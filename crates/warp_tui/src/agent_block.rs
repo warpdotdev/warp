@@ -39,7 +39,7 @@ use crate::agent_block_sections::{
     render_completed_todos_section, render_fallback_tool_call_section, render_input_section,
     render_summarization_section, render_thinking_section, render_todo_list_section,
 };
-use crate::run_agents_card_view::{TuiRunAgentsCardView, TuiRunAgentsCardViewEvent};
+use crate::orchestration_block::{TuiOrchestrationBlock, TuiOrchestrationBlockEvent};
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::TuiCLISubagentView;
@@ -162,7 +162,7 @@ enum TuiToolCallView {
     FileEdits(ViewHandle<TuiFileEditsView>),
     Plan(ViewHandle<TuiPlanView>),
     ShellCommand(ViewHandle<TuiShellCommandView>),
-    RunAgents(ViewHandle<TuiRunAgentsCardView>),
+    OrchestrationBlock(ViewHandle<TuiOrchestrationBlock>),
 }
 
 impl TuiToolCallView {
@@ -172,7 +172,7 @@ impl TuiToolCallView {
             Self::FileEdits(view) => view.id(),
             Self::Plan(view) => view.id(),
             Self::ShellCommand(view) => view.id(),
-            Self::RunAgents(view) => view.id(),
+            Self::OrchestrationBlock(view) => view.id(),
         }
     }
 
@@ -182,7 +182,7 @@ impl TuiToolCallView {
             Self::FileEdits(view) => TuiChildView::new(view),
             Self::Plan(view) => TuiChildView::new(view),
             Self::ShellCommand(view) => TuiChildView::new(view),
-            Self::RunAgents(view) => TuiChildView::new(view),
+            Self::OrchestrationBlock(view) => TuiChildView::new(view),
         }
     }
 }
@@ -190,7 +190,7 @@ impl TuiToolCallView {
 /// The front-of-queue blocking interaction owned by an agent block: the
 /// child view rendering the pending action that awaits a decision.
 pub(super) struct TuiBlockingChild {
-    pub(super) view: ViewHandle<TuiRunAgentsCardView>,
+    pub(super) view: ViewHandle<TuiOrchestrationBlock>,
 }
 
 /// Events emitted to the transcript that owns this rich-content block.
@@ -426,9 +426,11 @@ impl TuiAIBlock {
             let AIAgentActionType::RunAgents(request) = &action.action else {
                 continue;
             };
-            // Existing card: re-sync its edit state from the latest streamed
+            // Existing block: re-sync its edit state from the latest streamed
             // chunk (the request may have grown since the view was created).
-            if let Some(TuiToolCallView::RunAgents(view)) = self.action_views.get(&action.id) {
+            if let Some(TuiToolCallView::OrchestrationBlock(view)) =
+                self.action_views.get(&action.id)
+            {
                 let request = request.clone();
                 view.update(ctx, |view, ctx| view.update_request(&request, ctx));
                 continue;
@@ -454,7 +456,7 @@ impl TuiAIBlock {
             let fallback_base_model_id = self.block_model.base_model(ctx).map(|id| id.to_string());
             let is_restored = self.block_model.is_restored();
             let view = ctx.add_typed_action_tui_view(move |ctx| {
-                TuiRunAgentsCardView::new(
+                TuiOrchestrationBlock::new(
                     action,
                     &request,
                     active_config,
@@ -467,17 +469,17 @@ impl TuiAIBlock {
             });
             let action_id_for_events = action_id.clone();
             ctx.subscribe_to_view(&view, move |me, _, event, ctx| match event {
-                TuiRunAgentsCardViewEvent::RejectRequested => {
+                TuiOrchestrationBlockEvent::RejectRequested => {
                     me.cancel_action(&action_id_for_events, ctx);
                 }
-                TuiRunAgentsCardViewEvent::BlockingStateChanged => {
+                TuiOrchestrationBlockEvent::BlockingStateChanged => {
                     ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
                     me.invalidate_layout(ctx);
                 }
-                TuiRunAgentsCardViewEvent::LayoutInvalidated => me.invalidate_layout(ctx),
+                TuiOrchestrationBlockEvent::LayoutInvalidated => me.invalidate_layout(ctx),
             });
             self.action_views
-                .insert(action_id, TuiToolCallView::RunAgents(view));
+                .insert(action_id, TuiToolCallView::OrchestrationBlock(view));
             ctx.notify();
         }
     }
@@ -515,7 +517,7 @@ impl TuiAIBlock {
             return None;
         }
         match self.action_views.get(&action_id)? {
-            TuiToolCallView::RunAgents(view) => view
+            TuiToolCallView::OrchestrationBlock(view) => view
                 .as_ref(ctx)
                 .wants_focus(ctx)
                 .then(|| TuiBlockingChild { view: view.clone() }),
@@ -722,7 +724,7 @@ impl TuiAIBlock {
             || self.action_views.values().any(|view| match view {
                 TuiToolCallView::FileEdits(_)
                 | TuiToolCallView::Plan(_)
-                | TuiToolCallView::RunAgents(_) => false,
+                | TuiToolCallView::OrchestrationBlock(_) => false,
                 TuiToolCallView::ShellCommand(view) => {
                     view.as_ref(app).needs_continuous_height_measurement()
                 }

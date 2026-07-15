@@ -30,13 +30,13 @@ Live catalogs come from `HarnessAvailabilityModel` ([`app/src/ai/harness_availab
 There is no TUI permission/confirmation UI for `RunAgents` today and no generalized input-hiding mechanism; the closest precedent is the inline-menu overlay, which keeps the input visible and focused.
 
 ## Proposed changes
-### 1. TUI RunAgents card `crates/warp_tui/src/run_agents_card_view.rs`
-New `TuiToolCallView::RunAgents(ViewHandle<TuiRunAgentsCardView>)` variant, constructed in `TuiAIBlock::sync_action_views` for `AIAgentActionType::RunAgents` actions (mirroring `ensure_run_agents_card_view`'s active-config lookup via `conversation.orchestration_config_for_plan(&request.plan_id)` at [`block.rs:7069-7083`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/app/src/ai/blocklist/block.rs#L7069-L7083), including `update_request` re-syncs while streaming).
+### 1. TUI orchestration block `crates/warp_tui/src/orchestration_block.rs`
+New `TuiToolCallView::OrchestrationBlock(ViewHandle<TuiOrchestrationBlock>)` variant, constructed in `TuiAIBlock::sync_action_views` for `AIAgentActionType::RunAgents` actions (mirroring `ensure_run_agents_card_view`'s active-config lookup via `conversation.orchestration_config_for_plan(&request.plan_id)` at [`block.rs:7069-7083`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/app/src/ai/blocklist/block.rs#L7069-L7083), including `update_request` re-syncs while streaming).
 
 View state: `action_id`, an `OrchestrationEditState` + card fields (`agent_run_configs`, `base_prompt`, `summary`, `skills`, `plan_id`, `original_tool_call_request`), `mode: Acceptance | Configuring { page }`, the active `TuiOptionSelector` handle, model handles (`BlocklistAIActionModel`, `RunAgentsExecutor`), and the identity palette captured at construction.
 
 - Shared card chrome: a persistent yellow-square permission title on a header row tinted with the surface overlay applied twice, over a 10%-magenta body in both modes; the body is inset three cells with one row of vertical padding. Acceptance renders the wrapping colored agent-identity line and one wrapping inline `Label: value` metadata row (bold values, muted bullets); the request summary is not repeated inside the card. Configuration renders `Edit agent configuration`, right-aligned `← n of m →`, a blank row, a bold singular/plural-aware question, and the selector. Each mode's styled key hints render below, outside the tinted surface (acceptance: `Enter to accept  Ctrl + E to edit Ctrl + C to reject`).
-- Keybindings registered in `run_agents_card_view::init` (added to `keybindings.rs`, `tui:`/`TUI_BINDING_GROUP` conventions): `enter` → Accept/Confirm, `ctrl-e` → Configure, `esc` → Back, `ctrl-c` → Reject, `left` → confirm then PreviousPage, `right` → confirm then NextPage, and `tab` → NextPage without confirmation. Arrow navigation applies the current option selection, recomputes the dynamic page sequence, then moves in the requested direction and clamps at sequence boundaries; Tab preserves the current unconfirmed highlight.
+- Keybindings registered in `orchestration_block::init` (added to `keybindings.rs`, `tui:`/`TUI_BINDING_GROUP` conventions): `enter` → Accept/Confirm, `ctrl-e` → Configure, `esc` → Back, `ctrl-c` → Reject, `left` → confirm then PreviousPage, `right` → confirm then NextPage, and `tab` → NextPage without confirmation. Arrow navigation applies the current option selection, recomputes the dynamic page sequence, then moves in the requested direction and clamps at sequence boundaries; Tab preserves the current unconfirmed highlight.
 - Page sequencing: `ConfigPage { Location, Harness, ApiKey, Host, Environment, Model }`; `sequence(state)` returns the dynamic page list (Cloud: 5 + API-key page when `should_show_auth_secret_picker`; Local: `[Location, Model]`). Confirmations call the shared transition methods (`state.apply_execution_mode_change`, `session.apply_harness_change`, `state.apply_auth_secret_change`, `set_worker_host` + `persist_host_selection`, `set_environment_id` + `persist_environment_selection`, `model_id` assignment). Enter advances and returns to Acceptance after the final page; arrows navigate in their requested direction after committing.
 - Search: only `ConfigPage::Model` opts into `TuiOptionSelector` search. The pinned
   `Search:` editor stays above the model viewport; the list starts on the selected
@@ -52,7 +52,7 @@ View state: `action_id`, an `OrchestrationEditState` + card fields (`agent_run_c
 
 ### 2. Generalized input replacement (derived, no stored flag)
 Input visibility is a pure function of the front-of-queue blocker rather than a suppression boolean:
-- `TuiAIBlock` gains `active_blocking_child(&self, ctx) -> Option<TuiBlockingChild>` (`{ action_id, view_id }`): the front pending action for the conversation (`BlocklistAIActionModel::get_pending_action`) when its status is `Blocked` and its registered child view reports `wants_focus(ctx)`. `TuiRunAgentsCardView::wants_focus` is true in Acceptance/Configuring and false once accepted, rejected, spawning, or finished — matching PRODUCT (1-8). Deriving from the action queue (not transcript order) keeps semantics identical to the GUI's `focus_subview_if_necessary` ([`block.rs:4913-4954`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/app/src/ai/blocklist/block.rs#L4913-L4954)).
+- `TuiAIBlock` gains `active_blocking_child(&self, ctx) -> Option<TuiBlockingChild>` (`{ action_id, view_id }`): the front pending action for the conversation (`BlocklistAIActionModel::get_pending_action`) when its status is `Blocked` and its registered child view reports `wants_focus(ctx)`. `TuiOrchestrationBlock::wants_focus` is true in Acceptance/Configuring and false once accepted, rejected, spawning, or finished — matching PRODUCT (1-8). Deriving from the action queue (not transcript order) keeps semantics identical to the GUI's `focus_subview_if_necessary` ([`block.rs:4913-4954`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/app/src/ai/blocklist/block.rs#L4913-L4954)).
 - `TuiTranscriptView` exposes the same query over its agent blocks; `TuiTerminalSessionView::render` calls it once per pass. When `Some`, the session view omits the input box and normal footer from its element tree and the card renders its own hint footer; when `None`, it renders input + footer as today.
 - Focus: on the `None → Some` transition the session view records that the input was focused and focuses the blocker view; on `Some(a) → Some(b)` it focuses `b` directly (no intermediate editable input, PRODUCT 6); on `Some → None` it restores focus to the input (PRODUCT 5). Draft/cursor/selection/scroll are untouched by construction — nothing in this path writes to the input model.
 - Re-derivation is driven by the session view's existing `BlocklistAIActionModel` subscription (`ActionBlockedOnUserConfirmation`, `FinishedAction`, queue changes → `ctx.notify()`). No terminal-model locks are added.
@@ -63,26 +63,13 @@ Input visibility is a pure function of the front-of-queue blocker rather than a 
 ### 4. Export seam
 `tui_export.rs` re-exports the neutral surface only: `OrchestrationConfigState`, `OrchestrationEditState`, `AuthSecretSelection`, snapshot types and builders, validation helpers, `RunAgentsExecutor`/`RunAgentsExecutorEvent`/`RunAgentsSpawningSnapshot`, `HarnessAvailabilityModel` + events, `RunAgentsRequest`/`RunAgentsExecutionMode`/`RunAgentsAgentRunConfig`, `OrchestrationConfig`/`OrchestrationConfigStatus`, and the shared orchestration telemetry types. No GUI element types cross the seam.
 
-### 5. Frontend test seams
-So the TUI card tests can exercise the real accept/reject paths:
-- `BlocklistAIActionModel::cancel_action_with_id` becomes `pub`, letting the TUI reject path invoke it through the seam.
-- `BlocklistAIActionModel::queue_pending_action_for_test` (test/`test-util` only) enqueues a `Blocked` pending action so frontend tests can drive confirmation flows against the real action model.
-- `register_orchestration_test_singletons` in `tui_export.rs` (test/`test-util` only) registers the settings machinery, auth/server/cloud-object singletons, and catalog + permission models (including `AIDocumentModel` for plan publication) that the card's snapshot builders and accept path read; `app/Cargo.toml` widens the `test-util` feature to the crates these singletons need, and `tui_export_tests.rs` smoke-tests the bootstrap.
 
 ## Testing and validation
-TUI render-to-lines tests (`run_agents_card_view_tests.rs`, `option_selector_tests.rs`, extended `agent_block_tests.rs`/`keybindings_tests.rs`, per the `tui-testing` conventions):
-- Acceptance card content, wrapping at 40/80/132 columns, and themed colors in dark/light/custom themes — PRODUCT (9-15, 17).
-- Identity stability across re-renders/edits and deterministic cycling at >palette size — PRODUCT (11-13).
-- Figma hierarchy/style: persistent title, exact inner indentation and blank rows, right-aligned arrow position, parenthesized option numbers, bold magenta selection, six-row viewport, and external footer styling.
-- Page order, dynamic counts, Local collapse to 2 pages, mid-flow location switch, arrow navigation that commits before moving, and Tab navigation that leaves the current highlight uncommitted.
-- Selector behavior: selection movement, viewport-relative 1-9, click/wheel, disabled rows, loading/failed/retry/empty, custom-host validation, selection preservation across snapshot refresh — PRODUCT (23-37, 43, 47-50).
-- Model-page search: selector-owned `Search:` chrome, list-first focus, digit
-  shortcuts, digit-containing queries, filtering/no-match rendering, and first-match
-  confirmation; non-model pages render no search editor.
-- Esc/Ctrl+C semantics from configuration; double-decision prevention — PRODUCT (8, 27, 28).
-- Input replacement: hidden input/footer while blocked, draft/cursor/selection preserved and restored, direct blocker→blocker transition, non-interactive terminal cards — PRODUCT (1-7).
-- Accept dispatch asserts `execute_run_agents` receives exactly the edited request (via the real `BlocklistAIActionModel` fixture used in `agent_block_tests.rs`); reject asserts `cancel_action_with_id` and terminal render — PRODUCT (55-57).
-- `keybindings_tests.rs` validator covers the new bindings as TUI-owned.
+Focused unit coverage:
+- `orchestration_block_tests.rs` covers page sequencing, approved-config and auth-secret resolution, request reconstruction, selector-to-edit-state navigation, and decision/focus behavior. The two interaction tests inject a local controller, so they exercise the real block, selector, and typed actions without exporting app test infrastructure.
+- `option_selector_tests.rs` covers the reusable selector's navigation, confirmation, search, disabled/loading/failure states, custom text, scrolling, and refresh behavior.
+- `agent_identity_tests.rs` covers palette size, deterministic assignment, uniqueness, and cycling.
+- `keybindings_tests.rs` validates that the orchestration block's bindings remain TUI-owned.
 
 Live verification via `./script/run-tui` (per `tui-verify-change`): accept-without-edit, full Cloud edit loop, Local collapse, retry on failed secret fetch, narrow-terminal reflow, input draft preservation across a full accept/reject cycle.
 
@@ -93,7 +80,7 @@ The work ships as a four-PR Graphite stack, each mergeable on its own:
 1. `harry/code-1822-edit-state` — the frontend-neutral orchestration domain module (`app/src/ai/orchestration/`: edit state, session, transitions, providers, validation) and the executor retarget; specified in [specs/code-1822-edit-state/TECH.md](../code-1822-edit-state/TECH.md).
 2. `harry/code-1822-option-snapshots` — option snapshots and their builders, plus the behavior-preserving GUI picker adaptation onto them; specified in [specs/code-1822-option-snapshots/TECH.md](../code-1822-option-snapshots/TECH.md).
 3. `harry/code-1822-tui-option-selector` — the reusable `TuiOptionSelector` primitive; specified in [specs/code-1822-tui-option-selector/TECH.md](../code-1822-tui-option-selector/TECH.md).
-4. The final PR (this spec's remaining scope) — the TUI RunAgents card, generalized input replacement, theming and agent identity, and the frontend test seams, reviewed against the PRODUCT invariants.
+4. The final PR (this spec's remaining scope) — the TUI orchestration block, generalized input replacement, theming, and agent identity, reviewed against the PRODUCT invariants.
 
 ## Risks and mitigations
 - Catalog events arriving mid-configuration can reshape option lists — the selector preserves the selected id when still present; disappearance surfaces the PRODUCT (50) unavailability copy rather than silently reselecting.

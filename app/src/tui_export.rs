@@ -2,14 +2,10 @@
 
 pub use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 pub use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
-#[cfg(any(test, feature = "test-util"))]
-use ai::api_keys::ApiKeyManager;
 pub use repo_metadata::repositories::RepoDetectionSource;
 pub use warp_cli::agent::Harness;
 use warp_completer::completer::{CompletionContext as _, TopLevelCommandCaseSensitivity};
 use warp_completer::signatures::CommandRegistry;
-#[cfg(any(test, feature = "test-util"))]
-use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::SingletonEntity as _;
 
 pub use crate::ai::agent::api::ServerConversationToken;
@@ -67,8 +63,6 @@ pub use crate::ai::blocklist::telemetry::{
     RunAgentsCardDecisionEvent,
 };
 pub use crate::ai::blocklist::view_util::format_credits;
-#[cfg(any(test, feature = "test-util"))]
-use crate::ai::blocklist::BlocklistAIPermissions;
 pub use crate::ai::blocklist::{
     block_context_from_terminal_model, AIActionStatus, BlocklistAIActionEvent,
     BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
@@ -76,8 +70,6 @@ pub use crate::ai::blocklist::{
     PolicyConfigUpdate, RequestFileEditsExecutor, RunAgentsExecutor, RunAgentsExecutorEvent,
     RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
-#[cfg(any(test, feature = "test-util"))]
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
 pub use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
 };
@@ -85,16 +77,12 @@ pub use crate::ai::connected_self_hosted_workers::{
 pub use crate::ai::conversation_export::{
     export_conversation_markdown, ConversationFileExport, ConversationFileExportError,
 };
-#[cfg(any(test, feature = "test-util"))]
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::harness_availability::{
     AuthSecretEntry, AuthSecretFetchState, HarnessAvailability, HarnessAvailabilityEvent,
     HarnessAvailabilityModel, HarnessModelInfo,
 };
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
-#[cfg(any(test, feature = "test-util"))]
-use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 pub use crate::ai::orchestration::{
     accept_disabled_reason_with_auth, api_key_snapshot, auth_secret_selection_required,
     empty_env_recommendation_message, environment_snapshot, harness_is_selectable,
@@ -107,36 +95,20 @@ pub use crate::ai::orchestration::{
 };
 pub use crate::ai::skills::{SkillManager, SkillReference};
 pub use crate::appearance::Appearance;
-#[cfg(any(test, feature = "test-util"))]
-use crate::auth::auth_manager::AuthManager;
-#[cfg(any(test, feature = "test-util"))]
-use crate::auth::AuthStateProvider;
 pub use crate::banner::BannerState;
 pub use crate::changelog_model::{
     ChangelogModel, ChangelogRequestType, ChangelogState, Event as ChangelogModelEvent,
 };
-#[cfg(any(test, feature = "test-util"))]
-use crate::cloud_object::model::persistence::CloudModel;
 pub use crate::code::DiffResult;
 pub use crate::code_review::git_repo_model::{
     GitRepoModels, GitRepoStatusModel, GitStatusMetadata,
 };
 pub use crate::completer::SessionContext;
-#[cfg(any(test, feature = "test-util"))]
-use crate::network::NetworkStatus;
 pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
 };
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
-#[cfg(any(test, feature = "test-util"))]
-use crate::server::server_api::ServerApiProvider;
-#[cfg(any(test, feature = "test-util"))]
-use crate::server::sync_queue::SyncQueue;
-#[cfg(any(test, feature = "test-util"))]
-use crate::settings::manager::SettingsManager;
 pub use crate::settings::AISettingsChangedEvent;
-#[cfg(any(test, feature = "test-util"))]
-use crate::settings::{init_and_register_user_preferences, AISettings};
 pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::conversation_restoration::{
@@ -196,14 +168,8 @@ pub use crate::tui::{
     TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
     TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
 };
-#[cfg(any(test, feature = "test-util"))]
-use crate::user_config::WarpConfig;
 pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 pub use crate::util::time_format::format_elapsed_seconds;
-#[cfg(any(test, feature = "test-util"))]
-use crate::workspaces::user_workspaces::UserWorkspaces;
-#[cfg(any(test, feature = "test-util"))]
-use crate::LaunchMode;
 
 /// Builds the live-shell completion context used to parse TUI input for NLD.
 pub fn tui_completion_session_context(
@@ -263,65 +229,3 @@ pub fn agent_conversations_cloud_metadata_load_failed(app: &warpui::AppContext) 
     crate::ai::agent_conversations_model::AgentConversationsModel::as_ref(app)
         .cloud_conversation_metadata_load_failed()
 }
-
-/// Registers the minimal singleton set needed to construct, render, and
-/// accept the TUI orchestration (`RunAgents`) card against real app models:
-/// the settings machinery backing `CloudAgentSettings`/`AISettings`, the
-/// auth/server/cloud-object singletons the catalog models read, and the
-/// catalog + permission models the card's snapshot builders and accept-path
-/// permission checks use. Intended for `warp_tui` tests (via the `test-util`
-/// feature) and this crate's own unit tests. Registration order matters:
-/// each model subscribes to singletons registered before it.
-#[cfg(any(test, feature = "test-util"))]
-pub fn register_orchestration_test_singletons(app: &mut warpui::App) {
-    // Settings machinery required by CloudAgentSettings/AISettings reads.
-    app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
-    app.update(init_and_register_user_preferences);
-    app.add_singleton_model(|_| SettingsManager::default());
-    app.add_singleton_model(WarpConfig::mock);
-    app.update(|ctx| {
-        // No-op secure storage backs ApiKeyManager in tests.
-        warpui_extras::secure_storage::register_noop("test", ctx);
-    });
-    app.update(AISettings::register_and_subscribe_to_events);
-    CloudAgentSettings::register(app);
-    // Secure-storage-backed; LLMPreferences subscribes to it.
-    app.add_singleton_model(ApiKeyManager::new);
-
-    // Auth / server / cloud-object singletons the catalog models read.
-    app.add_singleton_model(|_| NetworkStatus::new());
-    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-    app.add_singleton_model(AuthManager::new_for_test);
-    app.add_singleton_model(|ctx| {
-        // `UserWorkspaces::default_mock` needs mockall (dev-dependency only),
-        // so back the mock with the test ServerApi's clients instead.
-        let (team_client, workspace_client) = {
-            let provider = ServerApiProvider::as_ref(ctx);
-            (provider.get_team_client(), provider.get_workspace_client())
-        };
-        UserWorkspaces::mock(team_client, workspace_client, vec![], ctx)
-    });
-    app.add_singleton_model(SyncQueue::mock);
-    app.add_singleton_model(CloudModel::mock);
-    app.add_singleton_model(|_| crate::appearance::Appearance::mock());
-
-    // Catalog + permission singletons read by the card's construction,
-    // snapshot builders, and accept path.
-    app.add_singleton_model(|_| TemplatableMCPServerManager::default());
-    app.add_singleton_model(LLMPreferences::new);
-    app.add_singleton_model(HarnessAvailabilityModel::new);
-    app.add_singleton_model(ConnectedSelfHostedWorkersModel::new);
-    app.add_singleton_model(BlocklistAIPermissions::new);
-    app.add_singleton_model(|ctx| {
-        AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
-    });
-    // Plan publication during the accept path reads the document model.
-    app.add_singleton_model(|_| {
-        crate::ai::document::ai_document_model::AIDocumentModel::new_for_test()
-    });
-}
-
-#[cfg(test)]
-#[path = "tui_export_tests.rs"]
-mod tests;

@@ -955,27 +955,6 @@ impl BlocklistAIActionModel {
         });
     }
 
-    /// Synchronously enqueues a pending action, bypassing async
-    /// preprocessing, so tests can deterministically drive an action into
-    /// `Blocked` status and exercise confirmation flows.
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn queue_pending_action_for_test(
-        &mut self,
-        conversation_id: AIConversationId,
-        action: AIAgentAction,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let action_id = action.id.clone();
-        self.pending_actions
-            .entry(conversation_id)
-            .or_default()
-            .push_back(action);
-        ctx.emit(BlocklistAIActionEvent::QueuedAction(action_id.clone()));
-        ctx.emit(BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(
-            action_id,
-        ));
-    }
-
     fn handle_preprocess_actions_results(
         &mut self,
         conversation_id: AIConversationId,

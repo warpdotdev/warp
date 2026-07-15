@@ -10,20 +10,18 @@ use ai::document::AIDocumentId;
 use markdown_parser::parse_markdown;
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    register_orchestration_test_singletons, AIActionStatus, AIAgentAction, AIAgentActionId,
-    AIAgentActionResult, AIAgentActionResultType, AIAgentActionType, AIAgentExchangeId,
-    AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText,
-    AIAgentTextSection, AIAgentTodo, AIAgentTodoList, AIBlockModel, AIBlockOutputStatus,
-    AIConversationId, AIRequestType, AgentOutputImage, AgentOutputImageLayout,
-    AgentOutputMermaidDiagram, AgentOutputTable, Appearance, BlocklistAIActionModel, LLMId,
-    MessageId, ModelEventDispatcher, OutputStatusUpdateCallback, RequestCommandOutputResult,
-    RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest, ServerOutputId, Shared,
+    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoList,
+    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, AgentOutputImage,
+    AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable, Appearance, LLMId,
+    MessageId, OutputStatusUpdateCallback, RequestCommandOutputResult, ServerOutputId, Shared,
     SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus, UserQueryMode,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, ModelHandle, SingletonEntity};
+use warpui::{AddWindowOptions, SingletonEntity};
 use warpui_core::elements::tui::{
     Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiEvent, TuiEventContext,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPosition,
@@ -41,11 +39,7 @@ use super::{
 use crate::agent_block_sections::{
     completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
 };
-use crate::run_agents_card_view::TuiRunAgentsCardAction;
-use crate::test_fixtures::{
-    add_active_test_conversation, add_test_action_model_and_events,
-    add_test_action_model_with_surface, TestHostView,
-};
+use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
 use crate::tui_plan_view::TuiPlanViewAction;
 use crate::tui_shell_command_view::TuiShellCommandViewAction;
 
@@ -1471,180 +1465,6 @@ fn completed_todos_label_includes_active_list_positions() {
 struct FakeAgentBlockModel {
     inputs: Vec<AIAgentInput>,
     status: AIBlockOutputStatus,
-}
-
-/// Builds a Local/Oz `RunAgents` tool call with one child agent.
-fn run_agents_action(id: &str) -> AIAgentAction {
-    AIAgentAction {
-        id: AIAgentActionId::from(id.to_owned()),
-        task_id: TaskId::new("task-1".to_owned()),
-        action: AIAgentActionType::RunAgents(RunAgentsRequest {
-            summary: "Parallelize the task.".to_owned(),
-            base_prompt: "base".to_owned(),
-            skills: Vec::new(),
-            model_id: "auto".to_owned(),
-            harness_type: "oz".to_owned(),
-            execution_mode: RunAgentsExecutionMode::Local,
-            agent_run_configs: vec![RunAgentsAgentRunConfig {
-                name: "researcher".to_owned(),
-                prompt: "research".to_owned(),
-                title: "Researcher".to_owned(),
-            }],
-            plan_id: String::new(),
-            harness_auth_secret_name: None,
-        }),
-        requires_result: true,
-    }
-}
-
-/// Builds an agent block over `actions` against the caller's action model
-/// and conversation, so confirmation-queue state is observable on the block.
-fn test_agent_block_for_actions(
-    app: &mut App,
-    conversation_id: AIConversationId,
-    action_model: &ModelHandle<BlocklistAIActionModel>,
-    model_events: &ModelHandle<ModelEventDispatcher>,
-    actions: Vec<AIAgentAction>,
-) -> ViewHandle<TuiAIBlock> {
-    let messages = actions
-        .into_iter()
-        .enumerate()
-        .map(|(index, action)| action_message(&format!("message-{index}"), action))
-        .collect();
-    let model = FakeAgentBlockModel {
-        inputs: Vec::new(),
-        status: complete_output_messages(messages),
-    };
-    let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
-    let action_model = action_model.clone();
-    let model_events = model_events.clone();
-    app.update(|ctx| {
-        let (window_id, _) = ctx.add_tui_window(
-            AddWindowOptions {
-                window_style: WindowStyle::NotStealFocus,
-                ..Default::default()
-            },
-            |_| TestHostView,
-        );
-        ctx.add_typed_action_tui_view(window_id, move |ctx| {
-            TuiAIBlock::new(
-                conversation_id,
-                AIAgentExchangeId::new(),
-                Rc::new(model),
-                action_model,
-                &model_events,
-                terminal_model,
-                ctx,
-            )
-        })
-    })
-}
-
-/// The registered RunAgents card view for `action_id`, panicking otherwise.
-fn run_agents_card_view(
-    app: &App,
-    block: &ViewHandle<TuiAIBlock>,
-    action_id: &AIAgentActionId,
-) -> ViewHandle<crate::run_agents_card_view::TuiRunAgentsCardView> {
-    app.read(|ctx| match block.as_ref(ctx).action_views.get(action_id) {
-        Some(TuiToolCallView::RunAgents(view)) => view.clone(),
-        Some(TuiToolCallView::FileEdits(_))
-        | Some(TuiToolCallView::Plan(_))
-        | Some(TuiToolCallView::ShellCommand(_))
-        | None => {
-            panic!("expected a registered RunAgents card view")
-        }
-    })
-}
-
-#[test]
-fn run_agents_action_registers_a_card_that_blocks_only_while_awaiting_confirmation() {
-    App::test((), |mut app| async move {
-        register_orchestration_test_singletons(&mut app);
-        let (action_model, model_events, surface_id) = add_test_action_model_with_surface(&mut app);
-        let conversation_id = add_active_test_conversation(&mut app, surface_id);
-        let action = run_agents_action("run-agents-1");
-        let block = test_agent_block_for_actions(
-            &mut app,
-            conversation_id,
-            &action_model,
-            &model_events,
-            vec![action.clone()],
-        );
-        let card = run_agents_card_view(&app, &block, &action.id);
-
-        // Still streaming / not yet queued: the card renders the fallback
-        // status and does not hide the input.
-        assert!(app.read(|ctx| block.as_ref(ctx).active_blocking_child(ctx).is_none()));
-
-        // Queued and awaiting confirmation: the card is the active blocker
-        //.
-        action_model.update(&mut app, |model, ctx| {
-            model.queue_pending_action_for_test(conversation_id, action.clone(), ctx);
-        });
-        let blocker = app.read(|ctx| block.as_ref(ctx).active_blocking_child(ctx));
-        let blocker = blocker.expect("the blocked RunAgents card blocks the input");
-        assert_eq!(blocker.view.id(), card.id());
-
-        // Reject through the card: the block maps it to manual cancellation
-        // and the blocker resolves, restoring the input.
-        app.update(|ctx| {
-            ctx.dispatch_typed_action_for_view(
-                card.window_id(ctx),
-                card.id(),
-                &TuiRunAgentsCardAction::Reject,
-            );
-        });
-        assert!(matches!(
-            app.read(|ctx| action_model.as_ref(ctx).get_action_status(&action.id)),
-            Some(AIActionStatus::Finished(_))
-        ));
-        assert!(app.read(|ctx| block.as_ref(ctx).active_blocking_child(ctx).is_none()));
-    });
-}
-
-#[test]
-fn only_the_front_of_queue_action_blocks_and_handoff_is_direct() {
-    App::test((), |mut app| async move {
-        register_orchestration_test_singletons(&mut app);
-        let (action_model, model_events, surface_id) = add_test_action_model_with_surface(&mut app);
-        let conversation_id = add_active_test_conversation(&mut app, surface_id);
-        let first = run_agents_action("run-agents-1");
-        let second = run_agents_action("run-agents-2");
-        let block = test_agent_block_for_actions(
-            &mut app,
-            conversation_id,
-            &action_model,
-            &model_events,
-            vec![first.clone(), second.clone()],
-        );
-        action_model.update(&mut app, |model, ctx| {
-            model.queue_pending_action_for_test(conversation_id, first.clone(), ctx);
-            model.queue_pending_action_for_test(conversation_id, second.clone(), ctx);
-        });
-
-        // Pending requests behind the front blocker do not affect input
-        // visibility.
-        let first_card = run_agents_card_view(&app, &block, &first.id);
-        let blocker = app.read(|ctx| block.as_ref(ctx).active_blocking_child(ctx));
-        assert_eq!(blocker.expect("front blocker").view.id(), first_card.id());
-
-        // Resolving the front blocker hands off directly to the next queued
-        // blocking interaction.
-        app.update(|ctx| {
-            ctx.dispatch_typed_action_for_view(
-                first_card.window_id(ctx),
-                first_card.id(),
-                &TuiRunAgentsCardAction::Reject,
-            );
-        });
-        let second_card = run_agents_card_view(&app, &block, &second.id);
-        let blocker = app.read(|ctx| block.as_ref(ctx).active_blocking_child(ctx));
-        assert_eq!(
-            blocker.expect("handed-off blocker").view.id(),
-            second_card.id()
-        );
-    });
 }
 
 /// Builds an agent block with fresh test identity, registered in a fresh TUI

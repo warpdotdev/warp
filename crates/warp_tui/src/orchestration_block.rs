@@ -1,4 +1,4 @@
-//! [`TuiRunAgentsCardView`]: the TUI permission and configuration card for a
+//! [`TuiOrchestrationBlock`]: the TUI permission and configuration card for a
 //! `RunAgents` request.
 //!
 //! The card has two interactive modes: an acceptance card summarizing the
@@ -6,10 +6,11 @@
 //! a dynamic sequence of single-field pages rendered by
 //! [`TuiOptionSelector`]. Accept dispatches the edited request through the
 //! shared [`BlocklistAIActionModel::execute_run_agents`] path; Reject emits
-//! [`TuiRunAgentsCardViewEvent::RejectRequested`], which the owning
+//! [`TuiOrchestrationBlockEvent::RejectRequested`], which the owning
 //! [`crate::agent_block::TuiAIBlock`] maps to action cancellation. Terminal,
 //! spawning, streaming, and restored states reuse the existing fallback
 //! tool-call presentation and its `tool_call_labels` copy.
+use std::rc::Rc;
 
 use warp::tui_export::{
     accept_disabled_reason_with_auth, api_key_snapshot, empty_env_recommendation_message,
@@ -41,12 +42,12 @@ use crate::keybindings::TUI_BINDING_GROUP;
 use crate::option_selector::{OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent};
 use crate::tui_builder::TuiUiBuilder;
 
-const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
+const ORCHESTRATION_BLOCK_TITLE: &str = "Can I start additional agents for this task?";
 
 /// Keymap-context flag set while the acceptance card is active.
-const ACCEPTANCE_CONTEXT_FLAG: &str = "TuiRunAgentsCardAcceptance";
+const ACCEPTANCE_CONTEXT_FLAG: &str = "TuiOrchestrationBlockAcceptance";
 /// Keymap-context flag set while a configuration page is active.
-const CONFIGURING_CONTEXT_FLAG: &str = "TuiRunAgentsCardConfiguring";
+const CONFIGURING_CONTEXT_FLAG: &str = "TuiOrchestrationBlockConfiguring";
 
 /// Row ids emitted by `location_snapshot`.
 const LOCATION_CLOUD_ID: &str = "cloud";
@@ -55,47 +56,55 @@ const LOCATION_CLOUD_ID: &str = "cloud";
 /// startup from `keybindings::init`. All bindings are fixed and scoped to
 /// the card's keymap context, so they only fire while a card is focused.
 pub(crate) fn init(app: &mut AppContext) {
-    let acceptance = || id!(TuiRunAgentsCardView::ui_name()) & id!(ACCEPTANCE_CONTEXT_FLAG);
-    let configuring = || id!(TuiRunAgentsCardView::ui_name()) & id!(CONFIGURING_CONTEXT_FLAG);
+    let acceptance = || id!(TuiOrchestrationBlock::ui_name()) & id!(ACCEPTANCE_CONTEXT_FLAG);
+    let configuring = || id!(TuiOrchestrationBlock::ui_name()) & id!(CONFIGURING_CONTEXT_FLAG);
     app.register_fixed_bindings([
-        FixedBinding::new("enter", TuiRunAgentsCardAction::Accept, acceptance())
-            .with_group(TUI_BINDING_GROUP),
-        FixedBinding::new("numpadenter", TuiRunAgentsCardAction::Accept, acceptance())
-            .with_group(TUI_BINDING_GROUP),
-        FixedBinding::new("ctrl-e", TuiRunAgentsCardAction::Configure, acceptance())
+        FixedBinding::new("enter", TuiOrchestrationBlockAction::Accept, acceptance())
             .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
+            "numpadenter",
+            TuiOrchestrationBlockAction::Accept,
+            acceptance(),
+        )
+        .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new(
+            "ctrl-e",
+            TuiOrchestrationBlockAction::Configure,
+            acceptance(),
+        )
+        .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new(
             "enter",
-            TuiRunAgentsCardAction::ConfirmSelection,
+            TuiOrchestrationBlockAction::ConfirmSelection,
             configuring(),
         )
         .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
             "numpadenter",
-            TuiRunAgentsCardAction::ConfirmSelection,
+            TuiOrchestrationBlockAction::ConfirmSelection,
             configuring(),
         )
         .with_group(TUI_BINDING_GROUP),
-        FixedBinding::new("escape", TuiRunAgentsCardAction::Back, configuring())
+        FixedBinding::new("escape", TuiOrchestrationBlockAction::Back, configuring())
             .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
             "left",
-            TuiRunAgentsCardAction::CommitAndPreviousPage,
+            TuiOrchestrationBlockAction::CommitAndPreviousPage,
             configuring(),
         )
         .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
             "right",
-            TuiRunAgentsCardAction::CommitAndNextPage,
+            TuiOrchestrationBlockAction::CommitAndNextPage,
             configuring(),
         )
         .with_group(TUI_BINDING_GROUP),
-        FixedBinding::new("tab", TuiRunAgentsCardAction::NextPage, configuring())
+        FixedBinding::new("tab", TuiOrchestrationBlockAction::NextPage, configuring())
             .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
             "ctrl-c",
-            TuiRunAgentsCardAction::Reject,
-            id!(TuiRunAgentsCardView::ui_name()),
+            TuiOrchestrationBlockAction::Reject,
+            id!(TuiOrchestrationBlock::ui_name()),
         )
         .with_group(TUI_BINDING_GROUP),
     ]);
@@ -128,6 +137,139 @@ enum ConfigPage {
     Host,
     Environment,
     Model,
+}
+
+/// External orchestration behavior used by the block.
+trait OrchestrationBlockController {
+    /// Returns the current lifecycle status for the action.
+    fn action_status(
+        &self,
+        action_id: &AIAgentActionId,
+        ctx: &AppContext,
+    ) -> Option<AIActionStatus>;
+
+    /// Builds the current option snapshot for a configuration page.
+    fn snapshot_for_page(
+        &self,
+        page: ConfigPage,
+        state: &OrchestrationConfigState,
+        ctx: &AppContext,
+    ) -> OptionSnapshot;
+
+    /// Commits one page selection into the edit state.
+    fn apply_page_selection(
+        &self,
+        page: ConfigPage,
+        id: &str,
+        edit_state: &mut OrchestrationEditState,
+        fallback_base_model_id: Option<String>,
+        ctx: &mut AppContext,
+    );
+
+    /// Returns the reason acceptance is currently unavailable.
+    fn accept_disabled_reason(
+        &self,
+        state: &OrchestrationConfigState,
+        ctx: &AppContext,
+    ) -> Option<String>;
+
+    /// Dispatches the edited orchestration request.
+    fn execute(&self, action_id: &AIAgentActionId, request: RunAgentsRequest, ctx: &mut AppContext);
+}
+
+/// Production controller backed by the shared orchestration models.
+struct ModelOrchestrationBlockController {
+    action_model: ModelHandle<BlocklistAIActionModel>,
+}
+
+impl OrchestrationBlockController for ModelOrchestrationBlockController {
+    fn action_status(
+        &self,
+        action_id: &AIAgentActionId,
+        ctx: &AppContext,
+    ) -> Option<AIActionStatus> {
+        self.action_model.as_ref(ctx).get_action_status(action_id)
+    }
+
+    fn snapshot_for_page(
+        &self,
+        page: ConfigPage,
+        state: &OrchestrationConfigState,
+        ctx: &AppContext,
+    ) -> OptionSnapshot {
+        match page {
+            ConfigPage::Location => location_snapshot(state, ctx),
+            ConfigPage::Harness => harness_snapshot(state, ctx),
+            ConfigPage::ApiKey => api_key_snapshot(state, ctx),
+            ConfigPage::Host => host_snapshot(state, ctx),
+            ConfigPage::Environment => environment_snapshot(state, ctx),
+            ConfigPage::Model => model_snapshot(state, ctx),
+        }
+    }
+
+    fn apply_page_selection(
+        &self,
+        page: ConfigPage,
+        id: &str,
+        edit_state: &mut OrchestrationEditState,
+        fallback_base_model_id: Option<String>,
+        ctx: &mut AppContext,
+    ) {
+        match page {
+            ConfigPage::Location => {
+                edit_state
+                    .orchestration_config_state
+                    .apply_execution_mode_change(
+                        id == LOCATION_CLOUD_ID,
+                        fallback_base_model_id,
+                        ctx,
+                    );
+            }
+            ConfigPage::Harness => {
+                edit_state.apply_harness_change(id, fallback_base_model_id, ctx);
+            }
+            ConfigPage::ApiKey => {
+                let name = (!id.is_empty()).then(|| id.to_string());
+                edit_state
+                    .orchestration_config_state
+                    .apply_auth_secret_change(name, ctx);
+            }
+            ConfigPage::Host => {
+                edit_state
+                    .orchestration_config_state
+                    .set_worker_host(id.to_string());
+                persist_host_selection(id, ctx);
+            }
+            ConfigPage::Environment => {
+                edit_state
+                    .orchestration_config_state
+                    .set_environment_id(id.to_string());
+                persist_environment_selection(id, ctx);
+            }
+            ConfigPage::Model => {
+                edit_state.orchestration_config_state.model_id = id.to_string();
+            }
+        }
+    }
+
+    fn accept_disabled_reason(
+        &self,
+        state: &OrchestrationConfigState,
+        ctx: &AppContext,
+    ) -> Option<String> {
+        accept_disabled_reason_with_auth(state, ctx)
+    }
+
+    fn execute(
+        &self,
+        action_id: &AIAgentActionId,
+        request: RunAgentsRequest,
+        ctx: &mut AppContext,
+    ) {
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.execute_run_agents(action_id, request, ctx);
+        });
+    }
 }
 
 impl ConfigPage {
@@ -165,7 +307,7 @@ enum PageNavigation {
 
 /// Events emitted to the owning agent block.
 #[derive(Clone, Debug)]
-pub(crate) enum TuiRunAgentsCardViewEvent {
+pub(crate) enum TuiOrchestrationBlockEvent {
     /// The user rejected the request; the block cancels the action.
     RejectRequested,
     /// The card's blocking/focus state may have changed; ancestors re-derive
@@ -177,7 +319,7 @@ pub(crate) enum TuiRunAgentsCardViewEvent {
 
 /// Typed actions bound to the card's keybindings.
 #[derive(Clone, Debug)]
-pub(crate) enum TuiRunAgentsCardAction {
+pub(crate) enum TuiOrchestrationBlockAction {
     Accept,
     Configure,
     ConfirmSelection,
@@ -188,8 +330,8 @@ pub(crate) enum TuiRunAgentsCardAction {
     Reject,
 }
 
-/// The TUI `RunAgents` confirmation card view. See the module docs.
-pub(crate) struct TuiRunAgentsCardView {
+/// The TUI orchestration confirmation block. See the module docs.
+pub(crate) struct TuiOrchestrationBlock {
     action_id: AIAgentActionId,
     /// The latest streamed tool call, kept in sync by
     /// [`Self::update_request`]; terminal/streaming states render from it
@@ -203,7 +345,7 @@ pub(crate) struct TuiRunAgentsCardView {
     /// Arrow direction to apply after the selector confirms its current
     /// value. Enter leaves this unset and follows the normal forward flow.
     confirmation_navigation: Option<PageNavigation>,
-    action_model: ModelHandle<BlocklistAIActionModel>,
+    controller: Rc<dyn OrchestrationBlockController>,
     /// Approved/disapproved plan config used to resolve inherited fields.
     active_config: Option<(OrchestrationConfig, OrchestrationConfigStatus)>,
     /// The conversation's base model, used as the Oz model fallback.
@@ -220,8 +362,8 @@ pub(crate) struct TuiRunAgentsCardView {
     identity_palette: Vec<AgentIdentity>,
 }
 
-impl TuiRunAgentsCardView {
-    /// Creates a card for one pending `RunAgents` action and wires its model
+impl TuiOrchestrationBlock {
+    /// Creates a block for one pending `RunAgents` action and wires its model
     /// subscriptions.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -234,11 +376,6 @@ impl TuiRunAgentsCardView {
         is_restored: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let selector = ctx.add_typed_action_tui_view(TuiOptionSelector::new);
-        ctx.subscribe_to_view(&selector, |me, _, event, ctx| {
-            me.handle_selector_event(event, ctx);
-        });
-
         let action_id = action.id.clone();
         let action_id_for_executor = action_id.clone();
         ctx.subscribe_to_model(&run_agents_executor, move |me, _, event, ctx| match event {
@@ -248,14 +385,14 @@ impl TuiRunAgentsCardView {
             } if action_id == &action_id_for_executor => {
                 me.spawning = Some(*snapshot);
                 me.mode = CardMode::Acceptance;
-                ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+                ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
                 ctx.notify();
             }
             RunAgentsExecutorEvent::SpawningFinished { action_id }
                 if action_id == &action_id_for_executor =>
             {
                 me.spawning = None;
-                ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+                ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
                 ctx.notify();
             }
             RunAgentsExecutorEvent::SpawningStarted { .. }
@@ -268,7 +405,7 @@ impl TuiRunAgentsCardView {
                 if action_id == &action_id_for_actions =>
             {
                 me.mode = CardMode::Acceptance;
-                ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+                ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
                 ctx.notify();
             }
             BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(action_id)
@@ -278,7 +415,7 @@ impl TuiRunAgentsCardView {
                 // "Configuring agents…" placeholder to the interactive
                 // acceptance card, so resolve display defaults now.
                 me.resolve_interactive_defaults(ctx);
-                ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+                ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
                 ctx.notify();
             }
             _ => {}
@@ -322,8 +459,40 @@ impl TuiRunAgentsCardView {
             },
         );
 
-        let mut view = Self {
-            action_id,
+        let controller = Rc::new(ModelOrchestrationBlockController { action_model });
+        let identity_palette = TuiUiBuilder::from_app(ctx).agent_identity_palette();
+        let mut view = Self::from_parts(
+            action,
+            request,
+            active_config,
+            controller,
+            fallback_base_model_id,
+            is_restored,
+            identity_palette,
+            ctx,
+        );
+        view.resolve_interactive_defaults(ctx);
+        view
+    }
+
+    /// Constructs the block from injected external behavior.
+    #[allow(clippy::too_many_arguments)]
+    fn from_parts(
+        action: AIAgentAction,
+        request: &RunAgentsRequest,
+        active_config: Option<(OrchestrationConfig, OrchestrationConfigStatus)>,
+        controller: Rc<dyn OrchestrationBlockController>,
+        fallback_base_model_id: Option<String>,
+        is_restored: bool,
+        identity_palette: Vec<AgentIdentity>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        let selector = ctx.add_typed_action_tui_view(TuiOptionSelector::new);
+        ctx.subscribe_to_view(&selector, |me, _, event, ctx| {
+            me.handle_selector_event(event, ctx);
+        });
+        Self {
+            action_id: action.id.clone(),
             action,
             orchestration_edit_state: OrchestrationEditState::new(Self::config_state_from_request(
                 request,
@@ -333,17 +502,35 @@ impl TuiRunAgentsCardView {
             mode: CardMode::Acceptance,
             selector,
             confirmation_navigation: None,
-            action_model,
+            controller,
             active_config,
             fallback_base_model_id,
             is_restored,
             spawning: None,
             decided: false,
             accept_error: None,
-            identity_palette: TuiUiBuilder::from_app(ctx).agent_identity_palette(),
-        };
-        view.resolve_interactive_defaults(ctx);
-        view
+            identity_palette,
+        }
+    }
+
+    /// Constructs an interactive block around a test controller.
+    #[cfg(test)]
+    fn new_for_test(
+        action: AIAgentAction,
+        request: &RunAgentsRequest,
+        controller: Rc<dyn OrchestrationBlockController>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        Self::from_parts(
+            action,
+            request,
+            None,
+            controller,
+            Some("auto".to_string()),
+            false,
+            Vec::new(),
+            ctx,
+        )
     }
 
     /// Seeds the run-wide edit state from the streamed request, resolving
@@ -435,7 +622,7 @@ impl TuiRunAgentsCardView {
         self.orchestration_edit_state = OrchestrationEditState::new(new_state);
         self.resolve_interactive_defaults(ctx);
         self.refresh_active_page(ctx);
-        ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
         ctx.notify();
     }
 
@@ -447,9 +634,7 @@ impl TuiRunAgentsCardView {
             return false;
         }
         matches!(
-            self.action_model
-                .as_ref(ctx)
-                .get_action_status(&self.action_id),
+            self.controller.action_status(&self.action_id, ctx),
             Some(AIActionStatus::Blocked)
         )
     }
@@ -470,15 +655,11 @@ impl TuiRunAgentsCardView {
 
     /// Builds the option snapshot for `page` from the shared builders.
     fn snapshot_for_page(&self, page: ConfigPage, ctx: &AppContext) -> OptionSnapshot {
-        let state = &self.orchestration_edit_state.orchestration_config_state;
-        match page {
-            ConfigPage::Location => location_snapshot(state, ctx),
-            ConfigPage::Harness => harness_snapshot(state, ctx),
-            ConfigPage::ApiKey => api_key_snapshot(state, ctx),
-            ConfigPage::Host => host_snapshot(state, ctx),
-            ConfigPage::Environment => environment_snapshot(state, ctx),
-            ConfigPage::Model => model_snapshot(state, ctx),
-        }
+        self.controller.snapshot_for_page(
+            page,
+            &self.orchestration_edit_state.orchestration_config_state,
+            ctx,
+        )
     }
 
     /// Opens `page`: swaps the selector to its page fields, and
@@ -503,7 +684,7 @@ impl TuiRunAgentsCardView {
         self.selector.update(ctx, |selector, ctx| {
             selector.set_page(selector_page, ctx);
         });
-        ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
         ctx.notify();
     }
 
@@ -551,46 +732,13 @@ impl TuiRunAgentsCardView {
         let CardMode::Configuring { page } = self.mode else {
             return;
         };
-        match page {
-            ConfigPage::Location => {
-                let is_remote = id == LOCATION_CLOUD_ID;
-                self.orchestration_edit_state
-                    .orchestration_config_state
-                    .apply_execution_mode_change(
-                        is_remote,
-                        self.fallback_base_model_id.clone(),
-                        ctx,
-                    );
-            }
-            ConfigPage::Harness => {
-                let fallback = self.fallback_base_model_id.clone();
-                self.orchestration_edit_state
-                    .apply_harness_change(id, fallback, ctx);
-            }
-            ConfigPage::ApiKey => {
-                let name = (!id.is_empty()).then(|| id.to_string());
-                self.orchestration_edit_state
-                    .orchestration_config_state
-                    .apply_auth_secret_change(name, ctx);
-            }
-            ConfigPage::Host => {
-                self.orchestration_edit_state
-                    .orchestration_config_state
-                    .set_worker_host(id.to_string());
-                persist_host_selection(id, ctx);
-            }
-            ConfigPage::Environment => {
-                self.orchestration_edit_state
-                    .orchestration_config_state
-                    .set_environment_id(id.to_string());
-                persist_environment_selection(id, ctx);
-            }
-            ConfigPage::Model => {
-                self.orchestration_edit_state
-                    .orchestration_config_state
-                    .model_id = id.to_string();
-            }
-        }
+        self.controller.apply_page_selection(
+            page,
+            id,
+            &mut self.orchestration_edit_state,
+            self.fallback_base_model_id.clone(),
+            ctx,
+        );
         self.finish_page_confirmation(page, ctx);
     }
 
@@ -617,7 +765,7 @@ impl TuiRunAgentsCardView {
             Some(next) => self.open_page(next, ctx),
             None => {
                 self.mode = CardMode::Acceptance;
-                ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+                ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
                 ctx.notify();
             }
         }
@@ -635,7 +783,7 @@ impl TuiRunAgentsCardView {
             Self::page_sequence(&self.orchestration_edit_state.orchestration_config_state);
         let Some(index) = sequence.iter().position(|candidate| *candidate == page) else {
             self.mode = CardMode::Acceptance;
-            ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+            ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
             ctx.notify();
             return;
         };
@@ -703,7 +851,7 @@ impl TuiRunAgentsCardView {
                 self.handle_back(ctx);
             }
             TuiOptionSelectorEvent::LayoutInvalidated => {
-                ctx.emit(TuiRunAgentsCardViewEvent::LayoutInvalidated);
+                ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
             }
         }
     }
@@ -724,7 +872,7 @@ impl TuiRunAgentsCardView {
         if self.decided || self.spawning.is_some() || !self.wants_focus(ctx) {
             return;
         }
-        if let Some(reason) = accept_disabled_reason_with_auth(
+        if let Some(reason) = self.controller.accept_disabled_reason(
             &self.orchestration_edit_state.orchestration_config_state,
             ctx,
         ) {
@@ -737,10 +885,8 @@ impl TuiRunAgentsCardView {
         self.mode = CardMode::Acceptance;
         let request = self.to_request();
         let action_id = self.action_id.clone();
-        self.action_model.update(ctx, |action_model, ctx| {
-            action_model.execute_run_agents(&action_id, request, ctx);
-        });
-        ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+        self.controller.execute(&action_id, request, ctx);
+        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
         ctx.notify();
     }
 
@@ -752,8 +898,8 @@ impl TuiRunAgentsCardView {
         }
         self.decided = true;
         self.mode = CardMode::Acceptance;
-        ctx.emit(TuiRunAgentsCardViewEvent::RejectRequested);
-        ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+        ctx.emit(TuiOrchestrationBlockEvent::RejectRequested);
+        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
         ctx.notify();
     }
 
@@ -783,7 +929,7 @@ impl TuiRunAgentsCardView {
         }
         if matches!(self.mode, CardMode::Configuring { .. }) {
             self.mode = CardMode::Acceptance;
-            ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+            ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
             ctx.notify();
         }
     }
@@ -986,7 +1132,7 @@ impl TuiRunAgentsCardView {
         TuiText::from_spans([
             ("■ ".to_string(), builder.attention_glyph_style()),
             (
-                RUN_AGENTS_CARD_TITLE.to_string(),
+                ORCHESTRATION_BLOCK_TITLE.to_string(),
                 builder.primary_text_style(),
             ),
         ])
@@ -1022,13 +1168,13 @@ impl TuiRunAgentsCardView {
     }
 }
 
-impl Entity for TuiRunAgentsCardView {
-    type Event = TuiRunAgentsCardViewEvent;
+impl Entity for TuiOrchestrationBlock {
+    type Event = TuiOrchestrationBlockEvent;
 }
 
-impl TuiView for TuiRunAgentsCardView {
+impl TuiView for TuiOrchestrationBlock {
     fn ui_name() -> &'static str {
-        "TuiRunAgentsCardView"
+        "TuiOrchestrationBlock"
     }
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
@@ -1046,10 +1192,7 @@ impl TuiView for TuiRunAgentsCardView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        let status = self
-            .action_model
-            .as_ref(app)
-            .get_action_status(&self.action_id);
+        let status = self.controller.action_status(&self.action_id, app);
 
         // Terminal, spawning, restored, and still-streaming states reuse the
         // shared fallback tool-call row and its `tool_call_labels` copy.
@@ -1097,27 +1240,27 @@ impl TuiView for TuiRunAgentsCardView {
     }
 }
 
-impl TypedActionView for TuiRunAgentsCardView {
-    type Action = TuiRunAgentsCardAction;
+impl TypedActionView for TuiOrchestrationBlock {
+    type Action = TuiOrchestrationBlockAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            TuiRunAgentsCardAction::Accept => self.handle_accept(ctx),
-            TuiRunAgentsCardAction::Configure => self.handle_configure(ctx),
-            TuiRunAgentsCardAction::ConfirmSelection => self.handle_confirm_selection(ctx),
-            TuiRunAgentsCardAction::CommitAndPreviousPage => {
+            TuiOrchestrationBlockAction::Accept => self.handle_accept(ctx),
+            TuiOrchestrationBlockAction::Configure => self.handle_configure(ctx),
+            TuiOrchestrationBlockAction::ConfirmSelection => self.handle_confirm_selection(ctx),
+            TuiOrchestrationBlockAction::CommitAndPreviousPage => {
                 self.handle_arrow_navigation(PageNavigation::Previous, ctx)
             }
-            TuiRunAgentsCardAction::CommitAndNextPage => {
+            TuiOrchestrationBlockAction::CommitAndNextPage => {
                 self.handle_arrow_navigation(PageNavigation::Next, ctx)
             }
-            TuiRunAgentsCardAction::NextPage => self.navigate_page(true, ctx),
-            TuiRunAgentsCardAction::Back => self.handle_back(ctx),
-            TuiRunAgentsCardAction::Reject => self.handle_reject(ctx),
+            TuiOrchestrationBlockAction::NextPage => self.navigate_page(true, ctx),
+            TuiOrchestrationBlockAction::Back => self.handle_back(ctx),
+            TuiOrchestrationBlockAction::Reject => self.handle_reject(ctx),
         }
     }
 }
 
 #[cfg(test)]
-#[path = "run_agents_card_view_tests.rs"]
+#[path = "orchestration_block_tests.rs"]
 mod tests;
