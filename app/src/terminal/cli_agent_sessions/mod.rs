@@ -214,6 +214,8 @@ impl CLIAgentSession {
                 CLIAgentSessionStatus::Success
             }
             CLIAgentEventType::StopFailure => {
+                self.session_context.query = event.payload.query.clone();
+                self.session_context.response = event.payload.response.clone();
                 self.clear_permission_scoped_state();
                 CLIAgentSessionStatus::Failed {
                     error_type: event.payload.error_type.clone(),
