@@ -11,6 +11,15 @@ fn args(values: &[&str]) -> Vec<OsString> {
     values.iter().map(OsString::from).collect()
 }
 
+/// Builds the owned `(key, value)` environment slice the translator
+/// expects from a slice of string-literal pairs.
+fn env_pairs(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+    pairs
+        .iter()
+        .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+        .collect()
+}
+
 /// Asserts that `input` parses into the given distribution and Linux
 /// path.
 fn assert_parses(input: &str, distro: &str, linux_path: &str) {
@@ -255,18 +264,24 @@ fn leaves_other_distro_unc_argument_unchanged() {
 
 #[test]
 fn build_wslenv_excludes_path_case_insensitively() {
-    // `PATH` in any spelling is dropped so a Linux-form `PATH` is never handed to `wsl.exe`; other
-    // keys are kept and suffixed with `/u`.
+    // `PATH` in any spelling is dropped so a Linux-form `PATH` is never handed to `wsl.exe` through
+    // `WSLENV`; other keys are kept and suffixed with `/u`.
     assert_eq!(
-        build_wslenv(&args(&["PATH", "GIT_OPTIONAL_LOCKS"])),
+        build_wslenv(&env_pairs(&[
+            ("PATH", "/usr/bin"),
+            ("GIT_OPTIONAL_LOCKS", "0")
+        ])),
         Some("GIT_OPTIONAL_LOCKS/u".to_string())
     );
     assert_eq!(
-        build_wslenv(&args(&["Path", "GIT_AUTHOR_NAME"])),
+        build_wslenv(&env_pairs(&[
+            ("Path", "/usr/bin"),
+            ("GIT_AUTHOR_NAME", "Ada")
+        ])),
         Some("GIT_AUTHOR_NAME/u".to_string())
     );
-    assert_eq!(build_wslenv(&args(&["path"])), None);
-    assert_eq!(build_wslenv(&args(&[])), None);
+    assert_eq!(build_wslenv(&env_pairs(&[("path", "/usr/bin")])), None);
+    assert_eq!(build_wslenv(&[]), None);
 }
 
 #[test]
@@ -275,7 +290,7 @@ fn builds_wslenv_from_env_keys() {
         OsStr::new("git"),
         &args(&["commit"]),
         Some(Path::new(r"\\wsl$\Ubuntu\repo")),
-        &args(&["GIT_AUTHOR_NAME", "GIT_OPTIONAL_LOCKS"]),
+        &env_pairs(&[("GIT_AUTHOR_NAME", "Ada"), ("GIT_OPTIONAL_LOCKS", "0")]),
     )
     .expect("expected translation");
 
@@ -296,4 +311,86 @@ fn omits_wslenv_when_no_env_keys() {
     .expect("expected translation");
 
     assert_eq!(translated.wslenv, None);
+}
+
+#[test]
+fn carries_explicit_path_through_argv() {
+    // A caller-supplied `PATH` is threaded into the distribution as `env PATH=<value>` in front of
+    // `git`, and must not leak into `WSLENV`.
+    let translated = translate_for_wsl_unc_cwd(
+        OsStr::new("git"),
+        &args(&["commit"]),
+        Some(Path::new(r"\\wsl$\Ubuntu\repo")),
+        &env_pairs(&[("PATH", "/usr/local/bin:/usr/bin")]),
+    )
+    .expect("expected translation");
+
+    assert_eq!(
+        translated.args,
+        args(&[
+            "--distribution",
+            "Ubuntu",
+            "--cd",
+            "/repo",
+            "--exec",
+            "/usr/bin/env",
+            "PATH=/usr/local/bin:/usr/bin",
+            "git",
+            "commit",
+        ])
+    );
+    assert_eq!(translated.wslenv, None);
+}
+
+#[test]
+fn carries_case_insensitive_path_through_argv() {
+    let translated = translate_for_wsl_unc_cwd(
+        OsStr::new("git"),
+        &args(&["status"]),
+        Some(Path::new(r"\\wsl$\Ubuntu\repo")),
+        &env_pairs(&[("Path", "/opt/bin")]),
+    )
+    .expect("expected translation");
+
+    assert_eq!(
+        translated.args,
+        args(&[
+            "--distribution",
+            "Ubuntu",
+            "--cd",
+            "/repo",
+            "--exec",
+            "/usr/bin/env",
+            "PATH=/opt/bin",
+            "git",
+            "status",
+        ])
+    );
+}
+
+#[test]
+fn omits_env_wrapper_when_no_path() {
+    // Without an explicit `PATH`, `git` is executed directly with no `env` wrapper; other variables
+    // still travel via `WSLENV`.
+    let translated = translate_for_wsl_unc_cwd(
+        OsStr::new("git"),
+        &args(&["status"]),
+        Some(Path::new(r"\\wsl$\Ubuntu\repo")),
+        &env_pairs(&[("GIT_OPTIONAL_LOCKS", "0")]),
+    )
+    .expect("expected translation");
+
+    assert_eq!(
+        translated.args,
+        args(&[
+            "--distribution",
+            "Ubuntu",
+            "--cd",
+            "/repo",
+            "--exec",
+            "git",
+            "status",
+        ])
+    );
+    assert_eq!(translated.wslenv, Some("GIT_OPTIONAL_LOCKS/u".to_string()));
 }

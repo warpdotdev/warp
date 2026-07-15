@@ -149,9 +149,18 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 /// command should be left unchanged (non-`git` program, path-qualified
 /// `git`, or a working directory that is not a WSL UNC path).
 ///
-/// `env_keys` is the list of environment-variable names explicitly set
-/// on the command; they are advertised through `WSLENV` so they cross
-/// into the distribution (`PATH` excluded, see [`build_wslenv`]).
+/// `env` is the list of `(key, value)` environment variables explicitly
+/// set on the command. Non-`PATH` variables are advertised through
+/// `WSLENV` so they cross into the distribution (see [`build_wslenv`]).
+///
+/// An explicitly set `PATH` is instead carried as an argv element:
+/// `... --exec /usr/bin/env PATH=<value> git <args...>`. This is the
+/// `--exec` analogue of the inline `PATH=...; cmd` assignment in
+/// `app/src/terminal/model/session/command_executor/wsl_command_executor.rs`.
+/// Routing `PATH` through argv completely bypasses Windows' non-disableable
+/// Windows-to-WSL `PATH` conversion, which would otherwise truncate a
+/// caller-supplied Linux-form `PATH` (the value `run_git_command_with_env`
+/// sets so hook tools such as `git-lfs` resolve inside the distribution).
 ///
 /// Pure — public so the rewriting logic can be unit-tested (mirroring
 /// the "exposed for unit testing" precedent on
@@ -161,7 +170,7 @@ pub fn translate_for_wsl_unc_cwd(
     program: &OsStr,
     args: &[OsString],
     cwd: Option<&Path>,
-    env_keys: &[OsString],
+    env: &[(OsString, OsString)],
 ) -> Option<TranslatedCommand> {
     if !is_bare_git(program) {
         return None;
@@ -174,8 +183,21 @@ pub fn translate_for_wsl_unc_cwd(
         OsString::from("--cd"),
         OsString::from(&unc.linux_path),
         OsString::from("--exec"),
-        OsString::from("git"),
     ];
+    // A caller-supplied `PATH` is prepended to the executed program as an
+    // `env` assignment rather than propagated through `WSLENV`; see the
+    // rationale above.
+    if let Some(path_value) = env
+        .iter()
+        .find(|(key, _)| is_path_env_key(key))
+        .map(|(_, value)| value)
+    {
+        let mut path_arg = OsString::from("PATH=");
+        path_arg.push(path_value);
+        translated_args.push(OsString::from("/usr/bin/env"));
+        translated_args.push(path_arg);
+    }
+    translated_args.push(OsString::from("git"));
     for arg in args {
         translated_args.push(translate_arg(arg, &unc.distro));
     }
@@ -183,7 +205,7 @@ pub fn translate_for_wsl_unc_cwd(
     Some(TranslatedCommand {
         program: OsString::from("wsl.exe"),
         args: translated_args,
-        wslenv: build_wslenv(env_keys),
+        wslenv: build_wslenv(env),
     })
 }
 
@@ -223,11 +245,14 @@ fn translate_arg(arg: &OsStr, distro: &str) -> OsString {
 /// a non-disableable Windows-to-WSL `PATH` conversion, and a `PATH` that
 /// is already in Linux form — as it is when a WSL session's environment
 /// is threaded through `run_git_command_with_env` — fails that
-/// conversion and gets truncated. This mirrors the `PATH` handling in
+/// conversion and gets truncated. `PATH` is instead carried as an argv
+/// element by [`translate_for_wsl_unc_cwd`]. This mirrors the `PATH`
+/// handling in
 /// `app/src/terminal/model/session/command_executor/wsl_command_executor.rs`.
-fn build_wslenv(env_keys: &[OsString]) -> Option<String> {
-    let joined = env_keys
+fn build_wslenv(env: &[(OsString, OsString)]) -> Option<String> {
+    let joined = env
         .iter()
+        .map(|(key, _)| key)
         .filter(|key| !is_path_env_key(key))
         .map(|key| format!("{}/u", key.to_string_lossy()))
         .collect::<Vec<_>>()

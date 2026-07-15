@@ -158,18 +158,15 @@ impl Command {
         let program = self.inner.get_program().to_owned();
         let args: Vec<OsString> = self.inner.get_args().map(|arg| arg.to_owned()).collect();
         let cwd = self.inner.get_current_dir().map(|dir| dir.to_owned());
-        let env_keys: Vec<OsString> = self
+        let env: Vec<(OsString, OsString)> = self
             .inner
             .get_envs()
-            .filter_map(|(key, value)| value.map(|_| key.to_owned()))
+            .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))
             .collect();
 
-        let Some(translated) = crate::wsl_windows::translate_for_wsl_unc_cwd(
-            &program,
-            &args,
-            cwd.as_deref(),
-            &env_keys,
-        ) else {
+        let Some(translated) =
+            crate::wsl_windows::translate_for_wsl_unc_cwd(&program, &args, cwd.as_deref(), &env)
+        else {
             return;
         };
 
