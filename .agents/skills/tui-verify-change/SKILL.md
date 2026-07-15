@@ -279,8 +279,9 @@ if the expected text isn't in the capture, the change isn't rendering.
 on a change. But for PR evidence — and for attaching durable image/video
 artifacts — you often want an actual **screenshot** or a short **video** of the
 rendered TUI. Because the TUI is a console program, capture it by recording its
-PTY session with **asciinema** and rendering that recording with **agg**
-(asciinema's GIF generator); pull a still frame out with `ffmpeg`.
+PTY session with **asciinema**, rendering that recording with **agg**, and
+transcoding it to an **MP4** (the same format Warp's `computer_use` screen
+recording produces) with `ffmpeg`; pull a still frame out with `ffmpeg` too.
 
 **Install the tooling (cloud runner — one-time).** asciinema and ffmpeg are
 packaged; `agg` ships as a prebuilt binary rather than in apt:
@@ -323,17 +324,25 @@ sleep 1
 For a **logged-in** capture, build/run `warp-tui-dev` with `WARP_API_KEY` per
 Step 1 instead of `warp-tui-oss`.
 
-**Render the video (GIF).**
+**Render the video (MP4).** Match the format Warp's `computer_use` screen
+recording uses — an **H.264 / yuv420p MP4** with `+faststart` (see
+`crates/computer_use/src/linux/recording.rs`) — so TUI captures are consistent
+with GUI/computer-use recordings. `agg` only emits GIF, so render to GIF and then
+transcode to MP4 with those settings. libx264 + yuv420p require **even**
+dimensions, so pad up by a pixel when the terminal render is odd-sized:
 
 ```bash
 agg --cols 120 --rows 40 /tmp/tui.cast /tmp/tui.gif
+ffmpeg -y -i /tmp/tui.gif -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" \
+  -c:v libx264 -pix_fmt yuv420p -movflags +faststart /tmp/tui.mp4
+# /tmp/tui.gif is just the intermediate; /tmp/tui.mp4 is the artifact you keep.
 ```
 
 **Pull a still (PNG)** from a frame *while the surface is on screen* — see the
 frame-timing pitfall below:
 
 ```bash
-ffmpeg -y -ss 1.5 -i /tmp/tui.gif -frames:v 1 /tmp/tui.png
+ffmpeg -y -ss 1.5 -i /tmp/tui.mp4 -frames:v 1 /tmp/tui.png
 ```
 
 **Attach the capture as conversation artifacts (required, not an afterthought).**
@@ -343,7 +352,7 @@ task, and can surface into the PR description in the native Oz flow — don't le
 it sitting in a temp file. Call the `upload_artifact` tool once per file, passing
 the local `file_path` and a short `description` (e.g. `file_path=/tmp/tui.png`,
 `description="TUI <surface> after <change> — verification screenshot"`, and
-likewise `/tmp/tui.gif` for the recording). For any user-visible TUI change you
+likewise `/tmp/tui.mp4` for the recording). For any user-visible TUI change you
 verified here, attaching the screenshot and any recording is **expected**. These
 are FILE artifacts capped at 25 MB each, so keep recordings short (see below). If
 you're running somewhere the `upload_artifact` tool isn't available (a plain
@@ -353,8 +362,8 @@ them in the PR instead.
 Capture pitfalls:
 - **asciinema must run under a PTY.** Wrap it in tmux (above) or `script`; a
   bare `asciinema rec` in a non-interactive runner shell errors out.
-- **Don't take the still from the first or last GIF frame.** The first frame is
-  the blank terminal *before* the TUI draws, and once you quit the TUI the alt
+- **Don't take the still from the first or last video frame.** The first frame
+  is the blank terminal *before* the TUI draws, and once you quit the TUI the alt
   screen is restored — so the final frames show the normal terminal (e.g. the
   OSS `WARP_API_KEY ... IGNORED` startup warning), **not** the TUI surface.
   Extract a mid-recording timestamp (when the surface is up), or stop recording
@@ -383,9 +392,10 @@ cargo nextest run -p warpui_core
 For a user-visible TUI change, attach the concrete rendered result as the
 verification evidence: the relevant lines from `tmux capture-pane` (and/or the
 `render_to_lines` snapshot diff), and — for a visual or interaction change — a
-**screenshot or short video** rendered via asciinema+agg and attached to the run
-as conversation artifacts (Step 4). This is the TUI equivalent of the GUI's
-`computer_use` screenshot (see the TUI caveat in `review-pr-local`).
+**screenshot or short video** (an H.264 MP4, matching computer-use recordings)
+rendered via asciinema+agg+ffmpeg and attached to the run as conversation
+artifacts (Step 4). This is the TUI equivalent of the GUI's `computer_use`
+screenshot (see the TUI caveat in `review-pr-local`).
 
 ## Related skills
 
