@@ -16,10 +16,7 @@ fn id_token(account_id: &str) -> String {
 
 #[test]
 fn known_expiry_refreshes_five_minutes_early() {
-    assert_eq!(
-        refresh_delay(Some(60 * 60)),
-        Duration::from_secs(55 * 60)
-    );
+    assert_eq!(refresh_delay(Some(60 * 60)), Duration::from_secs(55 * 60));
 }
 
 #[test]
@@ -205,5 +202,53 @@ fn current_refresh_success_still_applies_and_wakes_waiter() {
             assert_eq!(tokens.chatgpt_account_id, "current-account");
             assert!(manager.codex_refresh_waiters.is_none());
         });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn test_set_codex_refresh_allowed() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        {
+            // Feature flag OFF -> always false
+            let _guard =
+                warp_core::features::FeatureFlag::CodexSubscription.override_enabled(false);
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_refresh_allowed(true, ctx);
+            });
+            manager.read(&app, |manager, _| {
+                assert!(!manager.codex_refresh_allowed);
+            });
+
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_refresh_allowed(false, ctx);
+            });
+            manager.read(&app, |manager, _| {
+                assert!(!manager.codex_refresh_allowed);
+            });
+        }
+
+        {
+            // Feature flag ON -> true when byo is true, false when byo is false
+            let _guard = warp_core::features::FeatureFlag::CodexSubscription.override_enabled(true);
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_refresh_allowed(true, ctx);
+            });
+            manager.read(&app, |manager, _| {
+                assert!(manager.codex_refresh_allowed);
+            });
+
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_refresh_allowed(false, ctx);
+            });
+            manager.read(&app, |manager, _| {
+                assert!(!manager.codex_refresh_allowed);
+            });
+        }
     });
 }
