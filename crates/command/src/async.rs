@@ -546,6 +546,6 @@ impl Command {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 #[path = "async_tests.rs"]
 mod tests;

@@ -880,6 +880,6 @@ impl Command {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 #[path = "blocking_tests.rs"]
 mod tests;

@@ -4,7 +4,6 @@ use super::*;
 /// replacement command rather than dropping it together with the skipped
 /// `PATH` values; otherwise the spawned `wsl.exe` silently inherits the
 /// parent's Windows `PATH`.
-#[cfg(windows)]
 #[test]
 fn wsl_unc_translation_preserves_path_removal() {
     use std::ffi::OsString;
