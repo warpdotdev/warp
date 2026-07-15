@@ -48,8 +48,9 @@ The orchestration designs establish the component states; the component itself r
 7. The caller cannot read or mutate the settled visible range or page-boundary geometry.
 8. The component does not mutate application selection, page state, focus, models, or caller-owned collections.
 9. The component communicates only semantic outcomes:
-   - `SelectTab(key)` when a tab or keyboard navigation chooses a tab.
+   - `SelectTab(key)` when a visible tab is clicked.
    - `PageChanged(anchor_key)` when an overflow control chooses another page.
+   - A target tab key when the caller requests previous or next keyboard navigation.
 10. Rebuilding or resizing the element does not recreate mouse state for tab keys that remain present.
 11. Removed tab keys release their retained component state and cannot remain clickable.
 
@@ -86,6 +87,6 @@ The orchestration designs establish the component states; the component itself r
 35. The component can resolve previous and next navigation from its private settled layout:
    - When the selected tab is visible, navigation uses the complete supplied order and wraps at both ends.
    - When the selected tab is off-page, previous resolves to the last visible secondary tab and next resolves to the first visible secondary tab.
-36. Resolved navigation emits only `SelectTab`; the caller decides what selecting that key means.
+36. Resolved navigation returns only the target key; the caller decides what selecting that key means.
 37. Hit targets include only the painted tab or overflow-control footprint, not unused trailing row space.
 38. Pointer press/release outside a target does not invoke its callback.

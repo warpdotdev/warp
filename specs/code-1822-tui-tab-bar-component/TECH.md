@@ -18,15 +18,15 @@ The component is intentionally domain-neutral. The orchestration integration tha
 Add `crates/warpui_core/src/elements/tui/tab_bar.rs` and export the component's public types from `crates/warpui_core/src/elements/tui/mod.rs`.
 
 Use a stable generic tab key (`K: Clone + Eq + Hash + 'static`) rather than indices so dynamic reordering cannot retarget callbacks. The public data surface contains:
-- `TuiTab<K>`: key, label, optional leading glyph/style, and selected state.
-- `TuiTabBarStyles`: caller-supplied background, focused/unfocused selected, normal, divider, and overflow styles.
-- `TuiTabBarConfig<K>`: optional main tab, ordered secondary tabs, focus presentation, page anchor, optional maximum label cells, styles, and semantic callbacks.
+- `TuiTab<K>`: key, label, and optional leading glyph/style.
+- `TuiTabBarStyles`: caller-supplied bar, normal-tab, focused-selected, and unfocused-selected styles.
+- `TuiTabBarConfig<K>`: optional main tab, ordered secondary tabs, selected key, focus presentation, page anchor, optional maximum label cells, caller-styled fixed/overflow text, and semantic pointer callbacks.
 - `TuiTabBarNavigationDirection`: `Previous` or `Next`.
 - `TuiTabBar<K>`: the reusable component retained by the caller and updated/rendered from config.
 
 The component exposes high-level operations only:
 - `render(config) -> Box<dyn TuiElement>`
-- `navigate(direction)`, which resolves against private settled layout and invokes `SelectTab`.
+- `navigation_target(direction) -> Option<K>`, which resolves against private settled layout.
 
 It does not expose visible indices, visible keys, page boundaries, measured widths, or mouse handles.
 
@@ -61,12 +61,12 @@ Wrap every painted tab and overflow control in `TuiHoverable` with component-own
 - A previous/next overflow click invokes `PageChanged(anchor_key)` from the settled layout.
 - Neither callback changes focus or application state directly.
 
-`navigate(Previous | Next)` uses the private settled layout:
+`navigation_target(Previous | Next)` uses the private settled layout:
 - If the selected key is visible, resolve the adjacent key from the complete supplied sequence of main tab followed by secondary tabs and wrap.
 - If the selected key is off-page, resolve `Previous` to the last visible secondary key and `Next` to the first visible secondary key.
-- If no target exists, emit nothing.
+- If no target exists, return `None`.
 
-The consuming view remains responsible for binding keys and forwarding directions. This keeps keymap policy outside the component while keeping width-dependent target resolution inside it.
+The consuming view remains responsible for binding keys, forwarding directions, and applying the returned semantic target. This keeps keymap and application-selection policy outside the component while keeping width-dependent target resolution inside it.
 
 ## Testing and validation
 Add `crates/warpui_core/src/elements/tui/tab_bar_tests.rs` using the element render and event-dispatch test harness:

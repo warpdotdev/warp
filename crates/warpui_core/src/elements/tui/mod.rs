@@ -45,6 +45,7 @@ mod scene;
 mod scrollable;
 mod selectable;
 mod shimmering_text;
+mod tab_bar;
 mod text;
 mod viewported_list;
 
@@ -75,6 +76,10 @@ pub use selectable::{
     TuiSelectionHandle, TuiSelectionSpan,
 };
 pub use shimmering_text::TuiShimmeringText;
+pub use tab_bar::{
+    TuiTab, TuiTabBar, TuiTabBarConfig, TuiTabBarEvent, TuiTabBarNavigationDirection,
+    TuiTabBarStyles, TuiTabBarText,
+};
 pub use text::TuiText;
 pub use viewported_list::{
     TuiViewportContent, TuiViewportPosition, TuiViewportVerticalAlignment, TuiViewportWindow,

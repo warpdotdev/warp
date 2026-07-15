@@ -84,6 +84,8 @@ titlecase = "1.0"
 tokio.workspace = true
 tracing.workspace = true
 trait-set = "0.3.0"
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
 vec1.workspace = true
 warp_util.workspace = true
 
