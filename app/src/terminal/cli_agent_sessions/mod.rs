@@ -21,7 +21,9 @@ pub enum CLIAgentSessionStatus {
         error_type: Option<String>,
         message: Option<String>,
     },
-    Blocked { message: Option<String> },
+    Blocked {
+        message: Option<String>,
+    },
 }
 
 impl CLIAgentSessionStatus {

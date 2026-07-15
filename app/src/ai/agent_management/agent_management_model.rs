@@ -177,7 +177,10 @@ impl AgentNotificationsModel {
                         ctx,
                     );
                 }
-                CLIAgentSessionStatus::Failed { error_type, message } => {
+                CLIAgentSessionStatus::Failed {
+                    error_type,
+                    message,
+                } => {
                     let title = session_context
                         .display_title()
                         .unwrap_or_else(|| format!("{} failed", agent.display_name()));
