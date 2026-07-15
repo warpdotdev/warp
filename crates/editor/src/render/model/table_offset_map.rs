@@ -290,10 +290,24 @@ impl TableCellOffsetMap {
     /// This walks `source` character-by-character alongside the rendered text of each fragment,
     /// which makes it robust to:
     /// - backslash escapes (e.g. `\*foo` consumes two source chars for one rendered char),
+    /// - raw HTML line breaks (e.g. `<br>` consumes four source chars for one rendered newline),
     /// - changes to Markdown marker syntax (we don't hardcode `**`, `*`, `<u>`, etc. here), and
     /// - nested styles where adjacent fragments share outer markers (e.g. `**a *b* c**`), since we
     ///   attribute each marker to the fragment whose rendered text follows it.
     pub fn from_inline_and_source(source: &str, inline: &[FormattedTextFragment]) -> Self {
+        fn html_line_break_len(source: &[char], start: usize) -> Option<usize> {
+            ["<br />", "<br/>", "<br>"].into_iter().find_map(|tag| {
+                let tag_len = tag.chars().count();
+                let candidate = source.get(start..start + tag_len)?;
+                candidate
+                    .iter()
+                    .copied()
+                    .zip(tag.chars())
+                    .all(|(actual, expected)| actual.eq_ignore_ascii_case(&expected))
+                    .then_some(tag_len)
+            })
+        }
+
         let source_chars: Vec<char> = source.chars().collect();
         let total_source_chars = source_chars.len();
         let mut fragment_ranges: Vec<TableCellFragmentRange> = Vec::new();
@@ -301,57 +315,59 @@ impl TableCellOffsetMap {
         let mut source_idx: usize = 0;
 
         for fragment in inline {
-            let rendered_chars: Vec<char> = fragment.text.chars().collect();
-            if rendered_chars.is_empty() {
-                continue;
-            }
+            for rendered_char in fragment.text.chars() {
+                let (visible_start, visible_end, next_source_idx) = loop {
+                    if source_idx >= total_source_chars {
+                        break (total_source_chars, total_source_chars, total_source_chars);
+                    }
 
-            let first_rendered = rendered_chars[0];
-            while source_idx < total_source_chars {
-                let sc = source_chars[source_idx];
-                if sc == '\\'
-                    && source_idx + 1 < total_source_chars
-                    && source_chars[source_idx + 1] == first_rendered
-                {
+                    if rendered_char == '\n'
+                        && let Some(tag_len) = html_line_break_len(&source_chars, source_idx)
+                    {
+                        // Treat the opening `<` as the visible source character for the rendered
+                        // newline. The rest of the tag is collapsed as non-visible Markdown
+                        // syntax by the same offset-map rules used for emphasis markers.
+                        break (source_idx, source_idx + 1, source_idx + tag_len);
+                    }
+
+                    let source_char = source_chars[source_idx];
+                    if source_char == '\\'
+                        && source_idx + 1 < total_source_chars
+                        && source_chars[source_idx + 1] == rendered_char
+                    {
+                        break (source_idx + 1, source_idx + 2, source_idx + 2);
+                    }
+                    if source_char == rendered_char {
+                        break (source_idx, source_idx + 1, source_idx + 1);
+                    }
                     source_idx += 1;
-                    break;
-                }
-                if sc == first_rendered {
-                    break;
-                }
-                source_idx += 1;
-            }
+                };
 
-            let visible_source_start = CharOffset::from(source_idx);
+                let rendered_start = rendered_offset;
+                let rendered_end = rendered_start + CharOffset::from(1);
+                let visible_source_start = CharOffset::from(visible_start);
+                let visible_source_end = CharOffset::from(visible_end);
 
-            for &rendered_char in &rendered_chars {
-                if source_idx >= total_source_chars {
-                    break;
-                }
-                let sc = source_chars[source_idx];
-                if sc == '\\'
-                    && source_idx + 1 < total_source_chars
-                    && source_chars[source_idx + 1] == rendered_char
+                if let Some(previous) = fragment_ranges.last_mut()
+                    && previous.rendered_end == rendered_start
+                    && previous.visible_source_end == visible_source_start
                 {
-                    source_idx += 2;
+                    previous.rendered_end = rendered_end;
+                    previous.source_end = visible_source_end;
+                    previous.visible_source_end = visible_source_end;
                 } else {
-                    source_idx += 1;
+                    fragment_ranges.push(TableCellFragmentRange {
+                        rendered_start,
+                        rendered_end,
+                        source_end: visible_source_end,
+                        visible_source_start,
+                        visible_source_end,
+                    });
                 }
+
+                source_idx = next_source_idx;
+                rendered_offset = rendered_end;
             }
-
-            let visible_source_end = CharOffset::from(source_idx);
-            let rendered_start = rendered_offset;
-            let rendered_end = rendered_start + CharOffset::from(rendered_chars.len());
-
-            fragment_ranges.push(TableCellFragmentRange {
-                rendered_start,
-                rendered_end,
-                source_end: visible_source_end,
-                visible_source_start,
-                visible_source_end,
-            });
-
-            rendered_offset = rendered_end;
         }
 
         let total_source_offset = CharOffset::from(total_source_chars);

@@ -3,13 +3,18 @@ use std::sync::Arc;
 use markdown_parser::{compute_formatted_text_delta, parse_markdown};
 use serde_yaml::Value;
 use string_offset::CharOffset;
-use vec1::Vec1;
+use vec1::{Vec1, vec1};
+use warpui_core::elements::ListIndentLevel;
 use warpui_core::{App, ReadModel};
 
 use super::MarkdownStyle;
 use crate::content::buffer::tests::TestEmbeddedItem;
-use crate::content::buffer::{Buffer, BufferEditAction, EditOrigin, StyledBlockBoundaryBehavior};
-use crate::content::text::{IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG};
+use crate::content::buffer::{
+    Buffer, BufferEditAction, EditOrigin, SelectionOffsets, StyledBlockBoundaryBehavior,
+};
+use crate::content::text::{
+    BlockHeaderSize, BlockType, BufferBlockStyle, IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG,
+};
 
 #[test]
 fn test_export_normalizes_code_languages() {
@@ -51,6 +56,154 @@ print_endline "Hello, World!"
 ```
 "#
     );
+}
+
+#[test]
+fn test_inline_html_line_breaks_preserve_block_styles_and_exports() {
+    App::test((), |mut app| async move {
+        let cases = [
+            (
+                "first<br>second",
+                BufferBlockStyle::PlainText,
+                "first\nsecond",
+                "<p>first<br>second</p>",
+            ),
+            (
+                "# first<br>second",
+                BufferBlockStyle::Header {
+                    header_size: BlockHeaderSize::Header1,
+                },
+                "first\nsecond\n",
+                "<h1>first<br>second</h1>",
+            ),
+            (
+                "* first<br>second",
+                BufferBlockStyle::UnorderedList {
+                    indent_level: ListIndentLevel::One,
+                },
+                "first\nsecond\n",
+                "<ul><li>first<br>second</li></ul>",
+            ),
+            (
+                "1. first<br>second",
+                BufferBlockStyle::OrderedList {
+                    indent_level: ListIndentLevel::One,
+                    number: Some(1),
+                },
+                "first\nsecond\n",
+                "<ol start=\"1\"><li>first<br>second</li></ol>",
+            ),
+            (
+                "- [ ] first<br>second",
+                BufferBlockStyle::TaskList {
+                    indent_level: ListIndentLevel::One,
+                    complete: false,
+                },
+                "first\nsecond\n",
+                "<ul><li><input type=\"checkbox\">first<br>second</li></ul>",
+            ),
+        ];
+
+        for (markdown, expected_style, expected_text, expected_html) in cases {
+            let (buffer, selection) = Buffer::mock_from_markdown(
+                markdown,
+                None,
+                Box::new(|_, _| IndentBehavior::Ignore),
+                &mut app,
+            );
+
+            app.read_model(&selection, |selection, ctx| selection.validate_buffer(ctx));
+            app.read_model(&buffer, |buffer, ctx| {
+                assert_eq!(buffer.text().as_str(), expected_text, "{markdown}");
+                assert_eq!(
+                    buffer.block_type_at_point(CharOffset::from(1)),
+                    BlockType::Text(expected_style.clone()),
+                    "{markdown} before the hard break"
+                );
+                assert_eq!(
+                    buffer.block_type_at_point(CharOffset::from(7)),
+                    BlockType::Text(expected_style.clone()),
+                    "{markdown} after the hard break"
+                );
+                assert_eq!(buffer.markdown_unescaped().trim_end(), markdown);
+
+                let range = CharOffset::from(1)..buffer.max_charoffset();
+                let html = buffer
+                    .ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+                    .expect("block should serialize to HTML");
+                assert!(html.contains(expected_html), "{markdown}: {html}");
+            });
+        }
+    });
+}
+
+#[test]
+fn test_inline_html_line_break_preserves_inline_styles() {
+    App::test((), |mut app| async move {
+        let markdown = "**first<br>second**";
+        let (buffer, selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        app.read_model(&selection, |selection, ctx| selection.validate_buffer(ctx));
+        app.read_model(&buffer, |buffer, ctx| {
+            assert_eq!(buffer.markdown_unescaped().trim_end(), markdown);
+            let range = CharOffset::from(1)..buffer.max_charoffset();
+            let html = buffer
+                .ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+                .expect("paragraph should serialize to HTML");
+            assert!(
+                html.contains("<strong>first</strong><strong><br></strong><strong>second</strong>"),
+                "{html}"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_inline_html_line_break_supports_caret_selection_and_plain_text() {
+    App::test((), |mut app| async move {
+        let markdown = "first<br>second";
+        let (buffer, selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        selection.update(&mut app, |selection, _| {
+            selection.set_selection_offsets(vec1![SelectionOffsets {
+                tail: CharOffset::from(6),
+                head: CharOffset::from(7),
+            }]);
+        });
+        buffer.read(&app, |buffer, ctx| {
+            assert_eq!(
+                buffer
+                    .selected_text_as_plain_text(selection.clone(), ctx)
+                    .as_str(),
+                "\n"
+            );
+            assert_eq!(buffer.text().as_str(), "first\nsecond");
+            assert_eq!(buffer.markdown_unescaped(), markdown);
+        });
+
+        selection.update(&mut app, |selection, _| {
+            selection.set_selection_offsets(vec1![SelectionOffsets {
+                tail: CharOffset::from(7),
+                head: CharOffset::from(7),
+            }]);
+        });
+        selection.read(&app, |selection, _| {
+            assert_eq!(
+                selection.selections_to_offset_ranges(),
+                vec1![CharOffset::from(7)..CharOffset::from(7)]
+            );
+        });
+    });
 }
 
 #[test]
@@ -332,6 +485,43 @@ fn test_table_markdown_round_trip() {
             exported_markdown,
             "| header 1 | header 2 |\n| --- | --- |\n| value 1 | value 2 |\n"
         );
+    });
+}
+
+#[test]
+fn test_table_html_line_break_round_trip() {
+    App::test((), |mut app| async move {
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
+        let markdown = "\
+| Feature | Notes |\n\
+| --- | --- |\n\
+| Export | **CSV<br>JSON** |\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let internal_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown());
+        assert_eq!(
+            internal_markdown,
+            format!(
+                "```{}\nFeature\tNotes\nExport\t**CSV<br>JSON**\n```\n",
+                TABLE_BLOCK_MARKDOWN_LANG
+            )
+        );
+
+        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert_eq!(exported_markdown, markdown);
+
+        let html = app
+            .read_model(&buffer, |buffer, ctx| {
+                let range = CharOffset::from(1)..buffer.max_charoffset();
+                buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+            })
+            .expect("table should serialize to HTML");
+        assert!(html.contains("<strong>CSV<br>JSON</strong>"), "{html}");
     });
 }
 

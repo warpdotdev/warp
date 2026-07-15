@@ -993,6 +993,9 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::CodeSpan(text) => {
                 state.push_closed_node(FormattedTextFragment::inline_code(text));
             }
+            InlineToken::HtmlLineBreak => {
+                state.push_closed_node(FormattedTextFragment::hard_line_break());
+            }
             InlineToken::Text(text) => {
                 state.push_text(text);
             }
@@ -1505,7 +1508,9 @@ fn consolidate_fragments(
     fragments
         .into_iter()
         .coalesce(|mut prev, current| {
-            if prev.styles == current.styles {
+            // Each hard line-break fragment represents one source tag. Keep consecutive breaks
+            // separate so lowering and serialization preserve their exact count.
+            if prev.styles == current.styles && !prev.styles.hard_line_break {
                 prev.text.push_str(&current.text);
                 Ok(prev)
             } else {
@@ -1541,6 +1546,7 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             backslash_escape,
             html_entity,
             code_span,
+            parse_inline_token_html_line_break,
             parse_inline_token_link_start,
             parse_inline_token_link_end,
             parse_inline_token_asterisk,
@@ -1556,6 +1562,26 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             // a punctuation character that doesn't affect formatting).
             unmatched_char,
         )),
+    )(input)
+}
+
+/// Parse an HTML line break tag.
+///
+/// The tag name is case-insensitive, like HTML, but this intentionally accepts only the common
+/// no-attribute forms. Other raw HTML remains literal Markdown text.
+fn parse_inline_token_html_line_break<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "html_line_break",
+        value(
+            InlineToken::HtmlLineBreak,
+            alt((
+                tag_no_case("<br />"),
+                tag_no_case("<br/>"),
+                tag_no_case("<br>"),
+            )),
+        ),
     )(input)
 }
 
@@ -1693,6 +1719,8 @@ enum InlineToken<'a> {
     /// An entire code span. Code spans have higher precedence than all other inline constructs,
     /// so we parse them into discrete tokens.
     CodeSpan(&'a str),
+    /// A raw HTML `<br>` tag, represented in formatted text as a newline character.
+    HtmlLineBreak,
     /// An autolink URL. Owned because backslash escapes are processed (e.g., `\.` → `.`),
     /// so the result may differ from the input slice.
     AutoLink(String),

@@ -358,6 +358,13 @@ impl<'a> BufferMarkdownParser<'a> {
             if run.run.is_empty() || run.text_styles.is_placeholder() {
                 continue;
             }
+            if run.text_styles.is_hard_line_break() {
+                debug_assert!(matches!(run.run.as_str(), "\n" | "\r\n"));
+                Self::append_formatting(&prev_styles, &run.text_styles, "", buf);
+                prev_styles.clone_from(&run.text_styles);
+                buf.push_str("<br>");
+                continue;
+            }
             let (content, has_trailing_newline) = match run.run.strip_suffix('\n') {
                 Some(without_newline) => (without_newline, true),
                 _ => (run.run.as_str(), false),
@@ -523,8 +530,11 @@ impl<'a> BufferToFormattedText<'a> {
 
 impl StyledBufferRun {
     fn to_formatted_text_fragment(&self) -> FormattedTextFragment {
-        let text = match self.run.strip_suffix('\n') {
-            Some(without_newline) => without_newline.to_string(),
+        let text = match (
+            self.text_styles.is_hard_line_break(),
+            self.run.strip_suffix('\n'),
+        ) {
+            (false, Some(without_newline)) => without_newline.to_string(),
             _ => self.run.clone(),
         };
 
@@ -950,6 +960,7 @@ impl Serialize for ExportedBufferBlocks<'_> {
                         let mut text = runs.run.as_str();
                         // Strip trailing newline since <p> or <code> already includes a linebreak.
                         if idx == text_block.block.len() - 1
+                            && !runs.text_styles.is_hard_line_break()
                             && let Some(removed_trailing_newline) = runs.run.strip_suffix('\n')
                         {
                             text = removed_trailing_newline;
@@ -989,7 +1000,14 @@ impl Serialize for ExportedBufferBlocks<'_> {
                             serializer.start_elem(tag_name, iter::empty())?;
                         }
 
-                        serializer.write_text(text)?;
+                        if runs.text_styles.is_hard_line_break() {
+                            debug_assert!(matches!(text, "\n" | "\r\n"));
+                            let tag_name = QualName::new(None, ns!(html), "br".into());
+                            serializer.start_elem(tag_name.clone(), iter::empty())?;
+                            serializer.end_elem(tag_name)?;
+                        } else {
+                            serializer.write_text(text)?;
+                        }
 
                         if runs.text_styles.is_inline_code() {
                             serializer.end_elem(QualName::new(None, ns!(html), "code".into()))?;
@@ -1145,7 +1163,19 @@ fn serialize_table_cell_inline<S>(
 where
     S: Serializer,
 {
+    let mut consolidated = Vec::<FormattedTextFragment>::new();
     for fragment in inline {
+        let mut fragment = fragment.clone();
+        fragment.styles.hard_line_break = false;
+        match consolidated.last_mut() {
+            Some(previous) if previous.styles == fragment.styles => {
+                previous.text.push_str(&fragment.text);
+            }
+            _ => consolidated.push(fragment),
+        }
+    }
+
+    for fragment in &consolidated {
         let styles = TextStylesWithMetadata::from(fragment.styles.clone());
 
         if let Some(link) = styles.link_content() {
@@ -1172,7 +1202,15 @@ where
             serializer.start_elem(QualName::new(None, ns!(html), "code".into()), iter::empty())?;
         }
 
-        serializer.write_text(&fragment.text)?;
+        let mut lines = fragment.text.split('\n').peekable();
+        while let Some(line) = lines.next() {
+            serializer.write_text(line)?;
+            if lines.peek().is_some() {
+                let tag = QualName::new(None, ns!(html), "br".into());
+                serializer.start_elem(tag.clone(), iter::empty())?;
+                serializer.end_elem(tag)?;
+            }
+        }
 
         if styles.is_inline_code() {
             serializer.end_elem(QualName::new(None, ns!(html), "code".into()))?;
@@ -1249,10 +1287,15 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
     let mut previous_styles = TextStylesWithMetadata::default();
     for fragment in inline {
         let next_styles = TextStylesWithMetadata::from(fragment.styles.clone());
+        let text = if fragment.styles.hard_line_break {
+            "<br>".to_string()
+        } else {
+            fragment.text.clone()
+        };
         let content = BufferMarkdownParser::append_formatting(
             &previous_styles,
             &next_styles,
-            fragment.text.as_str(),
+            text.as_str(),
             &mut markdown,
         );
         previous_styles = next_styles;

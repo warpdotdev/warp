@@ -69,6 +69,13 @@ pub fn validate_content(content: &SumTree<BufferText>) {
                 }
                 None => (),
             },
+            BufferText::HardLineBreak => {
+                assert!(
+                    !matches!(active_block_style, Some(BlockType::Item(_))),
+                    "{char_offset}: Found hard line break, but active block item does not decorate text\nBuffer: {}",
+                    content.debug()
+                );
+            }
             BufferText::BlockItem { item_type } => {
                 active_block_style = Some(BlockType::Item(item_type.clone()));
             }

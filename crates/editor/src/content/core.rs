@@ -1626,7 +1626,12 @@ fn update_content_with_text_fragments(
         }
 
         transition_styles_with_metadata(&active_text_style, &text_style, content_tree);
-        content_tree.append_str(&content);
+        if text_style.is_hard_line_break() {
+            debug_assert_eq!(content, "\n");
+            content_tree.push(BufferText::HardLineBreak);
+        } else {
+            content_tree.append_str(&content);
+        }
     }
 }
 

@@ -525,6 +525,99 @@ fn test_line_break() {
 }
 
 #[test]
+fn test_parse_html_line_break_spellings() {
+    for source in [
+        "first<br>second",
+        "first<br/>second",
+        "first<br />second",
+        "first<BR>second",
+        "first<Br />second",
+    ] {
+        assert_eq!(
+            test_parse_markdown(source),
+            vec![FormattedTextLine::Line(vec![
+                FormattedTextFragment::plain_text("first"),
+                FormattedTextFragment::hard_line_break(),
+                FormattedTextFragment::plain_text("second"),
+            ])],
+            "source: {source:?}"
+        );
+    }
+}
+
+#[test]
+fn test_parse_trailing_and_consecutive_html_line_breaks() {
+    assert_eq!(
+        test_parse_markdown("A<br>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("A"),
+            FormattedTextFragment::hard_line_break(),
+        ])]
+    );
+    assert_eq!(
+        test_parse_markdown("A<br><br>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("A"),
+            FormattedTextFragment::hard_line_break(),
+            FormattedTextFragment::hard_line_break(),
+        ])]
+    );
+}
+
+#[test]
+fn test_parse_html_line_break_preserves_inline_formatting() {
+    assert_eq!(
+        test_parse_markdown("before **bold<br>still bold** after"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("before "),
+            FormattedTextFragment::bold("bold"),
+            FormattedTextFragment {
+                text: "\n".to_string(),
+                styles: FormattedTextStyles {
+                    weight: Some(CustomWeight::Bold),
+                    hard_line_break: true,
+                    ..Default::default()
+                },
+            },
+            FormattedTextFragment::bold("still bold"),
+            FormattedTextFragment::plain_text(" after"),
+        ])]
+    );
+}
+
+#[test]
+fn test_parse_html_line_break_is_literal_in_code_or_when_malformed() {
+    assert_eq!(
+        test_parse_markdown("`first<br>second`"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::inline_code("first<br>second")
+        ])]
+    );
+    assert_eq!(
+        test_parse_markdown(r"first\<br>second"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("first<br>second")
+        ])]
+    );
+
+    for source in [
+        "first<br second",
+        "first<br >second",
+        "first<br class=x>second",
+        "first<brx>second",
+        "first</br>second",
+    ] {
+        assert_eq!(
+            test_parse_markdown(source),
+            vec![FormattedTextLine::Line(vec![
+                FormattedTextFragment::plain_text(source)
+            ])],
+            "source: {source:?}"
+        );
+    }
+}
+
+#[test]
 fn test_special_chars() {
     // This tests that we can parse:
     // - A non-escaping literal backslash
@@ -2827,6 +2920,45 @@ fn test_parse_table_with_inline_formatting() {
     } else {
         panic!("Expected table");
     }
+}
+
+#[test]
+fn test_parse_table_with_html_line_breaks() {
+    let source = "| Feature | Notes |\n| --- | --- |\n| Export | **CSV<br>JSON** |\n";
+    let result = test_parse_markdown_with_gfm_tables(source);
+
+    let FormattedTextLine::Table(table) = &result[0] else {
+        panic!("Expected table");
+    };
+    assert_eq!(
+        table.rows[0][1],
+        vec![
+            FormattedTextFragment::bold("CSV"),
+            FormattedTextFragment {
+                text: "\n".to_string(),
+                styles: FormattedTextStyles {
+                    weight: Some(CustomWeight::Bold),
+                    hard_line_break: true,
+                    ..Default::default()
+                },
+            },
+            FormattedTextFragment::bold("JSON"),
+        ]
+    );
+    assert_eq!(
+        table.to_internal_format(),
+        "Feature\tNotes\nExport\t**CSV<br>JSON**\n"
+    );
+    assert_eq!(
+        table.to_plain_text(),
+        "| Feature | Notes |\n| --- | --- |\n| Export | CSV<br>JSON |"
+    );
+}
+
+#[test]
+fn test_html_line_break_updates_formatted_line_count() {
+    let line = test_parse_markdown("first<br>second").remove(0);
+    assert_eq!(line.num_lines(), 2);
 }
 
 #[test]

@@ -69,6 +69,24 @@ fn test_validate_single_line_header() {
 }
 
 #[test]
+fn test_validate_inline_hard_line_break_in_header() {
+    let mut tree = SumTree::new();
+    tree.push(BufferText::BlockMarker {
+        marker_type: BufferBlockStyle::Header {
+            header_size: BlockHeaderSize::Header1,
+        },
+    });
+    tree.append_str("first");
+    tree.push(BufferText::HardLineBreak);
+    tree.append_str("second");
+    tree.push(BufferText::BlockMarker {
+        marker_type: BufferBlockStyle::PlainText,
+    });
+
+    super::validate_content(&tree);
+}
+
+#[test]
 /*
  * TODO: this test should panic once we prevent styling in code blocks.
 #[should_panic(

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
-use markdown_parser::{Hyperlink, TableAlignment};
+use markdown_parser::{FormattedTextInline, Hyperlink, TableAlignment};
 use num_traits::SaturatingSub;
 use rangemap::RangeSet;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -29,6 +29,7 @@ use super::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use super::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
 use super::text::{
     BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache,
+    TextStylesWithMetadata,
 };
 use crate::parallel_util::Last;
 use crate::render::layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font};
@@ -254,6 +255,28 @@ struct TableCellTextLayout {
     text_layout: InlineTextLayoutInput,
 }
 
+fn table_cell_runs(cell_inline: &FormattedTextInline) -> Vec<StyledBufferRun> {
+    let mut runs = Vec::<StyledBufferRun>::new();
+    for fragment in cell_inline {
+        let text_styles: TextStylesWithMetadata = fragment.styles.clone().into();
+        match runs.last_mut() {
+            Some(previous)
+                if !previous.text_styles.is_hard_line_break()
+                    && !text_styles.is_hard_line_break()
+                    && previous.text_styles == text_styles =>
+            {
+                previous.run.push_str(&fragment.text);
+            }
+            _ => runs.push(StyledBufferRun {
+                run: fragment.text.clone(),
+                text_styles,
+                block_style: BufferBlockStyle::PlainText,
+            }),
+        }
+    }
+    runs
+}
+
 /// The first table layout pass measures each cell without a column-width constraint so we can
 /// compute shared column widths before the final pass applies alignment-sensitive layout. We also
 /// keep the styled text inputs from this pass so the second pass can reuse them directly.
@@ -279,14 +302,7 @@ fn measure_table_cells(
         };
         let mut row_text_layouts = Vec::with_capacity(row.len());
         for (col_idx, cell_inline) in row.iter().enumerate() {
-            let runs: Vec<StyledBufferRun> = cell_inline
-                .iter()
-                .map(|fragment| StyledBufferRun {
-                    run: fragment.text.clone(),
-                    text_styles: fragment.styles.clone().into(),
-                    block_style: BufferBlockStyle::PlainText,
-                })
-                .collect();
+            let runs = table_cell_runs(cell_inline);
             let mut line = LayOutArgs::new();
             line.highlighted_urls = highlight_urls(&runs);
             for run in &runs {
@@ -387,7 +403,9 @@ impl LayOutArgs {
         content: &StyledBufferRun,
         paragraph_styles: &ParagraphStyles,
     ) -> bool {
-        let (run_content, has_new_line) = if let Some(content) = content.run.strip_suffix('\n') {
+        let (run_content, has_new_line) = if !content.text_styles.is_hard_line_break()
+            && let Some(content) = content.run.strip_suffix('\n')
+        {
             (content, true)
         } else {
             (content.run.as_str(), false)
@@ -1430,7 +1448,9 @@ fn highlight_urls(runs: &[StyledBufferRun]) -> Vec<ParsedUrl> {
     let mut state = UrlDetectionState::default();
 
     for content in runs {
-        let (run_content, has_newline) = if let Some(content) = content.run.strip_suffix('\n') {
+        let (run_content, has_newline) = if !content.text_styles.is_hard_line_break()
+            && let Some(content) = content.run.strip_suffix('\n')
+        {
             (content, true)
         } else {
             (content.run.as_str(), false)

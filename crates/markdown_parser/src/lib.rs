@@ -283,13 +283,20 @@ impl FormattedTextLine {
 
 impl LineCount for FormattedTextLine {
     fn num_lines(&self) -> usize {
+        fn inline_line_count(inline: &FormattedTextInline) -> usize {
+            1 + inline
+                .iter()
+                .filter(|fragment| fragment.styles.hard_line_break)
+                .count()
+        }
+
         match self {
             Self::CodeBlock(text) => text.code.matches('\n').count(),
-            Self::Heading(_) => 1,
-            Self::Line(_) => 1,
-            Self::OrderedList(_) => 1,
-            Self::UnorderedList(_) => 1,
-            Self::TaskList(_) => 1,
+            Self::Heading(header) => inline_line_count(&header.text),
+            Self::Line(line) => inline_line_count(line),
+            Self::OrderedList(list) => inline_line_count(&list.indented_text.text),
+            Self::UnorderedList(list) => inline_line_count(&list.text),
+            Self::TaskList(list) => inline_line_count(&list.text),
             Self::LineBreak => 0,
             Self::HorizontalRule => 0,
             Self::Embedded(_) => 1,
@@ -431,7 +438,16 @@ impl FormattedTable {
     /// Serialize to GFM pipe-table markdown.
     pub fn to_plain_text(&self) -> String {
         fn inline_to_text(inline: &FormattedTextInline) -> String {
-            inline.iter().map(|f| f.text.as_str()).collect()
+            inline
+                .iter()
+                .map(|fragment| {
+                    if fragment.styles.hard_line_break {
+                        "<br>".to_string()
+                    } else {
+                        fragment.text.clone()
+                    }
+                })
+                .collect()
         }
 
         let mut lines = Vec::new();
@@ -457,9 +473,24 @@ impl FormattedTable {
 
 /// Convert a `FormattedTextInline` back to markdown syntax.
 fn inline_to_markdown(inline: &FormattedTextInline) -> String {
-    let mut result = String::new();
+    let mut consolidated = Vec::<FormattedTextFragment>::new();
     for fragment in inline {
-        let mut text = fragment.text.clone();
+        let mut fragment = fragment.clone();
+        if fragment.styles.hard_line_break {
+            fragment.text = "<br>".to_string();
+            fragment.styles.hard_line_break = false;
+        }
+        match consolidated.last_mut() {
+            Some(previous) if previous.styles == fragment.styles => {
+                previous.text.push_str(&fragment.text);
+            }
+            _ => consolidated.push(fragment),
+        }
+    }
+
+    let mut result = String::new();
+    for fragment in consolidated {
+        let mut text = fragment.text;
         if text.is_empty() {
             continue;
         }
@@ -549,6 +580,8 @@ pub struct FormattedTextStyles {
     pub strikethrough: bool,
     pub inline_code: bool,
     pub hyperlink: Option<Hyperlink>,
+    /// Whether this fragment represents an explicit inline line break such as `<br>`.
+    pub hard_line_break: bool,
 }
 
 impl FormattedTextFragment {
@@ -556,6 +589,16 @@ impl FormattedTextFragment {
         Self {
             text: text.into(),
             styles: Default::default(),
+        }
+    }
+
+    pub fn hard_line_break() -> Self {
+        Self {
+            text: "\n".to_string(),
+            styles: FormattedTextStyles {
+                hard_line_break: true,
+                ..Default::default()
+            },
         }
     }
 
@@ -695,6 +738,14 @@ impl fmt::Debug for FormattedTextStyles {
                 f.write_str(" | ")?;
             }
             f.write_str("InlineCode")?;
+            first = false;
+        }
+
+        if self.hard_line_break {
+            if !first {
+                f.write_str(" | ")?;
+            }
+            f.write_str("HardLineBreak")?;
             first = false;
         }
 

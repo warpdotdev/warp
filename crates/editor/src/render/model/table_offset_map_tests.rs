@@ -232,6 +232,54 @@ fn test_table_cell_offset_map_handles_backslash_escaped_punctuation() {
 }
 
 #[test]
+fn test_table_cell_offset_map_collapses_html_line_break_tags() {
+    for source in ["a<br>b", "a<br/>b", "a<br />b", "a<BR />b"] {
+        let inline = parse_inline_markdown(source);
+        let rendered_text: String = inline
+            .iter()
+            .map(|fragment| fragment.text.as_str())
+            .collect();
+        assert_eq!(rendered_text, "a\nb", "source: {source:?}");
+
+        let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+        let break_start = CharOffset::from(1);
+        let following_source_offset = CharOffset::from(source.chars().count() - 1);
+
+        assert_eq!(map.rendered_length(), CharOffset::from(3));
+        assert_eq!(
+            map.rendered_to_source(CharOffset::from(0)),
+            CharOffset::from(0)
+        );
+        assert_eq!(map.rendered_to_source(CharOffset::from(1)), break_start);
+        assert_eq!(
+            map.rendered_to_source(CharOffset::from(2)),
+            following_source_offset
+        );
+        assert_eq!(
+            map.rendered_to_source(CharOffset::from(3)),
+            CharOffset::from(source.chars().count())
+        );
+
+        assert_eq!(
+            map.source_to_rendered(CharOffset::from(0)),
+            CharOffset::from(0)
+        );
+        assert_eq!(map.source_to_rendered(break_start), CharOffset::from(1));
+        for source_offset in 2..following_source_offset.as_usize() {
+            assert_eq!(
+                map.source_to_rendered(CharOffset::from(source_offset)),
+                CharOffset::from(2),
+                "source offset {source_offset} in {source:?}"
+            );
+        }
+        assert_eq!(
+            map.source_to_rendered(following_source_offset),
+            CharOffset::from(2)
+        );
+    }
+}
+
+#[test]
 fn test_table_cell_offset_map_handles_nested_styles() {
     let source = "**a *b* c**";
     let inline = parse_inline_markdown(source);
