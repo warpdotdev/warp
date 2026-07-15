@@ -4,6 +4,7 @@ use std::mem;
 
 use ai::agent::action_result::StopRecordingResult;
 use futures::channel::oneshot;
+use instant::Instant;
 use thiserror::Error;
 use warpui::{Entity, SingletonEntity};
 
@@ -37,6 +38,10 @@ pub(crate) struct ActiveRecording {
     pub(crate) id: String,
     pub(crate) conversation_id: AIConversationId,
     pub(crate) handle: computer_use::RecordingHandle,
+    /// When capture went live; action offsets are measured from here.
+    pub(crate) started_at: Instant,
+    /// Action groups to burn into the video, in dispatch order.
+    pub(crate) actions: Vec<computer_use::ActionLogEntry>,
 }
 
 enum RecordingState {
@@ -60,7 +65,7 @@ enum RecordingState {
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) enum FinalizationClaim {
     Claimed {
-        recording: ActiveRecording,
+        recording: Box<ActiveRecording>,
         result_receiver: oneshot::Receiver<StopRecordingResult>,
     },
     InProgress(oneshot::Receiver<StopRecordingResult>),
@@ -122,7 +127,25 @@ impl RecordingController {
                 id: recording_id,
                 conversation_id,
                 handle,
+                started_at: Instant::now(),
+                actions: Vec::new(),
             });
+        }
+    }
+
+    /// Appends an overlay group when the active recording belongs to the
+    /// originating conversation.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn record_action(&mut self, conversation_id: AIConversationId, labels: Vec<String>) {
+        if !labels.is_empty() {
+            if let RecordingState::Active(recording) = &mut self.state {
+                if recording.conversation_id == conversation_id {
+                    recording.actions.push(computer_use::ActionLogEntry {
+                        offset: recording.started_at.elapsed(),
+                        labels,
+                    });
+                }
+            }
         }
     }
 
@@ -182,7 +205,7 @@ impl RecordingController {
                     waiters: vec![sender],
                 };
                 FinalizationClaim::Claimed {
-                    recording,
+                    recording: Box::new(recording),
                     result_receiver: receiver,
                 }
             }
