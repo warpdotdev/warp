@@ -550,6 +550,7 @@ impl ApiKeyManager {
                 allow_use_of_warp_credits: false,
                 aws_credentials,
                 google_cloud_credentials,
+                codex_oauth_credentials: None,
             })
         }
     }
