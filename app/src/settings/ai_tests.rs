@@ -4,6 +4,7 @@ use warpui::{App, SingletonEntity};
 
 use super::*;
 use crate::ai::request_usage_model::{RequestLimitInfo, RequestLimitRefreshDuration};
+use crate::ai::voice::transcribe::TranscribeRequest;
 use crate::auth::AuthStateProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -780,8 +781,6 @@ fn voice_input_language_code_returns_iso_639_1_code() {
 
 #[test]
 fn transcribe_request_omits_language_for_auto_detect() {
-    use crate::ai::voice::transcribe::TranscribeRequest;
-
     let request = TranscribeRequest {
         language: VoiceInputLanguage::AutoDetect.code().map(|c| c.to_string()),
         ..Default::default()
@@ -795,8 +794,6 @@ fn transcribe_request_omits_language_for_auto_detect() {
 
 #[test]
 fn transcribe_request_includes_selected_language() {
-    use crate::ai::voice::transcribe::TranscribeRequest;
-
     let request = TranscribeRequest {
         language: VoiceInputLanguage::Dutch.code().map(|c| c.to_string()),
         ..Default::default()
