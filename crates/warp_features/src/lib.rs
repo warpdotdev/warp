@@ -907,6 +907,11 @@ pub enum FeatureFlag {
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
     McpJsonTreeView,
+
+    /// Gates preferring MCP tool calls over helper shell scripts for agent tool
+    /// orchestration. Scaffolding only — currently gates no behavior; the gated
+    /// behavior is tracked separately (see QUALITY-1050).
+    McpOverScripts,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
