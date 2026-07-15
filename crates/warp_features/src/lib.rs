@@ -879,6 +879,9 @@ pub enum FeatureFlag {
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,
 
+    /// Connect a ChatGPT (Codex) subscription via OAuth as a BYO credential
+    CodexSubscription,
+
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
@@ -912,6 +915,7 @@ pub enum FeatureFlag {
     /// procedurally as cell-filling rectangles instead of from the font,
     /// eliminating seams between adjacent box-drawing cells in the terminal.
     BoxDrawingGlyphs,
+
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -988,6 +992,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
+    FeatureFlag::CodexSubscription,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
