@@ -389,13 +389,16 @@ cargo nextest run -p warpui_core
 
 ## Evidence for the PR
 
-For a user-visible TUI change, attach the concrete rendered result as the
-verification evidence: the relevant lines from `tmux capture-pane` (and/or the
-`render_to_lines` snapshot diff), and — for a visual or interaction change — a
-**screenshot or short video** (an H.264 MP4, matching computer-use recordings)
-rendered via asciinema+agg+ffmpeg and attached to the run as conversation
-artifacts (Step 4). This is the TUI equivalent of the GUI's `computer_use`
-screenshot (see the TUI caveat in `review-pr-local`).
+For a user-visible TUI change, **prefer a screenshot or short video as the
+primary evidence** — an actual image/clip of the rendered surface is always more
+convincing to a reviewer than raw text. Capture it per Step 4 (a still, or an
+H.264 MP4 matching computer-use recordings), attach it to the run as a
+conversation artifact, and reference it in the PR. Include the `tmux
+capture-pane` lines (and/or a `render_to_lines` snapshot diff) as a
+**supplement** — handy for asserting on exact text — not as the main proof. Only
+fall back to text alone when an image/clip genuinely can't be produced, and say
+so. This is the TUI equivalent of the GUI's `computer_use` screenshot (see the
+TUI caveat in `review-pr-local`).
 
 ## Related skills
 
