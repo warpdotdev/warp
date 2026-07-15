@@ -1866,17 +1866,7 @@ fn parse_url<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
         take_till1(|c: char| c.is_whitespace() || "[]<".find_token(c)),
     )))(i)?;
 
-    // Strip trailing punctuation from the URL. Per the GFM autolink extension,
-    // trailing `? ! . , : * _ ~` are not part of the autolink. This covers both a
-    // URL at the end of a sentence (`https://example.com.`) and an emphasized
-    // autolink followed by punctuation (`**https://example.com**.`), where the
-    // closing `**` must be released from the URL so the emphasis pairs up.
-    //
-    // A backslash-escaped punctuation character (an odd number of preceding
-    // backslashes) is an intentional part of the URL, not trailing punctuation,
-    // so stop trimming there — the escape is unescaped below, e.g.
-    // `https://example.com\.` keeps its final `.`. All punctuation in the set is
-    // ASCII, so a byte scan is sufficient (multibyte chars are never trimmed).
+    // Strip trailing punctuation from the URL. Per the GFM autolink extension.
     let bytes = raw_url.as_bytes();
     let mut trimmed_len = raw_url.len();
     while trimmed_len > 0 {

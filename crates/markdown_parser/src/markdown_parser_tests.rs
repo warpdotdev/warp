@@ -1806,13 +1806,6 @@ fn test_parse_autolinks_with_emphasis() {
 
 #[test]
 fn test_parse_emphasized_autolink_with_trailing_punctuation() {
-    // Regression test: a bold- or italic-wrapped autolink followed by trailing
-    // punctuation (e.g. a sentence-ending period) must still render as an
-    // emphasized hyperlink. Previously the trailing `.` stopped the URL parser
-    // from stripping the closing `**`, so the `**` was absorbed into the URL and
-    // the opening `**` was left unmatched and rendered as literal text.
-
-    // Bold autolink followed by a period.
     assert_eq!(
         parse_all("**https://example.com**.", parse_inline),
         vec![
@@ -1828,7 +1821,6 @@ fn test_parse_emphasized_autolink_with_trailing_punctuation() {
         ]
     );
 
-    // Italic autolink followed by an exclamation mark.
     assert_eq!(
         parse_all("*https://example.com*!", parse_inline),
         vec![
@@ -1847,9 +1839,6 @@ fn test_parse_emphasized_autolink_with_trailing_punctuation() {
 
 #[test]
 fn test_parse_autolink_strips_trailing_sentence_punctuation() {
-    // Per the GFM autolink extension, trailing punctuation such as `.` is not
-    // considered part of an autolink.
-    // https://github.github.com/gfm/#autolinks-extension-
     assert_eq!(
         parse_all("See https://example.com.", parse_inline),
         vec![
@@ -1862,10 +1851,6 @@ fn test_parse_autolink_strips_trailing_sentence_punctuation() {
 
 #[test]
 fn test_parse_autolink_preserves_escaped_trailing_punctuation() {
-    // A backslash-escaped trailing punctuation character is an intentional part
-    // of the URL and must be preserved (unescaped), not trimmed. This guards the
-    // trailing-punctuation trim against splitting an escape sequence — e.g. from
-    // the serializer emitting `\.` for a URL that genuinely ends in `.`.
     assert_eq!(
         parse_all("https://example.com\\.", parse_inline),
         vec![FormattedTextFragment::hyperlink(
@@ -1874,8 +1859,6 @@ fn test_parse_autolink_preserves_escaped_trailing_punctuation() {
         )]
     );
 
-    // An escaped backslash (`\\`) is a literal backslash; the `.` after it is not
-    // escaped, so it is still trimmed as trailing punctuation.
     assert_eq!(
         parse_all("https://example.com\\\\.", parse_inline),
         vec![
