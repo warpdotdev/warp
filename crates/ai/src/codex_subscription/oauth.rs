@@ -266,8 +266,8 @@ fn parse_callback_query(query: &str) -> anyhow::Result<CallbackData> {
     let mut state = None;
     let mut error = None;
     let mut error_description = None;
-    let pairs: Vec<(String, String)> =
-        serde_urlencoded::from_str(query).context("the Codex authorization callback query was invalid")?;
+    let pairs: Vec<(String, String)> = serde_urlencoded::from_str(query)
+        .context("the Codex authorization callback query was invalid")?;
     for (key, value) in pairs {
         match key.as_str() {
             "code" => code = Some(value),
@@ -366,9 +366,7 @@ async fn post_form_token_request_at<T: Serialize + ?Sized>(
     parse_token_response(response).await
 }
 
-async fn parse_token_response(
-    response: http_client::Response,
-) -> anyhow::Result<TokenResponse> {
+async fn parse_token_response(response: http_client::Response) -> anyhow::Result<TokenResponse> {
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -433,8 +431,7 @@ pub fn chatgpt_account_id_from_id_token(id_token: &str) -> anyhow::Result<String
         segments.next(),
         segments.next(),
     );
-    let (Some(header), Some(payload), Some(signature), None) =
-        (header, payload, signature, extra)
+    let (Some(header), Some(payload), Some(signature), None) = (header, payload, signature, extra)
     else {
         bail!("the Codex ID token was not a JWT");
     };

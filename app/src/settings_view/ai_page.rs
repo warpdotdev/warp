@@ -2717,8 +2717,7 @@ impl AISettingsPageView {
             }
         };
 
-        self.codex_oauth_attempt_generation =
-            self.codex_oauth_attempt_generation.wrapping_add(1);
+        self.codex_oauth_attempt_generation = self.codex_oauth_attempt_generation.wrapping_add(1);
         let attempt_generation = self.codex_oauth_attempt_generation;
         self.codex_oauth_connecting = true;
         ctx.notify();
@@ -2739,56 +2738,60 @@ impl AISettingsPageView {
             toast_stack.add_persistent_toast(toast, window_id, ctx);
         });
 
-        ctx.spawn(async move { attempt.finish().await }, move |me, result, ctx| {
-            // A disconnect or newer login invalidates this callback, so it
-            // cannot restore or overwrite credentials from a stale attempt.
-            if !me.codex_oauth_connecting
-                || me.codex_oauth_attempt_generation != attempt_generation
-            {
-                return;
-            }
-            me.codex_oauth_connecting = false;
+        ctx.spawn(
+            async move { attempt.finish().await },
+            move |me, result, ctx| {
+                // A disconnect or newer login invalidates this callback, so it
+                // cannot restore or overwrite credentials from a stale attempt.
+                if !me.codex_oauth_connecting
+                    || me.codex_oauth_attempt_generation != attempt_generation
+                {
+                    return;
+                }
+                me.codex_oauth_connecting = false;
 
-            let window_id = ctx.window_id();
-            let toast = match result {
-                Ok(tokens) => {
-                    let store_result = ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
-                        manager.store_codex_tokens(tokens, ctx)
-                    });
-                    match store_result {
-                        Ok(()) => DismissibleToast::success(
-                            "ChatGPT (Codex) subscription connected".to_string(),
-                        ),
-                        Err(_) => {
-                            safe_error!(
-                                safe: ("Failed to store Codex OAuth credentials"),
-                                full: ("Failed to store Codex OAuth credentials")
-                            );
-                            DismissibleToast::error(
-                                "Couldn't connect ChatGPT (Codex). Try again.".to_string(),
-                            )
+                let window_id = ctx.window_id();
+                let toast = match result {
+                    Ok(tokens) => {
+                        let store_result = ApiKeyManager::handle(ctx)
+                            .update(ctx, move |manager, ctx| {
+                                manager.store_codex_tokens(tokens, ctx)
+                            });
+                        match store_result {
+                            Ok(()) => DismissibleToast::success(
+                                "ChatGPT (Codex) subscription connected".to_string(),
+                            ),
+                            Err(_) => {
+                                safe_error!(
+                                    safe: ("Failed to store Codex OAuth credentials"),
+                                    full: ("Failed to store Codex OAuth credentials")
+                                );
+                                DismissibleToast::error(
+                                    "Couldn't connect ChatGPT (Codex). Try again.".to_string(),
+                                )
+                            }
                         }
                     }
-                }
-                Err(_) => {
-                    safe_error!(
-                        safe: ("Codex OAuth loopback callback failed"),
-                        full: ("Codex OAuth loopback callback failed")
+                    Err(_) => {
+                        safe_error!(
+                            safe: ("Codex OAuth loopback callback failed"),
+                            full: ("Codex OAuth loopback callback failed")
+                        );
+                        DismissibleToast::error(
+                            "Couldn't connect ChatGPT (Codex). Try again.".to_string(),
+                        )
+                    }
+                };
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        toast.with_object_id(CODEX_OAUTH_CONNECT_TOAST_OBJECT_ID.to_string()),
+                        window_id,
+                        ctx,
                     );
-                    DismissibleToast::error(
-                        "Couldn't connect ChatGPT (Codex). Try again.".to_string(),
-                    )
-                }
-            };
-            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(
-                    toast.with_object_id(CODEX_OAUTH_CONNECT_TOAST_OBJECT_ID.to_string()),
-                    window_id,
-                    ctx,
-                );
-            });
-            ctx.notify();
-        });
+                });
+                ctx.notify();
+            },
+        );
     }
 
     /// Exchanges a pasted SuperGrok authorization code using the current
@@ -9451,8 +9454,8 @@ impl SettingsWidget for ApiKeysWidget {
 
         if should_render_codex_subscription(show_provider_keys) {
             #[cfg(not(target_family = "wasm"))]
-            let is_codex_connecting = view.codex_oauth_connecting
-                && ApiKeyManager::as_ref(app).codex_tokens().is_none();
+            let is_codex_connecting =
+                view.codex_oauth_connecting && ApiKeyManager::as_ref(app).codex_tokens().is_none();
             #[cfg(target_family = "wasm")]
             let is_codex_connecting = false;
             column.add_child(

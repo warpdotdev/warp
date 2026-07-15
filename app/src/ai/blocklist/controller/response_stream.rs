@@ -360,9 +360,8 @@ impl ResponseStream {
                 .as_ref()
                 .and_then(|keys| keys.codex_oauth_credentials.as_ref())
                 .is_some();
-            let uses_codex_subscription = is_openai_request
-                && has_codex_subscription
-                && has_selected_codex_credentials;
+            let uses_codex_subscription =
+                is_openai_request && has_codex_subscription && has_selected_codex_credentials;
             if uses_codex_subscription {
                 let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
                 let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -370,11 +369,7 @@ impl ResponseStream {
                 });
                 if let Some(refresh_rx) = refresh_rx {
                     let _ = ctx.spawn(
-                        async move {
-                            refresh_rx
-                                .with_timeout(CODEX_REFRESH_REQUEST_TIMEOUT)
-                                .await
-                        },
+                        async move { refresh_rx.with_timeout(CODEX_REFRESH_REQUEST_TIMEOUT).await },
                         move |me, result, ctx| {
                             // Cancelled or superseded while refreshing — drop this attempt.
                             if me.current_request_id != Some(request_id) {

@@ -915,7 +915,6 @@ pub enum FeatureFlag {
     /// procedurally as cell-filling rectangles instead of from the font,
     /// eliminating seams between adjacent box-drawing cells in the terminal.
     BoxDrawingGlyphs,
-
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

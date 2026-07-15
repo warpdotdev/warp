@@ -939,9 +939,11 @@ fn test_is_using_api_key_for_provider_openai_with_codex_subscription() {
         });
 
         // 2. If Codex subscription tokens are set, but the CodexSubscription feature flag is disabled, it should return false
-        let feature_off = warp_core::features::FeatureFlag::CodexSubscription.override_enabled(false);
-        use ::ai::api_keys::CodexTokens;
+        let feature_off =
+            warp_core::features::FeatureFlag::CodexSubscription.override_enabled(false);
         use std::time::SystemTime;
+
+        use ::ai::api_keys::CodexTokens;
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.set_codex_tokens(
                 Some(CodexTokens {

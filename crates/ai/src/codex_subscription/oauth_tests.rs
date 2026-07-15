@@ -17,9 +17,15 @@ fn authorize_url_contains_exact_codex_params() {
 
     let params: HashMap<String, String> = serde_urlencoded::from_str(query).unwrap();
     assert_eq!(params.len(), 9);
-    assert_eq!(params.get("response_type").map(String::as_str), Some("code"));
+    assert_eq!(
+        params.get("response_type").map(String::as_str),
+        Some("code")
+    );
     assert_eq!(params.get("client_id").map(String::as_str), Some(CLIENT_ID));
-    assert_eq!(params.get("redirect_uri").map(String::as_str), Some(redirect.as_str()));
+    assert_eq!(
+        params.get("redirect_uri").map(String::as_str),
+        Some(redirect.as_str())
+    );
     assert_eq!(params.get("scope").map(String::as_str), Some(SCOPE));
     assert_eq!(
         params.get("code_challenge").map(String::as_str),
@@ -37,7 +43,10 @@ fn authorize_url_contains_exact_codex_params() {
         params.get("codex_cli_simplified_flow").map(String::as_str),
         Some("true")
     );
-    assert_eq!(params.get("state").map(String::as_str), Some(pkce.state.as_str()));
+    assert_eq!(
+        params.get("state").map(String::as_str),
+        Some(pkce.state.as_str())
+    );
 }
 
 #[test]
@@ -102,7 +111,8 @@ fn callback_listener_falls_back_to_second_port() {
 
 #[test]
 fn token_exchange_posts_form_to_local_server() {
-    let response = r#"{"id_token":"id","access_token":"access","refresh_token":"refresh","expires_in":3600}"#;
+    let response =
+        r#"{"id_token":"id","access_token":"access","refresh_token":"refresh","expires_in":3600}"#;
     let (url, request_rx, server) = spawn_http_server("200 OK", response);
     let redirect = redirect_uri(1457);
     let tokens = warpui_core::r#async::block_on(exchange_code_for_tokens_at(
@@ -124,11 +134,20 @@ fn token_exchange_posts_form_to_local_server() {
         .contains("content-type: application/x-www-form-urlencoded"));
     let body = request.split_once("\r\n\r\n").unwrap().1;
     let form: HashMap<String, String> = serde_urlencoded::from_str(body).unwrap();
-    assert_eq!(form.get("grant_type").map(String::as_str), Some("authorization_code"));
+    assert_eq!(
+        form.get("grant_type").map(String::as_str),
+        Some("authorization_code")
+    );
     assert_eq!(form.get("code").map(String::as_str), Some("auth/code"));
-    assert_eq!(form.get("redirect_uri").map(String::as_str), Some(redirect.as_str()));
+    assert_eq!(
+        form.get("redirect_uri").map(String::as_str),
+        Some(redirect.as_str())
+    );
     assert_eq!(form.get("client_id").map(String::as_str), Some(CLIENT_ID));
-    assert_eq!(form.get("code_verifier").map(String::as_str), Some("verifier"));
+    assert_eq!(
+        form.get("code_verifier").map(String::as_str),
+        Some("verifier")
+    );
     server.join().unwrap();
 }
 
@@ -176,9 +195,8 @@ fn refresh_token_revoke_posts_openai_json_shape() {
 #[test]
 fn extracts_chatgpt_account_id_from_synthetic_jwt() {
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
-    let payload = URL_SAFE_NO_PAD.encode(
-        br#"{"https://api.openai.com/auth":{"chatgpt_account_id":"account-123"}}"#,
-    );
+    let payload = URL_SAFE_NO_PAD
+        .encode(br#"{"https://api.openai.com/auth":{"chatgpt_account_id":"account-123"}}"#);
     let token = format!("{header}.{payload}.signature");
     assert_eq!(
         chatgpt_account_id_from_id_token(&token).unwrap(),
@@ -191,12 +209,10 @@ fn rejects_id_token_without_account_claim() {
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
     let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"user"}"#);
     let token = format!("{header}.{payload}.signature");
-    assert!(
-        chatgpt_account_id_from_id_token(&token)
-            .unwrap_err()
-            .to_string()
-            .contains("chatgpt_account_id")
-    );
+    assert!(chatgpt_account_id_from_id_token(&token)
+        .unwrap_err()
+        .to_string()
+        .contains("chatgpt_account_id"));
 }
 
 fn invoke_callback(
@@ -240,7 +256,9 @@ fn spawn_http_server(
 }
 
 fn read_http_request(stream: &mut TcpStream) -> String {
-    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     let mut bytes = Vec::new();
     let mut chunk = [0u8; 1024];
     let header_end = loop {

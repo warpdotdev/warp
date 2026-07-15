@@ -39,8 +39,7 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
     match provider {
         LLMProvider::OpenAI => {
             manager.keys().openai.is_some()
-                || (FeatureFlag::CodexSubscription.is_enabled()
-                    && manager.has_codex_subscription())
+                || (FeatureFlag::CodexSubscription.is_enabled() && manager.has_codex_subscription())
         }
         LLMProvider::Anthropic => manager.keys().anthropic.is_some(),
         LLMProvider::Google => manager.keys().google.is_some(),
