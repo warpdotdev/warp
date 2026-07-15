@@ -47,6 +47,9 @@ pub struct CLIAgentEventPayload {
     pub tool_name: Option<String>,
     pub tool_input_preview: Option<String>,
     pub plugin_version: Option<String>,
+    /// On Claude Code, this comes from the `StopFailure` hook (e.g. `"rate_limit"`).
+    /// Not implemented for Codex.
+    pub error_type: Option<String>,
 }
 
 /// A parsed event from a CLI agent plugin.

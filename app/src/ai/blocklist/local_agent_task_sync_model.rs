@@ -548,7 +548,7 @@ fn map_cli_session_status(
     match status {
         CLIAgentSessionStatus::InProgress => (AgentTaskState::InProgress, None),
         CLIAgentSessionStatus::Success => (AgentTaskState::Succeeded, None),
-        CLIAgentSessionStatus::Failed { message } => (
+        CLIAgentSessionStatus::Failed { message, .. } => (
             AgentTaskState::Failed,
             message.as_ref().map(TaskStatusUpdate::message),
         ),

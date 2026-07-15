@@ -2853,7 +2853,8 @@ impl AgentDriver {
                         ) {
                             log::info!(
                                 "Ignoring runtime failure for {harness_name}: \
-                                 session already marked Success (pattern={}, excerpt={})",
+                                 session already marked Success or Failed via plugin \
+                                 (pattern={}, excerpt={})",
                                 error.pattern,
                                 error.excerpt,
                             );

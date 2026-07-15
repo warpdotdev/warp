@@ -17,7 +17,10 @@ use crate::ai::blocklist::InputConfig;
 pub enum CLIAgentSessionStatus {
     InProgress,
     Success,
-    Failed { message: Option<String> },
+    Failed {
+        error_type: Option<String>,
+        message: Option<String>,
+    },
     Blocked { message: Option<String> },
 }
 
@@ -211,6 +214,7 @@ impl CLIAgentSession {
             CLIAgentEventType::StopFailure => {
                 self.clear_permission_scoped_state();
                 CLIAgentSessionStatus::Failed {
+                    error_type: event.payload.error_type.clone(),
                     message: event.payload.response.clone(),
                 }
             }
