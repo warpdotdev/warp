@@ -13,6 +13,7 @@ use super::{
     menu_query_for_parsed_input, TuiSlashCommandModel, TuiSlashCommandRow, MAX_VISIBLE_ROWS,
 };
 use crate::inline_menu::keep_selected_visible;
+use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
 fn parsed_skill(argument: Option<&str>) -> ParsedSlashCommandInput {
     ParsedSlashCommandInput::SkillCommand(DetectedSkillCommand {
@@ -179,16 +180,79 @@ fn completed_empty_results_close_the_menu() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let input_editor = app.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
+        let suggestions_mode = app.add_model(|_| TuiInputSuggestionsModeModel::new());
+        suggestions_mode.update(&mut app, |mode, ctx| {
+            mode.set_mode(TuiInputSuggestionsMode::SlashCommands, ctx);
+        });
         let mixer = app.add_model(|_| SlashCommandMixer::new());
-        let model = app
-            .add_model(|_| TuiSlashCommandModel::new_for_test(input_editor, mixer, Vec::new(), 0));
+        let model = app.add_model(|_| {
+            TuiSlashCommandModel::new_for_test(input_editor, suggestions_mode, mixer, Vec::new(), 0)
+        });
 
         model.update(&mut app, |model, ctx| model.refresh_rows(ctx));
 
-        model.read(&app, |model, _| {
-            assert!(!model.is_open());
+        model.read(&app, |model, ctx| {
+            assert!(!model.is_open(ctx));
         });
     });
+}
+
+fn assert_explicit_menu_blocks_slash_commands(explicit_mode: TuiInputSuggestionsMode) {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let input_editor = app.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
+        let suggestions_mode = app.add_model(|_| TuiInputSuggestionsModeModel::new());
+        suggestions_mode.update(&mut app, |mode, ctx| {
+            mode.set_mode(TuiInputSuggestionsMode::SlashCommands, ctx);
+        });
+        let mixer = app.add_model(|_| SlashCommandMixer::new());
+        let model = app.add_model(|_| {
+            TuiSlashCommandModel::new_for_test(
+                input_editor,
+                suggestions_mode.clone(),
+                mixer,
+                vec![TuiSlashCommandRow {
+                    title: "Test command".to_owned(),
+                    description: None,
+                    action: AcceptSlashCommandOrSavedPrompt::SlashCommand {
+                        id: SlashCommandId::new(),
+                    },
+                }],
+                0,
+            )
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.accept_selected(ctx);
+        });
+        suggestions_mode.update(&mut app, |mode, ctx| {
+            mode.set_mode(explicit_mode, ctx);
+        });
+        model.update(&mut app, |model, ctx| {
+            model.set_highlighted_prefix_len_for_test(Some(6));
+            model.set_argument_hint_text_for_test(Some("<argument>"));
+            model.update_from_input(false, ctx);
+            model.run_query("model".to_owned(), false, ctx);
+            assert!(!model.is_open(ctx));
+            assert_eq!(model.highlighted_prefix_range(), None);
+            assert_eq!(model.argument_hint_text(), None);
+            assert_eq!(model.suggestions_mode.as_ref(ctx).mode(), explicit_mode);
+        });
+    });
+}
+
+#[test]
+fn conversation_menu_blocks_slash_command_activation() {
+    assert_explicit_menu_blocks_slash_commands(TuiInputSuggestionsMode::ConversationMenu);
+}
+
+#[test]
+fn model_menu_blocks_slash_command_activation() {
+    assert_explicit_menu_blocks_slash_commands(TuiInputSuggestionsMode::ModelSelector);
+}
+#[test]
+fn skill_menu_blocks_slash_command_activation() {
+    assert_explicit_menu_blocks_slash_commands(TuiInputSuggestionsMode::SkillMenu);
 }
 
 #[test]
@@ -196,11 +260,16 @@ fn accepting_a_result_does_not_disable_input_driven_lifecycle() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let input_editor = app.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
+        let suggestions_mode = app.add_model(|_| TuiInputSuggestionsModeModel::new());
+        suggestions_mode.update(&mut app, |mode, ctx| {
+            mode.set_mode(TuiInputSuggestionsMode::SlashCommands, ctx);
+        });
         let mixer = app.add_model(|_| SlashCommandMixer::new());
         let command_id = SlashCommandId::new();
         let model = app.add_model(|_| {
             TuiSlashCommandModel::new_for_test(
                 input_editor,
+                suggestions_mode,
                 mixer,
                 vec![TuiSlashCommandRow {
                     title: "Test command".to_owned(),

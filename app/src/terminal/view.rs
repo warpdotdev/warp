@@ -3774,6 +3774,7 @@ impl TerminalView {
                 ai_context_model.clone(),
                 ai_input_model.clone(),
                 ai_action_model.clone(),
+                conversation_selection.clone(),
                 cli_subagent_controller.clone(),
                 terminal_view_id,
                 None, // current_repo_path - will be set when CWD is determined
@@ -6797,8 +6798,9 @@ impl TerminalView {
                     ctx.notify();
                 }
             }
-            CLISubagentEvent::ToggledHideResponses => {}
-            CLISubagentEvent::UpdatedLastSnapshot => {}
+            CLISubagentEvent::ToggledHideResponses
+            | CLISubagentEvent::UpdatedInstruction { .. }
+            | CLISubagentEvent::UpdatedLastSnapshot => {}
             CLISubagentEvent::ControlHandedBackAfterTransfer => {
                 // Notify the shell command executor that control was handed back after transfer.
                 self.ai_action_model

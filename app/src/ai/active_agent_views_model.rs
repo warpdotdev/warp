@@ -304,12 +304,6 @@ impl ActiveAgentViewsModel {
             .and_then(|state| state.active_conversation_id)
     }
 
-    pub fn get_focused_terminal_view_id(&self, window_id: WindowId) -> Option<EntityId> {
-        self.focused_terminal_states
-            .get(&window_id)
-            .map(|state| state.focused_terminal_id)
-    }
-
     /// Get the last focused terminal view id (persisted across non-terminal focus changes).
     pub fn get_last_focused_terminal_id(&self) -> Option<EntityId> {
         self.last_focused_terminal_state

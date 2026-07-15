@@ -41,6 +41,7 @@ mod flex;
 mod geometry;
 mod hoverable;
 mod parent;
+mod scene;
 mod scrollable;
 mod selectable;
 mod shimmering_text;
@@ -48,7 +49,7 @@ mod text;
 mod viewported_list;
 
 pub use animated::TuiAnimated;
-pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
+pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiPaintSurface, TuiStyle};
 pub use child_view::TuiChildView;
 pub use clipped::TuiClipped;
 pub use collapsible::tui_collapsible;
@@ -64,6 +65,10 @@ pub use geometry::{
 };
 pub use hoverable::TuiHoverable;
 pub use parent::TuiParentElement;
+pub use scene::{
+    TuiClipBounds, TuiLocalPoint, TuiScene, TuiScreenPoint, TuiScreenPosition, TuiScreenRect,
+    TuiZIndex,
+};
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use selectable::{
     point_after_col, TuiRowGlyph, TuiRowResize, TuiSelectable, TuiSelectableElement,
@@ -129,8 +134,12 @@ impl TuiViewMapContext for TuiLayoutContext<'_> {
 pub struct TuiPaintContext<'a> {
     /// Pre-rendered elements keyed by view id, consumed during paint.
     pub rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>,
+    /// Retained clip and hit geometry produced during paint.
+    pub scene: TuiScene,
     /// The earliest repaint deadline requested by any element this frame.
     repaint_at: Option<Instant>,
+    /// Hardware terminal cursor submitted during paint.
+    terminal_cursor: Option<TuiScreenPoint>,
 }
 
 /// The soonest an element may request a repaint after the current paint.
@@ -144,8 +153,59 @@ impl<'a> TuiPaintContext<'a> {
     pub fn new(rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>) -> Self {
         Self {
             rendered_views,
+            scene: TuiScene::default(),
             repaint_at: None,
+            terminal_cursor: None,
         }
+    }
+    /// Attaches the active scene layer to an absolute screen position.
+    pub fn scene_point(&self, position: TuiScreenPosition) -> TuiScreenPoint {
+        TuiScreenPoint::from_position(position, self.scene.z_index())
+    }
+
+    /// Submits the hardware cursor for this frame, preferring higher layers.
+    pub fn set_terminal_cursor(&mut self, cursor: TuiScreenPoint) {
+        if self
+            .terminal_cursor
+            .is_some_and(|current| current.z_index > cursor.z_index)
+        {
+            return;
+        }
+        self.terminal_cursor = Some(cursor);
+    }
+
+    /// Returns the hardware cursor submitted during paint.
+    pub fn terminal_cursor(&self) -> Option<TuiScreenPoint> {
+        self.terminal_cursor
+    }
+
+    /// Runs `f` inside a clipped normal scene layer.
+    pub fn with_scene_layer<R>(
+        &mut self,
+        bounds: TuiClipBounds,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.scene.start_layer(bounds);
+        let result = f(self);
+        self.scene.stop_layer();
+        result
+    }
+
+    /// Runs `f` inside a clipped overlay scene layer.
+    pub fn with_overlay_layer<R>(
+        &mut self,
+        bounds: TuiClipBounds,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.scene.start_overlay_layer(bounds);
+        let result = f(self);
+        self.scene.stop_layer();
+        result
+    }
+
+    /// Makes the active scene layer transparent to hit testing.
+    pub fn set_active_layer_click_through(&mut self) {
+        self.scene.set_active_layer_click_through();
     }
 
     /// Requests a repaint after `delay` (floored to [`MIN_REPAINT_DELAY`]),
@@ -166,9 +226,16 @@ impl<'a> TuiPaintContext<'a> {
         self.repaint_at = Some(new_repaint_at);
     }
 
-    /// The earliest repaint deadline requested during this paint, if any.
+    /// Returns the earliest repaint requested by the current test paint.
+    #[cfg(test)]
     pub(crate) fn requested_repaint_at(&self) -> Option<Instant> {
         self.repaint_at
+    }
+
+    /// Finishes paint and returns its retained scene and repaint request.
+    pub(crate) fn finish(self) -> (TuiScene, Option<Instant>, Option<TuiScreenPoint>) {
+        debug_assert!(self.scene.is_at_root_layer());
+        (self.scene, self.repaint_at, self.terminal_cursor)
     }
 }
 
@@ -186,11 +253,8 @@ impl TuiViewMapContext for TuiPaintContext<'_> {
 ///   [`TuiConstraint::clamp`]). The context carries the presenter's
 ///   pre-rendered view map so [`TuiChildView`](crate::elements::tui::TuiChildView)
 ///   can retrieve its child element.
-/// - [`render`](TuiElement::render): paint into `area` of `buffer`. `area` is
-///   the rect the parent allocated (its size is the value `layout` returned,
-///   clamped to what was available).
-/// - [`cursor_position`](TuiElement::cursor_position): where a text cursor
-///   should sit within `area`, if any (default: none).
+/// - [`render`](TuiElement::render): paint at an absolute screen origin through
+///   a [`TuiPaintSurface`], retaining scene geometry through [`TuiPaintContext`].
 /// - [`present`](TuiElement::present): participate in the child-view recursion
 ///   so the presenter can record parent/child view relationships (default:
 ///   nothing — only container/child-view elements override this).
@@ -209,22 +273,48 @@ pub trait TuiElement {
         app: &AppContext,
     ) -> TuiSize;
 
-    /// Paints this element into `area` of `buffer`. `ctx` carries the
+    /// Runs once after the whole tree has been laid out, before paint, so an
+    /// element can commit a *side effect* that depends on its final size
+    /// (mirroring the GUI's `Element::after_layout`). Unlike
+    /// [`layout`](TuiElement::layout) — the measurement pass, which may run more
+    /// than once and must stay pure — this fires exactly once per frame with the
+    /// arranged geometry settled, which is where size-driven effects like a PTY
+    /// resize belong. `ctx` carries the presenter's view map so container
+    /// elements can propagate the pass into their children (and
+    /// [`TuiChildView`](crate::elements::tui::TuiChildView) into its embedded
+    /// view). The default is a no-op; only container elements and elements with
+    /// a post-layout side effect override it.
+    fn after_layout(&mut self, _ctx: &mut TuiLayoutContext, _app: &AppContext) {}
+
+    /// Paints this element at absolute `origin`. `surface` owns the active
+    /// ratatui buffer and accepts only absolute-coordinate paint operations.
+    /// `ctx` carries the
     /// presenter's pre-rendered view map so [`TuiChildView`] can look up and
     /// render its child element without caching it locally, and collects
     /// repaint requests from animated elements
     /// ([`TuiPaintContext::repaint_after`]).
     ///
     /// [`TuiChildView`]: crate::elements::tui::TuiChildView
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext);
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    );
 
-    /// The `(x, y)` cell, within `area`, where the terminal cursor should be
-    /// placed for this element, if it owns the cursor. `ctx` is passed through
-    /// so [`TuiChildView`] can delegate to its child without caching it.
-    ///
-    /// [`TuiChildView`]: crate::elements::tui::TuiChildView
-    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
+    /// Returns the size retained by the most recent layout.
+    fn size(&self) -> Option<TuiSize> {
         None
+    }
+
+    /// Returns the screen origin retained by the most recent paint.
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        None
+    }
+
+    /// Returns the element's retained screen bounds.
+    fn bounds(&self) -> Option<TuiScreenRect> {
+        Some(TuiScreenRect::new(self.origin()?, self.size()?))
     }
 
     /// Walks this element during the presenter's child-view pass. Container and
@@ -232,19 +322,15 @@ pub trait TuiElement {
     /// leaf elements do nothing.
     fn present(&mut self, _ctx: &mut TuiPresentationContext<'_>) {}
 
-    /// Offers `event` to this element within `area`, returning `true` if it was
-    /// handled. `event_ctx` collects app updates and typed actions;
-    /// `ctx` carries the presenter's pre-rendered view map so [`TuiChildView`]
-    /// can look up and dispatch into its child; `app` provides read access to
-    /// the shared core during dispatch.
+    /// Offers `event` to this element, returning `true` if it was handled.
+    /// Retained geometry and the painted scene are available through
+    /// `event_ctx`; `app` provides shared core access.
     ///
     /// [`TuiChildView`]: crate::elements::tui::TuiChildView
     fn dispatch_event(
         &mut self,
         _event: &TuiEvent,
-        _area: TuiRect,
-        _event_ctx: &mut TuiEventContext,
-        _ctx: &mut TuiLayoutContext,
+        _event_ctx: &mut TuiEventContext<'_>,
         _app: &AppContext,
     ) -> bool {
         false
@@ -274,7 +360,13 @@ impl TuiElement for () {
         TuiSize::ZERO
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
+    fn render(
+        &mut self,
+        _origin: TuiScreenPosition,
+        _surface: &mut TuiPaintSurface<'_>,
+        _ctx: &mut TuiPaintContext,
+    ) {
+    }
 }
 
 /// Threads the current view ancestry through the element tree during the
@@ -332,21 +424,68 @@ impl TuiViewMapContext for TuiPresentationContext<'_> {
 /// Shared harnesses for TUI element tests.
 #[cfg(test)]
 pub(crate) mod test_support {
-    use super::{TuiBuffer, TuiBufferExt, TuiElement, TuiPaintContext, TuiRect, TuiSize};
-    use crate::EntityIdMap;
+    use std::rc::Rc;
 
-    /// Runs `f` with a paint context over a fresh, empty view map — the
-    /// common harness for leaf-element paint tests.
-    pub(crate) fn with_paint_context<R>(f: impl FnOnce(&mut TuiPaintContext) -> R) -> R {
+    use super::{
+        TuiBuffer, TuiBufferExt, TuiElement, TuiEvent, TuiEventContext, TuiPaintContext,
+        TuiPaintSurface, TuiRect, TuiScene, TuiSize,
+    };
+    use crate::presenter::tui::{TuiFrame, TuiPresenter};
+    use crate::{App, AppContext, EntityId, EntityIdMap};
+
+    /// Runs `f` with an identity-mapped surface and fresh paint context.
+    pub(crate) fn with_paint_surface<R>(
+        buffer: &mut TuiBuffer,
+        f: impl FnOnce(&mut TuiPaintSurface<'_>, &mut TuiPaintContext<'_>) -> R,
+    ) -> R {
         let mut rendered_views = EntityIdMap::default();
-        f(&mut TuiPaintContext::new(&mut rendered_views))
+        let mut ctx = TuiPaintContext::new(&mut rendered_views);
+        let mut surface = TuiPaintSurface::new(buffer);
+        f(&mut surface, &mut ctx)
+    }
+    /// Runs `f` with dispatch state over an empty scene and view map.
+    pub(crate) fn with_event_context<R>(f: impl FnOnce(&mut TuiEventContext<'_>) -> R) -> R {
+        let mut rendered_views = EntityIdMap::default();
+        let mut ctx = TuiEventContext::new(Rc::new(TuiScene::default()), &mut rendered_views);
+        f(&mut ctx)
     }
 
     /// Renders `element` into a `size` buffer and returns the rows as strings.
-    pub(crate) fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
-        let area = TuiRect::new(0, 0, size.width, size.height);
-        let mut buffer = TuiBuffer::empty(area);
-        with_paint_context(|ctx| element.render(area, &mut buffer, ctx));
-        buffer.to_lines()
+    pub(crate) fn render_to_lines(
+        element: impl TuiElement + 'static,
+        size: TuiSize,
+    ) -> Vec<String> {
+        render_to_frame(element, size).buffer.to_lines()
+    }
+
+    /// Renders `element` through the presenter and returns the complete frame.
+    pub(crate) fn render_to_frame(element: impl TuiElement + 'static, size: TuiSize) -> TuiFrame {
+        App::test((), |app| async move {
+            app.read(|app_ctx| {
+                TuiPresenter::new().present_element(
+                    element.finish(),
+                    TuiRect::new(0, 0, size.width, size.height),
+                    app_ctx,
+                )
+            })
+        })
+    }
+
+    /// Dispatches through the element tree and scene retained by `presenter`.
+    pub(crate) fn dispatch_presented_event(
+        presenter: &mut TuiPresenter,
+        event: &TuiEvent,
+        app: &AppContext,
+    ) -> (bool, usize) {
+        let (Some(element), Some(scene)) = (
+            presenter.last_element.as_mut(),
+            presenter.last_scene.clone(),
+        ) else {
+            return (false, 0);
+        };
+        let mut event_ctx = TuiEventContext::new(scene, &mut presenter.rendered_views);
+        event_ctx.set_origin_view(Some(EntityId::new()));
+        let handled = element.dispatch_event(event, &mut event_ctx, app);
+        (handled, event_ctx.take_notified().len())
     }
 }

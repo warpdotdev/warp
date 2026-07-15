@@ -3,10 +3,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use super::TuiAnimated;
-use crate::elements::tui::test_support::with_paint_context;
+use crate::elements::tui::test_support::with_paint_surface;
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiRect,
-    TuiSize, TuiText,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, TuiText,
 };
 use crate::{App, EntityIdMap};
 
@@ -36,7 +36,8 @@ fn rebuilds_its_frame_on_every_layout_pass_and_requests_repaints() {
 
                 let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 10, 1));
                 let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-                animated.render(TuiRect::new(0, 0, 10, 1), &mut buffer, &mut paint_ctx);
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                animated.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
                 assert_eq!(buffer.to_lines(), vec![format!("{expected:<10}")]);
                 assert!(paint_ctx.requested_repaint_at().is_some());
             }
@@ -47,10 +48,12 @@ fn rebuilds_its_frame_on_every_layout_pass_and_requests_repaints() {
 
 #[test]
 fn paints_nothing_before_its_first_layout() {
-    let animated = TuiAnimated::new(Duration::from_millis(50), || {
+    let mut animated = TuiAnimated::new(Duration::from_millis(50), || {
         TuiText::new("content").finish()
     });
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 7, 1));
-    with_paint_context(|ctx| animated.render(TuiRect::new(0, 0, 7, 1), &mut buffer, ctx));
+    with_paint_surface(&mut buffer, |surface, ctx| {
+        animated.render(TuiScreenPosition::new(0, 0), surface, ctx)
+    });
     assert_eq!(buffer.to_lines(), vec!["       "]);
 }

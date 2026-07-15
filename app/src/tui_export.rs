@@ -1,27 +1,40 @@
 //! Public app APIs used by the `warp_tui` frontend.
 
 pub use repo_metadata::repositories::RepoDetectionSource;
+pub use warp_cli::agent::Harness;
+use warpui::SingletonEntity as _;
 
 pub use crate::ai::agent::api::ServerConversationToken;
 pub use crate::ai::agent::conversation::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
-    ConversationUsageTotals,
+    ConversationUsageTotals, TodoStatus,
 };
 pub use crate::ai::agent::task::TaskId;
+pub use crate::ai::agent::todos::AIAgentTodoList;
 pub use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
-    AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText, AIAgentTextSection,
-    AskUserQuestionResult, CancellationReason, FileGlobV2Result, GrepResult, MessageId,
-    RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
-    SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
-    StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, UserQueryMode,
+    AIAgentActionType, AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutput,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText,
+    AIAgentTextSection, AIAgentTodo, AIAgentTodoId, AskUserQuestionResult, CancellationReason,
+    FileGlobV2Result, GrepResult, MessageId, RequestCommandOutputResult, RunAgentsAgentOutcomeKind,
+    RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
+    ShellCommandDelay, StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType,
+    TodoOperation, UserQueryMode,
+};
+pub use crate::ai::agent_conversations_model::{
+    query_conversation_entries, AgentConversationEntry, AgentConversationEntryId,
+    AgentConversationListEntryState, AgentConversationListPolicy, AgentConversationsModel,
+    AgentConversationsModelEvent, AgentManagementFilters, AgentRunDisplayStatus, HarnessFilter,
+    OwnerFilter,
 };
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
     EphemeralMessageModel,
 };
-pub use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
+pub use crate::ai::blocklist::block::cli_controller::{
+    CLISubagentController, CLISubagentEvent, CLISubagentTarget, LongRunningCommandControlState,
+    UserTakeOverReason,
+};
 pub use crate::ai::blocklist::block::model::{
     AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback,
 };
@@ -40,10 +53,10 @@ pub use crate::ai::blocklist::history_model::{
 };
 pub use crate::ai::blocklist::view_util::format_credits;
 pub use crate::ai::blocklist::{
-    AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIInputModel, InputConfig, InputModePolicy,
-    InputModePolicyHandle, InputType, InputTypeAutoDetectionSource, PolicyConfigUpdate,
-    RequestFileEditsExecutor, ShellCommandExecutor, ShellCommandExecutorEvent,
+    block_context_from_terminal_model, AIActionStatus, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
+    InputConfig, InputModePolicy, InputModePolicyHandle, InputType, InputTypeAutoDetectionSource,
+    PolicyConfigUpdate, RequestFileEditsExecutor, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 #[cfg(feature = "local_fs")]
 pub use crate::ai::conversation_export::{
@@ -51,6 +64,14 @@ pub use crate::ai::conversation_export::{
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
+pub use crate::ai::orchestration::{
+    accept_disabled_reason_with_auth, auth_secret_selection_required,
+    empty_env_recommendation_message, harness_is_selectable, persist_environment_selection,
+    persist_host_selection, resolve_auth_secret_selection_for_harness,
+    resolve_default_environment_id, resolve_default_host_slug, resolve_recent_host_slug,
+    should_show_auth_secret_picker, AuthSecretSelection, OrchestrationConfigState,
+    OrchestrationEditState, ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
+};
 pub use crate::ai::skills::{SkillManager, SkillReference};
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
@@ -72,6 +93,11 @@ pub use crate::terminal::conversation_restoration::{
     RestoredConversationExchange,
 };
 pub use crate::terminal::event::AfterBlockCompletedEvent;
+pub use crate::terminal::input::models::{query_model_picker_choices, ModelPickerChoice};
+pub use crate::terminal::input::skills::{
+    query_selectable_skills, AcceptSkill, SelectableSkill,
+    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+};
 pub use crate::terminal::input::slash_command_model::{
     slash_command_composition_filter, DetectedCommand, DetectedSkillCommand,
     ParsedSlashCommandInput,
@@ -97,6 +123,8 @@ pub use crate::terminal::model::blockgrid::BlockGrid;
 pub use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
 };
+pub use crate::terminal::model::escape_sequences::{KeystrokeWithDetails, ToEscapeSequence};
+pub use crate::terminal::model::grid::grid_handler::{GridHandler, TermMode};
 pub use crate::terminal::model::rich_content::RichContentType;
 pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 pub use crate::terminal::model::session::Sessions;
@@ -107,10 +135,20 @@ pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};
 pub use crate::terminal::{
-    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData,
+    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData, SizeInfo, SizeUpdate,
     TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
 };
 pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
+pub use crate::tui::{
+    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
+    TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
+};
 pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 pub use crate::util::time_format::format_elapsed_seconds;
+
+/// Returns whether cloud conversation metadata failed to load.
+pub fn agent_conversations_cloud_metadata_load_failed(app: &warpui::AppContext) -> bool {
+    crate::ai::agent_conversations_model::AgentConversationsModel::as_ref(app)
+        .cloud_conversation_metadata_load_failed()
+}

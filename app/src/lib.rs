@@ -308,7 +308,7 @@ use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::{AudibleBell, CustomSecretRegexUpdater, History};
 #[cfg(feature = "tui")]
-pub use crate::tui::{TuiLoginModel, TuiLoginPhase};
+pub use crate::tui::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use crate::undo_close::UndoCloseStack;
 use crate::user_config::WarpConfig;
 use crate::util::bindings::is_binding_cross_platform;
@@ -326,6 +326,7 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Our embedded application assets.
 pub static ASSETS: warp_assets::Assets = warp_assets::Assets;
+const TUI_SECURE_STORAGE_SERVICE_SUFFIX: &str = ".tui";
 
 fn determine_agent_source(
     launch_mode: &LaunchMode,
@@ -411,7 +412,7 @@ pub(crate) enum LaunchMode {
     },
 
     /// Run the headless TUI front-end (the `warp-tui` binary in the `warp_tui`
-    /// crate). Boots the real headless app so auth/agent state can be reused,
+    /// crate). Boots the real headless app so shared auth/agent infrastructure can be reused,
     /// then renders an editor-backed input UI to the terminal (via `mount`)
     /// instead of opening a GUI window.
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
@@ -469,6 +470,24 @@ impl LaunchMode {
             | LaunchMode::RemoteServerDaemon { .. } => ::settings::SettingsMode::Gui,
         }
     }
+    /// The platform secure-storage service name for this launch mode.
+    ///
+    /// The TUI uses a separate namespace so it never attempts to read secrets
+    /// created by the GUI. On macOS, those items' Keychain ACLs trust the GUI's
+    /// distinct code-signing identity and would otherwise prompt for the user's
+    /// login password when the TUI accesses them.
+    fn secure_storage_service_name<'a>(&self, data_domain: &'a str) -> Cow<'a, str> {
+        match self {
+            LaunchMode::Tui { .. } => {
+                Cow::Owned(format!("{data_domain}{TUI_SECURE_STORAGE_SERVICE_SUFFIX}"))
+            }
+            LaunchMode::App { .. }
+            | LaunchMode::CommandLine { .. }
+            | LaunchMode::Test { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. } => Cow::Borrowed(data_domain),
+        }
+    }
 
     fn take_test_driver(&mut self) -> Option<TestDriver> {
         match self {
@@ -494,8 +513,7 @@ impl LaunchMode {
             LaunchMode::App { .. } => ExecutionMode::App,
             LaunchMode::CommandLine { .. } => ExecutionMode::Sdk,
             LaunchMode::Test { .. } => ExecutionMode::App,
-            // The TUI front-end is an app-style client, not the SDK.
-            LaunchMode::Tui { .. } => ExecutionMode::App,
+            LaunchMode::Tui { .. } => ExecutionMode::Tui,
             // RemoteServerProxy is a thin byte bridge; Sdk is the closest match.
             LaunchMode::RemoteServerProxy => ExecutionMode::Sdk,
             // RemoteServerDaemon gets its own mode for distinct Sentry tagging.
@@ -526,6 +544,15 @@ impl LaunchMode {
             LaunchMode::Tui { .. } => true,
             LaunchMode::App { .. } | LaunchMode::Test { .. } => false,
         }
+    }
+
+    /// Whether this launch mode should start the local loopback HTTP server
+    /// (`crates/http_server`), which serves app-installation detection and profiling on a
+    /// fixed port. Only non-headless GUI instances start it, since co-located headless
+    /// processes (daemon, CLI, proxy, TUI) would otherwise contend for the fixed port.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    fn should_start_local_http_server(&self) -> bool {
+        !self.is_headless()
     }
 
     /// Returns `true` if this process can build and sync codebase indices.
@@ -1081,10 +1108,27 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let pty_spawner =
         terminal::local_tty::spawner::PtySpawner::new().context("Failed to create pty spawner")?;
 
-    // The TUI front-end skips the GUI lifecycle callbacks (which reach for
-    // singletons/windows it never creates), so it uses empty callbacks.
+    // The TUI front-end skips the GUI lifecycle callbacks, which reach for
+    // windows and GUI-only state, but still flushes telemetry and reporting on
+    // termination.
     let callbacks = if matches!(launch_mode, LaunchMode::Tui { .. }) {
-        warpui::platform::AppCallbacks::default()
+        let mut tracing_initialization = tracing_initialization.take();
+        warpui::platform::AppCallbacks {
+            on_will_terminate: Some(Box::new(move |ctx| {
+                TelemetryCollector::handle(ctx).update(ctx, |telemetry_collector, ctx| {
+                    telemetry_collector.flush_telemetry_events_for_shutdown(ctx);
+                });
+
+                profiling::teardown();
+                if let Some(initialization) = tracing_initialization.as_mut() {
+                    initialization.shutdown();
+                }
+
+                #[cfg(feature = "crash_reporting")]
+                crash_reporting::uninit_sentry();
+            })),
+            ..Default::default()
+        }
     } else {
         app_callbacks(
             launch_mode.is_integration_test(),
@@ -1255,6 +1299,7 @@ pub(crate) fn initialize_app(
     // Sentry. Only the dependencies of crash_reporting should be initialized here. Avoid adding
     // any other stuff here, as failures will be silent. Push them to pre_sentry_errors instead.
     let data_domain = ChannelState::data_domain();
+    let secure_storage_service_name = launch_mode.secure_storage_service_name(&data_domain);
 
     // Daemon auth arrives through the client handshake, so avoid platform keychains that may
     // require an interactive unlock prompt. Other headless modes still use secure storage for
@@ -1265,13 +1310,13 @@ pub(crate) fn initialize_app(
         // Register an implementation of the secure storage service.
         cfg_if::cfg_if! {
             if #[cfg(feature = "integration_tests")] {
-                warpui_extras::secure_storage::register_noop(&data_domain, ctx);
+                warpui_extras::secure_storage::register_noop(&secure_storage_service_name, ctx);
             } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-                warpui_extras::secure_storage::register_with_fallback(&data_domain, warp_core::paths::state_dir(), ctx)
+                warpui_extras::secure_storage::register_with_fallback(&secure_storage_service_name, warp_core::paths::state_dir(), ctx)
             } else if #[cfg(target_os = "windows")] {
-                warpui_extras::secure_storage::register_with_dir(&data_domain, warp_core::paths::state_dir(), ctx)
+                warpui_extras::secure_storage::register_with_dir(&secure_storage_service_name, warp_core::paths::state_dir(), ctx)
             } else {
-                warpui_extras::secure_storage::register(&data_domain, ctx);
+                warpui_extras::secure_storage::register(&secure_storage_service_name, ctx);
             }
         }
     }
@@ -2331,15 +2376,16 @@ pub(crate) fn initialize_app(
         aliases.connect(ctx);
     });
 
-    // When running natively, add the http server singleton to the application.
     #[cfg(not(target_family = "wasm"))]
-    ctx.add_singleton_model(move |ctx| {
-        let routers = vec![
-            app_installation_detection::make_router(),
-            profiling::make_router(),
-        ];
-        http_server::HttpServer::new(routers, ctx)
-    });
+    if launch_mode.should_start_local_http_server() {
+        ctx.add_singleton_model(move |ctx| {
+            let routers = vec![
+                app_installation_detection::make_router(),
+                profiling::make_router(),
+            ];
+            http_server::HttpServer::new(routers, ctx)
+        });
+    }
     #[cfg(feature = "local_fs")]
     if matches!(
         launch_mode,
@@ -2930,3 +2976,7 @@ fn init_logging_for_unit_tests_glue() {
     // Initialize terminal-friendly logging for tests from the shared logger crate.
     warp_logging::init_logging_for_unit_tests();
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;

@@ -12,8 +12,9 @@ use std::rc::Rc;
 use super::selectable::{row_glyphs, row_text, TuiSelectionHandle};
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint,
-    TuiLayoutContext, TuiPaintContext, TuiPresentationContext, TuiRect, TuiRowResize,
-    TuiScrollableElement, TuiSelectableElement, TuiSelectionSpan, TuiSize,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect,
+    TuiRowResize, TuiScreenPoint, TuiScreenPosition, TuiScrollableElement, TuiSelectableElement,
+    TuiSelectionSpan, TuiSize,
 };
 use crate::AppContext;
 
@@ -102,11 +103,11 @@ where
 {
     fn selection_point_at(
         &mut self,
-        position: super::TuiPoint,
-        area: TuiRect,
+        position: super::TuiLocalPoint,
+        size: TuiSize,
         clamp_outside: bool,
     ) -> Option<TuiGridPoint> {
-        self.resolve_selection_point(position, area, clamp_outside)
+        self.resolve_selection_point(position, size, clamp_outside)
     }
 
     fn selection_row_glyphs(
@@ -122,51 +123,51 @@ where
     fn selected_text(
         &self,
         selection: TuiSelectionSpan,
-        area: TuiRect,
+        size: TuiSize,
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> Option<String> {
-        self.selection_text(selection, area, ctx, app)
+        self.selection_text(selection, size, ctx, app)
     }
 
     fn render_selection(
         &self,
         selection: &TuiSelectionHandle,
-        area: TuiRect,
-        buffer: &mut TuiBuffer,
+        origin: TuiScreenPosition,
+        size: TuiSize,
+        surface: &mut TuiPaintSurface<'_>,
         _ctx: &mut TuiPaintContext,
     ) {
         let Some(resolved) = self.state.resolved_viewport() else {
             return;
         };
-        let visible_height = area.height.saturating_sub(resolved.screen_offset).min(
+        let visible_height = size.height.saturating_sub(resolved.screen_offset).min(
             resolved
                 .content_height
                 .saturating_sub(resolved.window.scroll_top)
                 .min(usize::from(u16::MAX)) as u16,
         );
-        let mut snapshot = TuiBuffer::empty(TuiRect::new(0, 0, area.width, visible_height));
+        let mut snapshot = TuiBuffer::empty(TuiRect::new(0, 0, size.width, visible_height));
         for row in 0..visible_height {
-            for col in 0..area.width {
-                snapshot[(col, row)] = buffer[(
-                    area.x.saturating_add(col),
-                    area.y
-                        .saturating_add(resolved.screen_offset)
-                        .saturating_add(row),
-                )]
-                    .clone();
+            for col in 0..size.width {
+                let position = origin.offset(
+                    i32::from(col),
+                    i32::from(resolved.screen_offset.saturating_add(row)),
+                );
+                if let Some(cell) = surface.cell(position) {
+                    snapshot[(col, row)] = cell.clone();
+                }
             }
         }
         *self.selection_snapshot.borrow_mut() = Some((resolved, snapshot));
-
-        if !selection.validate_width(area.width) {
+        if !selection.validate_width(size.width) {
             return;
         }
         let Some(range) = selection.range() else {
             return;
         };
         let viewport_bottom = resolved.window.scroll_top.saturating_add(usize::from(
-            area.height.saturating_sub(resolved.screen_offset),
+            size.height.saturating_sub(resolved.screen_offset),
         ));
         let first_row = max(range.start.row, resolved.window.scroll_top);
         let end_row_exclusive = if range.end.col == 0 {
@@ -177,9 +178,8 @@ where
         let last_row = min(end_row_exclusive, viewport_bottom);
         let mut selection_rects = Vec::new();
         for row in first_row..last_row {
-            let y = area
-                .y
-                .saturating_add(resolved.screen_offset)
+            let y = resolved
+                .screen_offset
                 .saturating_add(row.saturating_sub(resolved.window.scroll_top) as u16);
             let start_col = if row == range.start.row {
                 range.start.col
@@ -189,19 +189,17 @@ where
             let end_col = if row == range.end.row {
                 range.end.col
             } else {
-                area.width
+                size.width
             };
             if start_col < end_col {
-                selection_rects.push(TuiRect::new(
-                    area.x.saturating_add(start_col),
-                    y,
-                    end_col.saturating_sub(start_col).min(area.width),
-                    1,
+                selection_rects.push((
+                    origin.offset(i32::from(start_col), i32::from(y)),
+                    TuiSize::new(end_col.saturating_sub(start_col).min(size.width), 1),
                 ));
             }
         }
-        for rect in selection_rects {
-            toggle_selection_reverse(buffer, rect);
+        for (origin, size) in selection_rects {
+            toggle_selection_reverse(surface, origin, size);
         }
     }
 
@@ -261,6 +259,25 @@ pub trait TuiViewportedElement {
         None
     }
 
+    /// Optional *logical* text for a resolved selection span.
+    ///
+    /// Returning `Some` lets copy source text from the content's logical model
+    /// instead of the rendered cell grid, so soft-wrapped visual rows are
+    /// rejoined into their original line (no newline inserted at a wrap point,
+    /// no rendered wrap/quote indentation captured) and the full selected range
+    /// is returned even when it exceeds what the viewport rendered. Returning
+    /// `None` (the default) makes the caller fall back to per-row grid-text
+    /// extraction, which is the right behavior for content that has no clean
+    /// logical form (diagrams, images, tables).
+    fn selection_logical_text(
+        &self,
+        _selection: TuiSelectionSpan,
+        _available_width: u16,
+        _app: &AppContext,
+    ) -> Option<String> {
+        None
+    }
+
     /// Drains row resizes produced during the latest layout.
     fn take_selection_row_resizes(&self) -> Vec<TuiRowResize> {
         Vec::new()
@@ -273,7 +290,17 @@ struct VisibleElement {
     height: u16,
     element: TuiClipped,
 }
-
+impl VisibleElement {
+    /// Returns this item's rendered slot within the viewport area.
+    fn slot(&self, area: TuiRect) -> Option<TuiRect> {
+        let slot_y = area.y.saturating_add(self.viewport_y);
+        if slot_y >= area.bottom() {
+            return None;
+        }
+        let height = self.height.min(area.bottom() - slot_y);
+        Some(TuiRect::new(area.x, slot_y, area.width, height))
+    }
+}
 /// Lays out visible items using the canonical viewport clipping rules.
 fn layout_visible_elements(
     content: TuiViewportContent,
@@ -312,30 +339,38 @@ fn layout_visible_elements(
             let height = visible_bottom
                 .saturating_sub(visible_top)
                 .min(usize::from(u16::MAX)) as u16;
+            let element = TuiClipped::from_laid_out_child(
+                element,
+                viewport_origin_y,
+                TuiSize::new(available_width, height),
+            );
             Some(VisibleElement {
                 viewport_y,
                 height,
-                element: TuiClipped::new(element).with_viewport_origin_y(viewport_origin_y),
+                element,
             })
         })
         .collect()
 }
 
-/// Renders canonical visible elements into `area`.
+/// Renders canonical visible elements at an absolute viewport origin.
 fn render_visible_elements(
-    visible_elements: &[VisibleElement],
-    area: TuiRect,
-    buffer: &mut TuiBuffer,
+    visible_elements: &mut [VisibleElement],
+    origin: TuiScreenPosition,
+    size: TuiSize,
+    surface: &mut TuiPaintSurface<'_>,
     ctx: &mut TuiPaintContext,
 ) {
+    let area = TuiRect::new(0, 0, size.width, size.height);
     for visible in visible_elements {
-        let slot_y = area.y.saturating_add(visible.viewport_y);
-        if slot_y >= area.bottom() {
+        let Some(slot) = visible.slot(area) else {
             continue;
-        }
-        let height = visible.height.min(area.bottom() - slot_y);
-        let slot = TuiRect::new(area.x, slot_y, area.width, height);
-        visible.element.render(slot, buffer, ctx);
+        };
+        visible.element.render(
+            origin.offset(i32::from(slot.x), i32::from(slot.y)),
+            surface,
+            ctx,
+        );
     }
 }
 
@@ -348,18 +383,35 @@ fn render_viewport_content(
     app: &AppContext,
 ) -> TuiBuffer {
     let area = TuiRect::new(0, 0, available_width, window.viewport_height);
-    let visible_elements = layout_visible_elements(content, window, 0, available_width, ctx, app);
+    let mut visible_elements =
+        layout_visible_elements(content, window, 0, available_width, ctx, app);
     let mut buffer = TuiBuffer::empty(area);
     let mut paint_ctx = TuiPaintContext::new(ctx.rendered_views);
-    render_visible_elements(&visible_elements, area, &mut buffer, &mut paint_ctx);
+    {
+        let origin = TuiScreenPosition::new(0, 0);
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        render_visible_elements(
+            &mut visible_elements,
+            origin,
+            area.as_size(),
+            &mut surface,
+            &mut paint_ctx,
+        );
+    }
     buffer
 }
 
-/// Toggles reverse video over a selected rectangle.
-fn toggle_selection_reverse(buffer: &mut TuiBuffer, rect: TuiRect) {
-    for row in rect.y..rect.bottom() {
-        for col in rect.x..rect.right() {
-            let cell = &mut buffer[(col, row)];
+/// Toggles reverse video over selected absolute bounds.
+fn toggle_selection_reverse(
+    surface: &mut TuiPaintSurface<'_>,
+    origin: TuiScreenPosition,
+    size: TuiSize,
+) {
+    for row in 0..size.height {
+        for col in 0..size.width {
+            let Some(cell) = surface.cell_mut(origin.offset(i32::from(col), i32::from(row))) else {
+                continue;
+            };
             if cell.modifier.contains(super::Modifier::REVERSED) {
                 cell.modifier.remove(super::Modifier::REVERSED);
             } else {
@@ -378,7 +430,8 @@ where
     content: Content,
     visible_elements: Vec<VisibleElement>,
     content_height: usize,
-    size: TuiSize,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
     vertical_alignment: TuiViewportVerticalAlignment,
     selection_snapshot: RefCell<Option<(TuiResolvedViewport, TuiBuffer)>>,
 }
@@ -394,7 +447,8 @@ where
             content,
             visible_elements: Vec::new(),
             content_height: 0,
-            size: TuiSize::ZERO,
+            size: None,
+            origin: None,
             vertical_alignment: TuiViewportVerticalAlignment::Top,
             selection_snapshot: RefCell::new(None),
         }
@@ -565,16 +619,16 @@ where
     /// Maps a screen point into the latest resolved content window.
     fn resolve_selection_point(
         &self,
-        position: super::TuiPoint,
-        area: TuiRect,
+        position: super::TuiLocalPoint,
+        size: TuiSize,
         clamp_outside: bool,
     ) -> Option<TuiGridPoint> {
         let resolved = self.state.resolved_viewport()?;
-        if resolved.content_height == 0 || area.width == 0 || area.height == 0 {
+        if resolved.content_height == 0 || size.width == 0 || size.height == 0 {
             return None;
         }
-        let content_top = area.y.saturating_add(resolved.screen_offset);
-        let visible_height = area.height.saturating_sub(resolved.screen_offset);
+        let content_top = i32::from(resolved.screen_offset);
+        let visible_height = size.height.saturating_sub(resolved.screen_offset);
         let visible_content_height = min(
             usize::from(visible_height),
             resolved
@@ -585,30 +639,29 @@ where
             return None;
         }
         let row_in_view = if clamp_outside {
-            position
-                .y
-                .saturating_sub(content_top)
-                .min(visible_content_height.saturating_sub(1) as u16)
+            position.y.saturating_sub(content_top).clamp(
+                0,
+                i32::try_from(visible_content_height.saturating_sub(1)).unwrap_or(i32::MAX),
+            ) as usize
         } else {
-            if position.x < area.x
-                || position.x >= area.right()
+            if position.x < 0
+                || position.x >= i32::from(size.width)
                 || position.y < content_top
-                || usize::from(position.y.saturating_sub(content_top)) >= visible_content_height
+                || usize::try_from(position.y.saturating_sub(content_top)).ok()?
+                    >= visible_content_height
             {
                 return None;
             }
-            position.y - content_top
+            usize::try_from(position.y - content_top).ok()?
         };
         Some(TuiGridPoint {
             row: resolved
                 .window
                 .scroll_top
-                .saturating_add(usize::from(row_in_view))
+                .saturating_add(row_in_view)
                 .min(resolved.content_height.saturating_sub(1)),
-            col: position
-                .x
-                .saturating_sub(area.x)
-                .min(area.width.saturating_sub(1)),
+            col: u16::try_from(position.x.clamp(0, i32::from(size.width.saturating_sub(1))))
+                .unwrap_or_default(),
         })
     }
 
@@ -653,7 +706,7 @@ where
     fn selection_text(
         &self,
         selection: TuiSelectionSpan,
-        area: TuiRect,
+        size: TuiSize,
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> Option<String> {
@@ -665,6 +718,16 @@ where
         if selection.start.row >= end_row_exclusive {
             return None;
         }
+        // Prefer the content's logical text so soft-wrapped rows rejoin without
+        // inserted newlines or rendered wrap indentation, and the full selected
+        // range is captured. Content that has no logical form returns `None`,
+        // and we fall back to per-row grid extraction below.
+        if let Some(logical) = self
+            .content
+            .selection_logical_text(selection, size.width, app)
+        {
+            return Some(logical);
+        }
         let mut lines = Vec::new();
         let mut chunk_start = selection.start.row;
         while chunk_start < end_row_exclusive {
@@ -672,7 +735,7 @@ where
                 end_row_exclusive,
                 chunk_start.saturating_add(usize::from(u16::MAX)),
             );
-            let buffer = self.selection_rows(chunk_start..chunk_end, area.width, ctx, app)?;
+            let buffer = self.selection_rows(chunk_start..chunk_end, size.width, ctx, app)?;
             for row in chunk_start..chunk_end {
                 let buffer_row = row.saturating_sub(chunk_start) as u16;
                 let start_col = if row == selection.start.row {
@@ -683,7 +746,7 @@ where
                 let end_col = if row == selection.end.row {
                     selection.end.col
                 } else {
-                    area.width
+                    size.width
                 };
                 lines.push(row_text(&buffer, buffer_row, start_col..end_col));
             }
@@ -704,28 +767,36 @@ where
         app: &AppContext,
     ) -> TuiSize {
         self.layout_visible_elements(constraint, ctx, app);
-        self.size = constraint.max;
+        let size = constraint.max;
+        self.size = Some(size);
+        size
+    }
+
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        for visible in &mut self.visible_elements {
+            visible.element.after_layout(ctx, app);
+        }
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        render_visible_elements(&mut self.visible_elements, origin, size, surface, ctx);
+    }
+
+    fn size(&self) -> Option<TuiSize> {
         self.size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        render_visible_elements(&self.visible_elements, area, buffer, ctx);
-    }
-
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        for visible in &self.visible_elements {
-            let slot_y = area.y.saturating_add(visible.viewport_y);
-            if slot_y >= area.bottom() {
-                continue;
-            }
-            let height = visible.height.min(area.bottom() - slot_y);
-            let slot = TuiRect::new(area.x, slot_y, area.width, height);
-            let (x, y) = visible.element.cursor_position(slot, ctx)?;
-            if y < height {
-                return Some((x, slot_y.saturating_sub(area.y).saturating_add(y)));
-            }
-        }
-        None
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -737,26 +808,14 @@ where
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        for visible in &mut self.visible_elements {
-            let slot_y = area.y.saturating_add(visible.viewport_y);
-            if slot_y >= area.bottom() {
-                continue;
-            }
-            let height = visible.height.min(area.bottom() - slot_y);
-            let slot = TuiRect::new(area.x, slot_y, area.width, height);
-            if visible
-                .element
-                .dispatch_event(event, slot, event_ctx, ctx, app)
-            {
-                return true;
-            }
-        }
-        false
+        self.visible_elements
+            .iter_mut()
+            .fold(false, |handled, visible| {
+                visible.element.dispatch_event(event, event_ctx, app) || handled
+            })
     }
 }
 

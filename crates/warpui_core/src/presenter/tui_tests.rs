@@ -12,9 +12,9 @@ use instant::Instant;
 
 use super::TuiPresenter;
 use crate::elements::tui::{
-    TuiAnimated, TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement,
-    TuiLayoutContext, TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
-    TuiStyle,
+    TuiAnimated, TuiBufferExt, TuiChildView, TuiConstraint, TuiContainer, TuiElement,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect,
+    TuiRectExt, TuiScreenPoint, TuiScreenPosition, TuiSize,
 };
 use crate::platform::WindowStyle;
 use crate::{
@@ -27,12 +27,16 @@ use crate::{
 /// A single line of text: as wide as its content, one row tall.
 struct TextDouble {
     text: String,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TextDouble {
     fn new(text: &str) -> Self {
         Self {
             text: text.to_owned(),
+            size: None,
+            origin: None,
         }
     }
 
@@ -48,17 +52,34 @@ impl TuiElement for TextDouble {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        constraint.clamp(TuiSize::new(self.width(), 1))
+        let size = constraint.clamp(TuiSize::new(self.width(), 1));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
-        buffer.set_stringn(
-            area.x,
-            area.y,
-            &self.text,
-            usize::from(area.width),
-            TuiStyle::default(),
-        );
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let size = self.size.unwrap();
+        for (column, character) in self.text.chars().take(usize::from(size.width)).enumerate() {
+            if let Some(cell) =
+                surface.cell_mut(origin.offset(i32::try_from(column).unwrap_or(i32::MAX), 0))
+            {
+                cell.set_char(character);
+            }
+        }
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 
@@ -68,6 +89,8 @@ impl TuiElement for TextDouble {
 struct ColumnDouble {
     children: Vec<Box<dyn TuiElement>>,
     child_sizes: Vec<TuiSize>,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl ColumnDouble {
@@ -75,6 +98,8 @@ impl ColumnDouble {
         Self {
             children,
             child_sizes: Vec::new(),
+            size: None,
+            origin: None,
         }
     }
 }
@@ -99,36 +124,45 @@ impl TuiElement for ColumnDouble {
             max_width = max_width.max(size.width);
             self.child_sizes.push(size);
         }
-        constraint.clamp(TuiSize::new(max_width, total_height))
+        let size = constraint.clamp(TuiSize::new(max_width, total_height));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let size = self.size.unwrap();
+        let area = TuiRect::new(0, 0, size.width, size.height);
         let mut remaining = area;
-        for (child, size) in self.children.iter().zip(&self.child_sizes) {
+        for (child, size) in self.children.iter_mut().zip(&self.child_sizes) {
             let (row, rest) = remaining.split_top(size.height);
             let child_area = TuiRect::new(row.x, row.y, size.width.min(row.width), row.height);
-            child.render(child_area, buffer, ctx);
+            child.render(
+                origin.offset(i32::from(child_area.x), i32::from(child_area.y)),
+                surface,
+                ctx,
+            );
             remaining = rest;
         }
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
         for child in &mut self.children {
             child.present(ctx);
         }
-    }
-
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        let mut remaining = area;
-        for (child, size) in self.children.iter().zip(&self.child_sizes) {
-            let (row, rest) = remaining.split_top(size.height);
-            let child_area = TuiRect::new(row.x, row.y, size.width.min(row.width), row.height);
-            if let Some((cx, cy)) = child.cursor_position(child_area, ctx) {
-                return Some((child_area.x - area.x + cx, child_area.y - area.y + cy));
-            }
-            remaining = rest;
-        }
-        None
     }
 }
 
@@ -139,6 +173,8 @@ struct ContainerDouble {
     padding: u16,
     fill: char,
     child_size: TuiSize,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl ContainerDouble {
@@ -148,6 +184,8 @@ impl ContainerDouble {
             padding,
             fill,
             child_size: TuiSize::ZERO,
+            size: None,
+            origin: None,
         }
     }
 }
@@ -166,17 +204,27 @@ impl TuiElement for ContainerDouble {
         );
         let size = self.child.layout(TuiConstraint::loose(inner_max), ctx, app);
         self.child_size = size;
-        constraint.clamp(TuiSize::new(
+        let size = constraint.clamp(TuiSize::new(
             size.width.saturating_add(inset),
             size.height.saturating_add(inset),
-        ))
+        ));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let size = self.size.unwrap();
+        let area = TuiRect::new(0, 0, size.width, size.height);
         let fill = self.fill.to_string();
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
-                if let Some(cell) = buffer.cell_mut((x, y)) {
+                if let Some(cell) = surface.cell_mut(origin.offset(i32::from(x), i32::from(y))) {
                     cell.set_symbol(&fill);
                 }
             }
@@ -188,7 +236,19 @@ impl TuiElement for ContainerDouble {
             self.child_size.width.min(inner.width),
             self.child_size.height.min(inner.height),
         );
-        self.child.render(child_area, buffer, ctx);
+        self.child.render(
+            origin.offset(i32::from(child_area.x), i32::from(child_area.y)),
+            surface,
+            ctx,
+        );
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -199,11 +259,17 @@ impl TuiElement for ContainerDouble {
 /// A leaf that owns the cursor, reporting it at a fixed offset within its area.
 struct CursorDouble {
     offset: (u16, u16),
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl CursorDouble {
     fn new(offset: (u16, u16)) -> Self {
-        Self { offset }
+        Self {
+            offset,
+            size: None,
+            origin: None,
+        }
     }
 }
 
@@ -214,27 +280,46 @@ impl TuiElement for CursorDouble {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        constraint.clamp(TuiSize::new(5, 1))
+        let size = constraint.clamp(TuiSize::new(5, 1));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
-        buffer.set_stringn(
-            area.x,
-            area.y,
-            "INPUT",
-            usize::from(area.width),
-            TuiStyle::default(),
-        );
+    fn render(
+        &mut self,
+        position: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        let origin = ctx.scene_point(position);
+        self.origin = Some(origin);
+        ctx.set_terminal_cursor(TuiScreenPoint::new(
+            origin.x.saturating_add(i32::from(self.offset.0)),
+            origin.y.saturating_add(i32::from(self.offset.1)),
+            origin.z_index,
+        ));
+        let size = self.size.unwrap();
+        for (column, character) in "INPUT".chars().take(usize::from(size.width)).enumerate() {
+            if let Some(cell) =
+                surface.cell_mut(position.offset(i32::try_from(column).unwrap_or(i32::MAX), 0))
+            {
+                cell.set_char(character);
+            }
+        }
+    }
+    fn size(&self) -> Option<TuiSize> {
+        self.size
     }
 
-    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        Some(self.offset)
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 
 /// A leaf that requests a repaint `delay` after every paint.
 struct RepaintDouble {
     delay: Duration,
+    size: Option<TuiSize>,
 }
 
 impl TuiElement for RepaintDouble {
@@ -244,11 +329,59 @@ impl TuiElement for RepaintDouble {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        constraint.clamp(TuiSize::new(1, 1))
+        let size = constraint.clamp(TuiSize::new(1, 1));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
+    fn render(
+        &mut self,
+        _origin: TuiScreenPosition,
+        _surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
         ctx.repaint_after(self.delay);
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+}
+
+/// A leaf that counts how many times `after_layout` is invoked on it, used to
+/// pin the presenter's post-layout pass and its propagation through containers.
+struct AfterLayoutDouble {
+    after_layout_calls: Rc<Cell<usize>>,
+    size: Option<TuiSize>,
+}
+
+impl TuiElement for AfterLayoutDouble {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let size = constraint.clamp(TuiSize::new(1, 1));
+        self.size = Some(size);
+        size
+    }
+
+    fn after_layout(&mut self, _ctx: &mut TuiLayoutContext, _app: &AppContext) {
+        self.after_layout_calls
+            .set(self.after_layout_calls.get() + 1);
+    }
+
+    fn render(
+        &mut self,
+        _origin: TuiScreenPosition,
+        _surface: &mut TuiPaintSurface<'_>,
+        _ctx: &mut TuiPaintContext,
+    ) {
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
     }
 }
 
@@ -435,9 +568,11 @@ fn frame_surfaces_the_earliest_requested_repaint_deadline() {
             let column = ColumnDouble::new(vec![
                 Box::new(RepaintDouble {
                     delay: Duration::from_secs(60),
+                    size: None,
                 }),
                 Box::new(RepaintDouble {
                     delay: Duration::from_millis(10),
+                    size: None,
                 }),
             ]);
 
@@ -503,6 +638,33 @@ fn paint_only_repaint_reuses_the_cached_leaf_root_without_re_rendering() {
         });
         assert_eq!(frame.buffer.to_lines(), vec!["LEAF    "]);
         assert_eq!(renders.get(), 1);
+    });
+}
+
+#[test]
+fn after_layout_runs_once_and_propagates_through_containers() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let calls = Rc::new(Cell::new(0));
+            let leaf = AfterLayoutDouble {
+                after_layout_calls: calls.clone(),
+                size: None,
+            };
+            // Nest the leaf inside real containers so the assertion also covers
+            // container `after_layout` propagation, not just the root call.
+            let tree =
+                TuiContainer::new(TuiContainer::new(leaf.finish()).with_padding_x(1).finish())
+                    .finish();
+
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(tree, TuiRect::new(0, 0, 6, 3), app_ctx);
+
+            assert_eq!(
+                calls.get(),
+                1,
+                "after_layout should reach the nested leaf exactly once"
+            );
+        });
     });
 }
 

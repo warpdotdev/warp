@@ -28,7 +28,8 @@ use super::model_spec_scores::{
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
-    byo_key_source_for_model, should_show_bedrock_icon_for_model, should_show_key_icon_for_model,
+    byo_key_source_for_model, should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
     ByoKeySource, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMSpec,
 };
 use crate::auth::AuthStateProvider;
@@ -48,6 +49,7 @@ use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
+const AUTO_GEMINI_ENTERPRISE_AGENT_PLATFORM_TOOLTIP: &str = "Warp uses Gemini Enterprise Agent Platform when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
@@ -132,6 +134,78 @@ fn model_specs_width(app: &AppContext) -> f32 {
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     ) * 34.
+}
+/// Frontend-neutral model picker result shared by GUI and TUI surfaces.
+#[derive(Clone, Debug)]
+pub struct ModelPickerChoice {
+    pub llm: LLMInfo,
+    pub disable_reason: Option<DisableReason>,
+    pub name_match_result: Option<FuzzyMatchResult>,
+    pub score: OrderedFloat<f64>,
+}
+
+impl ModelPickerChoice {
+    pub fn is_selectable(&self) -> bool {
+        self.disable_reason.is_none()
+    }
+
+    fn priority_tier(&self) -> u8 {
+        if self.is_selectable() {
+            0
+        } else {
+            1
+        }
+    }
+}
+
+/// Applies the GUI model picker's ordering, fuzzy filtering, and effective disabled state.
+pub fn query_model_picker_choices<'a>(
+    llm_preferences: &LLMPreferences,
+    choices: impl IntoIterator<Item = &'a LLMInfo>,
+    query_text: &str,
+    app: &AppContext,
+) -> Vec<ModelPickerChoice> {
+    let choices = ModelSelectorDataSource::order_model_choices(
+        llm_preferences,
+        choices.into_iter().collect(),
+    );
+    let query_text = query_text.trim().to_lowercase();
+    let mut results = choices
+        .into_iter()
+        .filter_map(|llm| {
+            let name_match_result = if query_text.is_empty() {
+                None
+            } else {
+                let result = match_indices_case_insensitive(
+                    llm.display_name.to_lowercase().as_str(),
+                    query_text.as_str(),
+                )?;
+                if query_text.len() > 1 && result.score < 10 {
+                    return None;
+                }
+                Some(result)
+            };
+            let disable_reason = if llm.disable_reason == Some(DisableReason::RequiresUpgrade)
+                && should_show_key_icon_for_model(llm, app)
+            {
+                None
+            } else {
+                llm.disable_reason.clone()
+            };
+            Some(ModelPickerChoice {
+                llm: llm.clone(),
+                disable_reason,
+                score: OrderedFloat(
+                    name_match_result
+                        .as_ref()
+                        .map_or(f64::MIN, |result| result.score as f64),
+                ),
+                name_match_result,
+            })
+        })
+        .collect::<Vec<_>>();
+    results.sort_by_key(|choice| (choice.priority_tier(), choice.score));
+    results
 }
 
 pub struct ModelSelectorDataSource {
@@ -247,37 +321,12 @@ impl SyncDataSource for ModelSelectorDataSource {
                 })
                 .collect_vec()
         };
-        let choices = Self::order_model_choices(llm_preferences, choices);
-
-        let query_text = query.text.trim().to_lowercase();
-
-        if query_text.is_empty() {
-            return Ok(choices
+        Ok(
+            query_model_picker_choices(llm_preferences, choices, &query.text, app)
                 .into_iter()
-                .map(|llm| QueryResult::from(ModelSearchItem::new(llm, &active_llm_id, app)))
-                .collect());
-        }
-
-        Ok(choices
-            .into_iter()
-            .filter_map(|llm| {
-                let match_result = match_indices_case_insensitive(
-                    llm.display_name.to_lowercase().as_str(),
-                    query_text.as_str(),
-                )?;
-
-                // Avoid spamming results with extremely weak matches.
-                if query_text.len() > 1 && match_result.score < 10 {
-                    return None;
-                }
-
-                Some(QueryResult::from(
-                    ModelSearchItem::new(llm, &active_llm_id, app)
-                        .with_name_match_result(Some(match_result.clone()))
-                        .with_score(OrderedFloat(match_result.score as f64)),
-                ))
-            })
-            .collect())
+                .map(|choice| QueryResult::from(ModelSearchItem::new(choice, &active_llm_id, app)))
+                .collect(),
+        )
     }
 }
 
@@ -301,6 +350,7 @@ struct ModelSearchItem {
     disable_reason: Option<DisableReason>,
     is_auto: bool,
     is_using_bedrock: bool,
+    is_using_gemini_enterprise_agent_platform: bool,
     name_match_result: Option<FuzzyMatchResult>,
     score: OrderedFloat<f64>,
     manage_api_key_mouse_state: MouseStateHandle,
@@ -310,32 +360,26 @@ struct ModelSearchItem {
 }
 
 impl ModelSearchItem {
-    fn new(llm: &LLMInfo, active_llm_id: &LLMId, app: &AppContext) -> Self {
-        // If the model requires an upgrade but the user already has a BYOK key
-        // for this provider, treat it as enabled by clearing the disable reason.
-        let disable_reason = if llm.disable_reason == Some(DisableReason::RequiresUpgrade)
-            && should_show_key_icon_for_model(llm, app)
-        {
-            None
-        } else {
-            llm.disable_reason.clone()
-        };
+    fn new(choice: ModelPickerChoice, active_llm_id: &LLMId, app: &AppContext) -> Self {
+        let llm = &choice.llm;
         let is_custom_router = is_custom_router_id(llm.id.as_str());
         let is_auto = is_auto(llm);
         let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
+        let is_using_gemini_enterprise_agent_platform =
+            should_show_gemini_enterprise_agent_platform_icon_for_model(llm, app);
         let byo_key_source = byo_key_source_for_model(llm, app);
         let leading_icon = if is_using_bedrock {
             Icon::Aws
+        } else if is_using_gemini_enterprise_agent_platform {
+            Icon::GeminiEnterpriseAgentPlatform
         } else if is_custom_router {
             Icon::Dataflow
         } else {
             llm.provider.icon().unwrap_or(Icon::Oz)
         };
-        let credential_icon = if !is_using_bedrock && byo_key_source.is_some() {
-            Some(Icon::Key)
-        } else {
-            None
-        };
+        let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;
+        let credential_icon =
+            (!is_using_cloud_host && byo_key_source.is_some()).then_some(Icon::Key);
         Self {
             id: llm.id.clone(),
             provider: llm.provider.clone(),
@@ -347,26 +391,17 @@ impl ModelSearchItem {
             is_selected: &llm.id == active_llm_id,
             is_custom_router,
             description: llm.description.clone(),
-            disable_reason,
+            disable_reason: choice.disable_reason,
             is_auto,
             is_using_bedrock,
-            name_match_result: None,
-            score: OrderedFloat(f64::MIN),
+            is_using_gemini_enterprise_agent_platform,
+            name_match_result: choice.name_match_result,
+            score: choice.score,
             manage_api_key_mouse_state: Default::default(),
             cost_row_tooltip_mouse_state: Default::default(),
             reasoning_level: llm.reasoning_level(),
             discount_percentage: llm.discount_percentage,
         }
-    }
-
-    fn with_name_match_result(mut self, result: Option<FuzzyMatchResult>) -> Self {
-        self.name_match_result = result;
-        self
-    }
-
-    fn with_score(mut self, score: OrderedFloat<f64>) -> Self {
-        self.score = score;
-        self
     }
 }
 
@@ -489,7 +524,9 @@ impl SearchItem for ModelSearchItem {
 
         if should_show_discount_chip(
             self.discount_percentage,
-            self.credential_icon.is_some() || self.is_using_bedrock,
+            self.credential_icon.is_some()
+                || self.is_using_bedrock
+                || self.is_using_gemini_enterprise_agent_platform,
         ) {
             let discount_percentage = self.discount_percentage.unwrap_or(0.);
             let chip = Container::new(
@@ -559,9 +596,14 @@ impl SearchItem for ModelSearchItem {
         };
         let header = render_model_spec_header(title, description, app);
 
-        let cost_row = if self.is_using_bedrock || self.byo_key_source.is_some() {
+        let uses_external_inference = self.is_using_bedrock
+            || self.is_using_gemini_enterprise_agent_platform
+            || self.byo_key_source.is_some();
+        let cost_row = if uses_external_inference {
             let search_query = if self.is_using_bedrock {
                 "bedrock"
+            } else if self.is_using_gemini_enterprise_agent_platform {
+                "gemini enterprise"
             } else {
                 "api"
             }
@@ -597,6 +639,10 @@ impl SearchItem for ModelSearchItem {
                     "Inference may use Bedrock"
                 } else if self.is_using_bedrock {
                     "Inference via Bedrock"
+                } else if self.is_using_gemini_enterprise_agent_platform && self.is_auto {
+                    "Inference may use Gemini Enterprise Agent Platform"
+                } else if self.is_using_gemini_enterprise_agent_platform {
+                    "Inference via Gemini Enterprise Agent Platform"
                 } else if let Some(source) = self.byo_key_source {
                     source.inference_label()
                 } else {
@@ -605,6 +651,11 @@ impl SearchItem for ModelSearchItem {
                 tooltip: if self.is_using_bedrock && self.is_auto {
                     Some(CostRowTooltip {
                         text: AUTO_BEDROCK_TOOLTIP,
+                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
+                    })
+                } else if self.is_using_gemini_enterprise_agent_platform && self.is_auto {
+                    Some(CostRowTooltip {
+                        text: AUTO_GEMINI_ENTERPRISE_AGENT_PLATFORM_TOOLTIP,
                         mouse_state: self.cost_row_tooltip_mouse_state.clone(),
                     })
                 } else {

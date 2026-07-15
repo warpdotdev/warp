@@ -594,6 +594,7 @@ default = [
     "cloud_environments",
     "create_environment_slash_command",
     "code_review_find",
+    "async_find",
     "shared_session_long_running_commands",
     "mcp_grouped_server_context",
     "fork_from_command",
@@ -668,6 +669,7 @@ default = [
     "vertical_tabs_summary_mode",
     "tab_configs",
     "grouped_tabs",
+    "pinned_tabs",
     "agent_harness",
     "hoa_onboarding_flow",
     "hoa_remote_control",
@@ -681,7 +683,6 @@ default = [
     "git_credential_refresh",
     "oz_handoff",
     "handoff_local_cloud",
-    "run_agents_tool",
     "pending_user_query_indicator",
     "queue_slash_command",
     "queued_prompts_v2",
@@ -695,6 +696,7 @@ default = [
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
+    "terminal_lifecycle_recovery",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -845,6 +847,7 @@ tab_close_button_on_left = []
 team_features_override = []
 test-util = ["cloud_object_client/test-util", "warp_server_auth/test-util"]
 team_workflows = ["team_features_override"]
+terminal_lifecycle_recovery = []
 toggle_bootstrap_block = []
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = [
@@ -984,7 +987,6 @@ file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
-run_agents_tool = []
 wait_for_events_parent_registration = []
 pending_user_query_indicator = []
 queue_slash_command = []

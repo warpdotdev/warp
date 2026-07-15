@@ -14,8 +14,8 @@
 //! bottom input to at most six rows) without a bespoke layout element.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPresentationContext, TuiRect, TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize,
 };
 use crate::AppContext;
 
@@ -61,17 +61,6 @@ impl TuiConstrainedBox {
         );
         TuiConstraint::new(min, TuiSize::new(max_width, max_height))
     }
-
-    /// `area` clipped to the configured caps, anchored at the area's origin.
-    fn capped_area(&self, area: TuiRect) -> TuiRect {
-        let width = self
-            .max_cols
-            .map_or(area.width, |cols| area.width.min(cols));
-        let height = self
-            .max_rows
-            .map_or(area.height, |rows| area.height.min(rows));
-        TuiRect::new(area.x, area.y, width, height)
-    }
 }
 
 impl TuiElement for TuiConstrainedBox {
@@ -84,12 +73,25 @@ impl TuiElement for TuiConstrainedBox {
         self.child.layout(self.cap_constraint(constraint), ctx, app)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        self.child.render(self.capped_area(area), buffer, ctx);
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        self.child.after_layout(ctx, app);
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        self.child.cursor_position(self.capped_area(area), ctx)
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.child.render(origin, surface, ctx);
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.child.size()
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.child.origin()
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -99,13 +101,10 @@ impl TuiElement for TuiConstrainedBox {
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        self.child
-            .dispatch_event(event, self.capped_area(area), event_ctx, ctx, app)
+        self.child.dispatch_event(event, event_ctx, app)
     }
 }
 

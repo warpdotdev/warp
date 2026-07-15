@@ -15,8 +15,8 @@ use warp::tui_export::{
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, EntityId, EntityIdMap, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize, TuiViewportContent,
-    TuiViewportWindow, TuiViewportedElement,
+    TuiBufferExt, TuiConstraint, TuiGridPoint, TuiLayoutContext, TuiRect, TuiSelectionSpan,
+    TuiSize, TuiViewportContent, TuiViewportWindow, TuiViewportedElement,
 };
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView, TypedActionView, ViewContext};
@@ -36,7 +36,7 @@ fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
         .blocks()
         .iter()
         .filter(|block| should_render_terminal_block(block, model.block_list()))
-        .map(|block| TuiBlockListViewportItemId::TerminalBlock(block.id().clone()))
+        .map(|block| TuiBlockListViewportItemId::Terminal(block.id().clone()))
         .collect::<Vec<_>>();
     let source = TuiBlockListViewportSource::new(
         Arc::new(FairMutex::new(model)),
@@ -340,6 +340,158 @@ fn tui_transcript_toggle_expands_and_remeasures_block_at_stable_width() {
     });
 }
 
+/// A selection covering the whole wrapped input section copies the original
+/// query verbatim (logical text), not the per-row grid scrape. Guards the TUI
+/// copy bug where a multi-row selection pasted with inserted newlines.
+#[test]
+fn selection_logical_text_returns_query_for_full_input_selection() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        // `seeded_agent_block_source` registers a block whose input query is
+        // "hello world from rust".
+        let query = "hello world from rust";
+        let (source, _model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+        let width = 12u16;
+        let block_height = app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            agent_block.as_ref(app).desired_height(width, &mut ctx, app)
+        });
+        // The block is input-only, so its height is the top padding row plus the
+        // wrapped input; a wrapped input spans more than one row here.
+        assert!(
+            block_height > 2,
+            "input should wrap at width {width}: {block_height}"
+        );
+        let selection = TuiSelectionSpan {
+            start: TuiGridPoint { row: 1, col: 0 },
+            end: TuiGridPoint {
+                row: block_height - 1,
+                col: width,
+            },
+        };
+
+        let text = app.read(|app| source.selection_logical_text(selection, width, app));
+
+        assert_eq!(text.as_deref(), Some(query));
+    });
+}
+
+/// A selection that does not cover the whole input section (here starting
+/// mid-line) returns `None`, so copy falls back to the per-row grid path.
+#[test]
+fn selection_logical_text_falls_back_for_partial_input_selection() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, _model, _agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+        let width = 12u16;
+        let selection = TuiSelectionSpan {
+            start: TuiGridPoint { row: 1, col: 1 },
+            end: TuiGridPoint { row: 2, col: width },
+        };
+
+        let text = app.read(|app| source.selection_logical_text(selection, width, app));
+
+        assert_eq!(text, None);
+    });
+}
+
+/// A selection that ends part-way through the section's final wrapped row (the
+/// end column stops short of the last glyph) falls back to per-row grid text,
+/// so the whole logical section is not returned and unselected trailing text is
+/// never copied.
+#[test]
+fn selection_logical_text_falls_back_for_partial_end_selection() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, _model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+        let width = 12u16;
+        let block_height = app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            agent_block.as_ref(app).desired_height(width, &mut ctx, app)
+        });
+        assert!(
+            block_height > 2,
+            "input should wrap at width {width}: {block_height}"
+        );
+        // Start at the section's first column, but end at column 1 of the last
+        // rendered row — short of the last glyph.
+        let selection = TuiSelectionSpan {
+            start: TuiGridPoint { row: 1, col: 0 },
+            end: TuiGridPoint {
+                row: block_height - 1,
+                col: 1,
+            },
+        };
+
+        let text = app.read(|app| source.selection_logical_text(selection, width, app));
+
+        assert_eq!(text, None);
+    });
+}
+
+/// A selection over an agent block's input and plain-text response sections
+/// copies both as logical text joined by a newline — agent *output* text is
+/// covered too, not just user input.
+#[test]
+fn selection_logical_text_covers_agent_plain_text_output() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let output = "the agent replied with a fairly long answer";
+        let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let agent_block = add_agent_block_with(
+            &mut app,
+            vec![query_input("hi")],
+            plain_text_output_status(output),
+            terminal_model.clone(),
+        );
+        let view_id = agent_block.id();
+        {
+            let mut model = terminal_model.lock();
+            model.block_list_mut().append_rich_content(
+                RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
+                false,
+            );
+            model.block_list_mut().take_dirty_rich_content_items();
+            model
+                .block_list_mut()
+                .update_rich_content_heights(&HashMap::from([(view_id, 99.0)]));
+        }
+        let agent_blocks = AgentBlockRegistry::new(RefCell::new(HashMap::from([(
+            view_id,
+            agent_block.clone(),
+        )])));
+        let source = TuiBlockListViewportSource::new(terminal_model.clone(), agent_blocks);
+
+        let width = 16u16;
+        let block_height = app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            agent_block.as_ref(app).desired_height(width, &mut ctx, app)
+        });
+        // Select the whole block (both sections), from the blank top padding row
+        // through the last rendered row.
+        let selection = TuiSelectionSpan {
+            start: TuiGridPoint { row: 0, col: 0 },
+            end: TuiGridPoint {
+                row: block_height - 1,
+                col: width,
+            },
+        };
+
+        let text = app.read(|app| source.selection_logical_text(selection, width, app));
+
+        assert_eq!(text, Some(format!("hi\n{output}")));
+    });
+}
+
 /// Builds a source over one registered agent block seeded with a stale,
 /// non-dirty cached height. When `preceding_rows > 0`, a terminal block of that
 /// many output rows precedes it, controlling how far below the top it sits.
@@ -507,7 +659,7 @@ fn reasoning_agent_block_source(
 fn expand_thinking_section(app: &mut App, agent_block: &ViewHandle<TuiAIBlock>) {
     agent_block.update(app, |block, ctx| {
         block.handle_action(
-            &TuiAIBlockAction::SetThinkingCollapsed {
+            &TuiAIBlockAction::SetSectionCollapsed {
                 message_id: MessageId::new("reasoning-1".to_owned()),
                 collapsed: false,
             },
@@ -637,6 +789,24 @@ fn finished_reasoning_status(body: &str) -> AIBlockOutputStatus {
                     },
                     finished_duration: Some(Duration::from_secs(2)),
                 },
+                citations: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    }
+}
+
+/// A completed output carrying a single plain-text response section.
+fn plain_text_output_status(text: &str) -> AIBlockOutputStatus {
+    AIBlockOutputStatus::Complete {
+        output: Shared::new(AIAgentOutput {
+            messages: vec![AIAgentOutputMessage {
+                id: MessageId::new("text-1".to_owned()),
+                message: AIAgentOutputMessageType::Text(AIAgentText {
+                    sections: vec![AIAgentTextSection::PlainText {
+                        text: text.to_owned().into(),
+                    }],
+                }),
                 citations: Vec::new(),
             }],
             ..Default::default()

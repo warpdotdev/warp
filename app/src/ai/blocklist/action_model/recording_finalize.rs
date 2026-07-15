@@ -104,14 +104,37 @@ async fn finalize_recording(
         return StopRecordingResult::Cancelled;
     }
     let recorder = computer_use::create_recorder();
+    let actions = recording.actions;
     let output = match recorder.stop(recording.handle).await {
         Ok(output) => output,
         Err(error) => return StopRecordingResult::Error(error.to_string()),
     };
 
     let local_path = output.path.clone();
+
+    // Burn keyboard action pills into the video before upload. Best-effort: on
+    // any failure the original capture is uploaded unannotated (a no-labels
+    // video beats no video). The overlay file, when produced, is a sibling of
+    // the mp4.
+    let mut upload_path = local_path.clone();
+    let mut overlay_path: Option<std::path::PathBuf> = None;
+    if !actions.is_empty() {
+        match computer_use::burn_in_action_log(&local_path, &actions, (output.width, output.height))
+            .await
+        {
+            Ok(path) if path != local_path => {
+                overlay_path = Some(path.clone());
+                upload_path = path;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                log::warn!("Recording overlay burn-in failed; uploading original: {error}");
+            }
+        }
+    }
+
     let request = FileArtifactUploadRequest {
-        path: output.path,
+        path: upload_path,
         run_id: None,
         conversation_id: server_conversation_token,
         description: None,
@@ -125,6 +148,9 @@ async fn finalize_recording(
     // uploads or retaining their files requires a separate persistence policy.
     let _ = std::fs::remove_file(&local_path);
     let _ = std::fs::remove_file(local_path.with_extension("log"));
+    if let Some(overlay_path) = overlay_path.as_ref() {
+        let _ = std::fs::remove_file(overlay_path);
+    }
 
     match upload_result {
         Ok(upload) => StopRecordingResult::Success(RecordingStopped {
@@ -201,7 +227,7 @@ fn start_or_join_finalization<T: Entity>(
             result_receiver,
         } => {
             RecordingController::handle(ctx).update(ctx, |_controller, ctx| {
-                spawn_finalize(recording, reason, should_upload, ctx);
+                spawn_finalize(*recording, reason, should_upload, ctx);
             });
             Some(RecordingFinalization::Pending(result_receiver))
         }
@@ -278,7 +304,7 @@ pub(crate) fn spawn_recording_exit_watcher(
                         }
                         computer_use::RecordingExitKind::Crashed => FinalizeReason::FfmpegExited,
                     };
-                    spawn_finalize(recording, reason, true, ctx);
+                    spawn_finalize(*recording, reason, true, ctx);
                 }
             }
             None if controller.active_recording_id() == Some(recording_id.as_str()) => {
