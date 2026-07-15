@@ -316,9 +316,13 @@ pub enum TemplatableMCPServerManagerEvent {
         uuid: Uuid,
         state: MCPServerState,
     },
+    /// A server managed by this shared runtime needs interactive OAuth.
+    /// Frontends choose how to present and receive the authorization flow.
     AuthenticationRequired {
         uuid: Uuid,
     },
+    /// The shared secure credential cache changed for an installation.
+    /// Frontends can refresh any authentication controls or status they expose.
     CredentialsChanged {
         uuid: Uuid,
     },

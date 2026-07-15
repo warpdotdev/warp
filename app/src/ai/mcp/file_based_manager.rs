@@ -36,7 +36,12 @@ pub struct FileBasedMCPManager {
     /// consumer can query the current config health. A successful parse or
     /// removal clears the diagnostic for that path.
     config_diagnostics_by_path: HashMap<PathBuf, FileMCPConfigDiagnostic>,
+    /// The TUI scans its global config before login so it can render config
+    /// health immediately, but starting servers before authentication would
+    /// expose tools and begin OAuth before the session is ready. Hold global
+    /// Warp servers until the TUI login flow explicitly activates them.
     defer_global_warp_autostart: bool,
+    /// Whether deferred global Warp servers may now be started.
     global_warp_servers_activated: bool,
 }
 
@@ -74,18 +79,28 @@ impl FileBasedMCPManager {
                 provider,
                 servers,
             } => {
-                self.config_diagnostics_by_path.remove(config_path);
+                if self
+                    .config_diagnostics_by_path
+                    .remove(config_path)
+                    .is_some()
+                {
+                    ctx.emit(FileBasedMCPManagerEvent::ConfigDiagnosticChanged);
+                }
                 self.apply_parsed_servers(root_path.clone(), *provider, servers.clone(), ctx);
-                ctx.emit(FileBasedMCPManagerEvent::ServersChanged);
             }
             FileMCPWatcherEvent::ConfigRemoved {
                 config_path,
                 root_path,
                 provider,
             } => {
-                self.config_diagnostics_by_path.remove(config_path);
+                if self
+                    .config_diagnostics_by_path
+                    .remove(config_path)
+                    .is_some()
+                {
+                    ctx.emit(FileBasedMCPManagerEvent::ConfigDiagnosticChanged);
+                }
                 self.remove_servers_for_root_provider(root_path, *provider, ctx);
-                ctx.emit(FileBasedMCPManagerEvent::ServersChanged);
             }
             FileMCPWatcherEvent::ConfigError { diagnostic } => {
                 self.config_diagnostics_by_path
@@ -138,7 +153,11 @@ impl FileBasedMCPManager {
             .get_mut(root_path)
             .and_then(|m| m.remove(&provider));
         if let Some(hashes) = hashes {
+            let servers_changed = !hashes.is_empty();
             self.remove_if_orphaned(hashes, ctx);
+            if servers_changed {
+                ctx.emit(FileBasedMCPManagerEvent::ServersChanged);
+            }
         }
     }
 
@@ -263,6 +282,9 @@ impl FileBasedMCPManager {
 
         // If orphaned servers are found, remove them and purge their credentials.
         self.remove_if_orphaned(servers_to_remove, ctx);
+        if previous_scanned_servers != scanned_servers {
+            ctx.emit(FileBasedMCPManagerEvent::ServersChanged);
+        }
     }
 
     /// Returns `true` if the server identified by `hash` is referenced from any global
