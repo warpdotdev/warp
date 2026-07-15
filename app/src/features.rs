@@ -417,8 +417,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationsAsContext,
         #[cfg(feature = "incremental_auto_reload")]
         FeatureFlag::IncrementalAutoReload,
-        #[cfg(feature = "run_agents_tool")]
-        FeatureFlag::RunAgentsTool,
         #[cfg(feature = "wait_for_events_parent_registration")]
         FeatureFlag::WaitForEventsParentRegistration,
         #[cfg(feature = "pending_user_query_indicator")]

@@ -681,7 +681,6 @@ default = [
     "git_credential_refresh",
     "oz_handoff",
     "handoff_local_cloud",
-    "run_agents_tool",
     "pending_user_query_indicator",
     "queue_slash_command",
     "queued_prompts_v2",
@@ -984,7 +983,6 @@ file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
-run_agents_tool = []
 wait_for_events_parent_registration = []
 pending_user_query_indicator = []
 queue_slash_command = []
