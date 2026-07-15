@@ -131,13 +131,20 @@ fn schedule_codex_token_refresh(
     if !manager.codex_refresh_allowed {
         return;
     }
-    let Some(tokens) = manager.codex_tokens() else {
-        return;
+    let (refresh_token, expires_at) = {
+        let Some(tokens) = manager.codex_tokens() else {
+            return;
+        };
+        let Some(refresh_token) = tokens.refresh_token.clone() else {
+            return;
+        };
+        (refresh_token, tokens.expires_at)
     };
-    let Some(refresh_token) = tokens.refresh_token.clone() else {
-        return;
-    };
-    let expires_in = tokens.expires_at.map(|expires_at| {
+    #[cfg(test)]
+    {
+        manager.codex_refresh_scheduled_count += 1;
+    }
+    let expires_in = expires_at.map(|expires_at| {
         expires_at
             .duration_since(SystemTime::now())
             .unwrap_or(Duration::ZERO)
@@ -178,10 +185,7 @@ pub(crate) fn register_codex_refresh(
     }
 }
 
-pub(crate) fn finish_codex_refresh(
-    manager: &mut ApiKeyManager,
-    outcome: CodexRefreshOutcome,
-) {
+pub(crate) fn finish_codex_refresh(manager: &mut ApiKeyManager, outcome: CodexRefreshOutcome) {
     for waiter in manager.codex_refresh_waiters.take().unwrap_or_default() {
         let _ = waiter.send(outcome);
     }

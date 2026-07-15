@@ -1,8 +1,9 @@
 use std::time::{Duration, SystemTime};
 
+use warp_core::features::FeatureFlag;
+
 use super::*;
 use crate::codex_subscription::{finish_codex_refresh, register_codex_refresh};
-use warp_core::features::FeatureFlag;
 
 fn make_manager(keys: ApiKeys) -> ApiKeyManager {
     make_manager_with_grok(keys, None)
@@ -27,6 +28,8 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         secure_storage_write_version: 0,
         grok_secure_storage_write_version: 0,
         codex_secure_storage_write_version: 0,
+        #[cfg(test)]
+        codex_refresh_scheduled_count: 0,
     }
 }
 
@@ -201,10 +204,9 @@ fn codex_tokens_secure_storage_round_trip_preserves_refresh_state() {
 
 #[test]
 fn codex_tokens_deserialize_optional_refresh_fields_from_older_storage() {
-    let restored: CodexTokens = serde_json::from_str(
-        r#"{"access_token":"access","chatgpt_account_id":"account"}"#,
-    )
-    .unwrap();
+    let restored: CodexTokens =
+        serde_json::from_str(r#"{"access_token":"access","chatgpt_account_id":"account"}"#)
+            .unwrap();
     assert_eq!(restored.refresh_token, None);
     assert_eq!(restored.id_token, None);
     assert_eq!(restored.expires_at, None);

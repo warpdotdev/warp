@@ -1,7 +1,8 @@
-use super::*;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use warpui_core::App;
+
+use super::*;
 
 fn id_token(account_id: &str) -> String {
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
@@ -214,40 +215,123 @@ fn test_set_codex_refresh_allowed() {
         });
         let manager = app.add_singleton_model(ApiKeyManager::new);
 
+        // Prepare valid tokens with a future expiry.
+        let test_tokens = CodexTokens {
+            access_token: "test-access".into(),
+            refresh_token: Some("test-refresh".into()),
+            id_token: Some(id_token("test-account")),
+            chatgpt_account_id: "test-account".into(),
+            expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
+            connected_at: Some(SystemTime::now()),
+        };
+
         {
-            // Feature flag OFF -> always false
+            // Case 1: Feature flag OFF -> does not schedule, allowed is always false
             let _guard =
                 warp_core::features::FeatureFlag::CodexSubscription.override_enabled(false);
+
+            // Set tokens with feature disabled.
             manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_tokens(Some(test_tokens.clone()), ctx);
                 manager.set_codex_refresh_allowed(true, ctx);
             });
             manager.read(&app, |manager, _| {
                 assert!(!manager.codex_refresh_allowed);
+                assert_eq!(manager.codex_refresh_scheduled_count, 0);
             });
 
+            // Set allowed false with feature disabled.
             manager.update(&mut app, |manager, ctx| {
                 manager.set_codex_refresh_allowed(false, ctx);
             });
             manager.read(&app, |manager, _| {
                 assert!(!manager.codex_refresh_allowed);
+                assert_eq!(manager.codex_refresh_scheduled_count, 0);
+            });
+        }
+
+        // Feature flag is now ON because the OFF guard was dropped.
+        let _guard = warp_core::features::FeatureFlag::CodexSubscription.override_enabled(true);
+
+        {
+            // Case 2: Feature flag ON but no tokens installed -> does not schedule, but allowed is true
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_tokens(None, ctx);
+                manager.set_codex_refresh_allowed(true, ctx);
+            });
+            manager.read(&app, |manager, _| {
+                assert!(manager.codex_refresh_allowed);
+                assert_eq!(manager.codex_refresh_scheduled_count, 0);
+            });
+
+            // Reset allowed to false
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_refresh_allowed(false, ctx);
             });
         }
 
         {
-            // Feature flag ON -> true when byo is true, false when byo is false
-            let _guard = warp_core::features::FeatureFlag::CodexSubscription.override_enabled(true);
+            // Case 3: Feature flag ON but tokens installed have no refresh_token -> does not schedule
+            let tokens_no_refresh = CodexTokens {
+                access_token: "test-access".into(),
+                refresh_token: None,
+                id_token: Some(id_token("test-account")),
+                chatgpt_account_id: "test-account".into(),
+                expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
+                connected_at: Some(SystemTime::now()),
+            };
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_tokens(Some(tokens_no_refresh), ctx);
+                manager.set_codex_refresh_allowed(true, ctx);
+            });
+            manager.read(&app, |manager, _| {
+                assert!(manager.codex_refresh_allowed);
+                assert_eq!(manager.codex_refresh_scheduled_count, 0);
+            });
+
+            // Reset allowed to false
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_refresh_allowed(false, ctx);
+            });
+        }
+
+        {
+            // Case 4: Enabling the feature/allowed path with tokens -> schedules exactly once
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_tokens(Some(test_tokens.clone()), ctx);
+                assert_eq!(manager.codex_refresh_scheduled_count, 0);
+                manager.set_codex_refresh_allowed(true, ctx);
+            });
+            manager.read(&app, |manager, _| {
+                assert!(manager.codex_refresh_allowed);
+                assert_eq!(manager.codex_refresh_scheduled_count, 1);
+            });
+
+            // Case 5: Repeated enable -> no duplicate scheduling
             manager.update(&mut app, |manager, ctx| {
                 manager.set_codex_refresh_allowed(true, ctx);
             });
             manager.read(&app, |manager, _| {
                 assert!(manager.codex_refresh_allowed);
+                assert_eq!(manager.codex_refresh_scheduled_count, 1);
             });
 
+            // Case 6: Transition allowed to false -> stops scheduling
             manager.update(&mut app, |manager, ctx| {
                 manager.set_codex_refresh_allowed(false, ctx);
             });
             manager.read(&app, |manager, _| {
                 assert!(!manager.codex_refresh_allowed);
+                assert_eq!(manager.codex_refresh_scheduled_count, 1);
+            });
+
+            // Case 7: Re-enabling allowed -> schedules again
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_refresh_allowed(true, ctx);
+            });
+            manager.read(&app, |manager, _| {
+                assert!(manager.codex_refresh_allowed);
+                assert_eq!(manager.codex_refresh_scheduled_count, 2);
             });
         }
     });
