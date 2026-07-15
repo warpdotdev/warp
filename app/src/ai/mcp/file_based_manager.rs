@@ -29,17 +29,20 @@ pub struct FileBasedMCPManager {
     /// They are temporarily stored here and removed to emit FileBasedMCPManagerEvent::CloudEnvMcpScanComplete
     pending_scan_auto_started_servers_by_root:
         HashMap<PathBuf, HashMap<MCPProvider, HashSet<Uuid>>>,
-    /// Latest parse diagnostic for each config path. Invalid snapshots preserve
-    /// the last-known-good server set.
-    config_diagnostics: HashMap<PathBuf, FileMCPConfigDiagnostic>,
+    /// Latest read or parse diagnostic for each config path.
+    ///
+    /// This lives beside the parsed server snapshot rather than in a frontend:
+    /// an invalid update preserves the last-known-good servers while any
+    /// consumer can query the current config health. A successful parse or
+    /// removal clears the diagnostic for that path.
+    config_diagnostics_by_path: HashMap<PathBuf, FileMCPConfigDiagnostic>,
     defer_global_warp_autostart: bool,
     global_warp_servers_activated: bool,
 }
 
 impl FileBasedMCPManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let defer_global_warp_autostart = settings::settings_mode() == settings::SettingsMode::Tui
-            && FeatureFlag::TuiMcpServers.is_enabled();
+        let defer_global_warp_autostart = settings::settings_mode() == settings::SettingsMode::Tui;
         if FeatureFlag::FileBasedMcp.is_enabled() {
             ctx.subscribe_to_model(&FileMCPWatcher::handle(ctx), |me, _, event, ctx| {
                 me.handle_watcher_event(event, ctx);
@@ -56,7 +59,7 @@ impl FileBasedMCPManager {
             file_based_servers: Default::default(),
             file_based_servers_by_root: Default::default(),
             pending_scan_auto_started_servers_by_root: Default::default(),
-            config_diagnostics: Default::default(),
+            config_diagnostics_by_path: Default::default(),
             defer_global_warp_autostart,
             global_warp_servers_activated: !defer_global_warp_autostart,
         }
@@ -71,7 +74,7 @@ impl FileBasedMCPManager {
                 provider,
                 servers,
             } => {
-                self.config_diagnostics.remove(config_path);
+                self.config_diagnostics_by_path.remove(config_path);
                 self.apply_parsed_servers(root_path.clone(), *provider, servers.clone(), ctx);
                 ctx.emit(FileBasedMCPManagerEvent::ServersChanged);
             }
@@ -80,12 +83,12 @@ impl FileBasedMCPManager {
                 root_path,
                 provider,
             } => {
-                self.config_diagnostics.remove(config_path);
+                self.config_diagnostics_by_path.remove(config_path);
                 self.remove_servers_for_root_provider(root_path, *provider, ctx);
                 ctx.emit(FileBasedMCPManagerEvent::ServersChanged);
             }
             FileMCPWatcherEvent::ConfigError { diagnostic } => {
-                self.config_diagnostics
+                self.config_diagnostics_by_path
                     .insert(diagnostic.config_path.clone(), diagnostic.clone());
                 ctx.emit(FileBasedMCPManagerEvent::ConfigDiagnosticChanged);
             }
@@ -473,7 +476,7 @@ impl FileBasedMCPManager {
             .map(|(hash, _)| *hash)
     }
     pub fn config_diagnostic(&self, config_path: &Path) -> Option<&FileMCPConfigDiagnostic> {
-        self.config_diagnostics.get(config_path)
+        self.config_diagnostics_by_path.get(config_path)
     }
 
     pub fn global_warp_servers(&self) -> Vec<&TemplatableMCPServerInstallation> {

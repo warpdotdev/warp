@@ -8,10 +8,9 @@
 mod mcp;
 
 pub use mcp::{
-    TuiMcpAction, TuiMcpConfigState, TuiMcpModel, TuiMcpModelEvent, TuiMcpServerId,
+    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
     TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
 };
-use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, SingletonEntity};
 
 use crate::ai::mcp::FileBasedMCPManager;
@@ -78,9 +77,7 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
     ctx.add_singleton_model(move |_| TuiLoginModel {
         phase: initial_phase,
     });
-    if FeatureFlag::TuiMcpServers.is_enabled() {
-        ctx.add_singleton_model(TuiMcpModel::new);
-    }
+    ctx.add_singleton_model(TuiMcpManager::new);
 
     // Mount the TUI now so it renders immediately; the root view shows the
     // login placeholder until the model flips to `LoggedIn`.
@@ -132,9 +129,6 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
 }
 
 fn activate_global_mcp_servers(ctx: &mut AppContext) {
-    if !FeatureFlag::TuiMcpServers.is_enabled() {
-        return;
-    }
     FileBasedMCPManager::handle(ctx).update(ctx, |manager, ctx| {
         manager.activate_global_warp_servers(ctx);
     });

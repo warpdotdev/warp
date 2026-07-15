@@ -43,21 +43,24 @@ fn mcp_summary_reports_mixed_runtime_states() {
         config_state: TuiMcpConfigState::Ready,
         servers: vec![
             server(1, TuiMcpServerStatus::Running),
-            server(2, TuiMcpServerStatus::Authenticating),
+            server(2, TuiMcpServerStatus::Starting),
+            server(3, TuiMcpServerStatus::Authenticating),
+            server(4, TuiMcpServerStatus::Stopping),
             server(
-                3,
+                5,
                 TuiMcpServerStatus::Failed {
                     message: "failed".to_string(),
                 },
             ),
-            server(4, TuiMcpServerStatus::Offline),
+            server(6, TuiMcpServerStatus::Offline),
         ],
     };
 
     assert_eq!(
         mcp_status_label(&snapshot),
         (
-            "1 connected · 1 needs auth · 1 failed · 1 offline · /mcp".to_string(),
+            "1 connected · 1 starting · 1 needs auth · 1 stopping · 1 failed · 1 offline · /mcp"
+                .to_string(),
             false
         )
     );

@@ -30,7 +30,7 @@ use warp::tui_export::{
     RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate,
     SkillReference, SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand,
     TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiMcpAction,
-    TuiMcpModel, TuiSlashCommand, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
+    TuiMcpManager, TuiSlashCommand, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
     TuiZeroStateDataSource, UserTakeOverReason, COMMAND_REGISTRY,
     LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, WAKEUP_THROTTLE_PERIOD,
 };
@@ -211,7 +211,7 @@ pub(crate) struct TuiTerminalSessionView {
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
     model_menu: ModelHandle<TuiModelMenuModel>,
     skills_menu: ModelHandle<TuiSkillMenuModel>,
-    mcp_menu: Option<ModelHandle<TuiMcpMenuModel>>,
+    mcp_menu: ModelHandle<TuiMcpMenuModel>,
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
@@ -657,13 +657,10 @@ impl TuiTerminalSessionView {
         ctx.subscribe_to_model(&skills_menu, |_, _, _: &TuiSkillMenuEvent, ctx| {
             ctx.notify();
         });
-        let mcp_menu = FeatureFlag::TuiMcpServers.is_enabled().then(|| {
-            let menu = ctx.add_model(|ctx| TuiMcpMenuModel::new(suggestions_mode.clone(), ctx));
-            ctx.subscribe_to_model(&menu, |_, _, event, ctx| {
-                let TuiMcpMenuEvent::Updated = event;
-                ctx.notify();
-            });
-            menu
+        let mcp_menu = ctx.add_model(|ctx| TuiMcpMenuModel::new(suggestions_mode.clone(), ctx));
+        ctx.subscribe_to_model(&mcp_menu, |_, _, event, ctx| {
+            let TuiMcpMenuEvent::Updated = event;
+            ctx.notify();
         });
         // Typing after a ctrl-c press disarms the pending exit confirmation.
         // The ctrl-c buffer clear leaves the buffer empty, so the window it
@@ -703,15 +700,13 @@ impl TuiTerminalSessionView {
         });
 
         let input_mode_for_input_view = ai_input_model.clone();
-        let mut inline_menus = vec![
+        let inline_menus = vec![
             TuiInlineMenu::new(slash_commands.clone()),
             TuiInlineMenu::new(conversation_menu.clone()),
             TuiInlineMenu::new(model_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
+            TuiInlineMenu::new(mcp_menu.clone()),
         ];
-        if let Some(mcp_menu) = &mcp_menu {
-            inline_menus.push(TuiInlineMenu::new(mcp_menu.clone()));
-        }
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
@@ -798,11 +793,9 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
-        if FeatureFlag::TuiMcpServers.is_enabled() {
-            ctx.subscribe_to_model(&TuiMcpModel::handle(ctx), |_, _, _, ctx| {
-                ctx.notify();
-            });
-        }
+        ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| {
+            ctx.notify();
+        });
 
         // Bridge shared shell-tool executor events into terminal-manager PTY intents.
         let shell_command_executor = action_model.as_ref(ctx).shell_command_executor(ctx);
@@ -1857,7 +1850,7 @@ impl TuiTerminalSessionView {
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
     }
     fn handle_accepted_mcp_action(&mut self, action: TuiMcpAction, ctx: &mut ViewContext<Self>) {
-        TuiMcpModel::handle(ctx).update(ctx, |model, ctx| {
+        TuiMcpManager::handle(ctx).update(ctx, |model, ctx| {
             model.apply_action(action, ctx);
         });
         ctx.notify();
@@ -1935,9 +1928,7 @@ impl TuiTerminalSessionView {
             }
             TuiSlashCommand::Mcp => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-                if let Some(menu) = &self.mcp_menu {
-                    menu.update(ctx, |menu, ctx| menu.open(ctx));
-                }
+                self.mcp_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             TuiSlashCommand::CreateNewProject => {

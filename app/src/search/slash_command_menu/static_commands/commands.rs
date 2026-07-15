@@ -649,7 +649,7 @@ fn all_commands() -> Vec<StaticCommand> {
     if FeatureFlag::LocalDockerSandbox.is_enabled() {
         commands.push(CREATE_DOCKER_SANDBOX);
     }
-    if FeatureFlag::TuiMcpServers.is_enabled() {
+    if settings::settings_mode() == settings::SettingsMode::Tui {
         commands.push(MCP);
     }
 

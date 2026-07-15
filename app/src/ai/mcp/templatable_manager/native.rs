@@ -810,8 +810,7 @@ impl TemplatableMCPServerManager {
         // PATH.
         if let TransportType::CLIServer(cli_server) = &mut server.transport_type {
             let execution_path = AISettings::as_ref(ctx).mcp_execution_path.value().clone();
-            let can_inherit_process_path = settings::settings_mode() == settings::SettingsMode::Tui
-                && FeatureFlag::TuiMcpServers.is_enabled();
+            let can_inherit_process_path = settings::settings_mode() == settings::SettingsMode::Tui;
             if execution_path.is_none() && !can_inherit_process_path {
                 // This can only happen if the user is trying to launch an MCP server
                 // without ever having had a successfully bootstrapped session, which
@@ -897,8 +896,7 @@ impl TemplatableMCPServerManager {
         let (oauth_result_tx, oauth_result_rx) = async_channel::unbounded();
 
         let is_headless = AppExecutionMode::as_ref(ctx).is_autonomous();
-        let use_tui_loopback = settings::settings_mode() == settings::SettingsMode::Tui
-            && FeatureFlag::TuiMcpServers.is_enabled();
+        let use_tui_loopback = settings::settings_mode() == settings::SettingsMode::Tui;
 
         let mut persisted_credentials = self.server_credentials.get(&template_uuid).cloned();
         if persisted_credentials.is_none() && FeatureFlag::FileBasedMcp.is_enabled() {

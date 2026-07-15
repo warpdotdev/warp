@@ -11,11 +11,10 @@ use std::path::PathBuf;
 
 use ai::project_context::model::ProjectContextModel;
 use warp::tui_export::{
-    ChangelogModel, ChangelogState, SkillManager, TuiMcpConfigState, TuiMcpModel,
+    ChangelogModel, ChangelogState, SkillManager, TuiMcpConfigState, TuiMcpManager,
     TuiMcpServerStatus,
 };
 use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiText};
@@ -78,14 +77,11 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
     if let Some(cwd) = cwd {
         column = render_project_section(cwd, column, builder, app);
     }
-    if FeatureFlag::TuiMcpServers.is_enabled() {
-        column = render_mcp_section(column, builder, app);
-    }
-    column
+    render_mcp_section(column, builder, app)
 }
 
 fn render_mcp_section(mut column: TuiFlex, builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
-    let snapshot = TuiMcpModel::as_ref(app).snapshot();
+    let snapshot = TuiMcpManager::as_ref(app).snapshot();
     let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
     let muted = builder.muted_text_style();
     column = column.child(blank_row()).child(
@@ -122,28 +118,34 @@ fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, boo
             ("No servers configured · run /mcp".to_string(), false)
         }
         TuiMcpConfigState::Ready => {
-            let running = snapshot
-                .servers
-                .iter()
-                .filter(|server| matches!(server.status, TuiMcpServerStatus::Running))
-                .count();
-            let authenticating = snapshot
-                .servers
-                .iter()
-                .filter(|server| matches!(server.status, TuiMcpServerStatus::Authenticating))
-                .count();
-            let failed = snapshot
-                .servers
-                .iter()
-                .filter(|server| matches!(server.status, TuiMcpServerStatus::Failed { .. }))
-                .count();
-            let offline = snapshot.servers.len() - running - authenticating - failed;
+            let mut running = 0;
+            let mut starting = 0;
+            let mut authenticating = 0;
+            let mut stopping = 0;
+            let mut failed = 0;
+            let mut offline = 0;
+            for server in &snapshot.servers {
+                match &server.status {
+                    TuiMcpServerStatus::Offline => offline += 1,
+                    TuiMcpServerStatus::Starting => starting += 1,
+                    TuiMcpServerStatus::Authenticating => authenticating += 1,
+                    TuiMcpServerStatus::Running => running += 1,
+                    TuiMcpServerStatus::Stopping => stopping += 1,
+                    TuiMcpServerStatus::Failed { .. } => failed += 1,
+                }
+            }
             let mut parts = Vec::new();
             if running > 0 {
                 parts.push(format!("{running} connected"));
             }
+            if starting > 0 {
+                parts.push(format!("{starting} starting"));
+            }
             if authenticating > 0 {
                 parts.push(format!("{authenticating} needs auth"));
+            }
+            if stopping > 0 {
+                parts.push(format!("{stopping} stopping"));
             }
             if failed > 0 {
                 parts.push(format!("{failed} failed"));

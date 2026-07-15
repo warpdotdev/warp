@@ -68,15 +68,20 @@ pub enum TuiMcpAction {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum TuiMcpModelEvent {
+pub enum TuiMcpManagerEvent {
     Updated,
 }
 
-pub struct TuiMcpModel {
+/// TUI-facing aggregate over every global Warp MCP server.
+///
+/// There is one singleton model for the TUI process, not one model per
+/// server. Its snapshot joins file-config health with runtime state for all
+/// configured servers; per-server actions are routed by [`TuiMcpServerId`].
+pub struct TuiMcpManager {
     snapshot: TuiMcpSnapshot,
 }
 
-impl TuiMcpModel {
+impl TuiMcpManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(&FileBasedMCPManager::handle(ctx), |me, _, _, ctx| {
             me.refresh(ctx);
@@ -227,14 +232,14 @@ impl TuiMcpModel {
         };
         if self.snapshot != snapshot {
             self.snapshot = snapshot;
-            ctx.emit(TuiMcpModelEvent::Updated);
+            ctx.emit(TuiMcpManagerEvent::Updated);
             ctx.notify();
         }
     }
 }
 
-impl Entity for TuiMcpModel {
-    type Event = TuiMcpModelEvent;
+impl Entity for TuiMcpManager {
+    type Event = TuiMcpManagerEvent;
 }
 
-impl SingletonEntity for TuiMcpModel {}
+impl SingletonEntity for TuiMcpManager {}

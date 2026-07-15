@@ -338,15 +338,15 @@ pub async fn make_authenticated_client(
         .and_then(ChannelState::mcp_oauth_provider_by_issuer)
     {
         let (client_id, client_secret) = if uses_loopback {
-            let tui_client = provider.tui_client.ok_or_else(|| {
+            let loopback_client = provider.loopback_client.ok_or_else(|| {
                 AuthError::AuthorizationFailed(
                     "This OAuth provider uses a pre-registered client that is not configured for \
-                     the Warp TUI loopback callback. A separate loopback-capable client \
-                     registration is required."
+                     loopback callbacks. A separate loopback-capable client registration is \
+                     required."
                         .to_string(),
                 )
             })?;
-            (tui_client.client_id, tui_client.client_secret)
+            (loopback_client.client_id, loopback_client.client_secret)
         } else {
             (provider.client_id, Some(provider.client_secret))
         };

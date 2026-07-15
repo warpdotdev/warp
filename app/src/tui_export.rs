@@ -141,7 +141,7 @@ pub use crate::terminal::{
 pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
 pub use crate::tui::{
-    TuiMcpAction, TuiMcpConfigState, TuiMcpModel, TuiMcpModelEvent, TuiMcpServerId,
+    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
     TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
 };
 pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};

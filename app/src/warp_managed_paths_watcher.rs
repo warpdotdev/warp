@@ -8,7 +8,6 @@ use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
 use repo_metadata::RepositoryUpdate;
 #[cfg(any(not(target_family = "wasm"), test))]
 use repo_metadata::TargetFile;
-use warp_core::features::FeatureFlag;
 #[cfg(not(target_family = "wasm"))]
 use warpui::ModelHandle;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -74,9 +73,7 @@ pub(crate) fn warp_home_mcp_config_file_path() -> Option<PathBuf> {
 pub(crate) fn active_mcp_config_file_path() -> Option<PathBuf> {
     match settings::settings_mode() {
         settings::SettingsMode::Gui => warp_home_mcp_config_file_path(),
-        settings::SettingsMode::Tui => FeatureFlag::TuiMcpServers
-            .is_enabled()
-            .then(warp_core::paths::tui_mcp_config_file_path),
+        settings::SettingsMode::Tui => Some(warp_core::paths::tui_mcp_config_file_path()),
     }
 }
 

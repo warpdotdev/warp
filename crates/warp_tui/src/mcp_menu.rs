@@ -1,5 +1,5 @@
 use warp::tui_export::{
-    TuiMcpAction, TuiMcpConfigState, TuiMcpModel, TuiMcpModelEvent, TuiMcpServerStatus,
+    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerStatus,
     TuiMcpTransport,
 };
 use warp_search_core::inline_menu::InlineMenuSelection;
@@ -48,8 +48,8 @@ impl TuiMcpMenuModel {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(
-            &TuiMcpModel::handle(ctx),
-            |model, _, _: &TuiMcpModelEvent, ctx| {
+            &TuiMcpManager::handle(ctx),
+            |model, _, _: &TuiMcpManagerEvent, ctx| {
                 if model.is_open(ctx) {
                     model.refresh_rows(ctx);
                 }
@@ -159,7 +159,7 @@ impl TuiMcpMenuModel {
         else {
             return None;
         };
-        let mcp = TuiMcpModel::as_ref(app);
+        let mcp = TuiMcpManager::as_ref(app);
         let snapshot = mcp.snapshot();
         let status = rows.is_empty().then(|| {
             let label = match &snapshot.config_state {
@@ -200,7 +200,7 @@ impl TuiMcpMenuModel {
         if !self.is_open(ctx) {
             return;
         }
-        let snapshot = TuiMcpModel::as_ref(ctx).snapshot();
+        let snapshot = TuiMcpManager::as_ref(ctx).snapshot();
         let mut rows = Vec::new();
         if let TuiMcpConfigState::Invalid { message } = &snapshot.config_state {
             rows.push(TuiMcpMenuRow {

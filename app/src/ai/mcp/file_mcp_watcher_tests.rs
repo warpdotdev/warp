@@ -1,8 +1,12 @@
+use std::collections::{HashMap, HashSet};
 use std::env;
+use std::path::PathBuf;
+
+use futures::stream::AbortHandle;
 
 use super::{
     parse_mcp_config_file, substitute_env_vars, FileMCPConfigDiagnosticKind,
-    FileMCPConfigParseOutcome,
+    FileMCPConfigParseOutcome, FileMCPWatcher,
 };
 use crate::ai::mcp::MCPProvider;
 
@@ -12,6 +16,26 @@ fn cleanup_env_vars(vars: &[&str]) {
     }
 }
 
+#[test]
+fn abort_config_parse_cancels_and_removes_inflight_task() {
+    let (file_mcp_tx, _file_mcp_rx) = async_channel::unbounded();
+    let config_path = PathBuf::from("/tmp/.mcp.json");
+    let key = (config_path.clone(), MCPProvider::Warp);
+    let (abort_handle, _abort_registration) = AbortHandle::new_pair();
+    let observed_handle = abort_handle.clone();
+    let mut watcher = FileMCPWatcher {
+        file_mcp_tx,
+        parse_abort_handles: HashMap::from([(key.clone(), abort_handle)]),
+        home_provider_watchers: HashMap::new(),
+        project_repo_watchers: HashSet::new(),
+        cloud_env_pending: HashMap::new(),
+    };
+
+    watcher.abort_config_parse(&config_path, MCPProvider::Warp);
+
+    assert!(observed_handle.is_aborted());
+    assert!(!watcher.parse_abort_handles.contains_key(&key));
+}
 #[test]
 fn test_substitute_env_vars_success() {
     let test_vars = ["FOO", "BAZ", "REPEATED"];

@@ -212,6 +212,7 @@ impl TemplatableMCPServerManager {
             .unwrap_or_default()
     }
 
+    #[cfg(feature = "tui")]
     pub fn resources_for_server(&self, uuid: Uuid) -> Vec<rmcp::model::Resource> {
         self.active_servers
             .get(&uuid)
