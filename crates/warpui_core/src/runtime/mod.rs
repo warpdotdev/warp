@@ -31,7 +31,8 @@ use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as CrosstermEvent,
+    Event as CrosstermEvent, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -615,9 +616,15 @@ trait TerminalModeControl {
 
 struct CrosstermModeControl;
 fn enter_terminal_screen(out: &mut impl Write) -> io::Result<()> {
+    // Opt into the Kitty keyboard protocol so terminals that support it (Ghostty,
+    // kitty, foot, WezTerm, ...) report modified keys like Shift+Enter as distinct
+    // events. Without this, those terminals send a bare CR for both Enter and
+    // Shift+Enter, so the input can't distinguish "submit" from "insert newline".
+    // `DISAMBIGUATE_ESCAPE_CODES` alone is sufficient for that disambiguation.
     execute!(
         out,
         EnterAlternateScreen,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES),
         EnableMouseCapture,
         EnableBracketedPaste,
         Hide
@@ -630,6 +637,7 @@ fn leave_terminal_screen(out: &mut impl Write) -> io::Result<()> {
         Show,
         DisableBracketedPaste,
         DisableMouseCapture,
+        PopKeyboardEnhancementFlags,
         LeaveAlternateScreen
     )
 }

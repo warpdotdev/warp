@@ -463,6 +463,31 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
         "leaving the TUI should disable bracketed paste"
     );
 }
+
+/// Regression test for Shift+Enter not inserting a newline in terminals that
+/// require the Kitty keyboard protocol (e.g. Ghostty): entering the TUI must
+/// push the `DISAMBIGUATE_ESCAPE_CODES` enhancement flag (CSI `>1u`) so modified
+/// keys are reported distinctly, and leaving must pop it (CSI `<1u`).
+#[test]
+fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
+    let mut enter_output = Vec::new();
+    enter_terminal_screen(&mut enter_output).unwrap();
+    assert!(
+        enter_output
+            .windows(b"\x1b[>1u".len())
+            .any(|window| window == b"\x1b[>1u"),
+        "entering the TUI should push the DISAMBIGUATE_ESCAPE_CODES keyboard enhancement flag"
+    );
+
+    let mut leave_output = Vec::new();
+    leave_terminal_screen(&mut leave_output).unwrap();
+    assert!(
+        leave_output
+            .windows(b"\x1b[<1u".len())
+            .any(|window| window == b"\x1b[<1u"),
+        "leaving the TUI should pop the keyboard enhancement flags"
+    );
+}
 #[test]
 fn raw_mode_guard_restores_on_drop() {
     let log = Rc::new(RefCell::new(Vec::new()));
