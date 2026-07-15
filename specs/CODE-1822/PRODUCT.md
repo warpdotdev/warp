@@ -64,11 +64,12 @@ The Warp TUI gains an interactive permission card for an active `RunAgents` requ
 22. Selecting Cloud restores the applicable Cloud page sequence and valid selections from the current edit session when possible.
 23. Each page initially highlights the request's current value, including values inherited from an approved plan configuration. If the current value is unavailable, the page highlights the appropriate valid default and clearly reflects the replacement.
 24. A confirmed selection is saved immediately to the edit session.
-   - Tab and Right move to the next applicable page without confirming the current highlight.
-   - Left moves to the previous applicable page without confirming the current highlight.
-   - Navigation clamps at the first and final pages; the unavailable boundary arrow is muted.
-25. Confirming a selection on a non-final page advances to the next applicable page.
-26. Confirming the final page returns to the acceptance card without launching. A second Enter on the acceptance card is required to launch the edited request.
+   - Right confirms the current highlight and moves to the next applicable page.
+   - Left confirms the current highlight and moves to the previous applicable page.
+   - Tab moves to the next applicable page without confirming the current highlight.
+   - Arrow navigation clamps at the first and final pages after confirming the current highlight; the unavailable boundary arrow is muted.
+25. Pressing Enter to confirm a selection on a non-final page advances to the next applicable page.
+26. Pressing Enter to confirm the final page returns to the acceptance card without launching. A second Enter on the acceptance card is required to launch the edited request.
 27. Esc returns to the acceptance card and retains selections confirmed on completed pages. The current page's highlighted but unconfirmed option is discarded.
 28. Ctrl+C rejects the entire request from any configuration page.
 

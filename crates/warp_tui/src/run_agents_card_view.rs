@@ -78,10 +78,18 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_group(TUI_BINDING_GROUP),
         FixedBinding::new("escape", TuiRunAgentsCardAction::Back, configuring())
             .with_group(TUI_BINDING_GROUP),
-        FixedBinding::new("left", TuiRunAgentsCardAction::PreviousPage, configuring())
-            .with_group(TUI_BINDING_GROUP),
-        FixedBinding::new("right", TuiRunAgentsCardAction::NextPage, configuring())
-            .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new(
+            "left",
+            TuiRunAgentsCardAction::CommitAndPreviousPage,
+            configuring(),
+        )
+        .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new(
+            "right",
+            TuiRunAgentsCardAction::CommitAndNextPage,
+            configuring(),
+        )
+        .with_group(TUI_BINDING_GROUP),
         FixedBinding::new("tab", TuiRunAgentsCardAction::NextPage, configuring())
             .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
@@ -148,6 +156,12 @@ enum CardMode {
     Acceptance,
     Configuring { page: ConfigPage },
 }
+/// Page direction requested by an arrow-key confirmation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PageNavigation {
+    Previous,
+    Next,
+}
 
 /// Events emitted to the owning agent block.
 #[derive(Clone, Debug)]
@@ -167,7 +181,8 @@ pub(crate) enum TuiRunAgentsCardAction {
     Accept,
     Configure,
     ConfirmSelection,
-    PreviousPage,
+    CommitAndPreviousPage,
+    CommitAndNextPage,
     NextPage,
     Back,
     Reject,
@@ -185,6 +200,9 @@ pub(crate) struct TuiRunAgentsCardView {
     request_fields: RunAgentsRequest,
     mode: CardMode,
     selector: ViewHandle<TuiOptionSelector>,
+    /// Arrow direction to apply after the selector confirms its current
+    /// value. Enter leaves this unset and follows the normal forward flow.
+    confirmation_navigation: Option<PageNavigation>,
     action_model: ModelHandle<BlocklistAIActionModel>,
     /// Approved/disapproved plan config used to resolve inherited fields.
     active_config: Option<(OrchestrationConfig, OrchestrationConfigStatus)>,
@@ -314,6 +332,7 @@ impl TuiRunAgentsCardView {
             request_fields: request.clone(),
             mode: CardMode::Acceptance,
             selector,
+            confirmation_navigation: None,
             action_model,
             active_config,
             fallback_base_model_id,
@@ -572,7 +591,16 @@ impl TuiRunAgentsCardView {
                     .model_id = id.to_string();
             }
         }
-        self.advance_after(page, ctx);
+        self.finish_page_confirmation(page, ctx);
+    }
+
+    /// Completes a page confirmation using an arrow's requested direction,
+    /// or the normal Enter behavior when no arrow direction is pending.
+    fn finish_page_confirmation(&mut self, page: ConfigPage, ctx: &mut ViewContext<Self>) {
+        match self.confirmation_navigation.take() {
+            Some(navigation) => self.navigate_after_confirmation(page, navigation, ctx),
+            None => self.advance_after(page, ctx),
+        }
     }
 
     /// Advances past `page` in the (freshly recomputed) sequence, returning
@@ -595,7 +623,34 @@ impl TuiRunAgentsCardView {
         }
     }
 
-    /// Moves to an adjacent page without applying the current selection.
+    /// Moves after committing `page`, recomputing the dynamic sequence so
+    /// choices such as Local navigate within the newly applicable pages.
+    fn navigate_after_confirmation(
+        &mut self,
+        page: ConfigPage,
+        navigation: PageNavigation,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let sequence =
+            Self::page_sequence(&self.orchestration_edit_state.orchestration_config_state);
+        let Some(index) = sequence.iter().position(|candidate| *candidate == page) else {
+            self.mode = CardMode::Acceptance;
+            ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
+            ctx.notify();
+            return;
+        };
+        let target = match navigation {
+            PageNavigation::Previous => index
+                .checked_sub(1)
+                .and_then(|index| sequence.get(index))
+                .copied(),
+            PageNavigation::Next => sequence.get(index + 1).copied(),
+        }
+        .unwrap_or(page);
+        self.open_page(target, ctx);
+    }
+
+    /// Moves to the next page without applying the current selection.
     fn navigate_page(&mut self, forward: bool, ctx: &mut ViewContext<Self>) {
         let CardMode::Configuring { page } = self.mode else {
             return;
@@ -635,14 +690,18 @@ impl TuiRunAgentsCardView {
                         .orchestration_config_state
                         .set_worker_host(value.clone());
                     persist_host_selection(value, ctx);
-                    self.advance_after(ConfigPage::Host, ctx);
+                    self.finish_page_confirmation(ConfigPage::Host, ctx);
                 }
             }
             TuiOptionSelectorEvent::RetryRequested => {
+                self.confirmation_navigation = None;
                 self.ensure_auth_secrets_fetched(ctx);
                 self.refresh_active_page(ctx);
             }
-            TuiOptionSelectorEvent::Dismissed => self.handle_back(ctx),
+            TuiOptionSelectorEvent::Dismissed => {
+                self.confirmation_navigation = None;
+                self.handle_back(ctx);
+            }
             TuiOptionSelectorEvent::LayoutInvalidated => {
                 ctx.emit(TuiRunAgentsCardViewEvent::LayoutInvalidated);
             }
@@ -715,6 +774,7 @@ impl TuiRunAgentsCardView {
     /// selections; the current page's unconfirmed selection is discarded.
     /// Active custom-text editing unwinds first.
     fn handle_back(&mut self, ctx: &mut ViewContext<Self>) {
+        self.confirmation_navigation = None;
         let consumed = self
             .selector
             .update(ctx, |selector, ctx| selector.handle_back(ctx));
@@ -730,6 +790,15 @@ impl TuiRunAgentsCardView {
 
     /// Confirms the selector's selected option (Enter).
     fn handle_confirm_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        self.confirmation_navigation = None;
+        self.selector.update(ctx, |selector, ctx| {
+            selector.confirm_selected(ctx);
+        });
+    }
+    /// Confirms the selector's selected option, then navigates in the arrow's
+    /// direction once the selector emits its confirmation event.
+    fn handle_arrow_navigation(&mut self, navigation: PageNavigation, ctx: &mut ViewContext<Self>) {
+        self.confirmation_navigation = Some(navigation);
         self.selector.update(ctx, |selector, ctx| {
             selector.confirm_selected(ctx);
         });
@@ -1036,7 +1105,12 @@ impl TypedActionView for TuiRunAgentsCardView {
             TuiRunAgentsCardAction::Accept => self.handle_accept(ctx),
             TuiRunAgentsCardAction::Configure => self.handle_configure(ctx),
             TuiRunAgentsCardAction::ConfirmSelection => self.handle_confirm_selection(ctx),
-            TuiRunAgentsCardAction::PreviousPage => self.navigate_page(false, ctx),
+            TuiRunAgentsCardAction::CommitAndPreviousPage => {
+                self.handle_arrow_navigation(PageNavigation::Previous, ctx)
+            }
+            TuiRunAgentsCardAction::CommitAndNextPage => {
+                self.handle_arrow_navigation(PageNavigation::Next, ctx)
+            }
             TuiRunAgentsCardAction::NextPage => self.navigate_page(true, ctx),
             TuiRunAgentsCardAction::Back => self.handle_back(ctx),
             TuiRunAgentsCardAction::Reject => self.handle_reject(ctx),

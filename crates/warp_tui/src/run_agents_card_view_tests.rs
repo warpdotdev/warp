@@ -639,20 +639,46 @@ fn switching_to_local_mid_flow_collapses_the_sequence() {
 }
 
 #[test]
-fn horizontal_navigation_moves_between_pages_without_applying_selections() {
+fn horizontal_navigation_commits_the_selection_before_moving() {
     App::test((), |mut app| async move {
         let fixture = blocked_card(&mut app, &request("oz", remote("env-1", "warp")));
         act(&mut app, &fixture.card, TuiRunAgentsCardAction::Configure);
-
-        // Select Local, then navigate away without confirming it.
         let selector = app.read(|app| fixture.card.as_ref(app).selector.clone());
+
+        // Left commits Local and clamps on the first page.
         selector.update(&mut app, |selector, ctx| {
             selector.handle_action(&TuiOptionSelectorAction::MoveDown, ctx);
         });
-        act(&mut app, &fixture.card, TuiRunAgentsCardAction::NextPage);
+        act(
+            &mut app,
+            &fixture.card,
+            TuiRunAgentsCardAction::CommitAndPreviousPage,
+        );
         let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
-        assert!(all.contains("← 2 of 5 →"));
-        assert!(all.contains("Which harness should the agent use?"));
+        assert!(all.contains("Where should the agent run?"), "{all}");
+        assert!(all.contains("← 1 of 2 →"), "{all}");
+        assert!(app.read(|app| {
+            !fixture
+                .card
+                .as_ref(app)
+                .orchestration_edit_state
+                .orchestration_config_state
+                .execution_mode
+                .is_remote()
+        }));
+
+        // Right commits Cloud, expands the sequence, and moves to Harness.
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::MoveUp, ctx);
+        });
+        act(
+            &mut app,
+            &fixture.card,
+            TuiRunAgentsCardAction::CommitAndNextPage,
+        );
+        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
+        assert!(all.contains("Which harness should the agent use?"), "{all}");
+        assert!(all.contains("← 2 of 5 →"), "{all}");
         assert!(app.read(|app| {
             fixture
                 .card
@@ -662,33 +688,5 @@ fn horizontal_navigation_moves_between_pages_without_applying_selections() {
                 .execution_mode
                 .is_remote()
         }));
-
-        act(
-            &mut app,
-            &fixture.card,
-            TuiRunAgentsCardAction::PreviousPage,
-        );
-        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
-        assert!(all.contains("← 1 of 5 →"));
-
-        // Previous on the first page is clamped.
-        act(
-            &mut app,
-            &fixture.card,
-            TuiRunAgentsCardAction::PreviousPage,
-        );
-        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
-        assert!(all.contains("← 1 of 5 →"));
-
-        for _ in 0..10 {
-            act(&mut app, &fixture.card, TuiRunAgentsCardAction::NextPage);
-        }
-        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
-        assert!(all.contains("← 5 of 5 →"));
-
-        // Next on the final page is clamped.
-        act(&mut app, &fixture.card, TuiRunAgentsCardAction::NextPage);
-        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
-        assert!(all.contains("← 5 of 5 →"));
     });
 }
