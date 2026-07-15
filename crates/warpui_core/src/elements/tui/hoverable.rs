@@ -29,6 +29,7 @@
 //! handler only when released inside the footprint. (Hover delays and the
 //! other [`MouseState`] fields are unused.)
 
+use std::mem;
 use std::sync::MutexGuard;
 
 use super::{
@@ -139,10 +140,25 @@ impl TuiElement for TuiHoverable {
     ) -> bool {
         let child_handled = self.child.dispatch_event(event, event_ctx, app);
 
-        if let TuiEvent::MouseMoved { position, .. } = event {
+        if let TuiEvent::MouseMoved {
+            position,
+            is_synthetic,
+            ..
+        } = event
+        {
             let is_hovered = self.is_mouse_over_element(*position, event_ctx);
             let mut state = self.state();
             if is_hovered != state.is_hovered() {
+                // Guard against layout<->hover feedback loops (mirrors the GUI
+                // Hoverable): a synthetic move replayed after a redraw may flip
+                // hover, which relayouts and replays another synthetic move; two
+                // consecutive synthetic flips are suppressed to break the cycle.
+                let was_synthetic =
+                    mem::replace(&mut state.last_event_is_synthetic_hover, *is_synthetic);
+                if *is_synthetic && was_synthetic {
+                    return false;
+                }
+
                 state.is_hovered = is_hovered;
                 drop(state);
                 event_ctx.notify();
@@ -151,6 +167,8 @@ impl TuiElement for TuiHoverable {
             // their own transitions from the same event.
             return false;
         }
+        // Any non-move event re-arms the synthetic-flip guard, mirroring the GUI.
+        self.state().last_event_is_synthetic_hover = false;
 
         if child_handled {
             return true;

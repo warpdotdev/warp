@@ -9,6 +9,7 @@ use crate::inline_menu::{
     result_row_capacity, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
     TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
 };
+use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, true, false);
 
@@ -33,21 +34,23 @@ pub(crate) struct TuiModelMenuEvent;
 
 pub(crate) struct TuiModelMenuModel {
     input_editor: ModelHandle<CodeEditorModel>,
+    suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     state: TuiModelMenuState,
 }
 
 impl TuiModelMenuModel {
     pub(crate) fn new(
         input_editor: ModelHandle<CodeEditorModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&input_editor, |model, _, event, ctx| {
-            if model.is_open() && matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
+            if model.is_open(ctx) && matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 model.refresh_rows(ctx);
             }
         });
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |model, _, event, ctx| {
-            if model.is_open()
+            if model.is_open(ctx)
                 && matches!(
                     event,
                     LLMPreferencesEvent::UpdatedAvailableLLMs
@@ -59,6 +62,7 @@ impl TuiModelMenuModel {
         });
         Self {
             input_editor,
+            suggestions_mode,
             state: TuiModelMenuState::Closed,
         }
     }
@@ -66,6 +70,7 @@ impl TuiModelMenuModel {
     #[cfg(test)]
     pub(crate) fn new_for_test(
         input_editor: ModelHandle<CodeEditorModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         rows: Vec<(LLMId, bool)>,
         selected_index: usize,
     ) -> Self {
@@ -85,18 +90,32 @@ impl TuiModelMenuModel {
         );
         Self {
             input_editor,
+            suggestions_mode,
             state: TuiModelMenuState::Open { list },
         }
     }
 
-    pub(crate) fn is_open(&self) -> bool {
+    fn has_open_state(&self) -> bool {
         matches!(self.state, TuiModelMenuState::Open { .. })
     }
 
+    pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
+        self.has_open_state()
+            && self.suggestions_mode.as_ref(ctx).mode() == TuiInputSuggestionsMode::ModelSelector
+    }
+
     pub(crate) fn open(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.is_open() {
+        if self.has_open_state() {
             return;
         }
+        let did_open = self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.try_open(TuiInputSuggestionsMode::ModelSelector, ctx)
+        });
+        if !did_open {
+            return;
+        }
+        self.input_editor
+            .update(ctx, |editor, ctx| editor.clear_buffer(ctx));
         self.state = TuiModelMenuState::Open {
             list: TuiInlineMenuListState::default(),
         };
@@ -104,10 +123,13 @@ impl TuiModelMenuModel {
     }
 
     pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.is_open() {
+        if !self.is_open(ctx) {
             return;
         }
         self.state = TuiModelMenuState::Closed;
+        self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.close_if_active(TuiInputSuggestionsMode::ModelSelector, ctx);
+        });
         self.input_editor
             .update(ctx, |editor, ctx| editor.clear_buffer(ctx));
         ctx.emit(TuiModelMenuEvent);
@@ -129,14 +151,20 @@ impl TuiModelMenuModel {
         ctx.emit(TuiModelMenuEvent);
     }
 
-    pub(crate) fn accept_selected(&self) -> Option<LLMId> {
+    pub(crate) fn accept_selected(&self, ctx: &AppContext) -> Option<LLMId> {
+        if !self.is_open(ctx) {
+            return None;
+        }
         let TuiModelMenuState::Open { list } = &self.state else {
             return None;
         };
         list.selected_row().map(|row| row.id.clone())
     }
 
-    pub(crate) fn snapshot(&self) -> Option<TuiInlineMenuSnapshot> {
+    pub(crate) fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        if !self.is_open(ctx) {
+            return None;
+        }
         let TuiModelMenuState::Open { list } = &self.state else {
             return None;
         };
@@ -166,7 +194,7 @@ impl TuiModelMenuModel {
     }
 
     fn refresh_rows(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.is_open() {
+        if !self.is_open(ctx) {
             return;
         }
         let query = input_text(&self.input_editor, ctx);

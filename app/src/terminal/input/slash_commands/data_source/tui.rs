@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use parking_lot::FairMutex;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
 use super::core::subscribe_to_shared_dependencies;
@@ -17,15 +19,19 @@ use crate::terminal::input::slash_commands::{
     slash_command_is_supported_in_tui, AcceptSlashCommandOrSavedPrompt,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::view::resolve_ai_query_routing;
+use crate::terminal::TerminalModel;
 
 pub struct TuiDataSourceArgs {
     pub active_session: ModelHandle<ActiveSession>,
     pub cli_subagent_controller: ModelHandle<CLISubagentController>,
     pub terminal_view_id: EntityId,
+    pub terminal_model: Arc<FairMutex<TerminalModel>>,
 }
 
 pub struct TuiSlashCommandDataSource {
     state: SlashCommandDataSourceState,
+    terminal_model: Arc<FairMutex<TerminalModel>>,
 }
 
 impl TuiSlashCommandDataSource {
@@ -34,6 +40,7 @@ impl TuiSlashCommandDataSource {
             active_session,
             cli_subagent_controller,
             terminal_view_id,
+            terminal_model,
         } = args;
 
         subscribe_to_shared_dependencies(
@@ -50,9 +57,19 @@ impl TuiSlashCommandDataSource {
                 cli_subagent_controller,
                 terminal_view_id,
             ),
+            terminal_model,
         };
         me.recompute_active_commands(ctx);
         me
+    }
+
+    /// Returns whether this TUI surface routes AI work to its local execution host.
+    ///
+    /// This reuses the GUI's canonical routing decision. TUI surfaces have no
+    /// `AmbientAgentViewModel`, so shared-session state comes from the terminal model.
+    pub fn local_skills_available(&self, app: &AppContext) -> bool {
+        let terminal_model = self.terminal_model.lock();
+        resolve_ai_query_routing(self.terminal_view_id(), None, &terminal_model, app).is_local()
     }
     pub fn set_active_repo_root(
         &mut self,
@@ -103,7 +120,9 @@ impl SyncDataSource for TuiSlashCommandDataSource {
 
         let query_text = query.text.trim().to_lowercase();
         let mut results = self.match_active_commands(&query_text, app);
-        results.extend(self.match_skills(&query_text, app));
+        if self.local_skills_available(app) {
+            results.extend(self.match_skills(&query_text, app));
+        }
         Ok(results
             .into_iter()
             .map(|item: InlineItem| item.into())

@@ -95,6 +95,17 @@ fn shell_command_views_keep_independent_collapse_state() {
     assert!(second.is_collapsed());
 }
 
+#[test]
+fn manual_collapse_override_wins_over_auto_expansion() {
+    let mut state = ShellCommandViewState::new_collapsed();
+
+    state.toggle();
+
+    assert!(!state.is_collapsed());
+    assert!(state.manual_override);
+    assert!(!state.auto_expanded);
+}
+
 fn add_shell_view(
     app: &mut App,
     action: AIAgentAction,
