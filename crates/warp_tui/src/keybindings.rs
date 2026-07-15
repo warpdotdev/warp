@@ -19,8 +19,8 @@
 //! would otherwise match everywhere and, for multi-keystroke chords, swallow
 //! prefix keys via a pending match.
 
-use warpui_core::keymap::{BindingLens, IsBindingValid, Trigger};
-use warpui_core::AppContext;
+use warpui_core::keymap::{BindingLens, Context, IsBindingValid, Trigger};
+use warpui_core::{AppContext, TuiView};
 
 use crate::input::TuiInputView;
 use crate::root_view::RootTuiView;
@@ -30,6 +30,32 @@ use crate::transcript_view::TuiTranscriptView;
 /// Group tag set on every TUI-registered binding. The validators treat it (or
 /// a `tui:` name prefix) as proof of TUI ownership.
 pub(crate) const TUI_BINDING_GROUP: &str = "tui";
+pub(crate) const PLAN_TOGGLE_AVAILABLE_FLAG: &str = "TuiPlanToggleAvailable";
+pub(crate) const PLAN_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_plan";
+pub(crate) const CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME: &str =
+    "tui:session:toggle_plan_when_available";
+
+pub(crate) fn contextual_plan_toggle_hint(ctx: &AppContext) -> Option<String> {
+    let mut context = Context::default();
+    context.set.insert(TuiInputView::ui_name());
+    context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
+    ctx.editable_bindings()
+        .find(|binding| {
+            binding.name == CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME && binding.in_context(&context)
+        })
+        .and_then(|binding| match binding.trigger {
+            Trigger::Keystrokes(keystrokes) if !keystrokes.is_empty() => Some(
+                keystrokes
+                    .iter()
+                    .map(|keystroke| keystroke.displayed())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            Trigger::Keystrokes(_) | Trigger::Standard(_) | Trigger::Custom(_) | Trigger::Empty => {
+                None
+            }
+        })
+}
 
 /// Registers all TUI view keybindings and the cross-surface binding
 /// validators. Called once at TUI startup, before the driver starts.

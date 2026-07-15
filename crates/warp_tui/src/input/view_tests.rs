@@ -48,13 +48,32 @@ const W: u16 = 80;
 
 #[test]
 fn input_escape_context_is_present_only_while_escape_is_handled() {
-    let closed = input_keymap_context(false);
+    let closed = input_keymap_context(false, false);
     assert!(closed.set.contains("TuiInputView"));
     assert!(!closed.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
+    assert!(!closed
+        .set
+        .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG));
 
-    let open = input_keymap_context(true);
+    let open = input_keymap_context(true, true);
     assert!(open.set.contains("TuiInputView"));
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
+    assert!(open
+        .set
+        .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG));
+}
+#[test]
+fn input_plan_toggle_context_follows_live_availability() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view_with_plan_toggle_available(ctx, |_| true);
+            assert!(view
+                .as_ref(ctx)
+                .keymap_context(ctx)
+                .set
+                .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG));
+        });
+    });
 }
 
 fn add_suggestions_mode(
@@ -251,6 +270,13 @@ fn recognized_slash_command_prefix_matches_menu_color_after_menu_closes() {
 }
 
 fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
+    build_view_with_plan_toggle_available(ctx, |_| false)
+}
+
+fn build_view_with_plan_toggle_available(
+    ctx: &mut AppContext,
+    plan_toggle_available: impl Fn(&AppContext) -> bool + 'static,
+) -> ViewHandle<TuiInputView> {
     // `CodeEditorModel::new_tui` reads syntax colors from the `Appearance`
     // singleton, so register a mock one before constructing the editor.
     ctx.add_singleton_model(|_| Appearance::mock());
@@ -265,6 +291,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
         |ctx| {
             let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
             TuiInputView::new(model, input_mode, suggestions_mode, Vec::new(), ctx)
+                .with_plan_toggle_available(plan_toggle_available)
         },
     );
     view
@@ -1521,13 +1548,13 @@ fn keymap_context_flags_shell_mode() {
             let view = build_view(ctx);
             assert_eq!(
                 view.as_ref(ctx).keymap_context(ctx),
-                input_keymap_context(false)
+                input_keymap_context(false, false)
             );
 
             type_str(&view, ctx, "!");
             assert_eq!(
                 view.as_ref(ctx).keymap_context(ctx),
-                input_keymap_context(true)
+                input_keymap_context(true, false)
             );
         });
     });

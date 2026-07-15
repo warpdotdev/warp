@@ -7,11 +7,15 @@ use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
 };
+use warpui_core::keymap::{Context, Keystroke, Trigger};
 use warpui_core::{App, AppContext};
 
 use super::{
     export_file_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
     TuiTerminalSessionEvent,
+};
+use crate::keybindings::{
+    CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -117,6 +121,45 @@ fn user_input_event_projects_to_raw_user_bytes() {
         panic!("user input event should map to raw PTY bytes");
     };
     assert_eq!(&*bytes, b"hello\r");
+}
+#[test]
+fn plan_toggle_uses_contextual_ctrl_p_and_ctrl_shift_p() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            super::init(ctx);
+            crate::input::init(ctx);
+        });
+        app.read(|ctx| {
+            let toggle = ctx
+                .get_binding_by_name(PLAN_TOGGLE_BINDING_NAME)
+                .expect("primary plan toggle binding");
+            assert_eq!(
+                *toggle.trigger,
+                Trigger::Keystrokes(vec![Keystroke::parse("ctrl-shift-P").unwrap()])
+            );
+
+            let fallback = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME)
+                .expect("contextual plan toggle binding");
+            let ctrl_p = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-p").unwrap()]);
+            assert_eq!(*fallback.trigger, ctrl_p);
+
+            let mut input_without_plan = Context::default();
+            input_without_plan.set.insert("TuiInputView");
+            let mut input_with_plan = input_without_plan.clone();
+            input_with_plan.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
+            assert!(!fallback.in_context(&input_without_plan));
+            assert!(fallback.in_context(&input_with_plan));
+
+            let ctrl_p_move_up = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == "tui:input:move_up" && *binding.trigger == ctrl_p)
+                .expect("Ctrl+P move-up fallback");
+            assert!(ctrl_p_move_up.in_context(&input_without_plan));
+            assert!(!ctrl_p_move_up.in_context(&input_with_plan));
+        });
+    });
 }
 
 #[test]

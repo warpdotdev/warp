@@ -15,6 +15,7 @@ use warp::tui_export::{
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, TypedActionView};
 use warpui_core::elements::tui::{Color, Modifier, TuiBufferExt, TuiRect};
+use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView, ViewHandle};
 
@@ -49,10 +50,18 @@ fn streamed_create_renders_cached_markdown_and_code_children() {
                 .iter()
                 .any(|line| line.trim() == "Build a fast timer."));
             assert!(lines.iter().all(|line| !line.contains("**")));
+            let plan_toggle_hint = format!(
+                "{} to collapse plan",
+                Keystroke::parse("ctrl-p").unwrap().displayed()
+            );
+            assert_eq!(
+                lines.last().map(|line| line.trim_end()),
+                Some(plan_toggle_hint.as_str())
+            );
             assert!(lines
                 .iter()
                 .skip(2)
-                .filter(|line| !line.is_empty())
+                .filter(|line| { !line.is_empty() && line.trim_end() != plan_toggle_hint })
                 .all(|line| line.starts_with("  ")));
             let plan_background = TuiUiBuilder::from_app(ctx).plan_background();
             assert_eq!(buffer[(0, 0)].bg, Color::Reset);
@@ -273,7 +282,7 @@ fn collapse_persists_across_payload_updates_and_invalidates_layout() {
         });
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&TuiPlanViewAction::SetCollapsed(true), ctx);
+            view.handle_action(&TuiPlanViewAction::ToggleCollapsed, ctx);
             view.sync_action(
                 create_action("create-1", [("Plan", "second body")]),
                 true,
@@ -326,6 +335,7 @@ fn test_plan_view(
     ViewHandle<TuiPlanView>,
     warpui_core::ModelHandle<warp::tui_export::BlocklistAIActionModel>,
 ) {
+    app.update(crate::terminal_session_view::init);
     app.add_singleton_model(|_| Appearance::mock());
     let action_model = add_test_action_model(app);
     let action_model_for_view = action_model.clone();
