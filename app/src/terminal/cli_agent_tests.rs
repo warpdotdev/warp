@@ -574,3 +574,19 @@ fn test_detect_aifx_agent_run_claude_wrong_team() {
         });
     });
 }
+
+#[test]
+fn test_oh_my_pi_supported_skill_providers() {
+    use ai::skills::SkillProvider;
+
+    assert_eq!(
+        CLIAgent::OhMyPi.supported_skill_providers(),
+        &[
+            SkillProvider::Omp,
+            SkillProvider::Agents,
+            SkillProvider::Claude,
+            SkillProvider::Codex,
+            SkillProvider::OpenCode,
+        ]
+    );
+}
