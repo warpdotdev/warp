@@ -68,6 +68,7 @@ pub use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
 pub use crate::ai::blocklist::orchestration_topology::{
+    descendant_conversation_ids_in_pill_order, descendant_conversation_ids_in_spawn_order,
     orchestrator_agent_id_for_conversation, resolve_orchestration_participant,
     OrchestrationParticipantKind, ResolvedOrchestrationParticipant,
 };

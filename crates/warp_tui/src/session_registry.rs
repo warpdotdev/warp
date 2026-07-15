@@ -238,6 +238,7 @@ impl TuiSessions {
                     sessions.remove_session(*session_id, ctx);
                 });
             }
+            TuiOrchestrationEvent::TabBarChanged => {}
         });
     }
 
@@ -323,6 +324,13 @@ impl TuiSessions {
     /// Looks up a registered session.
     pub(crate) fn session(&self, id: TuiSessionId) -> Option<&TuiSession> {
         self.sessions.iter().find(|session| session.id == id)
+    }
+    /// Looks up a retained session by its terminal surface id.
+    pub(crate) fn session_id_for_surface(&self, surface_id: EntityId) -> Option<TuiSessionId> {
+        self.sessions
+            .iter()
+            .find(|session| session.id.surface_id() == surface_id)
+            .map(|session| session.id)
     }
 
     /// Whether no session has been registered.

@@ -625,6 +625,71 @@ fn dispatch(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, actions: &[Tu
 }
 
 #[test]
+fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
+    App::test((), |mut app| async move {
+        let (view, requests) = app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| {
+                view.set_focus_above_available(true, ctx);
+            });
+            let requests = Rc::new(RefCell::new(0usize));
+            let captured = requests.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiInputViewEvent::FocusAboveRequested = event {
+                    *captured.borrow_mut() += 1;
+                }
+            });
+            (view, requests)
+        });
+
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::SelectUp)],
+            );
+        });
+        assert_eq!(*requests.borrow(), 1);
+
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::Editor(TuiEditorAction::InsertText(
+                    "first\nsecond".to_string(),
+                ))],
+            );
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::SelectUp)],
+            );
+        });
+        assert_eq!(
+            *requests.borrow(),
+            1,
+            "second visual row stays in the input"
+        );
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.clear(ctx));
+            type_str(&view, ctx, "abc");
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::SelectLeft)],
+            );
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::SelectUp)],
+            );
+        });
+        assert_eq!(*requests.borrow(), 1, "active selection stays in the input");
+    });
+}
+
+#[test]
 fn clear_selection_collapses_to_head_without_changing_text() {
     App::test((), |mut app| async move {
         app.update(|ctx| {

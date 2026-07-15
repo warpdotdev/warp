@@ -18,6 +18,7 @@ use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
 use warpui_core::AppContext;
 
 use crate::orchestrated_agent_identity_styling::{agent_identity_palette, AgentIdentity};
+use crate::tab_bar::TuiTabBarStyles;
 use crate::terminal_background::probed_colors;
 
 /// Theme-derived styles and components for the TUI, mirroring the GUI's
@@ -253,6 +254,42 @@ impl TuiUiBuilder {
     /// Bold primary text for selected configuration metadata.
     pub(crate) fn orchestration_selected_value_style(&self) -> TuiStyle {
         self.primary_text_style().add_modifier(Modifier::BOLD)
+    }
+
+    /// Styles for the reusable component when rendered as orchestration tabs.
+    pub(crate) fn orchestration_tab_bar_styles(&self) -> TuiTabBarStyles {
+        let background = self.orchestration_surface_background();
+        let selected_fill = ThemeFill::from(self.warp_theme.terminal_colors().normal.magenta);
+        let selected_background = cell_color(selected_fill);
+        let selected_foreground =
+            cell_color(self.warp_theme.font_color(selected_fill.into_solid()));
+        TuiTabBarStyles {
+            bar: self.primary_text_style().bg(background),
+            leading: self.orchestration_tab_bar_label_style(),
+            chrome: self.orchestration_tab_bar_chrome_style(),
+            tab: self.muted_text_style().bg(background),
+            selected_focused: TuiStyle::default()
+                .fg(selected_foreground)
+                .bg(selected_background)
+                .add_modifier(Modifier::BOLD),
+            selected_unfocused: self
+                .primary_text_style()
+                .bg(background)
+                .add_modifier(Modifier::BOLD),
+        }
+    }
+
+    /// Bold fixed-label style over the orchestration tab-bar background.
+    pub(crate) fn orchestration_tab_bar_label_style(&self) -> TuiStyle {
+        self.primary_text_style()
+            .bg(self.orchestration_surface_background())
+            .add_modifier(Modifier::BOLD)
+    }
+
+    /// Muted divider/overflow style over the orchestration tab background.
+    pub(crate) fn orchestration_tab_bar_chrome_style(&self) -> TuiStyle {
+        self.muted_text_style()
+            .bg(self.orchestration_surface_background())
     }
 
     /// The deterministic agent identity palette for this theme. See

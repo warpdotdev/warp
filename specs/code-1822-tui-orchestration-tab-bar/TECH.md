@@ -41,16 +41,15 @@ Add `TuiSessions::session_id_for_surface(EntityId)` and a narrow session-view lo
 Extend `TuiOrchestrationModel` from launch coordination to the owner of semantic orchestration tab state. Add a per-orchestrator entry containing:
 - The child page-anchor conversation ID.
 - Whether the user explicitly paged away from the active tab.
-- Stable child identity assignments computed in spawn order, independently of the dynamic display order.
 
-Expose a plain-data snapshot for `TuiTerminalSessionView` containing the main tab, ordered child tabs, active conversation ID, identity indices, page anchor, and explicit-page state. The session view maps identity indices and semantic tab states to current-theme styles before updating the generalized component. Snapshot construction reads live history and session state each time; cached UI state never becomes the source of truth for membership, status, ordering, or selection.
+Expose a plain-data snapshot for `TuiTerminalSessionView` containing the root, ordered child tabs, active conversation ID, spawn-order-derived identity indices, and page anchor. The session view maps identity indices and semantic tab states to current-theme styles before updating the generalized component. Snapshot construction reads live history and session state each time; cached UI state never becomes the source of truth for membership, status, ordering, or selection.
 
 Model operations:
 - `select_conversation` resolves the target's retained session, calls `TuiSessions::focus_session`, clears explicit paging, and anchors the page so the selected child is visible.
 - `select_first_child`/`select_last_child` exclude the orchestrator.
 - `set_explicit_page` records the page anchor emitted by the tab bar and marks it explicit. It never calls `focus_session`.
 - A dynamic ordering update automatically re-anchors to the active child only when explicit paging is false.
-- Removed roots prune their per-tree state; removed children prune identity entries and clamp invalid anchors.
+- Removed roots prune their per-tree state; removed children clamp invalid anchors through fresh snapshot resolution.
 
 Subscribe to `BlocklistAIHistoryModel` events that can change membership, parent linkage, labels, status, recency, pin order, or active selection, and to all `TuiSessionsEvent` variants. Emit a narrow `TabBarChanged` event so every retained session view in the affected tree redraws. These subscriptions also make child materialization/removal visible without polling.
 
@@ -58,7 +57,6 @@ Subscribe to `BlocklistAIHistoryModel` events that can change membership, parent
 The model owns tab selection and page state, but actual responder focus remains view-owned because only a `ViewContext` can focus a view.
 
 Add orchestration-tab actions and a keymap-context flag to `TuiTerminalSessionView`:
-- `FocusTabs`
 - `FocusInput`
 - `SelectPrevious` / `SelectNext`
 - `SelectFirstChild` / `SelectLastChild`
@@ -67,7 +65,7 @@ Add orchestration-tab actions and a keymap-context flag to `TuiTerminalSessionVi
 
 Register `Left`, `Right`, `Tab`, `Shift+Tab`, `Shift+Left`, `Shift+Right`, and `Shift+Down` only under the tab-focused context. Keep the existing session-level `Ctrl+C` binding unchanged; the focused footer omits kill copy in this PR.
 
-`SelectPrevious` and `SelectNext` are forwarded to the tab-bar component. The component resolves the target from its private settled layout and emits `SelectConversation`; the session view then delegates that semantic selection to `TuiOrchestrationModel`. The session and model never read a visible range.
+The input's `FocusAboveRequested` event directly enters tab focus. `SelectPrevious` and `SelectNext` ask the tab-bar component for a target from its private settled layout; the session view then delegates that semantic selection to `TuiOrchestrationModel`. The session and model never read a visible range.
 
 Track whether the session view itself currently owns tab-bar focus. A switch performs two coordinated operations:
 1. Ask `TuiOrchestrationModel` to select/focus the target retained session.

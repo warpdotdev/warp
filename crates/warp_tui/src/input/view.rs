@@ -115,6 +115,8 @@ pub enum TuiInputViewEvent {
     AcceptedModel(LLMId),
     /// The user selected an action from the MCP menu.
     AcceptedMcp(TuiMcpAction),
+    /// Shift+Up reached an available focus target above the first visual row.
+    FocusAboveRequested,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -170,6 +172,8 @@ pub struct TuiInputView {
     /// construction always provides this; isolated input tests omit it.
     transcript: Option<ViewHandle<TuiTranscriptView>>,
     keyboard_enhancement_supported: bool,
+    /// Whether Shift+Up may hand focus to an owner-provided region above.
+    focus_above_available: bool,
 }
 
 impl Entity for TuiInputView {
@@ -247,6 +251,19 @@ impl TuiInputView {
             focused: false,
             transcript,
             keyboard_enhancement_supported: false,
+            focus_above_available: false,
+        }
+    }
+
+    /// Enables or disables the first-row Shift+Up focus handoff.
+    pub(crate) fn set_focus_above_available(
+        &mut self,
+        available: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.focus_above_available != available {
+            self.focus_above_available = available;
+            ctx.notify();
         }
     }
 
@@ -463,6 +480,11 @@ impl TypedActionView for TuiInputView {
                 TuiEditorInteractionOutcome::FollowCursor
             }
             TuiInputAction::EditorCommand(command) => {
+                if matches!(*command, TuiEditorCommand::SelectUp) && self.can_focus_above(ctx) {
+                    ctx.emit(TuiInputViewEvent::FocusAboveRequested);
+                    ctx.notify();
+                    return;
+                }
                 // Only open the conversation list from normal agent input; in
                 // `!` shell mode the `!` prefix is not part of `plain_text`, so
                 // an empty shell command would otherwise trip this branch and
@@ -560,6 +582,24 @@ impl TuiInputView {
     /// selection (the position where `!` toggles shell mode).
     fn is_cursor_at_start(&self, ctx: &AppContext) -> bool {
         self.cursor_offset(ctx).as_usize() <= 1 && self.selection_range(ctx).is_none()
+    }
+
+    /// Whether Shift+Up should leave the input instead of extending selection.
+    fn can_focus_above(&self, ctx: &AppContext) -> bool {
+        if !self.focus_above_available || self.selection_range(ctx).is_some() {
+            return false;
+        }
+        let model = self.model.as_ref(ctx);
+        let render = model.render_state().as_ref(ctx);
+        let Some(char_cell) = render.char_cell() else {
+            return false;
+        };
+        let cursor_offset = CharOffset::from(self.cursor_offset(ctx).as_usize().saturating_sub(1));
+        let hidden = char_cell.hidden_line_ranges(ctx);
+        char_cell
+            .display_lattice(&hidden)
+            .offset_to_display_point(cursor_offset)
+            .is_some_and(|point| point.row == 0)
     }
 
     // ── Scroll ─────────────────────────────────────────────────────────────
