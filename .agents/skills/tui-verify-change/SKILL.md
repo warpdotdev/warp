@@ -287,10 +287,15 @@ packaged; `agg` ships as a prebuilt binary rather than in apt:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y asciinema ffmpeg tmux
-# agg is not in apt — grab the prebuilt release binary for this arch:
-sudo curl -fsSL -o /usr/local/bin/agg \
-  "https://github.com/asciinema/agg/releases/latest/download/agg-$(uname -m)-unknown-linux-gnu"
-sudo chmod +x /usr/local/bin/agg
+# agg is not in apt — install a PINNED release binary and verify its checksum before
+# installing as root (don't pull an unpinned `latest`). The checksum below is for the
+# x86_64 build; on another arch use that asset's published checksum from the release.
+AGG_VERSION=v1.9.0
+AGG_SHA256=f111e315cd71056b116302342553dd765b7297579ed511f111d0cedb442aeda6
+curl -fsSL -o /tmp/agg \
+  "https://github.com/asciinema/agg/releases/download/${AGG_VERSION}/agg-$(uname -m)-unknown-linux-gnu"
+echo "${AGG_SHA256}  /tmp/agg" | sha256sum -c -   # aborts on mismatch
+sudo install -m 0755 /tmp/agg /usr/local/bin/agg
 ```
 
 **Record the session.** asciinema needs a real PTY, so run it **inside tmux** (a
@@ -300,14 +305,18 @@ reach the binary running under asciinema:
 
 ```bash
 cd <warp-repo-root>
-tmux kill-server 2>/dev/null
+tmux kill-session -t tuicap 2>/dev/null     # clear only THIS capture session (not kill-server)
 # asciinema records the TUI's PTY; -c runs the binary; --overwrite replaces a prior cast.
 tmux new-session -d -s tuicap -x 120 -y 40 \
   'asciinema rec --overwrite -c "./target/debug/warp-tui-oss" /tmp/tui.cast'
 sleep 1                                     # let it draw + answer the theme probe
 # ...drive the interaction you want to show, e.g.:
 # tmux send-keys -t tuicap "hello" Enter && sleep 3
-tmux send-keys -t tuicap C-c                # quit the TUI -> asciinema finalizes the cast
+# Quit the TUI so asciinema finalizes the cast. The logged-out placeholder exits on one
+# Ctrl-C, but a live/logged-in session needs a SECOND press within its ~1s window (see
+# "Quitting" under Pitfalls) — so send two; the extra press is a harmless no-op if it
+# already exited (the session is gone, hence 2>/dev/null).
+tmux send-keys -t tuicap C-c && sleep 0.5 && tmux send-keys -t tuicap C-c 2>/dev/null
 sleep 1
 ```
 
