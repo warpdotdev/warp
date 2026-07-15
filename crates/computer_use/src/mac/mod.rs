@@ -27,6 +27,12 @@ pub fn background_supported() -> bool {
     true
 }
 
+/// Ends any in-progress background computer-use session, restoring the user's original keyboard
+/// focus. Idempotent and a no-op when no session is active. See [`activation::end_all_sessions`].
+pub fn end_background_session() {
+    activation::end_all_sessions();
+}
+
 /// Enumerates the on-screen windows as crate-level [`crate::WindowInfo`] records.
 pub fn enumerate_windows() -> Vec<crate::WindowInfo> {
     window::enumerate_windows()

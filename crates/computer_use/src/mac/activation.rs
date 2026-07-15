@@ -107,8 +107,47 @@ pub fn ensure_activated(target_pid: libc::pid_t, info: &WindowInfo) {
             stop,
             thread,
             has_taps,
+            previous,
         },
     );
+}
+
+/// Ends every active background-activation session, restoring the user's original keyboard
+/// focus. For each activated window this first tears down the focus-suppression taps (by
+/// dropping the [`ActiveSession`], whose `Drop` stops and joins the tap thread), then sends an
+/// `ApplicationDeactivated` to the window we activated and re-activates the app that was
+/// frontmost before the session. Tearing the taps down first is essential: while installed they
+/// drop the previous app's focus-change messages, so the re-activation would be swallowed if it
+/// ran first.
+///
+/// Idempotent: a no-op when no session is active, so it is safe to call from every terminal path
+/// (normal completion, cancellation, teardown) and more than once.
+///
+/// The registry lock is held for the whole teardown so a concurrent [`ensure_activated`] — e.g.
+/// an immediate restart targeting the same window — blocks until teardown fully completes,
+/// leaving no window in which the taps are half torn-down or a stale registry key would suppress
+/// re-activation.
+pub fn end_all_sessions() {
+    let mut registry = registry().lock().unwrap();
+    let sessions: Vec<((libc::pid_t, i64), ActiveSession)> = registry.drain().collect();
+    for ((target_pid, target_window), session) in sessions {
+        let previous = session.previous;
+        // Tear the taps down first (Drop stops the run loop and joins the thread) so the
+        // re-activation below is no longer suppressed.
+        drop(session);
+        post_appkit_activation(
+            target_pid,
+            target_window,
+            NSEventSubtype::ApplicationDeactivated.0,
+        );
+        if let Some((previous_pid, previous_window)) = previous {
+            post_appkit_activation(
+                previous_pid,
+                previous_window,
+                NSEventSubtype::ApplicationActivated.0,
+            );
+        }
+    }
 }
 
 /// The process-global registry of activated windows, keyed by `(pid, window_number)`.
@@ -127,6 +166,10 @@ struct ActiveSession {
     /// The run-loop thread servicing the taps, joined on teardown.
     thread: Option<JoinHandle<()>>,
     has_taps: bool,
+    /// The app that was frontmost when this window was activated, as `(pid, window_number)`, so
+    /// teardown can restore the user's focus to it. `None` when there was no distinct previous
+    /// app to protect.
+    previous: Option<(libc::pid_t, i64)>,
 }
 
 impl Drop for ActiveSession {
@@ -330,3 +373,7 @@ fn post_center_primer(target_pid: libc::pid_t, info: &WindowInfo) {
     );
     thread::sleep(PRIMER_CLICK_SETTLE);
 }
+
+#[cfg(test)]
+#[path = "activation_tests.rs"]
+mod tests;

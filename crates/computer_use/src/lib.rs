@@ -107,6 +107,22 @@ pub fn background_supported() -> bool {
     }
 }
 
+/// Ends any in-progress background computer-use session, restoring the user's original keyboard
+/// focus.
+///
+/// On macOS a background session activates the target window and installs focus-suppression
+/// taps; this tears those down, deactivates the driven window, and re-activates the app that was
+/// frontmost before the session, so the user's keystrokes return to where they were. Idempotent
+/// and a no-op when no session is active, and on platforms without background per-window control.
+///
+/// Call this whenever a computer-use session ends — normal completion, cancellation, or teardown.
+pub fn end_background_session() {
+    #[cfg(macos)]
+    {
+        imp::end_background_session();
+    }
+}
+
 /// Enumerates the on-screen windows, returning their metadata so a caller can pick one to
 /// target. Returns an empty list on platforms where window enumeration is unsupported.
 pub fn enumerate_windows() -> Vec<WindowInfo> {

@@ -2657,6 +2657,13 @@ impl BlocklistAIController {
         reason: CancellationReason,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Restore the user's keyboard focus if a background computer-use session is still active.
+        // ctrl-c / stop / pane-close all funnel through here, and on cancellation the computer-use
+        // subagent never produces a normal SubagentResult, so the normal-completion teardown in
+        // `Conversation` is skipped. This teardown is idempotent, process-global, and a no-op when
+        // no background session is active, so it is safe to call unconditionally on every cancel.
+        computer_use::end_background_session();
+
         // Cancel any pending auto-resume for this conversation.
         if let Some(handle) = self.pending_auto_resume_handles.remove(&conversation_id) {
             handle.abort();

@@ -2937,6 +2937,13 @@ impl AIConversation {
                                     &task_id,
                                     &self.task_store,
                                 );
+                                // A computer-use subagent finishing normally ends its background
+                                // session; restore the user's keyboard focus so it no longer
+                                // targets the driven window. Idempotent and a no-op when no
+                                // background session is active (e.g. other subagent types). The
+                                // ctrl-c / cancel path, where no SubagentResult is produced, is
+                                // handled in `BlocklistAIController::cancel_conversation_progress`.
+                                computer_use::end_background_session();
                             }
                         }
                         Some(api::message::Message::ModelUsed(model_used)) => {
