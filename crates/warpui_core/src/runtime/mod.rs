@@ -623,17 +623,14 @@ fn enter_terminal_screen(out: &mut impl Write) -> io::Result<()> {
         EnableBracketedPaste,
         Hide
     )?;
-    // Opt into the Kitty keyboard protocol so terminals that support it (Ghostty,
-    // kitty, foot, WezTerm, ...) report modified keys like Shift+Enter as distinct
-    // events. Without this, those terminals send a bare CR for both Enter and
-    // Shift+Enter, so the input can't distinguish "submit" from "insert newline".
-    // `DISAMBIGUATE_ESCAPE_CODES` alone is sufficient for that disambiguation.
-    //
-    // Best-effort: terminals that don't support the protocol ignore the escape
-    // sequence, and crossterm hard-routes this command to the unsupported legacy
-    // Windows console API (which errors). Tolerate failure here so keyboard
-    // enhancement never aborts terminal setup — a failed push just means the
-    // enhancement isn't active, matching the pre-fix behavior on that terminal.
+
+    // Opt into the Kitty keyboard protocol so protocol-aware terminals (Ghostty,
+    // kitty, foot, WezTerm) report Shift+Enter distinctly from Enter; without it
+    // both arrive as a bare CR and the input can't tell "submit" from "insert
+    // newline". This only affects the TUI's own host terminal — the GUI never
+    // enters raw mode / the alt screen and never runs this. Best-effort: a no-op
+    // on terminals lacking the protocol, and it errors on the legacy Windows
+    // console (crossterm), so a failed push never aborts terminal setup.
     let _ = execute!(
         out,
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
