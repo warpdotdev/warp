@@ -65,7 +65,7 @@ function Show-BootstrapPreview {
     Write-Output ''
 }
 
-function Add-DirectoryToPathIfExists {
+function Add-DirectoryToPathIfPresent {
     param([string]$Path)
 
     if (-not $Path -or -not (Test-Path -Path $Path -PathType Container)) {
@@ -101,7 +101,7 @@ function Add-WinGetPackageCommandToPath {
         $command = Get-ChildItem -Path $packageDir.FullName -Filter "$CommandName.exe" -Recurse -ErrorAction SilentlyContinue |
             Select-Object -First 1
         if ($command) {
-            Add-DirectoryToPathIfExists $command.DirectoryName
+            Add-DirectoryToPathIfPresent $command.DirectoryName
             return
         }
     }
@@ -115,7 +115,7 @@ function Use-LibclangIfInstalled {
 
     foreach ($dir in $candidateDirs) {
         if (Test-Path -Path (Join-Path $dir 'libclang.dll') -PathType Leaf) {
-            Add-DirectoryToPathIfExists $dir
+            Add-DirectoryToPathIfPresent $dir
             $env:LIBCLANG_PATH = $dir
             return
         }
@@ -133,7 +133,7 @@ function Use-LibclangIfInstalled {
         $libclang = Get-ChildItem -Path $packageDir.FullName -Filter 'libclang.dll' -Recurse -ErrorAction SilentlyContinue |
             Select-Object -First 1
         if ($libclang) {
-            Add-DirectoryToPathIfExists $libclang.DirectoryName
+            Add-DirectoryToPathIfPresent $libclang.DirectoryName
             $env:LIBCLANG_PATH = $libclang.DirectoryName
             return
         }
@@ -162,11 +162,11 @@ if (-not $gitBinDir) {
     Write-Error 'https://gitforwindows.org/'
     exit 1
 }
-Add-DirectoryToPathIfExists $gitBinDir
+Add-DirectoryToPathIfPresent $gitBinDir
 
 # Some Rust build scripts depend on Unix patch.exe, which ships with Git for Windows.
 $gitUsrBinDir = Join-Path (Split-Path -Parent $gitBinDir) 'usr\bin'
-Add-DirectoryToPathIfExists $gitUsrBinDir
+Add-DirectoryToPathIfPresent $gitUsrBinDir
 
 function Resolve-CommonSkillsScript {
     param([string]$ScriptName)
