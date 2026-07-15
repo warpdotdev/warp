@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentActionId, AIConversationId, BlockId, LongRunningCommandControlState, TerminalModel,
+    AIAgentActionId, AIConversationId, Block, BlockId, LongRunningCommandControlState,
+    TerminalModel,
 };
 
 /// Keeps an agent-requested command's canonical block out of the TUI's
@@ -56,13 +57,18 @@ pub(super) fn terminal_use_conversation_to_resume(
     .then_some(*metadata.conversation_id())
 }
 
-pub(super) fn user_controlled_line_bytes(input: &str) -> Vec<u8> {
-    let mut bytes = input.as_bytes().to_vec();
-    #[cfg(target_os = "windows")]
-    bytes.push(b'\r');
-    #[cfg(not(target_os = "windows"))]
-    bytes.push(b'\n');
-    bytes
+/// Whether a running inline command, rather than Warp's editor or agent, owns
+/// keyboard input.
+pub(super) fn user_controls_running_command(block: &Block) -> bool {
+    block.is_active_and_long_running()
+        && block.is_bootstrapped()
+        && !block.is_in_band_command_block()
+        && !block.is_agent_driving_command()
+        && !block.is_agent_tagged_in()
+}
+
+pub(super) fn inline_process_owns_input(terminal_model: &TerminalModel) -> bool {
+    user_controls_running_command(terminal_model.block_list().active_block())
 }
 
 #[cfg(test)]
