@@ -233,6 +233,10 @@ pub(crate) struct TuiTerminalSessionView {
     /// Last dimensions applied to the terminal model and PTY.
     size_info: SizeInfo,
     /// Reports the full area allocated to the active alt-screen element.
+    /// This layout→channel→view pathway is the GUI's terminal-resize prior
+    /// art (`TerminalSizeElement::after_layout` → `resize_tx` →
+    /// `after_terminal_view_layout`): layout lacks a `ViewContext`, so the
+    /// settled size is handed off to a view-side handler to apply.
     alt_screen_resize_tx: Sender<TuiSize>,
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
     /// shell submission).
@@ -1195,11 +1199,14 @@ impl TuiTerminalSessionView {
     }
 
     /// Applies an alt-screen layout size to the terminal model and PTY.
+    /// TUI counterpart of the GUI's `after_terminal_view_layout`
+    /// (`app/src/terminal/view.rs`): consumes the after-layout resize channel
+    /// and commits the resize with a `ViewContext`.
     fn handle_alt_screen_resize(&mut self, size: TuiSize, ctx: &mut ViewContext<Self>) {
         if size.width == 0 || size.height == 0 {
             return;
         }
-        let size_update = SizeUpdate::after_headless_layout(
+        let size_update = SizeUpdate::from_cell_dimensions(
             self.size_info,
             usize::from(size.height),
             usize::from(size.width),

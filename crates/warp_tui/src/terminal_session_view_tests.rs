@@ -40,7 +40,7 @@ fn file_export_success_message_includes_destination_path() {
 #[test]
 fn resize_event_maps_to_pty_resize_intent() {
     let last_size = SizeInfo::new_without_font_metrics(24, 120);
-    let size_update = SizeUpdate::after_headless_layout(last_size, 8, 42);
+    let size_update = SizeUpdate::from_cell_dimensions(last_size, 8, 42);
     let event = TuiTerminalSessionEvent::Resize(size_update);
 
     let Some(PtyIntent::Resize(actual_update)) = event.pty_intent() else {

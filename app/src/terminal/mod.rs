@@ -232,7 +232,7 @@ pub struct SizeUpdate {
 
 impl SizeUpdate {
     /// Creates a size update for a layout measured directly in terminal cells.
-    pub fn after_headless_layout(last_size: SizeInfo, rows: usize, columns: usize) -> Self {
+    pub fn from_cell_dimensions(last_size: SizeInfo, rows: usize, columns: usize) -> Self {
         let new_size = SizeInfo::new_without_font_metrics(rows, columns);
         Self {
             update_reason: SizeUpdateReason::AfterLayout,
