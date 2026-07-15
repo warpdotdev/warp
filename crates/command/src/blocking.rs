@@ -5,10 +5,9 @@
 use std::ffi::OsStr;
 #[cfg(windows)]
 use std::ffi::OsString;
-use std::fmt;
-use std::io;
 use std::path::Path;
 use std::process::{Child, CommandArgs, CommandEnvs, ExitStatus, Output, Stdio};
+use std::{fmt, io};
 
 #[cfg(windows)]
 use anyhow::Context as _;
