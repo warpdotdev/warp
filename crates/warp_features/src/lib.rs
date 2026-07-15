@@ -912,6 +912,10 @@ pub enum FeatureFlag {
     /// procedurally as cell-filling rectangles instead of from the font,
     /// eliminating seams between adjacent box-drawing cells in the terminal.
     BoxDrawingGlyphs,
+
+    /// Enables the `oz runner` CRUD commands for managing cloud agent runners
+    /// via the CLI.
+    CloudAgentRunnerCLICommands,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -988,6 +992,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
+    FeatureFlag::CloudAgentRunnerCLICommands,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

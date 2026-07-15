@@ -27,6 +27,7 @@ use warp_cli::mcp::MCPCommand;
 use warp_cli::memory_store::{MemoryCommand, MemoryStoreCommand};
 use warp_cli::model::ModelCommand;
 use warp_cli::provider::ProviderCommand;
+use warp_cli::runner::RunnerCommand;
 use warp_cli::schedule::ScheduleSubcommand;
 use warp_cli::secret::SecretCommand;
 use warp_cli::share::ShareRequest;
@@ -100,6 +101,7 @@ pub mod output;
 mod profiles;
 mod provider;
 pub(crate) mod retry;
+mod runner;
 mod schedule;
 mod secret;
 pub(crate) mod setup_observability;
@@ -211,6 +213,12 @@ fn dispatch_command(
                 return Err(anyhow::anyhow!("invalid value 'api-key'"));
             }
             api_key::run(ctx, global_options, api_key_cmd)
+        }
+        CliCommand::Runner(runner_cmd) => {
+            if !FeatureFlag::CloudAgentRunnerCLICommands.is_enabled() {
+                return Err(anyhow::anyhow!("invalid value 'runner'"));
+            }
+            runner::run(ctx, global_options, runner_cmd)
         }
     }
 }
@@ -1549,6 +1557,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::HarnessSupport(_) => true,
         CliCommand::Artifact(_) => true,
         CliCommand::ApiKey(_) => true,
+        CliCommand::Runner(_) => true,
     }
 }
 
@@ -1797,6 +1806,12 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             ApiKeyCommand::List(_) => CliTelemetryEvent::ApiKeyList,
             ApiKeyCommand::Create(_) => CliTelemetryEvent::ApiKeyCreate,
             ApiKeyCommand::Expire(_) => CliTelemetryEvent::ApiKeyExpire,
+        },
+        CliCommand::Runner(runner_cmd) => match runner_cmd {
+            RunnerCommand::List(_) => CliTelemetryEvent::RunnerList,
+            RunnerCommand::Create(_) => CliTelemetryEvent::RunnerCreate,
+            RunnerCommand::Update(_) => CliTelemetryEvent::RunnerUpdate,
+            RunnerCommand::Delete(_) => CliTelemetryEvent::RunnerDelete,
         },
     }
 }
