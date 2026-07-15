@@ -161,10 +161,6 @@ impl ansi::Handler for GridHandler {
     }
 
     fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
-        // `and_then` is intentional: if `intern` returns None (registry cap
-        // hit), `active_hyperlink_id` stays None and subsequent `input(c)`
-        // writes plain non-clickable cells, so a cell's `hyperlink_id` never
-        // references an entry the registry doesn't hold.
         self.active_hyperlink_id = hyperlink.and_then(|h| self.hyperlink_registry.intern(h));
     }
 
@@ -856,9 +852,6 @@ impl ansi::Handler for GridHandler {
             }
             ansi::ClearMode::All => {
                 if self.ansi_handler_state.is_alt_screen {
-                    // Alt-screen apps redraw with a full clear constantly and
-                    // manage their own OSC 8 spans, so the active link is left
-                    // intact here; alt-screen content is not persisted or shared.
                     self.grid.region_mut(..).each(|cell| *cell = bg.into());
                 } else {
                     if self.full_grid_clear_behavior == FullGridClearBehavior::Clear {
@@ -866,9 +859,6 @@ impl ansi::Handler for GridHandler {
                     } else {
                         self.clear_viewport();
                     }
-                    // Don't carry an unclosed OSC 8 link past a full-screen clear
-                    // of the primary screen, so output after `clear` can't inherit
-                    // a stale URI.
                     self.active_hyperlink_id = None;
                 }
             }
@@ -886,8 +876,6 @@ impl ansi::Handler for GridHandler {
                 // grid has been cleared.
                 self.clear_secrets();
                 self.clear_displayed_rows_and_filter_matches();
-                // Same reason as in `reset_state`: don't carry an unclosed
-                // OSC 8 link past a full grid clear.
                 self.active_hyperlink_id = None;
 
                 // The row with the cursor still exists, though, so mark it as
@@ -920,9 +908,6 @@ impl ansi::Handler for GridHandler {
 
         self.clear_secrets();
 
-        // Drop any unclosed OSC 8 hyperlink so a hostile sender can't leave a
-        // link open, force a terminal reset, and have subsequent unrelated
-        // output inherit the stale URI.
         self.active_hyperlink_id = None;
 
         self.ansi_handler_state.active_charset = Default::default();
@@ -1624,9 +1609,6 @@ impl GridHandler {
         cursor_cell.fg = fg;
         cursor_cell.bg = bg;
         cursor_cell.flags = flags;
-        // Stamp the active OSC 8 hyperlink id (if any) onto the freshly-written
-        // cell. `set_hyperlink_id(None)` is a no-op when extra is None, so this
-        // only allocates `extra` when a hyperlink is actually active.
         cursor_cell.set_hyperlink_id(hyperlink_id);
 
         cursor_cell

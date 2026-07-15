@@ -94,6 +94,7 @@ pub struct TerminalManager<S> {
     pty_controller: ModelHandle<PtyController>,
 
     /// The manager is responsible for managing the lifetime of the remote server controller.
+    #[cfg_attr(feature = "remote_tty", allow(dead_code))]
     remote_server_controller: ModelHandle<RemoteServerController>,
 
     /// The process ID of the PTY. Purely used for integration tests. None if the PTY has not yet
@@ -109,6 +110,7 @@ pub struct TerminalManager<S> {
 
     /// The sharer side of the session sharing protocol. [`Some`] only when a
     /// shared session connection is ongoing.
+    #[cfg_attr(feature = "remote_tty", allow(dead_code))]
     pub(super) session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>>,
 }
 
@@ -165,6 +167,7 @@ impl<S> Drop for TerminalManager<S> {
 
 impl<S> TerminalManager<S> {
     /// Creates a local terminal manager model and terminal surface.
+    #[cfg_attr(feature = "remote_tty", allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_model<PostWire>(
         startup_directory: Option<PathBuf>,
@@ -463,8 +466,20 @@ impl<S> TerminalManager<S> {
     }
 
     /// Returns the remote server controller owned by this manager.
+    #[cfg_attr(feature = "remote_tty", allow(dead_code))]
     pub(super) fn remote_server_controller(&self) -> ModelHandle<RemoteServerController> {
         self.remote_server_controller.clone()
+    }
+
+    #[cfg(test)]
+    pub fn session_sharer(&self) -> Rc<RefCell<Option<ModelHandle<Network>>>> {
+        self.session_sharer.clone()
+    }
+
+    /// Returns the PTY process id, for integration tests.
+    #[cfg(feature = "integration_tests")]
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
     }
 
     /// Sends a shutdown message to the PTY event loop and waits for it to

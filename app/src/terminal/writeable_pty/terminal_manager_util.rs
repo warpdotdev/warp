@@ -149,6 +149,7 @@ pub fn wire_up_pty_controller_with_surface<T: EventLoopSender, S: TerminalSurfac
 /// in the subscription callbacks because that will create a reference cycle. Instead,
 /// we should use weak handles and upgrade them lazily.
 #[cfg(not(target_family = "wasm"))]
+#[cfg_attr(feature = "remote_tty", allow(dead_code))]
 pub fn wire_up_remote_server_controller_with_view<T: EventLoopSender>(
     remote_server_controller: &ModelHandle<
         super::remote_server_controller::RemoteServerController<T>,

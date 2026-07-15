@@ -773,6 +773,7 @@ impl PresenceManager {
     /// Like `single_distinct_present_viewer_uid`, but reads directly from a
     /// participant list before the presence manager finishes processing it.
     #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(feature = "remote_tty", allow(dead_code))]
     pub(crate) fn single_distinct_present_viewer_uid_from_viewers<'a>(
         viewers: impl Iterator<Item = &'a Viewer>,
     ) -> Option<&'a str> {

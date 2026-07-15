@@ -14,6 +14,7 @@ pub mod spawner;
 #[cfg(unix)]
 pub mod terminal_attributes;
 pub mod terminal_manager;
+#[cfg(any(windows, not(feature = "remote_tty")))]
 mod terminal_view_adaptor;
 #[cfg(unix)]
 mod unix;
@@ -34,6 +35,7 @@ pub use self::terminal_manager::{get_shell_starter, TerminalManager};
 pub use self::terminal_manager::{TerminalManagerInit, TerminalSurfaceInit, TerminalSurfaceResult};
 #[cfg(windows)]
 pub use self::terminal_view_adaptor::shutdown_all_pty_event_loops;
+#[cfg(not(feature = "remote_tty"))]
 pub(crate) use self::terminal_view_adaptor::{
     create_terminal_view_surface, terminal_view_restored_blocks, TerminalViewSurfaceConfig,
 };

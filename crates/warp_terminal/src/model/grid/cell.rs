@@ -296,7 +296,6 @@ impl Cell {
         if id.is_some() {
             self.extra.get_or_insert_with(Default::default).hyperlink_id = id;
         } else if let Some(extra) = self.extra.as_deref_mut() {
-            // Don't allocate `extra` just to clear an already-unset id.
             extra.hyperlink_id = None;
         }
     }

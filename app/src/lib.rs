@@ -389,6 +389,7 @@ pub(crate) enum LaunchMode {
         /// Whether this CLI invocation is running in a sandboxed environment.
         is_sandboxed: bool,
         /// Override for computer use permission from CLI flags. If None, uses default behavior.
+        #[allow(dead_code)]
         computer_use_override: Option<bool>,
     },
     /// Run a test - this may be an integration test or an eval.
