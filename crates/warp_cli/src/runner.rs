@@ -136,7 +136,7 @@ pub struct CreateRunnerArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-#[command(group(ArgGroup::new("runner_identifier").required(true).multiple(true).args(["id", "name"])))]
+#[command(group(ArgGroup::new("runner_identifier").required(true).multiple(false).args(["id", "name"])))]
 pub struct UpdateRunnerArgs {
     /// UID of the runner to update.
     #[arg(value_name = "UID")]

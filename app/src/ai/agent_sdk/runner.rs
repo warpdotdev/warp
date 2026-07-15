@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use comfy_table::Cell;
-use cynic::{MutationBuilder, QueryBuilder};
 use serde::Serialize;
 use warp_cli::agent::OutputFormat;
 use warp_cli::runner::{
@@ -9,25 +8,18 @@ use warp_cli::runner::{
     RunnerCommand, RunnerMacosVersionArg, RunnerOsArg, RunnerSortByArg, UpdateRunnerArgs,
 };
 use warp_cli::GlobalOptions;
-use warp_graphql::client::{get_request_context, get_user_facing_error_message};
-use warp_graphql::mutations::delete_runner::{
-    DeleteRunner, DeleteRunnerInput, DeleteRunnerResult, DeleteRunnerVariables,
-};
 use warp_graphql::mutations::upsert_runner::{
-    LinuxConfigInput, MacOsConfigInput, RunnerInput, RunnerInstanceShapeInput, UpsertRunner,
-    UpsertRunnerInput, UpsertRunnerResult, UpsertRunnerVariables,
+    LinuxConfigInput, MacOsConfigInput, RunnerInput, RunnerInstanceShapeInput, UpsertRunnerInput,
 };
 use warp_graphql::object::SpaceType;
-use warp_graphql::object_permissions::{Owner as GqlOwner, OwnerType};
+use warp_graphql::object_permissions::Owner as GqlOwner;
 use warp_graphql::queries::get_runners::{
-    GetRunners, GetRunnersResult, GetRunnersVariables, Runner, RunnerArch, RunnerConfig,
-    RunnerMacOsVersion, RunnerOs, RunnerSortBy,
+    Runner, RunnerArch, RunnerConfig, RunnerMacOsVersion, RunnerOs, RunnerSortBy,
 };
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::output::{self, TableFormat};
-use crate::cloud_object::Owner;
 use crate::server::server_api::ServerApiProvider;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
@@ -74,23 +66,12 @@ impl RunnerCommandRunner {
         args: ListRunnersArgs,
         ctx: &mut ModelContext<Self>,
     ) {
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
         let sort_by = args.sort_by.map(sort_by_to_gql);
 
         ctx.spawn(
             async move {
-                let op = GetRunners::build(GetRunnersVariables {
-                    request_context: get_request_context(),
-                    sort_by,
-                });
-                let response = server_api.send_graphql_request(op, None).await?;
-                let runners = match response.get_runners {
-                    GetRunnersResult::GetRunnersOutput(output) => output.runners,
-                    GetRunnersResult::UserFacingError(e) => {
-                        return Err(anyhow!(get_user_facing_error_message(e)));
-                    }
-                    GetRunnersResult::Unknown => return Err(anyhow!("failed to list runners")),
-                };
+                let runners = factory.get_runners(sort_by).await?;
 
                 let infos: Vec<RunnerInfo> = runners.into_iter().map(RunnerInfo::from).collect();
                 if args.json_output.force_json_output() {
@@ -135,26 +116,13 @@ impl RunnerCommandRunner {
                     }
                 };
 
-            let server_api = ServerApiProvider::as_ref(ctx).get();
-            let input = build_create_input(args, owner_to_input(owner));
+            let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
+            let input = build_create_input(args, owner.into());
 
             ctx.spawn(
                 async move {
-                    let op = UpsertRunner::build(UpsertRunnerVariables {
-                        input,
-                        request_context: get_request_context(),
-                    });
-                    let response = server_api.send_graphql_request(op, None).await?;
-                    let output = match response.upsert_runner {
-                        UpsertRunnerResult::UpsertRunnerOutput(output) => output,
-                        UpsertRunnerResult::UserFacingError(e) => {
-                            return Err(anyhow!(get_user_facing_error_message(e)));
-                        }
-                        UpsertRunnerResult::Unknown => {
-                            return Err(anyhow!("failed to create runner"))
-                        }
-                    };
-                    print_upsert_result(&output.runner, output.is_update, output_format)?;
+                    let upserted = factory.upsert_runner(input).await?;
+                    print_upsert_result(&upserted.runner, upserted.is_update, output_format)?;
                     Ok(())
                 },
                 |_, result: Result<()>, ctx| finish_command(result, ctx),
@@ -168,48 +136,27 @@ impl RunnerCommandRunner {
         args: UpdateRunnerArgs,
         ctx: &mut ModelContext<Self>,
     ) {
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
 
         ctx.spawn(
             async move {
                 // Fetch existing runners so we can resolve the target and preserve
                 // any fields that aren't being changed (the server upsert takes a
                 // full runner config).
-                let op = GetRunners::build(GetRunnersVariables {
-                    request_context: get_request_context(),
-                    sort_by: None,
-                });
-                let response = server_api.send_graphql_request(op, None).await?;
-                let runners = match response.get_runners {
-                    GetRunnersResult::GetRunnersOutput(output) => output.runners,
-                    GetRunnersResult::UserFacingError(e) => {
-                        return Err(anyhow!(get_user_facing_error_message(e)));
-                    }
-                    GetRunnersResult::Unknown => return Err(anyhow!("failed to list runners")),
-                };
+                let runners = factory.get_runners(None).await?;
 
                 let existing = resolve_runner(&runners, args.id.as_deref(), args.name.as_deref())?;
                 let uid = existing.uid.inner().to_string();
 
-                let input = build_update_input(&args, &existing.config)?;
+                let runner = build_update_input(&args, &existing.config)?;
 
-                let op = UpsertRunner::build(UpsertRunnerVariables {
-                    input: UpsertRunnerInput {
-                        uid: Some(cynic::Id::new(uid)),
-                        owner: None,
-                        runner: input,
-                    },
-                    request_context: get_request_context(),
-                });
-                let response = server_api.send_graphql_request(op, None).await?;
-                let output = match response.upsert_runner {
-                    UpsertRunnerResult::UpsertRunnerOutput(output) => output,
-                    UpsertRunnerResult::UserFacingError(e) => {
-                        return Err(anyhow!(get_user_facing_error_message(e)));
-                    }
-                    UpsertRunnerResult::Unknown => return Err(anyhow!("failed to update runner")),
+                let input = UpsertRunnerInput {
+                    uid: Some(cynic::Id::new(uid)),
+                    owner: None,
+                    runner,
                 };
-                print_upsert_result(&output.runner, output.is_update, output_format)?;
+                let upserted = factory.upsert_runner(input).await?;
+                print_upsert_result(&upserted.runner, upserted.is_update, output_format)?;
                 Ok(())
             },
             |_, result: Result<()>, ctx| finish_command(result, ctx),
@@ -217,35 +164,32 @@ impl RunnerCommandRunner {
     }
 
     fn delete(&self, args: DeleteRunnerArgs, ctx: &mut ModelContext<Self>) {
-        if !args.force && !confirm_delete(&args.id) {
-            ctx.terminate_app(TerminationMode::ForceTerminate, None);
-            return;
+        use std::io::IsTerminal as _;
+
+        if !args.force {
+            match confirm_delete(&args.id, std::io::stdin().is_terminal()) {
+                Ok(true) => {}
+                Ok(false) => {
+                    // Interactive decline: not an error, exit cleanly.
+                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    return;
+                }
+                Err(e) => {
+                    // A non-interactive refusal is a failure, so automation
+                    // doesn't mistake a skipped delete for a successful one.
+                    super::report_fatal_error(e, ctx);
+                    return;
+                }
+            }
         }
 
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
         let uid = args.id;
 
         ctx.spawn(
             async move {
-                let op = DeleteRunner::build(DeleteRunnerVariables {
-                    input: DeleteRunnerInput {
-                        uid: cynic::Id::new(uid),
-                    },
-                    request_context: get_request_context(),
-                });
-                let response = server_api.send_graphql_request(op, None).await?;
-                match response.delete_runner {
-                    DeleteRunnerResult::DeleteRunnerOutput(output) => {
-                        println!(
-                            "Runner deleted successfully: {}",
-                            output.deleted_uid.inner()
-                        );
-                    }
-                    DeleteRunnerResult::UserFacingError(e) => {
-                        return Err(anyhow!(get_user_facing_error_message(e)));
-                    }
-                    DeleteRunnerResult::Unknown => return Err(anyhow!("failed to delete runner")),
-                }
+                let deleted_uid = factory.delete_runner(uid).await?;
+                println!("Runner deleted successfully: {deleted_uid}");
                 Ok(())
             },
             |_, result: Result<()>, ctx| finish_command(result, ctx),
@@ -258,23 +202,22 @@ impl warpui::Entity for RunnerCommandRunner {
 }
 impl SingletonEntity for RunnerCommandRunner {}
 
-/// Prompt the user to confirm deletion of a runner. Returns true if the user
-/// confirmed, or if not running interactively where prompting isn't possible.
-fn confirm_delete(uid: &str) -> bool {
-    use std::io::IsTerminal as _;
-
-    if !std::io::stdin().is_terminal() {
-        // Non-interactive: refuse without --force so we don't delete silently.
-        eprintln!(
+/// Prompt the user to confirm deletion of a runner.
+///
+/// Returns `Ok(true)`/`Ok(false)` for an interactive confirm/decline. In
+/// non-interactive mode (no TTY) without `--force`, returns `Err` so the caller
+/// fails loudly (non-zero exit) instead of silently skipping the delete.
+fn confirm_delete(uid: &str, is_terminal: bool) -> Result<bool> {
+    if !is_terminal {
+        return Err(anyhow!(
             "Refusing to delete runner '{uid}' without confirmation in non-interactive mode (use --force to bypass)"
-        );
-        return false;
+        ));
     }
 
-    inquire::Confirm::new(&format!("Delete runner '{uid}'?"))
+    Ok(inquire::Confirm::new(&format!("Delete runner '{uid}'?"))
         .with_default(false)
         .prompt()
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 /// Resolve a runner by UID or (unambiguous) name from a fetched list.
@@ -417,21 +360,6 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
         mac,
         linux,
     })
-}
-
-/// Convert a resolved [`Owner`] into the GraphQL owner input.
-fn owner_to_input(owner: Owner) -> GqlOwner {
-    match owner {
-        Owner::Team { team_uid } => GqlOwner {
-            uid: Some(cynic::Id::new(team_uid.to_string())),
-            type_: OwnerType::Team,
-        },
-        // The server infers the user UID from the authenticated principal.
-        Owner::User { .. } => GqlOwner {
-            uid: None,
-            type_: OwnerType::User,
-        },
-    }
 }
 
 fn os_to_gql(os: RunnerOsArg) -> RunnerOs {
@@ -577,12 +505,13 @@ impl RunnerInfo {
         }
     }
 
-    /// The OS-specific config value shown in the combined table column.
+    /// The OS-specific config value shown in the combined "OS Settings" column,
+    /// labeled with which kind of setting it is (empty when neither applies).
     fn os_specific_display(&self) -> String {
         if let Some(image) = &self.docker_image {
-            image.clone()
+            format!("Docker image: {image}")
         } else if let Some(version) = &self.macos_version {
-            version.clone()
+            format!("macOS version: {version}")
         } else {
             String::new()
         }
@@ -612,7 +541,7 @@ impl TableFormat for RunnerInfo {
             Cell::new("Shape"),
             Cell::new("OS"),
             Cell::new("Arch"),
-            Cell::new("Docker image / macOS version"),
+            Cell::new("OS Settings"),
             Cell::new("Scope"),
             Cell::new("Last updated"),
         ]
@@ -632,3 +561,7 @@ impl TableFormat for RunnerInfo {
         ]
     }
 }
+
+#[cfg(test)]
+#[path = "runner_tests.rs"]
+mod tests;
