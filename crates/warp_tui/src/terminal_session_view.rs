@@ -179,6 +179,42 @@ fn export_file_success_message(export: &ConversationFileExport) -> String {
     }
 }
 
+/// Vertical gap, in cell rows, inserted between the inline menu, the input box,
+/// and the footer at the bottom of the session surface. The design mocks
+/// separate these three regions with a blank row rather than stacking them
+/// flush; see [`append_input_area`].
+const INPUT_AREA_ROW_GAP: u16 = 1;
+
+/// Appends the bottom input area — the optional inline menu, the input box, and
+/// the footer — onto `content`, inserting [`INPUT_AREA_ROW_GAP`] blank rows
+/// between the inline menu and the input box and between the input box and the
+/// footer so the spacing matches the design mocks (which don't stack the three
+/// regions flush). Kept as a free function so the spacing is unit-testable
+/// without standing up the whole session view.
+fn append_input_area(
+    mut content: TuiFlex,
+    inline_menu: Option<Box<dyn TuiElement>>,
+    input_box: Box<dyn TuiElement>,
+    footer: Box<dyn TuiElement>,
+) -> TuiFlex {
+    if let Some(menu) = inline_menu {
+        content = content.child(
+            TuiContainer::new(
+                TuiConstrainedBox::new(menu)
+                    .with_max_rows(MAX_INLINE_MENU_ROWS)
+                    .finish(),
+            )
+            .with_padding_bottom(INPUT_AREA_ROW_GAP)
+            .finish(),
+        );
+    }
+    content.child(input_box).child(
+        TuiContainer::new(TuiConstrainedBox::new(footer).with_max_rows(1).finish())
+            .with_padding_top(INPUT_AREA_ROW_GAP)
+            .finish(),
+    )
+}
+
 /// Typed actions handled by [`TuiTerminalSessionView`].
 #[derive(Debug, Clone)]
 pub(crate) enum TuiTerminalSessionAction {
@@ -2215,17 +2251,11 @@ impl TuiView for TuiTerminalSessionView {
                 }
             }
         }
-        if let Some(menu) = inline_menu {
-            content = content.child(
-                TuiConstrainedBox::new(menu)
-                    .with_max_rows(MAX_INLINE_MENU_ROWS)
-                    .finish(),
-            );
-        }
-        content = content.child(input_box.finish()).child(
-            TuiConstrainedBox::new(self.render_footer(ctx).finish())
-                .with_max_rows(1)
-                .finish(),
+        content = append_input_area(
+            content,
+            inline_menu,
+            input_box.finish(),
+            self.render_footer(ctx).finish(),
         );
 
         // The size wrapper sits inside the horizontal padding so the PTY's
