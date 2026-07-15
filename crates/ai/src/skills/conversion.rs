@@ -184,7 +184,9 @@ impl From<SkillProvider> for api::skill_descriptor::Provider {
             SkillProvider::Warp => api::skill_descriptor::provider::Type::Warp(()),
             SkillProvider::Agents => api::skill_descriptor::provider::Type::Agents(()),
             SkillProvider::Claude => api::skill_descriptor::provider::Type::Claude(()),
-            SkillProvider::Codex | SkillProvider::Omp => api::skill_descriptor::provider::Type::Codex(()),
+            SkillProvider::Codex | SkillProvider::Omp => {
+                api::skill_descriptor::provider::Type::Codex(())
+            }
             SkillProvider::Cursor => api::skill_descriptor::provider::Type::Cursor(()),
             SkillProvider::Gemini => api::skill_descriptor::provider::Type::Gemini(()),
             SkillProvider::Copilot => api::skill_descriptor::provider::Type::Copilot(()),

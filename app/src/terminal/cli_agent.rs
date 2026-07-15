@@ -344,9 +344,7 @@ impl CLIAgent {
             | CLIAgent::OhMyPi
             | CLIAgent::Auggie
             | CLIAgent::Droid
-            | CLIAgent::Antigravity => {
-                ColorU::new(0, 0, 0, 255)
-            }
+            | CLIAgent::Antigravity => ColorU::new(0, 0, 0, 255),
             _ => ColorU::white(),
         }
     }

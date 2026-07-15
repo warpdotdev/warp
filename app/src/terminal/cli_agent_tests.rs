@@ -401,12 +401,7 @@ fn test_detect_with_env_var_prefix() {
                 Some(CLIAgent::OpenCode),
             );
             assert_eq!(
-                CLIAgent::detect(
-                    "FOO=1 omp",
-                    Some(EscapeChar::Backslash),
-                    None,
-                    ctx,
-                ),
+                CLIAgent::detect("FOO=1 omp", Some(EscapeChar::Backslash), None, ctx,),
                 Some(CLIAgent::OhMyPi),
             );
         });
