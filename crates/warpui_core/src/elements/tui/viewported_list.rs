@@ -743,6 +743,12 @@ where
         size
     }
 
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        for visible in &mut self.visible_elements {
+            visible.element.after_layout(ctx, app);
+        }
+    }
+
     fn render(
         &mut self,
         origin: TuiScreenPosition,
