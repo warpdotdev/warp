@@ -270,6 +270,8 @@ pub(crate) trait TuiInlineMenuHandle {
     fn mode(&self) -> TuiInputSuggestionsMode;
     /// Returns whether this menu is open.
     fn is_open(&self, ctx: &AppContext) -> bool;
+    /// Opens the menu when it supports explicit opening.
+    fn open(&self, _ctx: &mut AppContext) {}
     /// Returns the input range highlighted by this menu.
     fn input_highlight_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>>;
     /// Returns the input argument hint shown by this menu.
@@ -297,6 +299,9 @@ impl TuiInlineMenu {
     }
     pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
         self.0.is_open(ctx)
+    }
+    pub(crate) fn open(&self, ctx: &mut AppContext) {
+        self.0.open(ctx);
     }
 
     pub(crate) fn mode(&self) -> TuiInputSuggestionsMode {
@@ -379,6 +384,9 @@ impl TuiInlineMenuHandle for ModelHandle<TuiConversationMenuModel> {
     }
     fn is_open(&self, ctx: &AppContext) -> bool {
         self.as_ref(ctx).is_open(ctx)
+    }
+    fn open(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.open(ctx));
     }
 
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
