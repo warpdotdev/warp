@@ -1816,7 +1816,16 @@ impl TemplatableMCPServerManager {
         installation_uuids: Vec<Uuid>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.delete_templatable_mcp_server_installations(installation_uuids, ctx);
+        // File-based MCP servers are ephemeral — they are spawned via `spawn_ephemeral_server`
+        // and are never inserted into `locally_installed_servers`. We therefore shut them down
+        // directly rather than going through `delete_templatable_mcp_server_installations`,
+        // which would emit spurious `ServerInstallationDeleted` events for UUIDs that were
+        // never registered as installations. Those events trigger a full `refresh_server_cards`
+        // cascade in the list page, which can transiently clear the running file-based MCP
+        // cards before `refresh_file_based_server_cards` has a chance to re-add them.
+        for installation_uuid in installation_uuids {
+            self.shutdown_server(installation_uuid, ctx);
+        }
     }
 
     pub fn purge_file_based_server_credentials(

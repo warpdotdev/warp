@@ -15,10 +15,13 @@ use crate::ai::mcp::{
 
 #[test]
 fn mcp_provider_from_file_path_recognizes_warp_home_path() {
-    if let Some(warp_home_mcp_config_file_path) = warp_core::paths::warp_home_mcp_config_file_path()
+    // home_config_file_path(MCPProvider::Warp) always returns ~/.warp/.mcp.json (canonical,
+    // shared across channels) so that's what mcp_provider_from_file_path should recognize.
+    if let Some(canonical_warp_mcp_path) =
+        dirs::home_dir().map(|h| h.join(".warp").join(".mcp.json"))
     {
         assert_eq!(
-            mcp_provider_from_file_path(&warp_home_mcp_config_file_path),
+            mcp_provider_from_file_path(&canonical_warp_mcp_path),
             Some(MCPProvider::Warp)
         );
     }

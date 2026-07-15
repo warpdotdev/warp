@@ -492,10 +492,12 @@ pub enum MCPServerUpdate {
 }
 
 pub(crate) fn home_config_file_path(provider: MCPProvider) -> Option<PathBuf> {
-    match provider {
-        MCPProvider::Warp => warp_core::paths::warp_home_mcp_config_file_path(),
-        _ => dirs::home_dir().map(|home_dir| home_dir.join(provider.home_config_path())),
-    }
+    // Always compute the home config path from the provider's canonical `home_config_path()`.
+    // For `MCPProvider::Warp` this is `.warp/.mcp.json` — the shared Warp MCP config that is
+    // the same across all channels (Stable, Dev, Preview, etc.). Using the channel-specific
+    // `warp_home_mcp_config_file_path()` would make WarpDev look in `~/.warp-dev/.mcp.json`
+    // and miss MCP servers configured via Stable's `~/.warp/.mcp.json`.
+    dirs::home_dir().map(|home_dir| home_dir.join(provider.home_config_path()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumIter)]

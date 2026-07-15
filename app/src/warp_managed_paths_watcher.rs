@@ -61,18 +61,8 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub(crate) fn warp_home_config_dir() -> Option<PathBuf> {
-    warp_core::paths::warp_home_config_dir()
-}
-
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_home_skills_dir() -> Option<PathBuf> {
     warp_core::paths::warp_home_skills_dir()
-}
-
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub(crate) fn warp_home_mcp_config_file_path() -> Option<PathBuf> {
-    warp_core::paths::warp_home_mcp_config_file_path()
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -89,9 +79,19 @@ pub(crate) fn warp_managed_skill_dirs() -> Vec<PathBuf> {
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_managed_mcp_config_path() -> Option<WarpMcpConfigPath> {
+    // Always use the canonical ~/.warp/.mcp.json path for the Warp-managed MCP config,
+    // regardless of channel. The Warp home MCP config is shared across all channels
+    // (Stable, Dev, Preview) just like ~/.claude.json is shared across all channels for Claude.
+    // Using the channel-specific warp_home_mcp_config_file_path() would make WarpDev look in
+    // ~/.warp-dev/.mcp.json instead of ~/.warp/.mcp.json, missing MCP servers the user
+    // configured via Stable.
+    let home = home_dir()?;
+    let config_path = home
+        .join(warp_core::paths::WARP_CONFIG_DIR)
+        .join(".mcp.json");
     Some(WarpMcpConfigPath {
-        root_path: home_dir()?,
-        config_path: warp_home_mcp_config_file_path()?,
+        root_path: home,
+        config_path,
     })
 }
 
@@ -322,25 +322,31 @@ impl WarpManagedPathsWatcher {
                     );
                 }
             }
-            if let (Some(warp_home_config_dir), Some(warp_home_mcp_config_path)) =
-                (warp_home_config_dir(), warp_home_mcp_config_file_path())
-            {
-                if warp_home_config_dir.exists()
-                    && !warp_home_config_dir.starts_with(&data_dir)
-                    && (!should_register_config_local_dir
-                        || !warp_home_config_dir.starts_with(&config_local_dir))
+            if let Some(mcp_config) = warp_managed_mcp_config_path() {
+                // Watch the directory containing the canonical Warp MCP config file
+                // (always ~/.warp/, shared across all channels). This allows WarpDev and
+                // other non-Stable channels to detect changes to ~/.warp/.mcp.json.
+                if let Some(warp_mcp_config_dir) =
+                    mcp_config.config_path.parent().map(|p| p.to_path_buf())
                 {
-                    // Watch the config directory non-recursively,
-                    // and ignore events for files other than the MCP config file.
-                    let emit = Arc::new(move |path: &Path| path == warp_home_mcp_config_path);
-                    Self::register_path(
-                        ctx,
-                        &watcher,
-                        warp_home_config_dir,
-                        WatchFilter::with_filter(Arc::new(|_: &Path| true), emit),
-                        RecursiveMode::NonRecursive,
-                        "Warp home MCP config directory",
-                    );
+                    let warp_home_mcp_config_path = mcp_config.config_path.clone();
+                    if warp_mcp_config_dir.exists()
+                        && !warp_mcp_config_dir.starts_with(&data_dir)
+                        && (!should_register_config_local_dir
+                            || !warp_mcp_config_dir.starts_with(&config_local_dir))
+                    {
+                        // Watch the config directory non-recursively,
+                        // and ignore events for files other than the MCP config file.
+                        let emit = Arc::new(move |path: &Path| path == warp_home_mcp_config_path);
+                        Self::register_path(
+                            ctx,
+                            &watcher,
+                            warp_mcp_config_dir,
+                            WatchFilter::with_filter(Arc::new(|_: &Path| true), emit),
+                            RecursiveMode::NonRecursive,
+                            "Warp home MCP config directory",
+                        );
+                    }
                 }
             }
         }

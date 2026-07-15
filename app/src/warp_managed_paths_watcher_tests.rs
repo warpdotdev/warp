@@ -5,8 +5,8 @@ use dirs::home_dir;
 use repo_metadata::{RepositoryUpdate, TargetFile};
 
 use super::{
-    filter_repository_update_by_prefix, warp_home_mcp_config_file_path, warp_home_skills_dir,
-    warp_managed_mcp_config_path, warp_managed_skill_dirs,
+    filter_repository_update_by_prefix, warp_home_skills_dir, warp_managed_mcp_config_path,
+    warp_managed_skill_dirs,
 };
 
 #[test]
@@ -20,16 +20,15 @@ fn warp_managed_skill_dirs_contains_only_warp_home_path() {
 
 #[test]
 fn warp_managed_mcp_config_path_contains_only_warp_home_path() {
-    match (
-        home_dir(),
-        warp_home_mcp_config_file_path(),
-        warp_managed_mcp_config_path(),
-    ) {
-        (Some(home_dir), Some(warp_home_mcp_config_path), Some(path)) => {
+    // warp_managed_mcp_config_path() always returns the canonical ~/.warp/.mcp.json path
+    // regardless of channel, so that MCP servers are shared across Stable, Dev, and Preview.
+    match (home_dir(), warp_managed_mcp_config_path()) {
+        (Some(home_dir), Some(path)) => {
+            let expected_config_path = home_dir.join(".warp").join(".mcp.json");
             assert_eq!(path.root_path, home_dir);
-            assert_eq!(path.config_path, warp_home_mcp_config_path);
+            assert_eq!(path.config_path, expected_config_path);
         }
-        (_, _, None) => {}
+        (_, None) => {}
         _ => panic!("Expected Warp MCP path when home directory is available"),
     }
 }
