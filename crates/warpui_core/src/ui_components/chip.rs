@@ -59,14 +59,8 @@ impl UiComponent for Chip {
             );
         }
 
-        // The chip's `margin` positions the whole chip relative to its siblings
-        // and is applied to the outer container below. It must not also be
-        // applied to the inner label, or the text picks up that spacing as
-        // asymmetric padding *inside* the chip (e.g. an extra gap on the right).
-        let mut label_styles = styles;
-        label_styles.margin = None;
         let mut label_container = Container::new(
-            ConstrainedBox::new(Span::new(self.label, label_styles).build().finish())
+            ConstrainedBox::new(Span::new(self.label, styles).build().finish())
                 .with_max_width(240.)
                 .finish(),
         );
@@ -80,7 +74,7 @@ impl UiComponent for Chip {
         }
 
         let mut container = Container::new(label_and_button.finish())
-            .with_horizontal_padding(6.)
+            .with_horizontal_padding(4.)
             .with_vertical_padding(2.)
             .with_border(
                 Border::all(styles.border_width.unwrap_or_default())
