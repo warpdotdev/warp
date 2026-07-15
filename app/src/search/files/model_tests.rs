@@ -167,8 +167,6 @@ mod file_search_model_tests {
     #[cfg(feature = "local_fs")]
     #[test]
     fn test_contents_args_excludes_folders_for_file_only_search() {
-        // The Command Palette file filter opts out of folders so directory
-        // matches don't consume the result cap and starve files (#12391).
         let args = FileSearchModel::contents_args("src", false, |_| Some("src/main.rs".into()));
         assert!(!args.include_folders);
 

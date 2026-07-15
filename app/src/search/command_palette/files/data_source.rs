@@ -113,9 +113,6 @@ impl FileDataSource {
         match &self.mode {
             FileDataSourceMode::Repo => {
                 let file_search_model = FileSearchModel::as_ref(app);
-                // The Command Palette file filter only opens files, so exclude
-                // directories: otherwise directories matching the query consume
-                // the repo-metadata result cap and starve file matches (#12391).
                 file_search_model.get_repo_file_contents(query, app)
             }
             FileDataSourceMode::CurrentFolder { cached_contents } => {
