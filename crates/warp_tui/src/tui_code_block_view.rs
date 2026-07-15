@@ -169,11 +169,8 @@ impl TuiCodeBlockView {
                         colors
                             .iter()
                             .map(|(range, color)| {
-                                let start =
-                                    CharOffset::from(range.start.as_usize().saturating_sub(1));
-                                let end = CharOffset::from(range.end.as_usize().saturating_sub(1));
                                 (
-                                    start..end,
+                                    range.clone(),
                                     TuiStyle::default().fg(Color::Rgb(color.r, color.g, color.b)),
                                 )
                             })
@@ -205,11 +202,10 @@ impl TuiCodeBlockView {
     }
 }
 
-fn should_use_fallback(code: &str) -> bool {
-    code.len() > MAX_HIGHLIGHT_BYTES || code.lines().count() > MAX_CODE_LINES
-}
+/// Returns no fallback for code that is safe to highlight, or a UTF-8-safe
+/// prefix bounded by both highlight limits with an explicit truncation notice.
 fn bounded_fallback_text(code: &str) -> Option<String> {
-    if !should_use_fallback(code) {
+    if code.len() <= MAX_HIGHLIGHT_BYTES && code.lines().count() <= MAX_CODE_LINES {
         return None;
     }
 
