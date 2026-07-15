@@ -14,13 +14,12 @@ use warp::tui_export::{
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, TypedActionView};
-use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::elements::tui::{Color, Modifier, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView, ViewHandle};
 
 use super::{TuiPlanCodeKey, TuiPlanView, TuiPlanViewAction, TuiPlanViewEvent};
 use crate::test_fixtures::{add_test_action_model, TestHostView};
-use crate::tui_builder::TuiUiBuilder;
 
 #[test]
 fn streamed_create_renders_cached_markdown_and_code_children() {
@@ -42,16 +41,20 @@ fn streamed_create_renders_cached_markdown_and_code_children() {
                 .clone();
 
             let (lines, buffer) = render(view, 80, ctx);
-            assert_eq!(lines[0], "○ Creating pomodoro-app-spec.md +7 ▾");
-            assert!(lines.iter().any(|line| line.trim() == "Overview"));
+            assert_eq!(lines[0], "Planning ▾");
+            assert_eq!(lines[1], "    Overview");
             assert!(lines
                 .iter()
                 .any(|line| line.trim() == "Build a fast timer."));
             assert!(lines.iter().all(|line| !line.contains("**")));
-            assert_eq!(
-                buffer[(79, 1)].bg,
-                TuiUiBuilder::from_app(ctx).plan_background()
-            );
+            assert!(lines
+                .iter()
+                .skip(1)
+                .filter(|line| !line.is_empty())
+                .all(|line| line.starts_with("    ")));
+            assert_eq!(buffer[(0, 1)].bg, Color::Reset);
+            assert!(buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+            assert!(!buffer[(0, 0)].modifier.contains(Modifier::UNDERLINED));
 
             let code_key = TuiPlanCodeKey {
                 document_index: 0,
@@ -142,7 +145,7 @@ fn finalized_create_replaces_streamed_payload_and_keeps_action_order() {
                 vec![("First", "final first"), ("Second", "final second")]
             );
             let (lines, _) = render(view, 60, ctx);
-            assert_eq!(lines[0], "✓ Created 2 documents +2 ▾");
+            assert_eq!(lines[0], "Planning ▾");
             let positions = ["First", "final first", "Second", "final second"].map(|needle| {
                 lines
                     .iter()
@@ -186,7 +189,7 @@ fn finalized_edit_uses_full_result_content() {
                 .content
                 .contains("| Mode | Focus |"));
             let (lines, _) = render(view, 50, ctx);
-            assert_eq!(lines[0], "✓ Updated Planning document +7 ▾");
+            assert_eq!(lines[0], "Planning ▾");
             assert!(lines.iter().any(|line| line.trim() == "Updated"));
             assert!(lines.iter().any(|line| line.trim() == "Final body"));
             let joined = lines.join("\n");
@@ -228,7 +231,7 @@ fn collapse_persists_across_payload_updates_and_invalidates_layout() {
             assert!(view.collapsed);
             assert_eq!(view.presentation.documents[0].content, "second body");
             let (lines, _) = render(view, 40, ctx);
-            assert_eq!(lines, vec!["○ Creating Plan +1 ▸"]);
+            assert_eq!(lines, vec!["Planning ▸"]);
         });
         assert!(invalidations.get() >= 2);
     });

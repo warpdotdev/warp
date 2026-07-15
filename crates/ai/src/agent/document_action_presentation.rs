@@ -15,12 +15,6 @@ pub enum ToolCallDisplayState {
     Cancelled,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DocumentActionKind {
-    Create,
-    Edit,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PresentedDocument {
     pub title: String,
@@ -31,7 +25,6 @@ pub struct PresentedDocument {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DocumentActionPresentation {
-    pub kind: DocumentActionKind,
     pub documents: Vec<PresentedDocument>,
 }
 
@@ -47,7 +40,6 @@ impl DocumentActionPresentation {
                     created_documents,
                 })),
             ) => Some(Self {
-                kind: DocumentActionKind::Create,
                 documents: created_documents
                     .iter()
                     .enumerate()
@@ -66,11 +58,9 @@ impl DocumentActionPresentation {
                     .collect(),
             }),
             (AIAgentActionType::CreateDocuments(_), Some(_)) => Some(Self {
-                kind: DocumentActionKind::Create,
                 documents: Vec::new(),
             }),
             (AIAgentActionType::CreateDocuments(request), None) => Some(Self {
-                kind: DocumentActionKind::Create,
                 documents: request
                     .documents
                     .iter()
@@ -93,7 +83,6 @@ impl DocumentActionPresentation {
                     updated_documents,
                 })),
             ) => Some(Self {
-                kind: DocumentActionKind::Edit,
                 documents: updated_documents
                     .iter()
                     .enumerate()
@@ -106,7 +95,6 @@ impl DocumentActionPresentation {
                     .collect(),
             }),
             (AIAgentActionType::EditDocuments(_), Some(_) | None) => Some(Self {
-                kind: DocumentActionKind::Edit,
                 documents: Vec::new(),
             }),
             (
@@ -143,50 +131,6 @@ impl DocumentActionPresentation {
                 _,
             ) => None,
         }
-    }
-
-    pub fn header_label(&self, state: ToolCallDisplayState) -> String {
-        let subject = if self.documents.len() == 1 {
-            self.documents[0].title.clone()
-        } else {
-            format!("{} documents", self.documents.len())
-        };
-        let verb = match (self.kind, state) {
-            (
-                DocumentActionKind::Create,
-                ToolCallDisplayState::Constructing | ToolCallDisplayState::Running,
-            ) => "Creating",
-            (
-                DocumentActionKind::Create,
-                ToolCallDisplayState::Pending | ToolCallDisplayState::AwaitingApproval,
-            ) => "Create",
-            (DocumentActionKind::Create, ToolCallDisplayState::Succeeded) => "Created",
-            (
-                DocumentActionKind::Create,
-                ToolCallDisplayState::Failed | ToolCallDisplayState::Cancelled,
-            ) => "Create",
-            (
-                DocumentActionKind::Edit,
-                ToolCallDisplayState::Constructing | ToolCallDisplayState::Running,
-            ) => "Updating",
-            (
-                DocumentActionKind::Edit,
-                ToolCallDisplayState::Pending | ToolCallDisplayState::AwaitingApproval,
-            ) => "Update",
-            (DocumentActionKind::Edit, ToolCallDisplayState::Succeeded) => "Updated",
-            (
-                DocumentActionKind::Edit,
-                ToolCallDisplayState::Failed | ToolCallDisplayState::Cancelled,
-            ) => "Update",
-        };
-        format!("{verb} {subject}")
-    }
-
-    pub fn line_count(&self) -> usize {
-        self.documents
-            .iter()
-            .map(|document| document.content.lines().count())
-            .sum()
     }
 }
 

@@ -1,4 +1,4 @@
-//! Stateful inline Markdown card for CreateDocuments and EditDocuments tool calls.
+//! Stateful inline Markdown view for CreateDocuments and EditDocuments tool calls.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -15,8 +15,6 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
-use crate::agent_block_sections::{tool_call_glyph_style, tool_call_label_style};
-use crate::tool_call_labels::{tool_call_display_state, tool_call_glyph, ToolCallDisplayState};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
 use crate::tui_markdown::{render_formatted_text, TuiMarkdownBlockHooks, TuiMarkdownPalette};
@@ -182,14 +180,6 @@ impl TuiPlanView {
         }
     }
 
-    fn display_state(&self, app: &AppContext) -> ToolCallDisplayState {
-        let status = self
-            .action_model
-            .as_ref(app)
-            .get_action_status(&self.action.id);
-        tool_call_display_state(status.as_ref(), self.output_streaming, None)
-    }
-
     fn render_documents(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
         let palette = TuiMarkdownPalette::from_builder(&builder);
@@ -233,9 +223,7 @@ impl TuiPlanView {
         }
 
         TuiContainer::new(documents.finish())
-            .with_padding_x(2)
-            .with_padding_y(1)
-            .with_background(builder.plan_background())
+            .with_padding_left(4)
             .finish()
     }
 
@@ -260,30 +248,12 @@ impl TuiView for TuiPlanView {
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
-        let state = self.display_state(app);
-        let glyph_style = tool_call_glyph_style(state, &builder);
-        let label_style = tool_call_label_style(state, &builder).add_modifier(Modifier::BOLD);
-        let label_style = if self.header_mouse_state.lock().unwrap().is_hovered() {
-            label_style.add_modifier(Modifier::UNDERLINED)
-        } else {
-            label_style
-        };
-        let line_count = self.presentation.line_count();
-        let mut header = vec![
-            (format!("{} ", tool_call_glyph(state)), glyph_style),
-            (self.presentation.header_label(state), label_style),
-        ];
-        if line_count > 0 {
-            header.push((
-                format!(" +{line_count}"),
-                builder.diff_added_style().add_modifier(Modifier::BOLD),
-            ));
-        }
+        let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
         let collapsed = self.collapsed;
         tui_collapsible(
             collapsed,
-            header,
-            builder.primary_text_style(),
+            [("Planning".to_owned(), header_style)],
+            header_style,
             self.header_mouse_state.clone(),
             || self.render_documents(app),
             move |event_ctx, _app| {

@@ -1,4 +1,4 @@
-use super::{DocumentActionKind, DocumentActionPresentation, ToolCallDisplayState};
+use super::DocumentActionPresentation;
 use crate::agent::action::{
     AIAgentActionType, CreateDocumentsRequest, DocumentDiff, DocumentToCreate, EditDocumentsRequest,
 };
@@ -13,7 +13,6 @@ fn streamed_create_uses_canonical_fallback_titles() {
 
     let presentation = DocumentActionPresentation::resolve(&action, None).unwrap();
 
-    assert_eq!(presentation.kind, DocumentActionKind::Create);
     assert_eq!(
         presentation
             .documents
@@ -21,11 +20,6 @@ fn streamed_create_uses_canonical_fallback_titles() {
             .map(|document| document.title.as_str())
             .collect::<Vec<_>>(),
         vec!["Document 1", "Named plan"]
-    );
-    assert_eq!(presentation.line_count(), 3);
-    assert_eq!(
-        presentation.header_label(ToolCallDisplayState::Running),
-        "Creating 2 documents"
     );
 }
 
@@ -47,10 +41,6 @@ fn completed_create_combines_request_titles_with_result_documents() {
         document.document_version,
         Some(AIDocumentVersion::default())
     );
-    assert_eq!(
-        presentation.header_label(ToolCallDisplayState::Succeeded),
-        "Created Planning document"
-    );
 }
 
 #[test]
@@ -69,12 +59,7 @@ fn completed_edit_uses_result_content_and_references() {
 
     let presentation = DocumentActionPresentation::resolve(&action, Some(&result)).unwrap();
 
-    assert_eq!(presentation.kind, DocumentActionKind::Edit);
     assert_eq!(presentation.documents[0].content, "updated");
-    assert_eq!(
-        presentation.header_label(ToolCallDisplayState::Succeeded),
-        "Updated Planning document"
-    );
 }
 
 #[test]
