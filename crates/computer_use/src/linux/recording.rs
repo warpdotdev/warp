@@ -67,10 +67,20 @@ impl crate::Recorder for Recorder {
             .args(["-framerate", &config.frame_rate.to_string()])
             .args(["-video_size", &format!("{width}x{height}")])
             .args(["-i", &display])
+            // Composite the X11 cursor into each captured frame so the
+            // viewer can see where the agent moves and clicks.
+            .args(["-draw_mouse", "1"])
             .args(["-c:v", "libx264"])
             .args(["-preset", "ultrafast"])
-            .args(["-pix_fmt", "yuv420p"])
-            .args(["-movflags", "+faststart"]);
+            .args(["-pix_fmt", "yuv420p"]);
+        // Apply playback speed: rescale presentation timestamps so the video
+        // plays faster than real time. A multiplier of 4 makes a 4-minute
+        // recording play in 1 minute. Values <= 1 are skipped (real-time).
+        if config.playback_speed_multiplier > 1.0 {
+            let setpts = format!("{:.6}*PTS", 1.0 / config.playback_speed_multiplier);
+            command.args(["-vf", &format!("setpts={setpts}")]);
+        }
+        command.args(["-movflags", "+faststart"]);
         // Enforce capture limits in ffmpeg so abandoned recordings remain bounded.
         command
             .arg("-t")

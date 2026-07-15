@@ -80,6 +80,10 @@ impl StartRecordingExecutor {
                     },
                     max_duration: max_duration.unwrap_or(defaults.max_duration),
                     max_size_bytes: max_size_bytes.unwrap_or(defaults.max_size_bytes),
+                    // Use the default speed multiplier (4x); future work will wire
+                    // this through the StartRecording proto field once the action
+                    // type supports non-Eq floats.
+                    playback_speed_multiplier: defaults.playback_speed_multiplier,
                 };
                 recorder.start(config).await
             },
