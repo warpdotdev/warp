@@ -246,10 +246,10 @@ pub(crate) struct TuiTerminalSessionView {
     conversation_restore_state: ConversationRestoreState,
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
-    /// Whether focus is currently held off the input editor because an
-    /// alt-screen app is active (so its raw keystrokes reach the PTY instead of
-    /// the input keymap). Tracks the enter/exit transition so focus is only
-    /// moved once per transition, not on every wakeup.
+    /// Not a copy of the terminal model's alt-screen state: this is the last
+    /// alt-screen-active value the focus logic acted on, so the wakeup handler
+    /// can edge-detect enter/exit transitions and move focus (off the input
+    /// editor and back) once per transition instead of on every wakeup.
     alt_screen_focus_active: bool,
 }
 
