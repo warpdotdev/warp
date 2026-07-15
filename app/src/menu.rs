@@ -37,7 +37,7 @@ use crate::util::time_format::format_approx_duration_from_now_sentence_case;
 pub const CHEVRON_RIGHT_ALIGN_SVG_PATH: &str = "bundled/svg/chevron-right-align.svg";
 
 const SUBMENU_OVERLAP: f32 = 8.;
-const MENU_VERTICAL_PADDING: f32 = 9.;
+pub(crate) const MENU_VERTICAL_PADDING: f32 = 9.;
 pub const MENU_ITEM_VERTICAL_PADDING: f32 = 5.;
 pub const MENU_ITEM_HORIZONTAL_PADDING: f32 = 14.;
 pub const SEPARATOR_VERTICAL_MARGIN: f32 = 4.;

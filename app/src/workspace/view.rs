@@ -279,6 +279,7 @@ use crate::launch_configs::launch_config::WindowTemplate;
 use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
 use crate::menu::{
     Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource, MenuVariant,
+    MENU_VERTICAL_PADDING,
 };
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
@@ -608,6 +609,9 @@ const NEW_SESSION_MENU_WINDOW_MARGIN: f32 = 8.;
 const NEW_SESSION_MENU_FALLBACK_MAX_HEIGHT: f32 = 480.;
 const NEW_SESSION_MENU_MIN_HEIGHT: f32 = 120.;
 const NEW_SESSION_MENU_VERTICAL_BUTTON_OFFSET_Y: f32 = 4.;
+const NEW_SESSION_MENU_BORDER_WIDTH: f32 = 1.;
+const NEW_SESSION_MENU_CHROME_HEIGHT: f32 =
+    MENU_VERTICAL_PADDING * 2. + NEW_SESSION_MENU_BORDER_WIDTH * 2.;
 const NEW_SESSION_SIDECAR_WIDTH: f32 = 300.;
 
 /// Shared position ID for the move-to-group sidecar overlay, used by both the
@@ -6756,7 +6760,10 @@ impl Workspace {
             return NEW_SESSION_MENU_FALLBACK_MAX_HEIGHT;
         };
         let anchor_y = self.new_session_menu_height_anchor_y(anchor, ctx);
-        let available_height = window.size().y() - anchor_y - NEW_SESSION_MENU_WINDOW_MARGIN;
+        let available_height = window.size().y()
+            - anchor_y
+            - NEW_SESSION_MENU_WINDOW_MARGIN
+            - NEW_SESSION_MENU_CHROME_HEIGHT;
         available_height.max(NEW_SESSION_MENU_MIN_HEIGHT)
     }
 

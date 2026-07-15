@@ -2972,7 +2972,8 @@ fn test_new_session_menu_is_capped_to_window_height() {
             );
 
             let expected_height =
-                (window_height - NEW_SESSION_MENU_WINDOW_MARGIN).max(NEW_SESSION_MENU_MIN_HEIGHT);
+                (window_height - NEW_SESSION_MENU_WINDOW_MARGIN - NEW_SESSION_MENU_CHROME_HEIGHT)
+                    .max(NEW_SESSION_MENU_MIN_HEIGHT);
             let menu_height = workspace.new_session_menu_max_height(
                 crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
                 ctx,
