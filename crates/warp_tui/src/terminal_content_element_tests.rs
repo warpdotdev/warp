@@ -15,11 +15,9 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext};
 
 use super::{
-    mouse_event_to_pty_bytes, paste_bytes, pty_bytes_for_event, TuiTerminalContentElement,
+    mouse_event_to_pty_bytes, paste_bytes, pty_bytes_for_event, MouseReportPolicy,
+    TuiTerminalContentElement,
 };
-const SGR_CLICK: TermMode = TermMode::SGR_MOUSE.union(TermMode::MOUSE_REPORT_CLICK);
-const SGR_DRAG: TermMode = TermMode::SGR_MOUSE.union(TermMode::MOUSE_DRAG);
-const SGR_MOTION: TermMode = TermMode::SGR_MOUSE.union(TermMode::MOUSE_MOTION);
 
 /// Builds retained screen bounds anchored at `(x, y)`.
 fn bounds(x: i32, y: i32, width: u16, height: u16) -> TuiScreenRect {
@@ -38,15 +36,27 @@ impl ModeProvider for MouseModeProvider {
     }
 }
 
+/// Builds a reporting policy with the given per-category flags.
+fn policy(buttons: bool, motion: bool, scroll: bool) -> MouseReportPolicy {
+    MouseReportPolicy {
+        report_buttons: buttons,
+        report_motion: motion,
+        report_scroll: scroll,
+    }
+}
+
+/// A policy allowing every report category.
+fn report_all() -> MouseReportPolicy {
+    policy(true, true, true)
+}
+
 /// Encodes `event` using the production TUI mouse-event adapter.
-fn mouse_bytes(event: &TuiEvent, area: TuiScreenRect, modes: TermMode) -> Option<Vec<u8>> {
-    mouse_event_to_pty_bytes(
-        event,
-        area,
-        |mode| modes.contains(mode),
-        true,
-        &MouseModeProvider,
-    )
+fn mouse_bytes(
+    event: &TuiEvent,
+    area: TuiScreenRect,
+    policy: MouseReportPolicy,
+) -> Option<Vec<u8>> {
+    mouse_event_to_pty_bytes(event, area, policy, true, &MouseModeProvider)
 }
 
 /// A leaf that fills its constraint and retains the laid-out size.
@@ -154,7 +164,6 @@ fn sgr_mouse_events_use_area_relative_coordinates() {
                 click_count: 1,
                 is_first_mouse: false,
             },
-            SGR_CLICK,
             b"\x1b[<0;3;2M".as_slice(),
         ),
         (
@@ -163,7 +172,6 @@ fn sgr_mouse_events_use_area_relative_coordinates() {
                 modifiers,
                 click_count: 1,
             },
-            SGR_CLICK,
             b"\x1b[<2;3;2M".as_slice(),
         ),
         (
@@ -171,7 +179,6 @@ fn sgr_mouse_events_use_area_relative_coordinates() {
                 position,
                 modifiers,
             },
-            SGR_CLICK,
             b"\x1b[<0;3;2m".as_slice(),
         ),
         (
@@ -179,7 +186,6 @@ fn sgr_mouse_events_use_area_relative_coordinates() {
                 position,
                 modifiers,
             },
-            SGR_DRAG,
             b"\x1b[<32;3;2M".as_slice(),
         ),
         (
@@ -188,7 +194,6 @@ fn sgr_mouse_events_use_area_relative_coordinates() {
                 modifiers,
                 is_synthetic: false,
             },
-            SGR_MOTION,
             b"\x1b[<35;3;2M".as_slice(),
         ),
         (
@@ -198,7 +203,6 @@ fn sgr_mouse_events_use_area_relative_coordinates() {
                 precise: false,
                 modifiers,
             },
-            TermMode::SGR_MOUSE,
             b"\x1b[<64;3;2M".as_slice(),
         ),
         (
@@ -208,18 +212,19 @@ fn sgr_mouse_events_use_area_relative_coordinates() {
                 precise: false,
                 modifiers,
             },
-            TermMode::SGR_MOUSE,
             b"\x1b[<65;3;2M".as_slice(),
         ),
     ];
-
-    for (event, modes, expected) in cases {
-        assert_eq!(mouse_bytes(&event, area, modes).as_deref(), Some(expected));
+    for (event, expected) in cases {
+        assert_eq!(
+            mouse_bytes(&event, area, report_all()).as_deref(),
+            Some(expected)
+        );
     }
 }
 
 #[test]
-fn click_and_motion_events_require_the_requested_reporting_mode() {
+fn events_are_gated_by_their_policy_category() {
     let area = bounds(0, 0, 10, 10);
     let position = TuiPoint::new(2, 3);
     let modifiers = ModifiersState::default();
@@ -239,13 +244,12 @@ fn click_and_motion_events_require_the_requested_reporting_mode() {
         is_synthetic: false,
     };
 
-    assert!(mouse_bytes(&left_down, area, TermMode::MOUSE_REPORT_CLICK).is_none());
-    assert!(mouse_bytes(&left_down, area, TermMode::SGR_MOUSE).is_none());
-    assert!(mouse_bytes(&left_down, area, SGR_DRAG).is_some());
-    assert!(mouse_bytes(&left_dragged, area, SGR_CLICK).is_none());
-    assert!(mouse_bytes(&left_dragged, area, SGR_DRAG).is_some());
-    assert!(mouse_bytes(&moved, area, SGR_DRAG).is_none());
-    assert!(mouse_bytes(&moved, area, SGR_MOTION).is_some());
+    assert!(mouse_bytes(&left_down, area, policy(false, true, true)).is_none());
+    assert!(mouse_bytes(&left_down, area, policy(true, false, false)).is_some());
+    assert!(mouse_bytes(&left_dragged, area, policy(false, true, true)).is_none());
+    assert!(mouse_bytes(&left_dragged, area, policy(true, false, false)).is_some());
+    assert!(mouse_bytes(&moved, area, policy(true, false, true)).is_none());
+    assert!(mouse_bytes(&moved, area, policy(false, true, false)).is_some());
 }
 
 #[test]
@@ -259,15 +263,21 @@ fn scroll_uses_sgr_when_available_and_arrows_otherwise() {
     let area = bounds(0, 0, 10, 10);
 
     assert_eq!(
-        mouse_bytes(&scroll, area, TermMode::NONE).as_deref(),
+        mouse_bytes(&scroll, area, policy(false, false, false)).as_deref(),
         Some(b"\x1bOA".as_slice())
     );
     assert_eq!(
-        mouse_bytes(&scroll, area, TermMode::SGR_MOUSE).as_deref(),
+        mouse_bytes(&scroll, area, policy(false, false, true)).as_deref(),
         Some(b"\x1b[<64;3;4M".as_slice())
     );
     assert_eq!(
-        mouse_event_to_pty_bytes(&scroll, area, |_| false, false, &MouseModeProvider,),
+        mouse_event_to_pty_bytes(
+            &scroll,
+            area,
+            policy(false, false, false),
+            false,
+            &MouseModeProvider,
+        ),
         None
     );
 }
@@ -309,11 +319,11 @@ fn unsupported_or_intercepted_mouse_events_are_not_forwarded() {
         modifiers,
     };
 
-    assert!(mouse_bytes(&outside, area, SGR_CLICK).is_none());
-    assert!(mouse_bytes(&shifted, area, SGR_CLICK).is_none());
-    assert!(mouse_bytes(&middle, area, SGR_CLICK).is_none());
-    assert!(mouse_bytes(&synthetic_move, area, SGR_MOTION).is_none());
-    assert!(mouse_bytes(&horizontal_scroll, area, SGR_CLICK).is_none());
+    assert!(mouse_bytes(&outside, area, report_all()).is_none());
+    assert!(mouse_bytes(&shifted, area, report_all()).is_none());
+    assert!(mouse_bytes(&middle, area, report_all()).is_none());
+    assert!(mouse_bytes(&synthetic_move, area, report_all()).is_none());
+    assert!(mouse_bytes(&horizontal_scroll, area, report_all()).is_none());
 }
 
 #[test]

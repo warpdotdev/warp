@@ -19,7 +19,10 @@ use std::sync::Arc;
 
 use async_channel::Sender;
 use parking_lot::FairMutex;
-use warp::tui_export::{KeystrokeWithDetails, TermMode, TerminalModel, ToEscapeSequence as _};
+use warp::tui_export::{
+    should_intercept_mouse, should_intercept_scroll, KeystrokeWithDetails, TermMode, TerminalModel,
+    ToEscapeSequence as _,
+};
 use warp_terminal::model::escape_sequences::{
     alt_screen_scroll_to_pty_bytes, ModeProvider, BRACKETED_PASTE_END, BRACKETED_PASTE_START,
 };
@@ -27,12 +30,33 @@ use warp_terminal::model::mouse::{MouseAction, MouseButton, MouseState};
 use warp_terminal::model::Point;
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiScreenRect,
-    TuiSize,
+    TuiPaintSurface, TuiPoint, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
+    TuiScreenRect, TuiSize,
 };
 use warpui_core::AppContext;
 
 use crate::terminal_session_view::TuiTerminalSessionAction;
+/// Which terminal mouse reports the active process and user settings allow.
+#[derive(Clone, Copy)]
+struct MouseReportPolicy {
+    /// Clicks, releases, and drags.
+    report_buttons: bool,
+    /// Hover motion.
+    report_motion: bool,
+    /// Wheel events as SGR reports.
+    report_scroll: bool,
+}
+
+impl MouseReportPolicy {
+    /// Derives the current reporting policy from terminal state and settings.
+    fn current(model: &TerminalModel, app: &AppContext) -> Self {
+        Self {
+            report_buttons: !should_intercept_mouse(model, false, app),
+            report_motion: model.is_term_mode_set(TermMode::MOUSE_MOTION),
+            report_scroll: !should_intercept_scroll(model, app),
+        }
+    }
+}
 
 /// Wraps the element displaying PTY content, reports its laid-out size, and
 /// optionally forwards input to the foreground process.
@@ -137,7 +161,12 @@ impl TuiElement for TuiTerminalContentElement {
                             .origin()
                             .zip(self.child.size())
                             .and_then(|(origin, size)| {
-                                pointer_pty_bytes(event, TuiScreenRect::new(origin, size), model)
+                                pointer_pty_bytes(
+                                    event,
+                                    TuiScreenRect::new(origin, size),
+                                    model,
+                                    app,
+                                )
                             });
                     if let Some(bytes) = bytes {
                         event_ctx.dispatch_typed_action(
@@ -192,12 +221,13 @@ fn pointer_pty_bytes(
     event: &TuiEvent,
     bounds: TuiScreenRect,
     model: &Arc<FairMutex<TerminalModel>>,
+    app: &AppContext,
 ) -> Option<Vec<u8>> {
     let model = model.lock();
     mouse_event_to_pty_bytes(
         event,
         bounds,
-        |mode| model.is_term_mode_set(mode),
+        MouseReportPolicy::current(model.deref(), app),
         model.is_alt_screen_active(),
         model.deref(),
     )
@@ -207,73 +237,37 @@ fn pointer_pty_bytes(
 fn mouse_event_to_pty_bytes<T: ModeProvider>(
     event: &TuiEvent,
     bounds: TuiScreenRect,
-    is_mode_set: impl Fn(TermMode) -> bool,
+    policy: MouseReportPolicy,
     allow_arrow_fallback: bool,
     mode_provider: &T,
 ) -> Option<Vec<u8>> {
-    if let TuiEvent::ScrollWheel {
-        position,
-        delta: (_, rows),
-        ..
-    } = event
-    {
-        if !bounds.contains(*position) {
-            return None;
-        }
-        let point = Point::new(
-            usize::try_from(i32::from(position.y) - bounds.origin.y).ok()?,
-            usize::try_from(i32::from(position.x) - bounds.origin.x).ok()?,
-        );
-        let report_mouse = is_mode_set(TermMode::SGR_MOUSE);
-        if !report_mouse && !allow_arrow_fallback {
-            return None;
-        }
-        return alt_screen_scroll_to_pty_bytes(
-            i32::try_from(*rows).ok()?,
-            point,
-            report_mouse,
-            mode_provider,
-        );
-    }
-
-    mouse_state_for_event(event, bounds, is_mode_set)
-        .and_then(|state| state.to_escape_sequence(mode_provider))
-}
-
-/// Converts a supported pointer event into the terminal's SGR mouse model.
-fn mouse_state_for_event(
-    event: &TuiEvent,
-    bounds: TuiScreenRect,
-    is_mode_set: impl Fn(TermMode) -> bool,
-) -> Option<MouseState> {
-    if !is_mode_set(TermMode::SGR_MOUSE) {
-        return None;
-    }
-    let reports_clicks = is_mode_set(TermMode::MOUSE_REPORT_CLICK);
-    let reports_drag = is_mode_set(TermMode::MOUSE_DRAG);
-    let reports_motion = is_mode_set(TermMode::MOUSE_MOTION);
-    let reports_clicks = reports_clicks || reports_drag || reports_motion;
-    let position = event.position()?;
-    if !bounds.contains(position) {
-        return None;
-    }
-    let point = Point::new(
-        usize::try_from(i32::from(position.y) - bounds.origin.y).ok()?,
-        usize::try_from(i32::from(position.x) - bounds.origin.x).ok()?,
-    );
+    let point = cell_point(event.position()?, bounds)?;
 
     let state = match event {
-        TuiEvent::LeftMouseDown { modifiers, .. } if reports_clicks && !modifiers.shift => {
+        TuiEvent::ScrollWheel {
+            delta: (_, rows), ..
+        } => {
+            if !policy.report_scroll && !allow_arrow_fallback {
+                return None;
+            }
+            return alt_screen_scroll_to_pty_bytes(
+                i32::try_from(*rows).ok()?,
+                point,
+                policy.report_scroll,
+                mode_provider,
+            );
+        }
+        TuiEvent::LeftMouseDown { modifiers, .. } if policy.report_buttons && !modifiers.shift => {
             MouseState::new(MouseButton::Left, MouseAction::Pressed, *modifiers)
         }
-        TuiEvent::RightMouseDown { modifiers, .. } if reports_clicks && !modifiers.shift => {
+        TuiEvent::RightMouseDown { modifiers, .. } if policy.report_buttons && !modifiers.shift => {
             MouseState::new(MouseButton::Right, MouseAction::Pressed, *modifiers)
         }
-        TuiEvent::LeftMouseUp { modifiers, .. } if reports_clicks && !modifiers.shift => {
+        TuiEvent::LeftMouseUp { modifiers, .. } if policy.report_buttons && !modifiers.shift => {
             MouseState::new(MouseButton::Left, MouseAction::Released, *modifiers)
         }
         TuiEvent::LeftMouseDragged { modifiers, .. }
-            if (reports_drag || reports_motion) && !modifiers.shift =>
+            if policy.report_buttons && !modifiers.shift =>
         {
             MouseState::new(MouseButton::LeftDrag, MouseAction::Pressed, *modifiers)
         }
@@ -281,11 +275,25 @@ fn mouse_state_for_event(
             modifiers,
             is_synthetic: false,
             ..
-        } if reports_motion => MouseState::new(MouseButton::Move, MouseAction::Pressed, *modifiers),
+        } if policy.report_motion => {
+            MouseState::new(MouseButton::Move, MouseAction::Pressed, *modifiers)
+        }
         _ => return None,
     };
-    Some(state.set_point(point))
+    state.set_point(point).to_escape_sequence(mode_provider)
 }
+
+/// Converts an in-bounds screen position to terminal grid coordinates.
+fn cell_point(position: TuiPoint, bounds: TuiScreenRect) -> Option<Point> {
+    if !bounds.contains(position) {
+        return None;
+    }
+    Some(Point::new(
+        usize::try_from(i32::from(position.y) - bounds.origin.y).ok()?,
+        usize::try_from(i32::from(position.x) - bounds.origin.x).ok()?,
+    ))
+}
+
 fn paste_bytes(text: &str, needs_bracketed_paste: bool) -> Vec<u8> {
     let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
     if !needs_bracketed_paste {

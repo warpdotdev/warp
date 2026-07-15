@@ -372,6 +372,7 @@ use crate::settings_view::{flags, SettingsSection};
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::alias::{check_for_alias_async, AliasedCommand};
 use crate::terminal::alt_screen::alt_screen_element::AltScreenElement;
+use crate::terminal::alt_screen::should_intercept_scroll;
 use crate::terminal::alt_screen_reporting::{AltScreenReporting, AltScreenReportingChangedEvent};
 use crate::terminal::block_filter::{
     filter_button_position_id, BlockFilterEditor, BlockFilterEditorEvent, BlockFilterQuery,
@@ -9412,17 +9413,16 @@ impl TerminalView {
         true
     }
 
-    /// Forwards GUI wheel movement using the shared alt-screen encoder.
-    fn alt_scroll(
-        &mut self,
-        lines_to_scroll: i32,
-        point: Point,
-        report_mouse: bool,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    /// Forwards wheel movement on the alt screen to the PTY, as SGR mouse
+    /// reports when the app requested them and arrow keys otherwise.
+    fn alt_scroll(&mut self, lines_to_scroll: i32, point: Point, ctx: &mut ViewContext<Self>) {
+        let report_mouse = !should_intercept_scroll(&self.model.lock(), ctx);
         if !report_mouse {
+            // Arrow-key scrolling can change the alt-screen grid content, so
+            // any link highlights are no longer valid.
             self.highlighted_link.invalidate();
         }
+
         let bytes = {
             let model = self.model.lock();
             alt_screen_scroll_to_pty_bytes(lines_to_scroll, point, report_mouse, model.deref())
@@ -26401,11 +26401,7 @@ impl TypedActionView for TerminalView {
 
         match action {
             Scroll { delta } => self.scroll(*delta, ctx),
-            AltScroll {
-                delta,
-                point,
-                report_mouse,
-            } => self.alt_scroll(*delta, *point, *report_mouse, ctx),
+            AltScroll { delta, point } => self.alt_scroll(*delta, *point, ctx),
             SharedSessionViewerAltScroll { new_scroll_top } => {
                 self.alt_screen_scroll_top = *new_scroll_top;
                 ctx.notify()
