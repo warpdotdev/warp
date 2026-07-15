@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use ai::agent::document_action_presentation::DocumentActionPresentation;
 use markdown_parser::{parse_markdown_with_gfm_tables, FormattedText, FormattedTextLine};
-use warp::tui_export::{AIAgentAction, BlocklistAIActionEvent, BlocklistAIActionModel};
+use warp::tui_export::{
+    AIAgentAction, AIAgentActionType, BlocklistAIActionEvent, BlocklistAIActionModel,
+};
 use warpui_core::elements::tui::{
     tui_collapsible, Modifier, TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiParentElement,
     TuiText,
@@ -15,6 +17,8 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
+use crate::agent_block_sections::tool_call_glyph_style;
+use crate::tool_call_labels::{tool_call_display_state, tool_call_glyph, ToolCallDisplayState};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
 use crate::tui_markdown::{render_formatted_text, TuiMarkdownBlockHooks, TuiMarkdownPalette};
@@ -180,6 +184,53 @@ impl TuiPlanView {
         }
     }
 
+    fn display_state(&self, app: &AppContext) -> ToolCallDisplayState {
+        let status = self
+            .action_model
+            .as_ref(app)
+            .get_action_status(&self.action.id);
+        tool_call_display_state(status.as_ref(), self.output_streaming, None)
+    }
+
+    fn document_subject(&self) -> String {
+        if self.presentation.documents.len() == 1 {
+            self.presentation.documents[0].title.clone()
+        } else {
+            format!("{} documents", self.presentation.documents.len())
+        }
+    }
+
+    fn header_label(&self, state: ToolCallDisplayState) -> (&'static str, Option<String>) {
+        if matches!(&self.action.action, AIAgentActionType::CreateDocuments(_)) {
+            match state {
+                ToolCallDisplayState::Constructing | ToolCallDisplayState::Running => {
+                    ("Creating ", Some(self.document_subject()))
+                }
+                ToolCallDisplayState::Pending | ToolCallDisplayState::AwaitingApproval => {
+                    ("Create plan", None)
+                }
+                ToolCallDisplayState::Succeeded => ("Created plan", None),
+                ToolCallDisplayState::Failed => ("Failed to create plan", None),
+                ToolCallDisplayState::Cancelled => ("Create plan cancelled", None),
+            }
+        } else {
+            debug_assert!(matches!(
+                &self.action.action,
+                AIAgentActionType::EditDocuments(_)
+            ));
+            match state {
+                ToolCallDisplayState::Constructing | ToolCallDisplayState::Running => {
+                    ("Updating plan", None)
+                }
+                ToolCallDisplayState::Pending | ToolCallDisplayState::AwaitingApproval => {
+                    ("Update plan", None)
+                }
+                ToolCallDisplayState::Succeeded => ("Updated plan", None),
+                ToolCallDisplayState::Failed => ("Failed to update plan", None),
+                ToolCallDisplayState::Cancelled => ("Update plan cancelled", None),
+            }
+        }
+    }
     fn render_documents(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
         let palette = TuiMarkdownPalette::from_builder(&builder);
@@ -223,7 +274,7 @@ impl TuiPlanView {
         }
 
         TuiContainer::new(documents.finish())
-            .with_padding_x(2)
+            .with_padding_left(2)
             .with_padding_y(1)
             .with_background(builder.plan_background())
             .finish()
@@ -250,11 +301,26 @@ impl TuiView for TuiPlanView {
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
+        let state = self.display_state(app);
         let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
+        let (label, subject) = self.header_label(state);
+        let mut header = vec![
+            (
+                format!("{} ", tool_call_glyph(state)),
+                tool_call_glyph_style(state, &builder),
+            ),
+            (label.to_owned(), header_style),
+        ];
+        if let Some(subject) = subject {
+            header.push((
+                subject,
+                builder.link_text_style().add_modifier(Modifier::BOLD),
+            ));
+        }
         let collapsed = self.collapsed;
         tui_collapsible(
             collapsed,
-            [("Planning".to_owned(), header_style)],
+            header,
             header_style,
             self.header_mouse_state.clone(),
             || self.render_documents(app),

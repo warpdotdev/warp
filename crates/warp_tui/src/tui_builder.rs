@@ -120,10 +120,14 @@ impl TuiUiBuilder {
         )))
     }
 
+    /// Theme-blue link text, matching linked filenames in tool-call headers.
+    pub(crate) fn link_text_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
+    }
     /// Blue command-name text used by the slash-command menu and recognized
     /// slash-command prefixes in the input.
     pub(crate) fn slash_command_text_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
+        self.link_text_style()
     }
 
     /// Solid cyan selection background used by the slash-command menu.

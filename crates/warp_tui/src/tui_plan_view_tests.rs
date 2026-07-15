@@ -42,7 +42,7 @@ fn streamed_create_renders_cached_markdown_and_code_children() {
                 .clone();
 
             let (lines, buffer) = render(view, 80, ctx);
-            assert_eq!(lines[0], "Planning ▾");
+            assert_eq!(lines[0], "○ Creating pomodoro-app-spec.md ▾");
             assert_eq!(lines[1], "");
             assert_eq!(lines[2], "  Overview");
             assert!(lines
@@ -60,8 +60,12 @@ fn streamed_create_renders_cached_markdown_and_code_children() {
             assert_eq!(buffer[(79, 1)].bg, plan_background);
             assert_eq!(buffer[(0, 2)].bg, plan_background);
             assert_eq!(buffer[(79, 2)].bg, plan_background);
-            assert!(buffer[(0, 0)].modifier.contains(Modifier::BOLD));
-            assert!(!buffer[(0, 0)].modifier.contains(Modifier::UNDERLINED));
+            assert_eq!(
+                buffer[(11, 0)].fg,
+                TuiUiBuilder::from_app(ctx).link_text_style().fg.unwrap()
+            );
+            assert!(buffer[(11, 0)].modifier.contains(Modifier::BOLD));
+            assert!(!buffer[(11, 0)].modifier.contains(Modifier::UNDERLINED));
 
             let code_key = TuiPlanCodeKey {
                 document_index: 0,
@@ -115,6 +119,22 @@ fn streamed_create_renders_cached_markdown_and_code_children() {
 }
 
 #[test]
+fn plan_body_has_left_padding_without_right_padding() {
+    App::test((), |mut app| async move {
+        let content = format!("{}xyz", "word ".repeat(15));
+        assert_eq!(content.len(), 78);
+        let action = create_action("create-1", [("Plan", content.as_str())]);
+        let (view, _) = test_plan_view(&mut app, action, true);
+
+        app.read(|ctx| {
+            let (lines, buffer) = render(view.as_ref(ctx), 80, ctx);
+            assert_eq!(lines[2], format!("  {content}"));
+            assert_eq!(buffer[(79, 2)].symbol(), "z");
+        });
+    });
+}
+
+#[test]
 fn finalized_create_replaces_streamed_payload_and_keeps_action_order() {
     App::test((), |mut app| async move {
         let action = create_action(
@@ -152,7 +172,7 @@ fn finalized_create_replaces_streamed_payload_and_keeps_action_order() {
                 vec![("First", "final first"), ("Second", "final second")]
             );
             let (lines, _) = render(view, 60, ctx);
-            assert_eq!(lines[0], "Planning ▾");
+            assert_eq!(lines[0], "✓ Created plan ▾");
             let positions = ["First", "final first", "Second", "final second"].map(|needle| {
                 lines
                     .iter()
@@ -196,7 +216,7 @@ fn finalized_edit_uses_full_result_content() {
                 .content
                 .contains("| Mode | Focus |"));
             let (lines, _) = render(view, 50, ctx);
-            assert_eq!(lines[0], "Planning ▾");
+            assert_eq!(lines[0], "✓ Updated plan ▾");
             assert!(lines.iter().any(|line| line.trim() == "Updated"));
             assert!(lines.iter().any(|line| line.trim() == "Final body"));
             let joined = lines.join("\n");
@@ -238,7 +258,7 @@ fn collapse_persists_across_payload_updates_and_invalidates_layout() {
             assert!(view.collapsed);
             assert_eq!(view.presentation.documents[0].content, "second body");
             let (lines, _) = render(view, 40, ctx);
-            assert_eq!(lines, vec!["Planning ▸"]);
+            assert_eq!(lines, vec!["○ Creating Plan ▸"]);
         });
         assert!(invalidations.get() >= 2);
     });
