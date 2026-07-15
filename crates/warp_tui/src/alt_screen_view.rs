@@ -7,7 +7,7 @@
 //! `AltScreenElement` (`app/src/terminal/alt_screen/alt_screen_element.rs`).
 //!
 //! Covers rendering and the cursor. PTY sizing and keyboard forwarding are
-//! handled by the session view's `TuiTerminalSizeElement` wrapper. Mouse
+//! handled by the session view's `TuiTerminalContentElement` wrapper. Mouse
 //! forwarding remains a follow-up.
 //!
 //! [`TuiTerminalSessionView`]: crate::terminal_session_view::TuiTerminalSessionView

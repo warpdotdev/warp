@@ -12,7 +12,7 @@ use warpui_core::event::KeyEventDetails;
 use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext};
 
-use super::{paste_bytes, pty_bytes_for_event, TuiTerminalSizeElement};
+use super::{paste_bytes, pty_bytes_for_event, TuiTerminalContentElement};
 
 /// A leaf that fills its constraint and retains the laid-out size.
 struct FillElement {
@@ -62,7 +62,7 @@ fn layout_measures_and_after_layout_publishes_the_size() {
         app.read(|app| {
             let (resize_tx, resize_rx) = async_channel::unbounded();
             let mut element =
-                TuiTerminalSizeElement::new(resize_tx, FillElement { size: None }.finish());
+                TuiTerminalContentElement::new(resize_tx, FillElement { size: None }.finish());
             let expected_size = TuiSize::new(42, 8);
             let mut rendered_views = EntityIdMap::default();
             let mut layout_ctx = TuiLayoutContext {
@@ -141,7 +141,7 @@ fn dropped_receiver_does_not_panic() {
             let (resize_tx, resize_rx) = async_channel::unbounded::<TuiSize>();
             drop(resize_rx);
             let mut element =
-                TuiTerminalSizeElement::new(resize_tx, FillElement { size: None }.finish());
+                TuiTerminalContentElement::new(resize_tx, FillElement { size: None }.finish());
             let mut rendered_views = EntityIdMap::default();
             let mut layout_ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,

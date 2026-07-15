@@ -34,11 +34,18 @@ pub(super) enum TerminalUseInterruptAction {
 }
 
 pub(super) fn terminal_use_interrupt_action(
-    control_state: &LongRunningCommandControlState,
-) -> TerminalUseInterruptAction {
+    control_state: Option<&LongRunningCommandControlState>,
+    process_owns_input: bool,
+) -> Option<TerminalUseInterruptAction> {
     match control_state {
-        LongRunningCommandControlState::Agent { .. } => TerminalUseInterruptAction::TakeControl,
-        LongRunningCommandControlState::User { .. } => TerminalUseInterruptAction::InterruptCommand,
+        Some(LongRunningCommandControlState::Agent { .. }) => {
+            Some(TerminalUseInterruptAction::TakeControl)
+        }
+        Some(LongRunningCommandControlState::User { .. }) => {
+            Some(TerminalUseInterruptAction::InterruptCommand)
+        }
+        None if process_owns_input => Some(TerminalUseInterruptAction::InterruptCommand),
+        None => None,
     }
 }
 

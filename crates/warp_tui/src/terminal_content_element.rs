@@ -9,10 +9,11 @@
 //! `TuiTerminalSessionView::handle_terminal_resize`), which layout and paint
 //! passes cannot do themselves.
 //!
-//! When configured with [`Self::with_pty_input`], the same wrapper also gives
-//! the foreground process first refusal on key and paste events. Keeping both
-//! responsibilities here ensures the subtree measured for the PTY is also the
-//! subtree that owns its input.
+//! When configured with [`TuiTerminalContentElement::with_pty_input`], the same
+//! wrapper also gives the foreground process first refusal on key and paste
+//! events. Keeping both responsibilities here ensures the subtree measured for
+//! the PTY is also the subtree that owns its input.
+
 use std::ops::Deref as _;
 use std::sync::Arc;
 
@@ -28,14 +29,15 @@ use warpui_core::AppContext;
 
 use crate::terminal_session_view::TuiTerminalSessionAction;
 
-/// Wraps the element displaying PTY content and reports its laid-out size.
-pub(crate) struct TuiTerminalSizeElement {
+/// Wraps the element displaying PTY content, reports its laid-out size, and
+/// optionally forwards input to the foreground process.
+pub(crate) struct TuiTerminalContentElement {
     child: Box<dyn TuiElement>,
     resize_tx: Sender<TuiSize>,
     pty_input_model: Option<Arc<FairMutex<TerminalModel>>>,
 }
 
-impl TuiTerminalSizeElement {
+impl TuiTerminalContentElement {
     /// Wraps `child`, publishing its laid-out size on `resize_tx`.
     pub(crate) fn new(resize_tx: Sender<TuiSize>, child: Box<dyn TuiElement>) -> Self {
         Self {
@@ -53,7 +55,7 @@ impl TuiTerminalSizeElement {
     }
 }
 
-impl TuiElement for TuiTerminalSizeElement {
+impl TuiElement for TuiTerminalContentElement {
     fn layout(
         &mut self,
         constraint: TuiConstraint,
@@ -182,5 +184,5 @@ fn paste_bytes(text: &str, needs_bracketed_paste: bool) -> Vec<u8> {
 }
 
 #[cfg(test)]
-#[path = "terminal_size_element_tests.rs"]
+#[path = "terminal_content_element_tests.rs"]
 mod tests;

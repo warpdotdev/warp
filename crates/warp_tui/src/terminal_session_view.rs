@@ -66,7 +66,7 @@ use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::resume::TuiExitSummaryHandle;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
-use crate::terminal_size_element::TuiTerminalSizeElement;
+use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
     hide_agent_requested_command_from_top_level, inline_process_owns_input,
     terminal_use_conversation_to_resume, terminal_use_interrupt_action, TerminalUseInterruptAction,
@@ -405,10 +405,17 @@ impl TuiTerminalSessionView {
     }
 
     fn handle_terminal_use_interrupt(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let Some(target) = self.cli_subagent_controller.as_ref(ctx).active_target() else {
+        let control_state = self
+            .cli_subagent_controller
+            .as_ref(ctx)
+            .active_target()
+            .map(|target| target.control_state);
+        let Some(action) =
+            terminal_use_interrupt_action(control_state.as_ref(), self.process_owns_input())
+        else {
             return false;
         };
-        match terminal_use_interrupt_action(&target.control_state) {
+        match action {
             TerminalUseInterruptAction::TakeControl => {
                 self.cli_subagent_controller.update(ctx, |controller, ctx| {
                     controller.switch_control_to_user(
@@ -1190,7 +1197,7 @@ impl TuiTerminalSessionView {
     /// TUI counterpart of the GUI's `after_terminal_view_layout`
     /// (`app/src/terminal/view.rs`): consumes the after-layout resize channel
     /// and commits the resize with a `ViewContext`. Fed by the
-    /// [`TuiTerminalSizeElement`] wrapping the block-list content column or the
+    /// [`TuiTerminalContentElement`] wrapping the block-list content column or the
     /// alt-screen grid, so the PTY tracks whichever region PTY content
     /// currently occupies.
     fn handle_terminal_resize(&mut self, size: TuiSize, ctx: &mut ViewContext<Self>) {
@@ -1295,20 +1302,9 @@ impl TuiTerminalSessionView {
             ctx.terminate_app(TerminationMode::ForceTerminate, None);
             return;
         }
-        // While a full-screen app is active, ctrl-c belongs to that app.
-        if self.terminal_model.lock().is_alt_screen_active() {
-            ctx.emit(TuiTerminalSessionEvent::WriteUserInput(Cow::Owned(vec![
-                0x03,
-            ])));
-            return;
-        }
         if self.handle_terminal_use_interrupt(ctx) {
             self.exit_confirmation.disarm();
             ctx.notify();
-            return;
-        }
-        if self.process_owns_input() {
-            ctx.emit(TuiTerminalSessionEvent::InterruptPty);
             return;
         }
         let now = Instant::now();
@@ -2123,7 +2119,7 @@ impl TuiView for TuiTerminalSessionView {
             )
         };
         if alt_screen_active {
-            return TuiTerminalSizeElement::new(
+            return TuiTerminalContentElement::new(
                 self.terminal_resize_tx.clone(),
                 AltScreenElement::new(self.terminal_model.clone()).finish(),
             )
@@ -2249,17 +2245,17 @@ impl TuiView for TuiTerminalSessionView {
         }
         let content = content.finish();
         let terminal_content =
-            TuiTerminalSizeElement::new(self.terminal_resize_tx.clone(), content);
+            TuiTerminalContentElement::new(self.terminal_resize_tx.clone(), content);
         let terminal_content = if inline_process_owns_input {
             terminal_content.with_pty_input(self.terminal_model.clone())
         } else {
             terminal_content
         };
 
-        // The size wrapper sits inside the horizontal padding so the PTY's
-        // columns match the width block content actually renders at (the GUI
-        // wraps its view root, but its padding is sub-cell; here it is 4 whole
-        // columns).
+        // The terminal-content wrapper sits inside the horizontal padding so
+        // the PTY's columns match the width block content actually renders at
+        // (the GUI wraps its view root, but its padding is sub-cell; here it is
+        // 4 whole columns).
         TuiContainer::new(terminal_content.finish())
             .with_padding_x(2)
             .with_padding_top(2)

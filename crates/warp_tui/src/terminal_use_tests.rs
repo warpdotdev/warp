@@ -240,8 +240,8 @@ fn terminal_use_interrupt_follows_takeover_then_process_interrupt_policy() {
         should_hide_responses: false,
     };
     assert_eq!(
-        terminal_use_interrupt_action(&agent),
-        TerminalUseInterruptAction::TakeControl
+        terminal_use_interrupt_action(Some(&agent), true),
+        Some(TerminalUseInterruptAction::TakeControl)
     );
 
     let stopped = LongRunningCommandControlState::User {
@@ -250,16 +250,16 @@ fn terminal_use_interrupt_follows_takeover_then_process_interrupt_policy() {
         },
     };
     assert_eq!(
-        terminal_use_interrupt_action(&stopped),
-        TerminalUseInterruptAction::InterruptCommand
+        terminal_use_interrupt_action(Some(&stopped), true),
+        Some(TerminalUseInterruptAction::InterruptCommand)
     );
 
     let manual = LongRunningCommandControlState::User {
         reason: UserTakeOverReason::Manual,
     };
     assert_eq!(
-        terminal_use_interrupt_action(&manual),
-        TerminalUseInterruptAction::InterruptCommand
+        terminal_use_interrupt_action(Some(&manual), true),
+        Some(TerminalUseInterruptAction::InterruptCommand)
     );
 
     let transferred = LongRunningCommandControlState::User {
@@ -268,9 +268,15 @@ fn terminal_use_interrupt_follows_takeover_then_process_interrupt_policy() {
         },
     };
     assert_eq!(
-        terminal_use_interrupt_action(&transferred),
-        TerminalUseInterruptAction::InterruptCommand
+        terminal_use_interrupt_action(Some(&transferred), true),
+        Some(TerminalUseInterruptAction::InterruptCommand)
     );
+
+    assert_eq!(
+        terminal_use_interrupt_action(None, true),
+        Some(TerminalUseInterruptAction::InterruptCommand)
+    );
+    assert_eq!(terminal_use_interrupt_action(None, false), None);
 }
 
 #[test]
