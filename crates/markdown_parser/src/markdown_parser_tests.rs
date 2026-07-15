@@ -1805,6 +1805,62 @@ fn test_parse_autolinks_with_emphasis() {
 }
 
 #[test]
+fn test_parse_emphasized_autolink_with_trailing_punctuation() {
+    // Regression test: a bold- or italic-wrapped autolink followed by trailing
+    // punctuation (e.g. a sentence-ending period) must still render as an
+    // emphasized hyperlink. Previously the trailing `.` stopped the URL parser
+    // from stripping the closing `**`, so the `**` was absorbed into the URL and
+    // the opening `**` was left unmatched and rendered as literal text.
+
+    // Bold autolink followed by a period.
+    assert_eq!(
+        parse_all("**https://example.com**.", parse_inline),
+        vec![
+            FormattedTextFragment {
+                text: "https://example.com".to_string(),
+                styles: FormattedTextStyles {
+                    weight: Some(CustomWeight::Bold),
+                    hyperlink: Some(Hyperlink::Url("https://example.com".to_string())),
+                    ..Default::default()
+                },
+            },
+            FormattedTextFragment::plain_text("."),
+        ]
+    );
+
+    // Italic autolink followed by an exclamation mark.
+    assert_eq!(
+        parse_all("*https://example.com*!", parse_inline),
+        vec![
+            FormattedTextFragment {
+                text: "https://example.com".to_string(),
+                styles: FormattedTextStyles {
+                    italic: true,
+                    hyperlink: Some(Hyperlink::Url("https://example.com".to_string())),
+                    ..Default::default()
+                },
+            },
+            FormattedTextFragment::plain_text("!"),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_autolink_strips_trailing_sentence_punctuation() {
+    // Per the GFM autolink extension, trailing punctuation such as `.` is not
+    // considered part of an autolink.
+    // https://github.github.com/gfm/#autolinks-extension-
+    assert_eq!(
+        parse_all("See https://example.com.", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("See "),
+            FormattedTextFragment::hyperlink("https://example.com", "https://example.com"),
+            FormattedTextFragment::plain_text("."),
+        ]
+    );
+}
+
+#[test]
 fn test_parse_escapes_inline() {
     assert_eq!(
         parse_all("\\*not emphasized*", parse_inline),
