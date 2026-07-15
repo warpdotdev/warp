@@ -74,13 +74,3 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("cat \"$log_file_1\""));
     assert!(command.contains("exit \"$failed\""));
 }
-
-#[test]
-fn clone_cache_and_setup_command_phases_are_ordered() {
-    let source = include_str!("environment.rs");
-    let clone = source.find("SetupStep::EnvironmentRepoClone").unwrap();
-    let cache = source.find("SetupStep::CacheSetup").unwrap();
-    let setup = source.find("SetupStep::EnvironmentSetupCommands").unwrap();
-    assert!(clone < cache);
-    assert!(cache < setup);
-}

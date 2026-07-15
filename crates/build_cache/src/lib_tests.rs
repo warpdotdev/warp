@@ -13,7 +13,7 @@ use instant::Instant;
 use warp_errors::ErrorExt as _;
 
 use super::{
-    CacheScope, CacheSetupError, Detection, RepoCacheKey, RepoIdentity, RepositoryCacheSource,
+    CacheScope, CacheSetupError, DetectedCacheModes, RepoCacheKey, RepoIdentity, RepositoryCacheSource,
     aggregate_mode_stats, build_export_script, construct_plan, create_retained_scratch_directory,
     is_valid_env_name, posix_single_quote, run_command_with_timeout, setup_cache,
 };
@@ -33,8 +33,8 @@ fn source(root: &Path, host: &str, owner: &str, repo: &str) -> RepositoryCacheSo
     }
 }
 
-fn detection(source: RepositoryCacheSource, modes: &[&str]) -> Detection {
-    Detection {
+fn detection(source: RepositoryCacheSource, modes: &[&str]) -> DetectedCacheModes {
+    DetectedCacheModes {
         key: RepoCacheKey::derive(&source.identity),
         source,
         modes: modes.iter().map(ToString::to_string).collect(),
@@ -102,14 +102,6 @@ fn repo_cache_key_distinguishes_forge_owner_and_repo() {
         base,
         RepoCacheKey::derive(&identity("github.com", "warp", "server"))
     );
-}
-
-#[test]
-fn repo_cache_key_rejects_non_lowercase_64_hex() {
-    assert!(RepoCacheKey::try_from("a".repeat(63)).is_err());
-    assert!(RepoCacheKey::try_from("A".repeat(64)).is_err());
-    assert!(RepoCacheKey::try_from("g".repeat(64)).is_err());
-    assert!(RepoCacheKey::try_from("0".repeat(64)).is_ok());
 }
 
 #[test]

@@ -20,6 +20,7 @@ use spacectl::{MountResponse, detect_command, mount_command, parse_mount_respons
 
 const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Identifiers for a code repository.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RepoIdentity {
     pub forge_host: String,
@@ -41,6 +42,7 @@ impl RepoIdentity {
     }
 }
 
+/// Key for scoping per-repository build caches.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RepoCacheKey(String);
 
@@ -66,28 +68,16 @@ impl fmt::Display for RepoCacheKey {
     }
 }
 
-impl TryFrom<String> for RepoCacheKey {
-    type Error = InvalidRepoCacheKey;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.len() != 64
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(InvalidRepoCacheKey);
-        }
-        Ok(Self(value))
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("repository cache keys must be exactly 64 lowercase hexadecimal characters")]
 pub struct InvalidRepoCacheKey;
 
+/// Ownership scope for a given cache mount.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CacheScope {
+    /// This cache mount is specific to a particular repository (e.g. a Rust `./target` directory).
     Repository { name: String, key: RepoCacheKey },
+    /// This cache mount is global to the system (e.g. the Homebrew download cache).
     Global,
 }
 
@@ -122,11 +112,12 @@ pub struct CacheConfiguration {
     pub modes: Vec<String>,
 }
 
-/// An executable plan contains zero or more repository configurations in ascending
-/// [`RepoCacheKey`] order, followed by exactly one global configuration.
+/// An executable plan for setting up build caches on the current host.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CacheSetupPlan {
     pub cache_root: PathBuf,
+    /// Individual cache configurations. This contains one or more repository-specific
+    /// configurations followed by a global configuration.
     pub configurations: Vec<CacheConfiguration>,
 }
 
@@ -164,7 +155,10 @@ impl CacheSetupPlan {
 
         for configuration in &self.configurations {
             if configuration.modes.is_empty()
-                || !is_sorted_deduplicated(&configuration.modes)
+                || !configuration
+                    .modes
+                    .windows(2)
+                    .all(|window| window[0] < window[1])
                 || !is_safe_relative_cache_dir(&configuration.relative_cache_dir)
             {
                 return Err(PlanInvariantError);
@@ -175,10 +169,6 @@ impl CacheSetupPlan {
         }
         Ok(())
     }
-}
-
-fn is_sorted_deduplicated(values: &[String]) -> bool {
-    values.windows(2).all(|window| window[0] < window[1])
 }
 
 fn is_safe_relative_cache_dir(path: &Path) -> bool {
@@ -252,11 +242,12 @@ pub struct ModeCacheStats {
     pub cache_misses: usize,
 }
 
+/// Report from preparing caches for a particular scope. This corresponds to a single call to
+/// `spacectl cache mount`.
 #[derive(Clone, Debug)]
-pub struct InvocationReport {
+pub struct CachePreparationReport {
     pub scope: CacheScope,
     pub modes: Vec<String>,
-    pub dry_run: bool,
     pub relative_cache_dir: PathBuf,
     pub response: Option<MountResponse>,
     pub error: Option<CacheSetupError>,
@@ -264,22 +255,23 @@ pub struct InvocationReport {
     pub mode_stats: BTreeMap<String, ModeCacheStats>,
 }
 
-impl InvocationReport {
+impl CachePreparationReport {
     pub fn succeeded(&self) -> bool {
         self.error.is_none() && self.response.is_some()
     }
 }
 
+/// Report from preparing caches for an environment.
 #[derive(Clone, Debug, Default)]
 pub struct CacheSetupReport {
     pub plan: Option<CacheSetupPlan>,
-    pub invocations: Vec<InvocationReport>,
+    pub invocations: Vec<CachePreparationReport>,
     pub add_envs: BTreeMap<String, String>,
     pub export_script: Option<String>,
 }
 
 impl CacheSetupReport {
-    pub fn degradations(&self) -> impl Iterator<Item = &InvocationReport> {
+    pub fn degradations(&self) -> impl Iterator<Item = &CachePreparationReport> {
         self.invocations
             .iter()
             .filter(|invocation| invocation.error.is_some())
@@ -287,30 +279,34 @@ impl CacheSetupReport {
 }
 
 #[derive(Clone)]
-struct Detection {
+struct DetectedCacheModes {
     source: RepositoryCacheSource,
     key: RepoCacheKey,
     modes: Vec<String>,
 }
 
+/// Calculates cache modes corresponding to global tools like package managers, which are not
+/// detected from an individual repo.
 pub fn global_cache_modes() -> Vec<String> {
     let mut modes = Vec::new();
-    if cfg!(target_os = "linux") && command_resolves_on_path("apt-config") {
+    if cfg!(target_os = "linux") && has_command("apt-config") {
         modes.push("apt".to_owned());
     }
-    if cfg!(target_os = "macos") && command_resolves_on_path("brew") {
+    if cfg!(target_os = "macos") && has_command("brew") {
         modes.push("brew".to_owned());
     }
     modes
 }
 
-fn command_resolves_on_path(command: &str) -> bool {
+/// Check if `command` exists on the current `$PATH`.
+fn has_command(command: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|path| {
         std::env::split_paths(&path).any(|directory| directory.join(command).is_executable())
     })
 }
 
-pub async fn run_spacectl_command(command: Command) -> Result<Vec<u8>, CacheSetupError> {
+/// Default implementation of the `run_command` hook for [`setup_cache`].
+pub async fn default_run_command(command: Command) -> Result<Vec<u8>, CacheSetupError> {
     run_command_with_timeout(command, SPACECTL_TIMEOUT).await
 }
 
@@ -341,19 +337,18 @@ async fn run_command_with_timeout(
     Ok(output.stdout)
 }
 
+/// Set up build caching on the current host.
 #[tracing::instrument(name = "setup_caches", skip_all, fields(tags.cloud_agent = true))]
-
 pub async fn setup_cache<F, Fut>(
     cache_root: PathBuf,
     repositories: Vec<RepositoryCacheSource>,
     additional_global_modes: Vec<String>,
-    run_command: F,
+    mut run_command: F,
 ) -> CacheSetupReport
 where
     F: FnMut(Command) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
 {
-    let mut run_command = run_command;
     let mut report = CacheSetupReport::default();
     let mut keyed_repositories: Vec<_> = repositories
         .into_iter()
@@ -364,7 +359,7 @@ where
         .collect();
     keyed_repositories.sort();
 
-    let mut detections = Vec::new();
+    let mut detected_modes = Vec::new();
     for (key, source) in keyed_repositories {
         let relative_cache_dir = PathBuf::from("repos").join(key.as_str());
         let configuration_root = cache_root.join(&relative_cache_dir);
@@ -376,7 +371,6 @@ where
             report.invocations.push(failed_invocation(
                 scope,
                 Vec::new(),
-                true,
                 relative_cache_dir,
                 CacheSetupError::RootCreationFailed,
                 Duration::ZERO,
@@ -397,20 +391,19 @@ where
         if let Some(response) = &invocation.response {
             let modes = canonical_modes(response.input.modes.clone());
             if !modes.is_empty() {
-                detections.push(Detection { source, key, modes });
+                detected_modes.push(DetectedCacheModes { source, key, modes });
             }
         }
         report.invocations.push(invocation);
     }
 
-    let plan = match construct_plan(cache_root, detections, additional_global_modes) {
+    let plan = match construct_plan(cache_root, detected_modes, additional_global_modes) {
         Ok(Some(plan)) => plan,
         Ok(None) => return report,
         Err(error) => {
             report.invocations.push(failed_invocation(
                 CacheScope::Global,
                 Vec::new(),
-                false,
                 PathBuf::from("shared"),
                 error,
                 Duration::ZERO,
@@ -427,7 +420,6 @@ where
             failed_invocation(
                 configuration.scope.clone(),
                 configuration.modes.clone(),
-                false,
                 configuration.relative_cache_dir.clone(),
                 CacheSetupError::RootCreationFailed,
                 Duration::ZERO,
@@ -450,7 +442,7 @@ where
                 CacheScope::Repository { .. } => {
                     for (name, value) in &response.output.add_envs {
                         if repository_env.insert(name.clone(), value.clone()).is_some() {
-                            log_env_conflict();
+                            log::warn!("repository build-cache environment conflict resolved by canonical repository order");
                         }
                     }
                 }
@@ -468,16 +460,12 @@ where
     report
 }
 
-fn log_env_conflict() {
-    tracing::warn!(
-        target: "build_cache",
-        "repository build-cache environment conflict resolved by canonical repository order"
-    );
-}
-
+/// Construct a plan for setting up build caches on the current system. This requires:
+/// - Analysis of the toolchains used in each repository (`detections`) 
+/// - System-level toolchains such as package managers
 fn construct_plan(
     cache_root: PathBuf,
-    mut detections: Vec<Detection>,
+    mut detections: Vec<DetectedCacheModes>,
     additional_global_modes: Vec<String>,
 ) -> Result<Option<CacheSetupPlan>, CacheSetupError> {
     for detection in &mut detections {
@@ -526,6 +514,7 @@ fn construct_plan(
         .map_err(|_| CacheSetupError::RootCreationFailed)
 }
 
+/// Create a temporary scratch directory for setting up the global cache scope.
 fn create_retained_scratch_directory<'a>(
     repository_paths: impl Iterator<Item = &'a Path>,
 ) -> Result<PathBuf, CacheSetupError> {
@@ -549,6 +538,7 @@ fn create_retained_scratch_directory<'a>(
     Ok(directory.keep())
 }
 
+/// Run `spacectl cache mount`.
 async fn run_spacectl_mount<F, Fut>(
     scope: CacheScope,
     modes: Vec<String>,
@@ -557,7 +547,7 @@ async fn run_spacectl_mount<F, Fut>(
     cache_root: &Path,
     cwd: &Path,
     run_command: &mut F,
-) -> InvocationReport
+) -> CachePreparationReport
 where
     F: FnMut(Command) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
@@ -615,10 +605,9 @@ where
                     "spacectl cache mode result"
                 );
             }
-            InvocationReport {
+            CachePreparationReport {
                 scope,
                 modes: selected_modes,
-                dry_run,
                 relative_cache_dir,
                 response: Some(response),
                 error: None,
@@ -628,7 +617,7 @@ where
         }
         Err(error) => {
             span.record("error_kind", error.kind());
-            failed_invocation(scope, modes, dry_run, relative_cache_dir, error, duration)
+            failed_invocation(scope, modes, relative_cache_dir, error, duration)
         }
     }
 }
@@ -636,15 +625,13 @@ where
 fn failed_invocation(
     scope: CacheScope,
     modes: Vec<String>,
-    dry_run: bool,
     relative_cache_dir: PathBuf,
     error: CacheSetupError,
     duration: Duration,
-) -> InvocationReport {
-    InvocationReport {
+) -> CachePreparationReport {
+    CachePreparationReport {
         scope,
         modes,
-        dry_run,
         relative_cache_dir,
         response: None,
         error: Some(error),

@@ -13,6 +13,7 @@ futures-lite.workspace = true
 hex.workspace = true
 instant.workspace = true
 is_executable = "1.0.1"
+log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

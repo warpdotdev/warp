@@ -2,9 +2,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use build_cache::{
-    CacheSetupError, CacheSetupReport, InvocationReport, RepoIdentity, RepositoryCacheSource,
-};
+use build_cache::{CacheSetupError, CacheSetupReport, RepoIdentity, RepositoryCacheSource};
 use cloud_object_models::SourceRepo;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_errors::report_error;
@@ -62,13 +60,23 @@ pub(crate) async fn setup_caches(
         cache_root,
         repositories,
         build_cache::global_cache_modes(),
-        build_cache::run_spacectl_command,
+        build_cache::default_run_command,
     )
     .await;
 
     let mut degraded = report_degradations(&report);
     if let Some(script) = report.export_script {
-        if apply_export(script, spawner).await.is_err() {
+        if apply_export_with(script, |script| async move {
+            spawner
+                .spawn(move |driver, ctx| driver.execute_silent_command(script, ctx))
+                .await
+                .map_err(|_| CacheSetupError::EnvExportFailed)?
+                .await
+                .map_err(|_| CacheSetupError::EnvExportFailed)
+        })
+        .await
+        .is_err()
+        {
             let error = CacheSetupError::EnvExportFailed;
             report_cache_error(&error, "global", "", "", None, Duration::ZERO);
             degraded = true;
@@ -84,35 +92,26 @@ pub(crate) async fn setup_caches(
 
 fn report_degradations(report: &CacheSetupReport) -> bool {
     let mut degraded = false;
-    report_degradations_with(report, |error, invocation| {
-        let repo_key = invocation
-            .scope
-            .repo_key()
-            .map(ToString::to_string)
-            .unwrap_or_default();
-        let modes = invocation.modes.join(",");
-        report_cache_error(
-            error,
-            invocation.scope.kind(),
-            &repo_key,
-            &modes,
-            error.exit_code(),
-            invocation.duration,
-        );
-        degraded = true;
-    });
-    degraded
-}
-
-fn report_degradations_with(
-    report: &CacheSetupReport,
-    mut reporter: impl FnMut(&CacheSetupError, &InvocationReport),
-) {
     for invocation in report.degradations() {
         if let Some(error) = &invocation.error {
-            reporter(error, invocation);
+            let repo_key = invocation
+                .scope
+                .repo_key()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            let modes = invocation.modes.join(",");
+            report_cache_error(
+                error,
+                invocation.scope.kind(),
+                &repo_key,
+                &modes,
+                error.exit_code(),
+                invocation.duration,
+            );
+            degraded = true;
         }
     }
+    degraded
 }
 
 fn report_cache_error(
@@ -139,21 +138,6 @@ fn report_cache_error(
         "Build cache setup degraded: scope={scope} error_kind={}",
         error.kind()
     );
-}
-
-async fn apply_export(
-    script: String,
-    spawner: &ModelSpawner<TerminalDriver>,
-) -> Result<(), CacheSetupError> {
-    apply_export_with(script, |script| async move {
-        spawner
-            .spawn(move |driver, ctx| driver.execute_silent_command(script, ctx))
-            .await
-            .map_err(|_| CacheSetupError::EnvExportFailed)?
-            .await
-            .map_err(|_| CacheSetupError::EnvExportFailed)
-    })
-    .await
 }
 
 async fn apply_export_with<F, Fut>(script: String, execute: F) -> Result<(), CacheSetupError>
