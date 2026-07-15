@@ -227,7 +227,7 @@ fn start_or_join_finalization<T: Entity>(
             result_receiver,
         } => {
             RecordingController::handle(ctx).update(ctx, |_controller, ctx| {
-                spawn_finalize(recording, reason, should_upload, ctx);
+                spawn_finalize(*recording, reason, should_upload, ctx);
             });
             Some(RecordingFinalization::Pending(result_receiver))
         }
@@ -304,7 +304,7 @@ pub(crate) fn spawn_recording_exit_watcher(
                         }
                         computer_use::RecordingExitKind::Crashed => FinalizeReason::FfmpegExited,
                     };
-                    spawn_finalize(recording, reason, true, ctx);
+                    spawn_finalize(*recording, reason, true, ctx);
                 }
             }
             None if controller.active_recording_id() == Some(recording_id.as_str()) => {
