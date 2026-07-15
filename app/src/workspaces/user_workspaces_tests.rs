@@ -419,6 +419,7 @@ fn workspace_with_gemini_enterprise_host(
 
 #[test]
 fn test_gemini_enterprise_credentials_default_off_when_admin_respects_user_setting() {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
     let team = team_for_test();
     let workspace = workspace_with_gemini_enterprise_host(
         &team,
@@ -451,6 +452,7 @@ fn test_gemini_enterprise_credentials_default_off_when_admin_respects_user_setti
 
 #[test]
 fn test_gemini_enterprise_credentials_respect_user_setting_honors_member_toggle() {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
     let team = team_for_test();
     let workspace = workspace_with_gemini_enterprise_host(
         &team,
@@ -485,6 +487,7 @@ fn test_gemini_enterprise_credentials_respect_user_setting_honors_member_toggle(
 
 #[test]
 fn test_gemini_enterprise_credentials_enforced_by_admin() {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
     let team = team_for_test();
     let workspace =
         workspace_with_gemini_enterprise_host(&team, true, HostEnablementSetting::Enforce);
@@ -520,6 +523,7 @@ fn test_gemini_enterprise_credentials_enforced_by_admin() {
 
 #[test]
 fn test_gemini_enterprise_credentials_disabled_when_host_disabled() {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
     let team = team_for_test();
     let workspace =
         workspace_with_gemini_enterprise_host(&team, false, HostEnablementSetting::Enforce);
@@ -549,6 +553,7 @@ fn test_gemini_enterprise_credentials_disabled_when_host_disabled() {
 
 #[test]
 fn test_gemini_enterprise_credentials_disabled_when_host_absent() {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
     let team = team_for_test();
     // Bedrock-only workspace: proves the GEAP gate reads its own host entry.
     let mut workspace = workspace_for_test(&team);
@@ -589,6 +594,7 @@ fn test_gemini_enterprise_credentials_disabled_when_host_absent() {
 
 #[test]
 fn test_gemini_enterprise_credentials_disabled_when_logged_out() {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
     let team = team_for_test();
     let workspace =
         workspace_with_gemini_enterprise_host(&team, true, HostEnablementSetting::Enforce);

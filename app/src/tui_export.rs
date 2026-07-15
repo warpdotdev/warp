@@ -64,6 +64,14 @@ pub use crate::ai::conversation_export::{
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
+pub use crate::ai::orchestration::{
+    accept_disabled_reason_with_auth, auth_secret_selection_required,
+    empty_env_recommendation_message, harness_is_selectable, persist_environment_selection,
+    persist_host_selection, resolve_auth_secret_selection_for_harness,
+    resolve_default_environment_id, resolve_default_host_slug, resolve_recent_host_slug,
+    should_show_auth_secret_picker, AuthSecretSelection, OrchestrationConfigState,
+    OrchestrationEditState, ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
+};
 pub use crate::ai::skills::{SkillManager, SkillReference};
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
@@ -115,6 +123,8 @@ pub use crate::terminal::model::blockgrid::BlockGrid;
 pub use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
 };
+pub use crate::terminal::model::escape_sequences::{KeystrokeWithDetails, ToEscapeSequence};
+pub use crate::terminal::model::grid::grid_handler::{GridHandler, TermMode};
 pub use crate::terminal::model::rich_content::RichContentType;
 pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 pub use crate::terminal::model::session::Sessions;
@@ -125,7 +135,7 @@ pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};
 pub use crate::terminal::{
-    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData,
+    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData, SizeInfo, SizeUpdate,
     TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
 };
 pub use crate::themes::default_themes::{dark_theme, light_theme};
