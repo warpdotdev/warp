@@ -252,19 +252,18 @@ pub fn create_recorder() -> Box<dyn Recorder> {
 /// Burns action labels into a recorded video, returning the path to the
 /// annotated file. The original file is left untouched; the caller owns cleanup
 /// of both. Real compositing (ffmpeg + libass) only runs on the Linux capture
-/// path; every other target (and any `test-util` build) returns `input`
-/// unchanged so callers can treat annotation as best-effort and upload the
-/// original on any failure.
+/// path; every other target returns `input` unchanged so callers can treat
+/// annotation as best-effort and upload the original on any failure.
 pub async fn burn_in_action_log(
     input: &Path,
     entries: &[ActionLogEntry],
     dimensions: (u32, u32),
 ) -> Result<PathBuf, RecordingError> {
-    #[cfg(all(linux, not(feature = "test-util"), not(noop)))]
+    #[cfg(all(linux, not(noop)))]
     {
         imp::burn_in_action_log(input, entries, dimensions).await
     }
-    #[cfg(not(all(linux, not(feature = "test-util"), not(noop))))]
+    #[cfg(not(all(linux, not(noop))))]
     {
         let _ = (entries, dimensions);
         Ok(input.to_path_buf())
