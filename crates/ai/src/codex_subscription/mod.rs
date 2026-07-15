@@ -2,6 +2,7 @@
 
 pub mod oauth;
 
+use std::future::Future;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context as _;
@@ -192,14 +193,41 @@ fn spawn_codex_refresh(
     waiters: Vec<oneshot::Sender<CodexRefreshOutcome>>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
+    let requested_refresh_token = refresh_token.clone();
+    spawn_codex_refresh_with(
+        manager,
+        requested_refresh_token,
+        waiters,
+        async move { oauth::refresh_access_token(&refresh_token).await },
+        ctx,
+    );
+}
+
+fn spawn_codex_refresh_with<F>(
+    manager: &mut ApiKeyManager,
+    requested_refresh_token: String,
+    waiters: Vec<oneshot::Sender<CodexRefreshOutcome>>,
+    refresh: F,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) where
+    F: Future<Output = anyhow::Result<TokenResponse>> + Send + 'static,
+{
     if !register_codex_refresh(manager, waiters) {
         return;
     }
-    ctx.spawn(
-        async move { oauth::refresh_access_token(&refresh_token).await },
-        move |manager, result, ctx| {
-            let outcome = match result {
-                Ok(response) => {
+    ctx.spawn(refresh, move |manager, result, ctx| {
+        let outcome = match result {
+            Ok(response) => {
+                let still_current = manager
+                    .codex_tokens()
+                    .and_then(|tokens| tokens.refresh_token.as_deref())
+                    == Some(requested_refresh_token.as_str());
+                if !still_current {
+                    log::info!(
+                        "Discarding Codex OAuth refresh response because its credentials are no longer current"
+                    );
+                    CodexRefreshOutcome::Failed
+                } else {
                     log::info!(
                         "Refreshed Codex OAuth token (expires_in={:?}, has_refresh_token={})",
                         response.expires_in,
@@ -215,14 +243,14 @@ fn spawn_codex_refresh(
                         }
                     }
                 }
-                Err(error) => {
-                    report_error!(error.context("Failed to refresh Codex OAuth token"));
-                    CodexRefreshOutcome::Failed
-                }
-            };
-            finish_codex_refresh(manager, outcome);
-        },
-    );
+            }
+            Err(error) => {
+                report_error!(error.context("Failed to refresh Codex OAuth token"));
+                CodexRefreshOutcome::Failed
+            }
+        };
+        finish_codex_refresh(manager, outcome);
+    });
 }
 
 #[cfg(test)]

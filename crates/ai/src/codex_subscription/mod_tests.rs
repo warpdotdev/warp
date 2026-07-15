@@ -1,6 +1,7 @@
 use super::*;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use warpui_core::App;
 
 fn id_token(account_id: &str) -> String {
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
@@ -80,4 +81,129 @@ fn refresh_response_carries_forward_optional_identity_and_refresh_fields() {
     assert_eq!(stored.chatgpt_account_id, "account-old");
     assert_eq!(stored.connected_at, Some(connected_at));
     assert_eq!(stored.expires_at, None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn stale_refresh_success_cannot_restore_or_overwrite_tokens() {
+    for replacement in [
+        None,
+        Some(CodexTokens {
+            access_token: "replacement-access".into(),
+            refresh_token: Some("replacement-refresh".into()),
+            id_token: Some(id_token("replacement-account")),
+            chatgpt_account_id: "replacement-account".into(),
+            expires_at: None,
+            connected_at: None,
+        }),
+    ] {
+        App::test((), |mut app| async move {
+            app.update(|ctx| {
+                warpui_extras::secure_storage::register_noop("test", ctx);
+            });
+            let manager = app.add_singleton_model(ApiKeyManager::new);
+            let request_refresh_token = "request-refresh".to_string();
+            let (response_sender, response_receiver) =
+                oneshot::channel::<anyhow::Result<TokenResponse>>();
+            let first_waiter = manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_tokens(
+                    Some(CodexTokens {
+                        access_token: "refreshing-access".into(),
+                        refresh_token: Some(request_refresh_token.clone()),
+                        id_token: Some(id_token("request-account")),
+                        chatgpt_account_id: "request-account".into(),
+                        expires_at: None,
+                        connected_at: None,
+                    }),
+                    ctx,
+                );
+                let (waiter_sender, waiter_receiver) = oneshot::channel();
+                spawn_codex_refresh_with(
+                    manager,
+                    request_refresh_token,
+                    vec![waiter_sender],
+                    async move {
+                        response_receiver
+                            .await
+                            .expect("test refresh response sender dropped")
+                    },
+                    ctx,
+                );
+                waiter_receiver
+            });
+            let second_waiter = manager.update(&mut app, |manager, _| {
+                let (waiter_sender, waiter_receiver) = oneshot::channel();
+                assert!(!register_codex_refresh(manager, vec![waiter_sender]));
+                waiter_receiver
+            });
+
+            manager.update(&mut app, |manager, ctx| {
+                manager.set_codex_tokens(replacement.clone(), ctx);
+            });
+            response_sender
+                .send(Ok(TokenResponse {
+                    id_token: None,
+                    access_token: "stale-refreshed-access".into(),
+                    refresh_token: Some("stale-rotated-refresh".into()),
+                    expires_in: Some(3600),
+                }))
+                .expect("refresh task dropped response receiver");
+
+            assert_eq!(first_waiter.await.unwrap(), CodexRefreshOutcome::Failed);
+            assert_eq!(second_waiter.await.unwrap(), CodexRefreshOutcome::Failed);
+            manager.read(&app, |manager, _| {
+                assert_eq!(manager.codex_tokens(), replacement.as_ref());
+                assert!(manager.codex_refresh_waiters.is_none());
+            });
+        });
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn current_refresh_success_still_applies_and_wakes_waiter() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+        let waiter = manager.update(&mut app, |manager, ctx| {
+            manager.set_codex_tokens(
+                Some(CodexTokens {
+                    access_token: "old-access".into(),
+                    refresh_token: Some("current-refresh".into()),
+                    id_token: Some(id_token("current-account")),
+                    chatgpt_account_id: "current-account".into(),
+                    expires_at: None,
+                    connected_at: None,
+                }),
+                ctx,
+            );
+            let (waiter_sender, waiter_receiver) = oneshot::channel();
+            spawn_codex_refresh_with(
+                manager,
+                "current-refresh".into(),
+                vec![waiter_sender],
+                async {
+                    Ok(TokenResponse {
+                        id_token: None,
+                        access_token: "fresh-access".into(),
+                        refresh_token: Some("rotated-refresh".into()),
+                        expires_in: Some(3600),
+                    })
+                },
+                ctx,
+            );
+            waiter_receiver
+        });
+
+        assert_eq!(waiter.await.unwrap(), CodexRefreshOutcome::Refreshed);
+        manager.read(&app, |manager, _| {
+            let tokens = manager.codex_tokens().unwrap();
+            assert_eq!(tokens.access_token, "fresh-access");
+            assert_eq!(tokens.refresh_token.as_deref(), Some("rotated-refresh"));
+            assert_eq!(tokens.chatgpt_account_id, "current-account");
+            assert!(manager.codex_refresh_waiters.is_none());
+        });
+    });
 }
