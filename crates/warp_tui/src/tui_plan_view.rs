@@ -223,7 +223,9 @@ impl TuiPlanView {
         }
 
         TuiContainer::new(documents.finish())
-            .with_padding_left(4)
+            .with_padding_x(2)
+            .with_padding_y(1)
+            .with_background(builder.plan_background())
             .finish()
     }
 

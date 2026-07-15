@@ -20,6 +20,7 @@ use warpui_core::{App, TuiView, ViewHandle};
 
 use super::{TuiPlanCodeKey, TuiPlanView, TuiPlanViewAction, TuiPlanViewEvent};
 use crate::test_fixtures::{add_test_action_model, TestHostView};
+use crate::tui_builder::TuiUiBuilder;
 
 #[test]
 fn streamed_create_renders_cached_markdown_and_code_children() {
@@ -42,17 +43,23 @@ fn streamed_create_renders_cached_markdown_and_code_children() {
 
             let (lines, buffer) = render(view, 80, ctx);
             assert_eq!(lines[0], "Planning ▾");
-            assert_eq!(lines[1], "    Overview");
+            assert_eq!(lines[1], "");
+            assert_eq!(lines[2], "  Overview");
             assert!(lines
                 .iter()
                 .any(|line| line.trim() == "Build a fast timer."));
             assert!(lines.iter().all(|line| !line.contains("**")));
             assert!(lines
                 .iter()
-                .skip(1)
+                .skip(2)
                 .filter(|line| !line.is_empty())
-                .all(|line| line.starts_with("    ")));
-            assert_eq!(buffer[(0, 1)].bg, Color::Reset);
+                .all(|line| line.starts_with("  ")));
+            let plan_background = TuiUiBuilder::from_app(ctx).plan_background();
+            assert_eq!(buffer[(0, 0)].bg, Color::Reset);
+            assert_eq!(buffer[(0, 1)].bg, plan_background);
+            assert_eq!(buffer[(79, 1)].bg, plan_background);
+            assert_eq!(buffer[(0, 2)].bg, plan_background);
+            assert_eq!(buffer[(79, 2)].bg, plan_background);
             assert!(buffer[(0, 0)].modifier.contains(Modifier::BOLD));
             assert!(!buffer[(0, 0)].modifier.contains(Modifier::UNDERLINED));
 
