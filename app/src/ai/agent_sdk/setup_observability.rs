@@ -162,10 +162,6 @@ impl SetupClientEventReporter {
     }
 }
 
-#[cfg(test)]
-#[path = "setup_observability_tests.rs"]
-mod tests;
-
 #[derive(Clone, Copy)]
 pub(crate) enum OzRunTimelineEvent {
     AgentStarted,

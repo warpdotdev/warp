@@ -1,21 +1,11 @@
-// spacectl execution intentionally uses std::process::Command for the build_cache crate boundary.
-#![allow(clippy::disallowed_types)]
 use std::ffi::OsStr;
-use std::io::Read as _;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use build_cache::{
-    CacheSetupError, CacheSetupReport, HostPlatform, InvocationReport, RepoIdentity,
-    RepositoryCacheSource, SystemCacheTools,
+    CacheSetupError, CacheSetupReport, InvocationReport, RepoIdentity, RepositoryCacheSource,
 };
 use cloud_object_models::SourceRepo;
-use is_executable::IsExecutable as _;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_errors::report_error;
 use warp_isolation_platform::IsolationPlatformType;
@@ -24,8 +14,6 @@ use warpui::ModelSpawner;
 use super::terminal::TerminalDriver;
 
 const BUILD_CACHE_ROOT_ENV: &str = "WARP_BUILD_CACHE_ROOT";
-const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
-const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("build cache setup completed with degraded results")]
@@ -73,11 +61,8 @@ pub(crate) async fn setup_caches(
     let report = build_cache::setup_cache(
         cache_root,
         repositories,
-        current_platform(),
-        current_system_cache_tools(),
-        |command| async move {
-            blocking::unblock(move || run_command_with_timeout(command, SPACECTL_TIMEOUT)).await
-        },
+        build_cache::global_cache_modes(),
+        build_cache::run_spacectl_command,
     )
     .await;
 
@@ -95,97 +80,6 @@ pub(crate) async fn setup_caches(
     } else {
         Ok(())
     }
-}
-
-fn current_platform() -> HostPlatform {
-    if cfg!(target_os = "linux") {
-        HostPlatform::Linux
-    } else if cfg!(target_os = "macos") {
-        HostPlatform::MacOs
-    } else {
-        HostPlatform::Other
-    }
-}
-
-fn current_system_cache_tools() -> SystemCacheTools {
-    SystemCacheTools {
-        apt_config: command_resolves_on_path("apt-config"),
-        brew: command_resolves_on_path("brew"),
-    }
-}
-
-fn command_resolves_on_path(command: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|directory| directory.join(command).is_executable())
-    })
-}
-
-fn run_command_with_timeout(
-    mut command: Command,
-    timeout: Duration,
-) -> Result<Vec<u8>, CacheSetupError> {
-    command.stdout(Stdio::piped()).stderr(Stdio::null());
-    #[cfg(unix)]
-    command.process_group(0);
-    let mut child = command.spawn().map_err(|_| CacheSetupError::SpawnFailed)?;
-    let stdout = child.stdout.take().ok_or(CacheSetupError::SpawnFailed)?;
-    let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = std::io::BufReader::new(stdout).read_to_end(&mut bytes);
-        let _ = stdout_tx.send(bytes);
-    });
-    let started = Instant::now();
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    terminate_process_group(&mut child);
-                    return Err(CacheSetupError::NonzeroExit {
-                        exit_code: status.code(),
-                    });
-                }
-                let remaining = timeout.saturating_sub(started.elapsed());
-                return match stdout_rx.recv_timeout(remaining) {
-                    Ok(bytes) => Ok(bytes),
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        terminate_process_group(&mut child);
-                        Err(CacheSetupError::Timeout)
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        terminate_process_group(&mut child);
-                        Err(CacheSetupError::SpawnFailed)
-                    }
-                };
-            }
-            Ok(None) if started.elapsed() < timeout => {
-                thread::sleep(PROCESS_POLL_INTERVAL);
-            }
-            Ok(None) => {
-                terminate_process_group(&mut child);
-                return Err(CacheSetupError::Timeout);
-            }
-            Err(_) => {
-                terminate_process_group(&mut child);
-                return Err(CacheSetupError::SpawnFailed);
-            }
-        }
-    }
-}
-
-fn terminate_process_group(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        use nix::sys::signal::{kill, Signal};
-        use nix::unistd::Pid;
-
-        // The command is spawned as its process-group leader, so a negative PID
-        // terminates spacectl and descendants that inherited its stdout pipe.
-        let _ = kill(Pid::from_raw(-(child.id() as i32)), Signal::SIGKILL);
-    }
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 fn report_degradations(report: &CacheSetupReport) -> bool {

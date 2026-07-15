@@ -7,7 +7,12 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+async-io.workspace = true
+command.workspace = true
+futures-lite.workspace = true
 hex.workspace = true
+instant.workspace = true
+is_executable = "1.0.1"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

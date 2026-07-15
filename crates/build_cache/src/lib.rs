@@ -1,12 +1,15 @@
-// The injected executor must receive an unexecuted std command so tests can inspect exact argv/cwd.
-#![allow(clippy::disallowed_types)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use async_io::Timer;
+use command::Stdio;
+use command::r#async::Command;
+use futures_lite::future;
+use instant::Instant;
+use is_executable::IsExecutable as _;
 use sha2::{Digest, Sha256};
 use tracing_futures::Instrument as _;
 use warp_errors::{ErrorExt, register_error};
@@ -14,6 +17,8 @@ use warp_errors::{ErrorExt, register_error};
 pub mod spacectl;
 
 use spacectl::{MountResponse, detect_command, mount_command, parse_mount_response};
+
+const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RepoIdentity {
@@ -29,15 +34,11 @@ impl RepoIdentity {
         repo: impl Into<String>,
     ) -> Self {
         Self {
-            forge_host: normalize_identity_part(forge_host.into()),
-            owner: normalize_identity_part(owner.into()),
-            repo: normalize_identity_part(repo.into()),
+            forge_host: forge_host.into().trim().to_ascii_lowercase(),
+            owner: owner.into().trim().to_ascii_lowercase(),
+            repo: repo.into().trim().to_ascii_lowercase(),
         }
     }
-}
-
-fn normalize_identity_part(value: String) -> String {
-    value.trim().to_ascii_lowercase()
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -106,7 +107,7 @@ impl CacheScope {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RepositoryCacheSource {
     pub name: String,
     pub identity: RepoIdentity,
@@ -191,19 +192,6 @@ fn is_safe_relative_cache_dir(path: &Path) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("cache setup plan invariant violated")]
 pub struct PlanInvariantError;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HostPlatform {
-    Linux,
-    MacOs,
-    Other,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct SystemCacheTools {
-    pub apt_config: bool,
-    pub brew: bool,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum CacheSetupError {
@@ -305,34 +293,67 @@ struct Detection {
     modes: Vec<String>,
 }
 
+pub fn global_cache_modes() -> Vec<String> {
+    let mut modes = Vec::new();
+    if cfg!(target_os = "linux") && command_resolves_on_path("apt-config") {
+        modes.push("apt".to_owned());
+    }
+    if cfg!(target_os = "macos") && command_resolves_on_path("brew") {
+        modes.push("brew".to_owned());
+    }
+    modes
+}
+
+fn command_resolves_on_path(command: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|directory| directory.join(command).is_executable())
+    })
+}
+
+pub async fn run_spacectl_command(command: Command) -> Result<Vec<u8>, CacheSetupError> {
+    run_command_with_timeout(command, SPACECTL_TIMEOUT).await
+}
+
+async fn run_command_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<Vec<u8>, CacheSetupError> {
+    command
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let output = async {
+        command
+            .output()
+            .await
+            .map_err(|_| CacheSetupError::SpawnFailed)
+    };
+    let timeout = async {
+        Timer::after(timeout).await;
+        Err(CacheSetupError::Timeout)
+    };
+    let output = future::race(output, timeout).await?;
+    if !output.status.success() {
+        return Err(CacheSetupError::NonzeroExit {
+            exit_code: output.status.code(),
+        });
+    }
+    Ok(output.stdout)
+}
+
+#[tracing::instrument(name = "setup_caches", skip_all, fields(tags.cloud_agent = true))]
+
 pub async fn setup_cache<F, Fut>(
     cache_root: PathBuf,
     repositories: Vec<RepositoryCacheSource>,
-    platform: HostPlatform,
-    tools: SystemCacheTools,
+    additional_global_modes: Vec<String>,
     run_command: F,
 ) -> CacheSetupReport
 where
     F: FnMut(Command) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
 {
-    let span = tracing::info_span!("setup_caches", tags.cloud_agent = true);
-    setup_cache_inner(cache_root, repositories, platform, tools, run_command)
-        .instrument(span)
-        .await
-}
-
-async fn setup_cache_inner<F, Fut>(
-    cache_root: PathBuf,
-    repositories: Vec<RepositoryCacheSource>,
-    platform: HostPlatform,
-    tools: SystemCacheTools,
-    mut run_command: F,
-) -> CacheSetupReport
-where
-    F: FnMut(Command) -> Fut,
-    Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
-{
+    let mut run_command = run_command;
     let mut report = CacheSetupReport::default();
     let mut keyed_repositories: Vec<_> = repositories
         .into_iter()
@@ -341,7 +362,7 @@ where
             (key, source)
         })
         .collect();
-    keyed_repositories.sort_by(|(left, _), (right, _)| left.cmp(right));
+    keyed_repositories.sort();
 
     let mut detections = Vec::new();
     for (key, source) in keyed_repositories {
@@ -363,13 +384,13 @@ where
             continue;
         }
 
-        let command = detect_command(&configuration_root, &source.cwd);
-        let invocation = invoke(
+        let invocation = run_spacectl_mount(
             scope,
             Vec::new(),
             true,
             relative_cache_dir,
-            command,
+            &configuration_root,
+            &source.cwd,
             &mut run_command,
         )
         .await;
@@ -382,7 +403,7 @@ where
         report.invocations.push(invocation);
     }
 
-    let plan = match construct_plan(cache_root, detections, platform, tools) {
+    let plan = match construct_plan(cache_root, detections, additional_global_modes) {
         Ok(Some(plan)) => plan,
         Ok(None) => return report,
         Err(error) => {
@@ -412,17 +433,13 @@ where
                 Duration::ZERO,
             )
         } else {
-            let command = mount_command(
-                &configuration_root,
-                &configuration.cwd,
-                &configuration.modes,
-            );
-            invoke(
+            run_spacectl_mount(
                 configuration.scope.clone(),
                 configuration.modes.clone(),
                 false,
                 configuration.relative_cache_dir.clone(),
-                command,
+                &configuration_root,
+                &configuration.cwd,
                 &mut run_command,
             )
             .await
@@ -461,8 +478,7 @@ fn log_env_conflict() {
 fn construct_plan(
     cache_root: PathBuf,
     mut detections: Vec<Detection>,
-    platform: HostPlatform,
-    tools: SystemCacheTools,
+    additional_global_modes: Vec<String>,
 ) -> Result<Option<CacheSetupPlan>, CacheSetupError> {
     for detection in &mut detections {
         detection.modes = canonical_modes(std::mem::take(&mut detection.modes));
@@ -471,15 +487,7 @@ fn construct_plan(
     for detection in &detections {
         global_modes.extend(detection.modes.iter().cloned());
     }
-    match platform {
-        HostPlatform::Linux if tools.apt_config => {
-            global_modes.insert("apt".to_owned());
-        }
-        HostPlatform::MacOs if tools.brew => {
-            global_modes.insert("brew".to_owned());
-        }
-        HostPlatform::Linux | HostPlatform::MacOs | HostPlatform::Other => {}
-    }
+    global_modes.extend(additional_global_modes);
     if global_modes.is_empty() {
         return Ok(None);
     }
@@ -522,16 +530,16 @@ fn create_retained_scratch_directory<'a>(
     repository_paths: impl Iterator<Item = &'a Path>,
 ) -> Result<PathBuf, CacheSetupError> {
     let repository_paths = repository_paths.collect::<Vec<_>>();
-    let directory = tempfile::Builder::new()
-        .prefix("warp-spacectl-")
-        .tempdir()
-        .map_err(|_| CacheSetupError::RootCreationFailed)?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("warp-spacectl-");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
-            .map_err(|_| CacheSetupError::RootCreationFailed)?;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
     }
+    let directory = builder
+        .tempdir()
+        .map_err(|_| CacheSetupError::RootCreationFailed)?;
     if repository_paths
         .iter()
         .any(|repository| directory.path().starts_with(repository))
@@ -541,18 +549,24 @@ fn create_retained_scratch_directory<'a>(
     Ok(directory.keep())
 }
 
-async fn invoke<F, Fut>(
+async fn run_spacectl_mount<F, Fut>(
     scope: CacheScope,
     modes: Vec<String>,
     dry_run: bool,
     relative_cache_dir: PathBuf,
-    command: Command,
+    cache_root: &Path,
+    cwd: &Path,
     run_command: &mut F,
 ) -> InvocationReport
 where
     F: FnMut(Command) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
 {
+    let command = if dry_run {
+        detect_command(cache_root, cwd)
+    } else {
+        mount_command(cache_root, cwd, &modes)
+    };
     let started = Instant::now();
     let scope_name = scope.kind();
     let repo_key = scope.repo_key().map(RepoCacheKey::as_str).unwrap_or("");

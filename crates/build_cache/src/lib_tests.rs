@@ -4,15 +4,18 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
+use command::r#async::Command;
 use futures::executor::block_on;
+#[cfg(unix)]
+use instant::Instant;
 use warp_errors::ErrorExt as _;
 
 use super::{
-    CacheScope, CacheSetupError, Detection, HostPlatform, RepoCacheKey, RepoIdentity,
-    RepositoryCacheSource, SystemCacheTools, aggregate_mode_stats, build_export_script,
-    construct_plan, create_retained_scratch_directory, is_valid_env_name, posix_single_quote,
-    setup_cache,
+    CacheScope, CacheSetupError, Detection, RepoCacheKey, RepoIdentity, RepositoryCacheSource,
+    aggregate_mode_stats, build_export_script, construct_plan, create_retained_scratch_directory,
+    is_valid_env_name, posix_single_quote, run_command_with_timeout, setup_cache,
 };
 use crate::spacectl::{Mount, MountInput, MountOutput, MountResponse};
 
@@ -60,17 +63,17 @@ fn response(modes: &[&str], envs: &[(&str, &str)], mounts: &[(&str, bool)]) -> V
     .into_bytes()
 }
 
-fn command_args(command: &std::process::Command) -> Vec<OsString> {
+fn command_args(command: &Command) -> Vec<OsString> {
     command.get_args().map(ToOwned::to_owned).collect()
 }
 
-fn is_detect(command: &std::process::Command) -> bool {
+fn is_detect(command: &Command) -> bool {
     command_args(command)
         .iter()
         .any(|arg| arg == "--dry_run=true")
 }
 
-fn is_global(command: &std::process::Command) -> bool {
+fn is_global(command: &Command) -> bool {
     command_args(command)
         .iter()
         .any(|arg| Path::new(arg).ends_with("shared"))
@@ -117,8 +120,7 @@ fn plan_orders_repository_keys_and_places_single_global_last() {
     let plan = construct_plan(
         temp.path().join("cache"),
         vec![detection(left, &["go"]), detection(right, &["cargo"])],
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
     )
     .unwrap()
     .unwrap();
@@ -148,8 +150,7 @@ fn plan_uses_only_relative_repo_and_shared_cache_directories() {
     let plan = construct_plan(
         temp.path().join("cache"),
         vec![detection(repo, &["cargo"])],
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
     )
     .unwrap()
     .unwrap();
@@ -176,11 +177,7 @@ fn plan_sorts_and_deduplicates_configuration_modes() {
     let plan = construct_plan(
         temp.path().join("cache"),
         vec![detection(repo, &["cargo", "go"])],
-        HostPlatform::Linux,
-        SystemCacheTools {
-            apt_config: true,
-            brew: false,
-        },
+        vec!["apt".to_owned()],
     )
     .unwrap()
     .unwrap();
@@ -202,8 +199,7 @@ fn global_modes_are_union_of_successful_repo_detections() {
             detection(one, &["go", "cargo"]),
             detection(two, &["cargo", "npm"]),
         ],
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
     )
     .unwrap()
     .unwrap();
@@ -214,60 +210,34 @@ fn global_modes_are_union_of_successful_repo_detections() {
 }
 
 #[test]
-fn global_modes_add_apt_only_on_linux_when_apt_config_exists() {
+fn plan_adds_supplied_apt_global_mode() {
     let temp = tempfile::tempdir().unwrap();
     let with_apt = construct_plan(
         temp.path().join("cache-a"),
         Vec::new(),
-        HostPlatform::Linux,
-        SystemCacheTools {
-            apt_config: true,
-            brew: true,
-        },
+        vec!["apt".to_owned()],
     )
     .unwrap()
     .unwrap();
     assert_eq!(with_apt.configurations.last().unwrap().modes, ["apt"]);
 
-    let without_apt = construct_plan(
-        temp.path().join("cache-b"),
-        Vec::new(),
-        HostPlatform::Linux,
-        SystemCacheTools {
-            apt_config: false,
-            brew: true,
-        },
-    )
-    .unwrap();
+    let without_apt = construct_plan(temp.path().join("cache-b"), Vec::new(), Vec::new()).unwrap();
     assert!(without_apt.is_none());
 }
 
 #[test]
-fn global_modes_add_brew_only_on_macos_when_brew_exists() {
+fn plan_adds_supplied_brew_global_mode() {
     let temp = tempfile::tempdir().unwrap();
     let with_brew = construct_plan(
         temp.path().join("cache-a"),
         Vec::new(),
-        HostPlatform::MacOs,
-        SystemCacheTools {
-            apt_config: true,
-            brew: true,
-        },
+        vec!["brew".to_owned()],
     )
     .unwrap()
     .unwrap();
     assert_eq!(with_brew.configurations.last().unwrap().modes, ["brew"]);
 
-    let without_brew = construct_plan(
-        temp.path().join("cache-b"),
-        Vec::new(),
-        HostPlatform::MacOs,
-        SystemCacheTools {
-            apt_config: true,
-            brew: false,
-        },
-    )
-    .unwrap();
+    let without_brew = construct_plan(temp.path().join("cache-b"), Vec::new(), Vec::new()).unwrap();
     assert!(without_brew.is_none());
 }
 
@@ -275,14 +245,9 @@ fn global_modes_add_brew_only_on_macos_when_brew_exists() {
 fn empty_mode_union_produces_no_executable_plan() {
     let temp = tempfile::tempdir().unwrap();
     assert!(
-        construct_plan(
-            temp.path().join("cache"),
-            Vec::new(),
-            HostPlatform::Other,
-            SystemCacheTools::default(),
-        )
-        .unwrap()
-        .is_none()
+        construct_plan(temp.path().join("cache"), Vec::new(), Vec::new(),)
+            .unwrap()
+            .is_none()
     );
 }
 
@@ -297,8 +262,7 @@ fn json_parse_failure_is_classified_and_does_not_abort_later_repos() {
     let report = block_on(setup_cache(
         temp.path().join("cache"),
         repositories,
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
         {
             let calls = Rc::clone(&calls);
             move |_| {
@@ -330,8 +294,7 @@ fn destructive_execution_uses_resolved_modes_without_redetection() {
     let report = block_on(setup_cache(
         temp.path().join("cache"),
         vec![source(temp.path(), "github.com", "warp", "client")],
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
         {
             let commands = Rc::clone(&commands);
             move |command| {
@@ -365,8 +328,7 @@ fn repo_failure_continues_and_global_still_executes() {
             source(temp.path(), "github.com", "warp", "one"),
             source(temp.path(), "github.com", "warp", "two"),
         ],
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
         {
             let destructive_calls = Rc::clone(&destructive_calls);
             move |command| {
@@ -402,8 +364,7 @@ fn spacectl_calls_are_bounded_by_two_repos_plus_one_global() {
             source(temp.path(), "github.com", "warp", "one"),
             source(temp.path(), "github.com", "warp", "two"),
         ],
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
         {
             let calls = Rc::clone(&calls);
             move |_| {
@@ -422,8 +383,7 @@ fn shared_success_replaces_complete_repo_env_overlay() {
     let report = block_on(setup_cache(
         temp.path().join("cache"),
         vec![source(temp.path(), "github.com", "warp", "client")],
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
         move |command| {
             futures::future::ready(Ok(if is_detect(&command) {
                 response(&["cargo"], &[], &[])
@@ -446,8 +406,7 @@ fn shared_failure_keeps_canonical_repo_env_overlay() {
     let report = block_on(setup_cache(
         temp.path().join("cache"),
         vec![source(temp.path(), "github.com", "warp", "client")],
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
         move |command| {
             futures::future::ready(if is_detect(&command) {
                 Ok(response(&["cargo"], &[], &[]))
@@ -479,8 +438,7 @@ fn repo_env_conflict_resolves_by_key_order() {
     let report = block_on(setup_cache(
         temp.path().join("cache"),
         repositories,
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
         move |command| {
             let value = if command.get_current_dir() == Some(winning_cwd.as_path()) {
                 "winner"
@@ -591,6 +549,46 @@ fn scratch_directories_are_unique_0700_outside_repo_and_retained() {
 }
 
 #[test]
+fn process_runner_classifies_spawn_nonzero_and_timeout() {
+    let missing = block_on(run_command_with_timeout(
+        Command::new_with_process_group("/definitely/missing/spacectl"),
+        Duration::from_millis(50),
+    ));
+    assert_eq!(missing, Err(CacheSetupError::SpawnFailed));
+
+    let mut nonzero = Command::new_with_process_group("sh");
+    nonzero.args(["-c", "exit 17"]);
+    assert_eq!(
+        block_on(run_command_with_timeout(nonzero, Duration::from_secs(1))),
+        Err(CacheSetupError::NonzeroExit {
+            exit_code: Some(17)
+        })
+    );
+
+    let mut timeout = Command::new_with_process_group("sh");
+    timeout.args(["-c", "sleep 1"]);
+    assert_eq!(
+        block_on(run_command_with_timeout(timeout, Duration::from_millis(10))),
+        Err(CacheSetupError::Timeout)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn timeout_returns_bounded_when_descendant_keeps_stdout_open() {
+    let mut command = Command::new_with_process_group("sh");
+    command.args(["-c", "sleep 5 &"]);
+    let started = Instant::now();
+    let result = block_on(run_command_with_timeout(
+        command,
+        Duration::from_millis(100),
+    ));
+
+    assert_eq!(result, Err(CacheSetupError::Timeout));
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
 fn cache_setup_error_variants_have_expected_is_actionable_classification() {
     assert!(!CacheSetupError::RootCreationFailed.is_actionable());
     assert!(!CacheSetupError::SpawnFailed.is_actionable());
@@ -618,8 +616,7 @@ fn failure_categories_are_preserved() {
                 "warp",
                 &format!("repo-{}", error.kind()),
             )],
-            HostPlatform::Other,
-            SystemCacheTools::default(),
+            Vec::new(),
             {
                 let error = error.clone();
                 move |_| futures::future::ready(Err(error.clone()))
@@ -633,8 +630,7 @@ fn failure_categories_are_preserved() {
     let report = block_on(setup_cache(
         cache_root_file,
         vec![source(temp.path(), "github.com", "warp", "root-failure")],
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
         |_| futures::future::ready(Ok(Vec::new())),
     ));
     assert_eq!(
@@ -656,8 +652,7 @@ fn queued_executor_can_return_each_failure_category() {
             source(temp.path(), "github.com", "warp", "one"),
             source(temp.path(), "github.com", "warp", "two"),
         ],
-        HostPlatform::Other,
-        SystemCacheTools::default(),
+        Vec::new(),
         {
             let queue = Rc::clone(&queue);
             move |_| futures::future::ready(queue.borrow_mut().pop_front().unwrap())

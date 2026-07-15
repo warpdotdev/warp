@@ -1,9 +1,11 @@
 use std::ffi::OsStr;
 use std::path::Path;
 
+use command::r#async::Command;
+
 use super::{detect_command, mount_command, parse_mount_response};
 
-fn args(command: &std::process::Command) -> Vec<&OsStr> {
+fn args(command: &Command) -> Vec<&OsStr> {
     command.get_args().collect()
 }
 

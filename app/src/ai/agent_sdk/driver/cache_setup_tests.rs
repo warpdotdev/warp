@@ -2,11 +2,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::rc::Rc;
 use std::time::Duration;
-#[cfg(unix)]
-use std::time::Instant;
 
 use build_cache::{
     build_export_script, CacheScope, CacheSetupError, CacheSetupReport, InvocationReport,
@@ -18,8 +15,7 @@ use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_isolation_platform::IsolationPlatformType;
 
 use super::{
-    apply_export_with, report_degradations_with, repository_cache_source, run_command_with_timeout,
-    should_setup_cache,
+    apply_export_with, report_degradations_with, repository_cache_source, should_setup_cache,
 };
 
 fn command_output(status: CommandExitStatus) -> CommandOutput {
@@ -66,43 +62,6 @@ fn source_repo_maps_to_canonical_identity_and_checkout() {
     assert_eq!(mapped.identity.owner, "platform/backend");
     assert_eq!(mapped.identity.repo, "api");
     assert_eq!(mapped.cwd, Path::new("/work/API"));
-}
-
-#[test]
-fn process_runner_classifies_spawn_nonzero_and_timeout() {
-    let missing = run_command_with_timeout(
-        Command::new("/definitely/missing/spacectl"),
-        Duration::from_millis(50),
-    );
-    assert_eq!(missing, Err(CacheSetupError::SpawnFailed));
-
-    let mut nonzero = Command::new("sh");
-    nonzero.args(["-c", "exit 17"]);
-    assert_eq!(
-        run_command_with_timeout(nonzero, Duration::from_secs(1)),
-        Err(CacheSetupError::NonzeroExit {
-            exit_code: Some(17)
-        })
-    );
-
-    let mut timeout = Command::new("sh");
-    timeout.args(["-c", "sleep 1"]);
-    assert_eq!(
-        run_command_with_timeout(timeout, Duration::from_millis(10)),
-        Err(CacheSetupError::Timeout)
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn timeout_returns_bounded_when_descendant_keeps_stdout_open() {
-    let mut command = Command::new("sh");
-    command.args(["-c", "sleep 5 &"]);
-    let started = Instant::now();
-    let result = run_command_with_timeout(command, Duration::from_millis(100));
-
-    assert_eq!(result, Err(CacheSetupError::Timeout));
-    assert!(started.elapsed() < Duration::from_secs(1));
 }
 
 #[test]

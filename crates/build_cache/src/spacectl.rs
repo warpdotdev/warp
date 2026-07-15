@@ -1,6 +1,6 @@
 use std::path::Path;
-use std::process::Command;
 
+use command::r#async::Command;
 use serde::Deserialize;
 
 use crate::CacheSetupError;
@@ -42,7 +42,7 @@ pub struct DiskUsage {
 }
 
 pub fn detect_command(cache_root: &Path, cwd: &Path) -> Command {
-    let mut command = Command::new("spacectl");
+    let mut command = Command::new_with_process_group("spacectl");
     command
         .args([
             "cache",
@@ -58,7 +58,7 @@ pub fn detect_command(cache_root: &Path, cwd: &Path) -> Command {
 }
 
 pub fn mount_command(cache_root: &Path, cwd: &Path, modes: &[String]) -> Command {
-    let mut command = Command::new("spacectl");
+    let mut command = Command::new_with_process_group("spacectl");
     command
         .args(["cache", "mount"])
         .arg(format!("--mode={}", modes.join(",")))
