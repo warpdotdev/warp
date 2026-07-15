@@ -336,6 +336,20 @@ frame-timing pitfall below:
 ffmpeg -y -ss 1.5 -i /tmp/tui.gif -frames:v 1 /tmp/tui.png
 ```
 
+**Attach the capture as conversation artifacts (required, not an afterthought).**
+Once you have the still and/or the recording, attach *each* to the run as a
+**conversation artifact** so the proof persists beyond `/tmp`, travels with the
+task, and can surface into the PR description in the native Oz flow — don't leave
+it sitting in a temp file. Call the `upload_artifact` tool once per file, passing
+the local `file_path` and a short `description` (e.g. `file_path=/tmp/tui.png`,
+`description="TUI <surface> after <change> — verification screenshot"`, and
+likewise `/tmp/tui.gif` for the recording). For any user-visible TUI change you
+verified here, attaching the screenshot and any recording is **expected**. These
+are FILE artifacts capped at 25 MB each, so keep recordings short (see below). If
+you're running somewhere the `upload_artifact` tool isn't available (a plain
+local dev shell rather than a cloud/ambient agent), keep the files and reference
+them in the PR instead.
+
 Capture pitfalls:
 - **asciinema must run under a PTY.** Wrap it in tmux (above) or `script`; a
   bare `asciinema rec` in a non-interactive runner shell errors out.
@@ -369,9 +383,9 @@ cargo nextest run -p warpui_core
 For a user-visible TUI change, attach the concrete rendered result as the
 verification evidence: the relevant lines from `tmux capture-pane` (and/or the
 `render_to_lines` snapshot diff), and — for a visual or interaction change — a
-**screenshot or short video** rendered via asciinema+agg (Step 4). This is the
-TUI equivalent of the GUI's `computer_use` screenshot (see the TUI caveat in
-`review-pr-local`).
+**screenshot or short video** rendered via asciinema+agg and attached to the run
+as conversation artifacts (Step 4). This is the TUI equivalent of the GUI's
+`computer_use` screenshot (see the TUI caveat in `review-pr-local`).
 
 ## Related skills
 
