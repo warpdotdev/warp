@@ -148,9 +148,9 @@ pub enum AIAgentActionType {
         summary: Option<String>,
         /// The surface to record. `None` (the default, and the only value the
         /// server currently supplies) records the whole screen; a `Window`
-        /// target records just that window via the client's Composite
-        /// per-frame capture. Applied by the client only when background
-        /// computer use is enabled.
+        /// target records just that window via native ffmpeg `x11grab
+        /// -window_id` on the foreground-visible window. Applied by the client
+        /// only when background computer use is enabled.
         window: Option<computer_use::Target>,
     },
 

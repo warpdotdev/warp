@@ -503,14 +503,13 @@ impl From<api::message::tool_call::RequestComputerUse> for AIAgentActionType {
     }
 }
 
-impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
-    fn from(value: api::message::tool_call::StartRecording) -> Self {
+impl TryFrom<api::message::tool_call::StartRecording> for AIAgentActionType {
+    type Error = ToolToAIAgentActionError;
+
+    fn try_from(value: api::message::tool_call::StartRecording) -> Result<Self, Self::Error> {
         let limits = value.limits;
-        let window = match convert_computer_use_target(value.target) {
-            target @ computer_use::Target::Window { .. } => Some(target),
-            computer_use::Target::Screen => None,
-        };
-        AIAgentActionType::StartRecording {
+        let window = convert_recording_target(value.target)?;
+        Ok(AIAgentActionType::StartRecording {
             frame_rate: value.frame_rate.max(0) as u32,
             max_duration: limits
                 .as_ref()
@@ -523,7 +522,7 @@ impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
                 .map(|bytes| bytes as u64),
             summary: (!value.summary.trim().is_empty()).then_some(value.summary),
             window,
-        }
+        })
     }
 }
 
@@ -562,6 +561,28 @@ fn convert_screenshot_params(
         max_total_px: (params.max_total_px > 0).then_some(params.max_total_px as usize),
         region,
         target: convert_computer_use_target(params.target),
+    }
+}
+
+/// Converts a `StartRecording` target into the optional window to record. Unlike
+/// [`convert_computer_use_target`], which falls back to whole-screen for an unparseable window id,
+/// recording preserves the parse failure and errors before capture starts: a malformed window
+/// target must not silently record the full display instead of the requested window.
+fn convert_recording_target(
+    target: Option<api::message::tool_call::ComputerUseTarget>,
+) -> Result<Option<computer_use::Target>, ToolToAIAgentActionError> {
+    use api::message::tool_call::computer_use_target::Target as ApiTarget;
+    match target.and_then(|t| t.target) {
+        Some(ApiTarget::Window(window)) => match window.window_id.parse::<u32>() {
+            Ok(window_id) => Ok(Some(computer_use::Target::Window {
+                window_id,
+                pid: window.pid,
+            })),
+            Err(_) => Err(ToolToAIAgentActionError::InvalidRecordingWindowId(
+                window.window_id,
+            )),
+        },
+        Some(ApiTarget::Screen(_)) | None => Ok(None),
     }
 }
 
@@ -782,3 +803,7 @@ impl From<api::message::tool_call::insert_review_comments::Comment> for InsertRe
         }
     }
 }
+
+#[cfg(test)]
+#[path = "convert_tests.rs"]
+mod tests;
