@@ -11,6 +11,15 @@ fn interrupt_event_projects_to_high_level_pty_intent() {
 }
 
 #[test]
+fn user_input_event_projects_to_raw_user_bytes() {
+    let event = TuiTerminalSessionEvent::WriteUserInput(b"hello\r".to_vec().into());
+    let Some(PtyIntent::WriteBytes(bytes)) = event.pty_intent() else {
+        panic!("user input event should map to raw PTY bytes");
+    };
+    assert_eq!(&*bytes, b"hello\r");
+}
+
+#[test]
 fn non_command_prompt_preserves_leading_whitespace() {
     assert_eq!(raw_prompt_if_not_blank("  /compact"), Some("  /compact"));
 }

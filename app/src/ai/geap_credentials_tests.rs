@@ -295,7 +295,7 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
 }
 
 #[test]
-fn refresh_rests_at_missing_when_enabled_but_unconfigured() {
+fn refresh_rests_at_unconfigured_when_enabled_but_unconfigured() {
     let mut workspace = workspace_with_geap_host(true);
     // Enabled, but the admin has not configured an audience yet.
     workspace
@@ -312,7 +312,7 @@ fn refresh_rests_at_missing_when_enabled_but_unconfigured() {
             refresh_geap_credentials(manager, ctx);
             assert_eq!(
                 *manager.geap_credentials_state(),
-                GeapCredentialsState::Missing
+                GeapCredentialsState::Unconfigured
             );
         });
     })

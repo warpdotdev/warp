@@ -20,6 +20,7 @@ use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentSaveStat
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::RunAgentsPermission;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+use crate::ai::orchestration::populate_default_auth_secret_for_execution;
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;

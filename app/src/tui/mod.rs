@@ -28,6 +28,12 @@ pub enum TuiLoginPhase {
     LoggedIn,
 }
 
+/// Events emitted by [`TuiLoginModel`].
+pub enum TuiLoginEvent {
+    /// Authentication completed and the TUI can create its terminal session.
+    LoggedIn,
+}
+
 /// Singleton holding the TUI's [`TuiLoginPhase`]. Updated by [`init`]'s auth
 /// flow and read by the `warp_tui` root view.
 pub struct TuiLoginModel {
@@ -42,7 +48,7 @@ impl TuiLoginModel {
 }
 
 impl Entity for TuiLoginModel {
-    type Event = ();
+    type Event = TuiLoginEvent;
 }
 
 impl SingletonEntity for TuiLoginModel {}
@@ -112,10 +118,19 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
 }
 
 /// Updates the shared [`TuiLoginModel`] phase and notifies observers, so the
-/// root view re-renders (and the TUI driver repaints).
+/// root view re-renders (and the TUI driver repaints). Emits
+/// [`TuiLoginEvent::LoggedIn`] when authentication completes.
 fn set_login_phase(ctx: &mut AppContext, phase: TuiLoginPhase) {
     TuiLoginModel::handle(ctx).update(ctx, |model, ctx| {
+        let logged_in = matches!(phase, TuiLoginPhase::LoggedIn);
         model.phase = phase;
         ctx.notify();
+        if logged_in {
+            ctx.emit(TuiLoginEvent::LoggedIn);
+        }
     });
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

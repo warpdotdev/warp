@@ -15,7 +15,7 @@ use warp::tui_export::{
     Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
     ServerConversationToken, TerminalManagerTrait, TerminalSurfaceResult,
 };
-use warp::{TuiLoginModel, TuiLoginPhase};
+use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_errors::report_error;
 use warpui::SingletonEntity;
 use warpui_core::platform::{TerminationMode, WindowStyle};
@@ -147,15 +147,13 @@ fn init(
                 let root_for_login = root.clone();
                 let banner_for_login = banner.clone();
                 let login_model = TuiLoginModel::handle(ctx);
-                ctx.subscribe_to_model(&login_model, move |_, _, ctx| {
-                    if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
-                        create_terminal_session_after_login(
-                            &session_for_login,
-                            &root_for_login,
-                            &banner_for_login,
-                            ctx,
-                        );
-                    }
+                ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
+                    TuiLoginEvent::LoggedIn => create_terminal_session_after_login(
+                        &session_for_login,
+                        &root_for_login,
+                        &banner_for_login,
+                        ctx,
+                    ),
                 });
             }
         }

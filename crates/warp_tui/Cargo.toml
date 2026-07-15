@@ -48,6 +48,7 @@ http_client.workspace = true
 instant.workspace = true
 itertools.workspace = true
 log.workspace = true
+markdown_parser.workspace = true
 num-traits.workspace = true
 parking_lot.workspace = true
 pathfinder_color.workspace = true

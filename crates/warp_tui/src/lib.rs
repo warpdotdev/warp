@@ -33,8 +33,8 @@ mod skills_menu;
 mod slash_commands;
 mod terminal_background;
 mod terminal_block;
+mod terminal_content_element;
 mod terminal_session_view;
-mod terminal_size_element;
 mod terminal_use;
 #[cfg(test)]
 mod test_fixtures;
@@ -46,6 +46,9 @@ mod tui_cli_subagent_view;
 mod tui_column_layout;
 mod tui_diff_storage;
 mod tui_file_edits_view;
+// The renderer's production consumer lands in a follow-up change.
+#[allow(dead_code)]
+mod tui_markdown;
 mod tui_shell_command_view;
 mod usage;
 mod warping_indicator;

@@ -1,37 +1,33 @@
-//! Full-screen alt-screen rendering + raw keyboard forwarding for the TUI.
+//! Full-screen alt-screen rendering for the TUI.
 //!
 //! When a PTY app switches to the alternate screen (vim, htop, less, …), the
 //! terminal model flips [`TerminalModel::is_alt_screen_active`] and populates a
 //! dedicated alt-screen grid. [`TuiTerminalSessionView`] then renders this
-//! element full-area instead of the block/transcript UI, and forwards
-//! keystrokes straight to the PTY as escape sequences — mirroring the GUI's
+//! element full-area instead of the block/transcript UI — mirroring the GUI's
 //! `AltScreenElement` (`app/src/terminal/alt_screen/alt_screen_element.rs`).
 //!
-//! Covers rendering, the cursor, and keyboard forwarding. PTY sizing is
-//! handled by the session view's `TuiTerminalSizeElement` wrapper, which
-//! publishes this element's laid-out dimensions after every layout. Mouse
-//! forwarding is tracked as a follow-up.
+//! Covers rendering and the cursor. PTY sizing and keyboard forwarding are
+//! handled by the session view's `TuiTerminalContentElement` wrapper. Mouse
+//! forwarding remains a follow-up.
 //!
 //! [`TuiTerminalSessionView`]: crate::terminal_session_view::TuiTerminalSessionView
 //! [`TerminalModel::is_alt_screen_active`]: warp::tui_export::TerminalModel
 
-use std::ops::Deref as _;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warp::tui_export::{KeystrokeWithDetails, TermMode, TerminalModel};
+use warp::tui_export::{TermMode, TerminalModel};
 use warp_terminal::model::grid::Dimensions as _;
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize,
+    TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiScreenPoint,
+    TuiScreenPosition, TuiSize,
 };
 use warpui_core::AppContext;
 
 use crate::terminal_block::render_grid_handler;
-use crate::terminal_session_view::TuiTerminalSessionAction;
 
-/// Renders the terminal's alt-screen grid full-area and forwards input to the
-/// PTY while a full-screen app is active.
+/// Renders the terminal's alt-screen grid full-area while a full-screen app is
+/// active.
 pub(crate) struct AltScreenElement {
     model: Arc<FairMutex<TerminalModel>>,
     size: Option<TuiSize>,
@@ -103,46 +99,6 @@ impl TuiElement for AltScreenElement {
 
     fn origin(&self) -> Option<TuiScreenPoint> {
         self.origin
-    }
-
-    fn dispatch_event(
-        &mut self,
-        event: &TuiEvent,
-        event_ctx: &mut TuiEventContext<'_>,
-        _app: &AppContext,
-    ) -> bool {
-        let TuiEvent::KeyDown {
-            keystroke,
-            chars,
-            details,
-            is_composing,
-        } = event
-        else {
-            // Mouse forwarding is a follow-up slice.
-            return false;
-        };
-        if *is_composing {
-            return false;
-        }
-        // Forward the key to the app. `to_pty_bytes` layers the fallbacks a
-        // single-`KeyDown` frontend needs — `Ctrl+<letter>` → C0, printable
-        // `chars`, and named control keys — on top of the shared
-        // `to_escape_sequence` encoder in `warp_terminal`. (ctrl-c never reaches
-        // here: the session view's interrupt handler forwards it to the app.)
-        let bytes = {
-            let model = self.model.lock();
-            KeystrokeWithDetails {
-                keystroke,
-                key_without_modifiers: details.key_without_modifiers.as_deref(),
-                chars: Some(chars.as_str()),
-            }
-            .to_pty_bytes(model.deref())
-        };
-        let Some(bytes) = bytes else {
-            return false;
-        };
-        event_ctx.dispatch_typed_action(TuiTerminalSessionAction::ForwardToPty(bytes));
-        true
     }
 }
 
