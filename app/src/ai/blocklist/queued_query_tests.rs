@@ -565,7 +565,7 @@ fn enter_edit_mode_locks_to_one_row_at_a_time() {
 }
 
 #[test]
-fn commit_edit_with_text_replaces_row_and_clears_config_state() {
+fn commit_edit_with_text_replaces_row_and_clears_edit_state() {
     // Non-empty edits replace the queued row's text.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();
@@ -609,7 +609,7 @@ fn commit_edit_with_empty_text_restores_original_text() {
 }
 
 #[test]
-fn cancel_edit_leaves_row_unchanged_and_clears_config_state() {
+fn cancel_edit_leaves_row_unchanged_and_clears_edit_state() {
     // Canceling an edit leaves the row unchanged.
     with_model(|mut app, model, _events| {
         let conv = AIConversationId::new();

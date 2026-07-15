@@ -102,4 +102,3 @@ fn accept_allowed_for_cloud_harness_with_named_or_inherited_auth() {
         }
     });
 }
-
