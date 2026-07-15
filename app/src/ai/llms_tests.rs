@@ -906,3 +906,75 @@ fn tui_agent_model_unknown_id_falls_back_to_the_default_model() {
         );
     });
 }
+
+#[test]
+fn test_is_using_api_key_for_provider_openai_with_codex_subscription() {
+    App::test((), |mut app| async move {
+        // Enforce the SoloUserByok override
+        let byok_guard = warp_core::features::FeatureFlag::SoloUserByok.override_enabled(true);
+
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+            ctx.add_singleton_model(ApiKeyManager::new);
+        });
+
+        // Initially without keys or subscription, it should return false
+        app.read(|ctx| {
+            assert!(!is_using_api_key_for_provider(&LLMProvider::OpenAI, ctx));
+        });
+
+        // 1. If OpenAI API key is present, it is true (even without subscription or feature flag enabled)
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_openai_key(Some("sk-openai".to_string()), ctx);
+        });
+        app.read(|ctx| {
+            assert!(is_using_api_key_for_provider(&LLMProvider::OpenAI, ctx));
+        });
+
+        // Clear OpenAI API key
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_openai_key(None, ctx);
+        });
+
+        // 2. If Codex subscription tokens are set, but the CodexSubscription feature flag is disabled, it should return false
+        let feature_off = warp_core::features::FeatureFlag::CodexSubscription.override_enabled(false);
+        use ::ai::api_keys::CodexTokens;
+        use std::time::SystemTime;
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_codex_tokens(
+                Some(CodexTokens {
+                    access_token: "test-token".to_string(),
+                    refresh_token: None,
+                    id_token: None,
+                    chatgpt_account_id: "account-123".to_string(),
+                    expires_at: None,
+                    connected_at: Some(SystemTime::now()),
+                }),
+                ctx,
+            );
+        });
+        app.read(|ctx| {
+            assert!(!is_using_api_key_for_provider(&LLMProvider::OpenAI, ctx));
+        });
+        drop(feature_off);
+
+        // 3. If Codex subscription tokens are set AND the CodexSubscription feature flag is enabled, it should return true
+        let feature_on = warp_core::features::FeatureFlag::CodexSubscription.override_enabled(true);
+        app.read(|ctx| {
+            assert!(is_using_api_key_for_provider(&LLMProvider::OpenAI, ctx));
+        });
+        drop(feature_on);
+
+        // 4. If BYO is disabled (SoloUserByok override false) but Codex subscription is present and flag is enabled, it should return false
+        drop(byok_guard);
+        let feature_on = warp_core::features::FeatureFlag::CodexSubscription.override_enabled(true);
+        let byok_off = warp_core::features::FeatureFlag::SoloUserByok.override_enabled(false);
+        app.read(|ctx| {
+            assert!(!is_using_api_key_for_provider(&LLMProvider::OpenAI, ctx));
+        });
+        drop(feature_on);
+        drop(byok_off);
+    });
+}
