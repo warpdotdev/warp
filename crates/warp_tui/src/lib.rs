@@ -9,6 +9,7 @@
 
 mod agent_block;
 mod agent_block_sections;
+mod alt_screen_view;
 mod autoupdate;
 mod clipboard;
 pub mod input;
@@ -33,6 +34,7 @@ mod slash_commands;
 mod terminal_background;
 mod terminal_block;
 mod terminal_session_view;
+mod terminal_size_element;
 mod terminal_use;
 #[cfg(test)]
 mod test_fixtures;

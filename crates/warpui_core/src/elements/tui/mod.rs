@@ -273,6 +273,19 @@ pub trait TuiElement {
         app: &AppContext,
     ) -> TuiSize;
 
+    /// Runs once after the whole tree has been laid out, before paint, so an
+    /// element can commit a *side effect* that depends on its final size
+    /// (mirroring the GUI's `Element::after_layout`). Unlike
+    /// [`layout`](TuiElement::layout) — the measurement pass, which may run more
+    /// than once and must stay pure — this fires exactly once per frame with the
+    /// arranged geometry settled, which is where size-driven effects like a PTY
+    /// resize belong. `ctx` carries the presenter's view map so container
+    /// elements can propagate the pass into their children (and
+    /// [`TuiChildView`](crate::elements::tui::TuiChildView) into its embedded
+    /// view). The default is a no-op; only container elements and elements with
+    /// a post-layout side effect override it.
+    fn after_layout(&mut self, _ctx: &mut TuiLayoutContext, _app: &AppContext) {}
+
     /// Paints this element at absolute `origin`. `surface` owns the active
     /// ratatui buffer and accepts only absolute-coordinate paint operations.
     /// `ctx` carries the

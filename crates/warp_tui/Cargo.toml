@@ -35,6 +35,7 @@ path = "src/bin/stable.rs"
 [dependencies]
 ai.workspace = true
 anyhow.workspace = true
+async-channel.workspace = true
 async-fs.workspace = true
 base64.workspace = true
 channel_versions.workspace = true
@@ -80,7 +81,6 @@ warp_core = { workspace = true, features = ["test-util"] }
 # `test-util` exposes `RenderState::layout_complete()`, used to deterministically
 # await async layout (e.g. diff ghost blocks) in tests instead of busy-polling.
 warp_editor = { workspace = true, features = ["test-util"] }
-async-channel.workspace = true
 # Process-level worker-dispatch regression test.
 command.workspace = true
 pathfinder_color.workspace = true
