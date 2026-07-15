@@ -1,5 +1,7 @@
 use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys};
 #[cfg(not(target_family = "wasm"))]
+use ::ai::codex_subscription::oauth as codex_oauth;
+#[cfg(not(target_family = "wasm"))]
 use ::ai::grok_subscription::oauth::{self, ManualCodeExchange};
 use chrono::{DateTime, Local};
 use enum_iterator::all;
@@ -746,7 +748,16 @@ pub struct AISettingsPageView {
     grok_oauth_attempt: Option<ManualCodeExchange>,
     #[cfg(not(target_family = "wasm"))]
     grok_code_editor: ViewHandle<EditorView>,
+    /// Whether a Codex loopback OAuth attempt is awaiting completion. Codex
+    /// has no manual-code fallback, so no authorization secret is retained by
+    /// the view.
+    #[cfg(not(target_family = "wasm"))]
+    codex_oauth_connecting: bool,
+    #[cfg(not(target_family = "wasm"))]
+    codex_oauth_attempt_generation: u64,
 }
+
+const CODEX_OAUTH_CONNECT_TOAST_OBJECT_ID: &str = "codex_oauth_connect_toast";
 
 impl AISettingsPageView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
@@ -1986,6 +1997,10 @@ impl AISettingsPageView {
             grok_oauth_attempt: None,
             #[cfg(not(target_family = "wasm"))]
             grok_code_editor,
+            #[cfg(not(target_family = "wasm"))]
+            codex_oauth_connecting: false,
+            #[cfg(not(target_family = "wasm"))]
+            codex_oauth_attempt_generation: 0,
         }
     }
 
@@ -2666,6 +2681,108 @@ impl AISettingsPageView {
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     toast.with_object_id(CONNECT_TOAST_OBJECT_ID.to_string()),
+                    window_id,
+                    ctx,
+                );
+            });
+            ctx.notify();
+        });
+    }
+    #[cfg(not(target_family = "wasm"))]
+    fn start_codex_oauth(&mut self, ctx: &mut ViewContext<Self>) {
+        use warp_core::safe_error;
+
+        use crate::view_components::{DismissibleToast, ToastLink};
+        use crate::workspace::WorkspaceAction;
+        use crate::ToastStack;
+
+        if !FeatureFlag::CodexSubscription.is_enabled() || self.codex_oauth_connecting {
+            return;
+        }
+
+        let attempt = match codex_oauth::OauthAttempt::start() {
+            Ok(attempt) => attempt,
+            Err(err) => {
+                safe_error!(
+                    safe: ("Failed to start Codex OAuth callback server"),
+                    full: ("Failed to start Codex OAuth callback server: {err:#}")
+                );
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    let toast =
+                        DismissibleToast::error(format!("Couldn't start ChatGPT login: {err}"));
+                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                });
+                return;
+            }
+        };
+
+        self.codex_oauth_attempt_generation =
+            self.codex_oauth_attempt_generation.wrapping_add(1);
+        let attempt_generation = self.codex_oauth_attempt_generation;
+        self.codex_oauth_connecting = true;
+        ctx.notify();
+
+        let authorize_url = attempt.authorize_url();
+        ctx.open_url(&authorize_url);
+
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            let toast = DismissibleToast::default(
+                "Opening your browser to connect your ChatGPT subscription…".to_string(),
+            )
+            .with_object_id(CODEX_OAUTH_CONNECT_TOAST_OBJECT_ID.to_string())
+            .with_link(
+                ToastLink::new("Copy URL".to_string())
+                    .with_onclick_action(WorkspaceAction::CopyTextToClipboard(authorize_url)),
+            );
+            toast_stack.add_persistent_toast(toast, window_id, ctx);
+        });
+
+        ctx.spawn(async move { attempt.finish().await }, move |me, result, ctx| {
+            // A disconnect or newer login invalidates this callback, so it
+            // cannot restore or overwrite credentials from a stale attempt.
+            if !me.codex_oauth_connecting
+                || me.codex_oauth_attempt_generation != attempt_generation
+            {
+                return;
+            }
+            me.codex_oauth_connecting = false;
+
+            let window_id = ctx.window_id();
+            let toast = match result {
+                Ok(tokens) => {
+                    let store_result = ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
+                        manager.store_codex_tokens(tokens, ctx)
+                    });
+                    match store_result {
+                        Ok(()) => DismissibleToast::success(
+                            "ChatGPT (Codex) subscription connected".to_string(),
+                        ),
+                        Err(_) => {
+                            safe_error!(
+                                safe: ("Failed to store Codex OAuth credentials"),
+                                full: ("Failed to store Codex OAuth credentials")
+                            );
+                            DismissibleToast::error(
+                                "Couldn't connect ChatGPT (Codex). Try again.".to_string(),
+                            )
+                        }
+                    }
+                }
+                Err(_) => {
+                    safe_error!(
+                        safe: ("Codex OAuth loopback callback failed"),
+                        full: ("Codex OAuth loopback callback failed")
+                    );
+                    DismissibleToast::error(
+                        "Couldn't connect ChatGPT (Codex). Try again.".to_string(),
+                    )
+                }
+            };
+            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    toast.with_object_id(CODEX_OAUTH_CONNECT_TOAST_OBJECT_ID.to_string()),
                     window_id,
                     ctx,
                 );
@@ -3637,6 +3754,8 @@ pub enum AISettingsPageAction {
     OpenEditCustomEndpointModal(usize),
     ConnectGrokSubscription,
     DisconnectGrokSubscription,
+    ConnectCodexSubscription,
+    DisconnectCodexSubscription,
 
     #[cfg(feature = "local_fs")]
     SetConversationLayout(crate::util::file::external_editor::settings::OpenConversationPreference),
@@ -4486,8 +4605,79 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
+            AISettingsPageAction::ConnectCodexSubscription => {
+                #[cfg(not(target_family = "wasm"))]
+                self.start_codex_oauth(ctx);
+            }
+            AISettingsPageAction::DisconnectCodexSubscription => {
+                if !FeatureFlag::CodexSubscription.is_enabled() {
+                    return;
+                }
+
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    self.codex_oauth_connecting = false;
+                    self.codex_oauth_attempt_generation =
+                        self.codex_oauth_attempt_generation.wrapping_add(1);
+                    let tokens = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                        take_codex_tokens_for_disconnect(manager, ctx)
+                    });
+                    if let Some(tokens) = tokens {
+                        // Clear local state first. Revocation is intentionally
+                        // best-effort and never blocks disconnecting.
+                        ctx.spawn(
+                            async move {
+                                if let Some(access_token) = tokens.access_token {
+                                    let _ = codex_oauth::revoke_access_token(&access_token).await;
+                                }
+                                if let Some(refresh_token) = tokens.refresh_token {
+                                    let _ = codex_oauth::revoke_refresh_token(&refresh_token).await;
+                                }
+                            },
+                            |_, _, _| {},
+                        );
+                    }
+                }
+                #[cfg(target_family = "wasm")]
+                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.set_codex_tokens(None, ctx);
+                });
+
+                let window_id = ctx.window_id();
+                crate::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    let toast = crate::view_components::DismissibleToast::default(
+                        "ChatGPT (Codex) subscription disconnected".to_string(),
+                    )
+                    .with_object_id(CODEX_OAUTH_CONNECT_TOAST_OBJECT_ID.to_string());
+                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                });
+                ctx.notify();
+            }
         }
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+struct CodexRevocationTokens {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn take_codex_tokens_for_disconnect(
+    manager: &mut ApiKeyManager,
+    ctx: &mut warpui::ModelContext<ApiKeyManager>,
+) -> Option<CodexRevocationTokens> {
+    let tokens = manager.codex_tokens().map(|tokens| CodexRevocationTokens {
+        access_token: (!tokens.access_token.trim().is_empty()).then(|| tokens.access_token.clone()),
+        refresh_token: tokens
+            .refresh_token
+            .as_ref()
+            .filter(|token| !token.trim().is_empty())
+            .cloned(),
+    });
+    manager.set_codex_tokens(None, ctx);
+    tokens
 }
 
 impl SettingsPageMeta for AISettingsPageView {
@@ -8071,6 +8261,10 @@ struct ApiKeysWidget {
     grok_connect_button: ViewHandle<ActionButton>,
     grok_connecting_button: ViewHandle<ActionButton>,
     grok_disconnect_button: ViewHandle<ActionButton>,
+    /// Parallel controls for the feature-gated ChatGPT (Codex) subscription.
+    codex_connect_button: ViewHandle<ActionButton>,
+    codex_connecting_button: ViewHandle<ActionButton>,
+    codex_disconnect_button: ViewHandle<ActionButton>,
 
     can_use_warp_credits_for_fallback: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
@@ -8261,7 +8455,32 @@ impl ApiKeysWidget {
                     ctx.dispatch_typed_action(AISettingsPageAction::DisconnectGrokSubscription);
                 })
         });
-        for button in [&grok_connect_button, &grok_disconnect_button] {
+        let codex_connect_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Connect", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::ConnectCodexSubscription);
+                })
+        });
+        let codex_connecting_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Connecting", SecondaryTheme).with_size(ButtonSize::Small)
+        });
+        codex_connecting_button.update(ctx, |button, ctx| {
+            button.set_disabled(true, ctx);
+        });
+        let codex_disconnect_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Disconnect", DangerSecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::DisconnectCodexSubscription);
+                })
+        });
+        for button in [
+            &grok_connect_button,
+            &grok_disconnect_button,
+            &codex_connect_button,
+            &codex_disconnect_button,
+        ] {
             button.update(ctx, |button, ctx| {
                 button.set_disabled(
                     !(is_any_ai_enabled && is_byo_enabled && member_byo_keys_allowed),
@@ -8270,15 +8489,20 @@ impl ApiKeysWidget {
             });
         }
 
-        // The Grok subscription is BYO auth, so keep the buttons' enablement
-        // in sync with the BYO API key policy, like the editors above.
-        let grok_buttons = [grok_connect_button.clone(), grok_disconnect_button.clone()];
+        // Subscription credentials are BYO auth, so keep the buttons'
+        // enablement in sync with the BYO API key policy, like the editors.
+        let subscription_buttons = [
+            grok_connect_button.clone(),
+            grok_disconnect_button.clone(),
+            codex_connect_button.clone(),
+            codex_disconnect_button.clone(),
+        ];
         ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 let is_any_ai_enabled = AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
                 let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled(ctx);
                 let member_byo_keys_allowed = workspace.as_ref(ctx).are_member_byo_keys_allowed();
-                for button in &grok_buttons {
+                for button in &subscription_buttons {
                     button.update(ctx, |button, ctx| {
                         button.set_disabled(
                             !(is_any_ai_enabled && is_byo_enabled && member_byo_keys_allowed),
@@ -8290,8 +8514,8 @@ impl ApiKeysWidget {
             }
         });
 
-        // Re-render the SuperGrok row whenever the stored tokens change (the
-        // connect flow completes, a disconnect, or a background refresh).
+        // Re-render subscription rows whenever stored tokens change (a connect,
+        // disconnect, or background refresh).
         ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), |_, _, event, ctx| {
             if matches!(event, ApiKeyManagerEvent::KeysUpdated) {
                 ctx.notify();
@@ -8306,6 +8530,9 @@ impl ApiKeysWidget {
             grok_connect_button,
             grok_connecting_button,
             grok_disconnect_button,
+            codex_connect_button,
+            codex_connecting_button,
+            codex_disconnect_button,
 
             can_use_warp_credits_for_fallback: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -8809,6 +9036,113 @@ impl ApiKeysWidget {
         column.finish()
     }
 
+    /// ChatGPT (Codex) subscription row. Unlike Grok, OpenAI's loopback flow
+    /// has no manual-code entry fallback.
+    fn render_codex_subscription_row(
+        &self,
+        appearance: &Appearance,
+        is_enabled: bool,
+        is_connecting: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let codex_tokens = ApiKeyManager::as_ref(app).codex_tokens();
+
+        let text_color = styles::header_font_color(is_enabled, app);
+        let label = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(4.)
+            .with_child(
+                Text::new_inline("Use your", appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                    .with_color(text_color.into())
+                    .finish(),
+            )
+            .with_child(
+                ConstrainedBox::new(Icon::OpenAILogo.to_warpui_icon(text_color).finish())
+                    .with_width(14.)
+                    .with_height(14.)
+                    .finish(),
+            )
+            .with_child(
+                Text::new_inline(
+                    "ChatGPT (Codex) subscription",
+                    appearance.ui_font_family(),
+                    CONTENT_FONT_SIZE,
+                )
+                .with_color(text_color.into())
+                .finish(),
+            )
+            .finish();
+
+        let button = if codex_tokens.is_some() {
+            &self.codex_disconnect_button
+        } else if is_connecting {
+            &self.codex_connecting_button
+        } else {
+            &self.codex_connect_button
+        };
+
+        let header_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(Shrinkable::new(1., label).finish())
+            .with_child(button.as_ref(app).render(app))
+            .finish();
+
+        let description = Container::new(
+            Text::new(
+                "Connect your ChatGPT subscription to use Codex models in the Warp Agent through your OpenAI account.",
+                appearance.ui_font_family(),
+                CONTENT_FONT_SIZE,
+            )
+            .with_color(styles::description_font_color(is_enabled, app).into())
+            .soft_wrap(true)
+            .finish(),
+        )
+        .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
+        .finish();
+
+        let mut column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(header_row)
+            .with_child(description);
+
+        if let Some(tokens) = codex_tokens {
+            let connected_text = match tokens.connected_at.map(DateTime::<Local>::from) {
+                Some(connected_at) => format!(
+                    "Connected on {}.",
+                    connected_at.format("%m/%d/%Y at %-I:%M%P")
+                ),
+                None => "Connected.".to_string(),
+            };
+            let check = ConstrainedBox::new(
+                Icon::Check
+                    .to_warpui_icon(appearance.theme().ansi_fg_green().into())
+                    .finish(),
+            )
+            .with_width(12.)
+            .with_height(12.)
+            .finish();
+            let status_text = Text::new_inline(
+                connected_text,
+                appearance.ui_font_family(),
+                CONTENT_FONT_SIZE,
+            )
+            .with_color(styles::description_font_color(is_enabled, app).into())
+            .finish();
+            column.add_child(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(4.)
+                    .with_child(check)
+                    .with_child(status_text)
+                    .finish(),
+            );
+        }
+
+        column.finish()
+    }
+
     /// Paste-the-code fallback for the current SuperGrok connect attempt.
     #[cfg(not(target_family = "wasm"))]
     fn render_grok_manual_code_entry(
@@ -8933,11 +9267,17 @@ impl CustomInferenceVisibility {
     }
 }
 
+const API_KEYS_SEARCH_TERMS: &str = "api keys bring your own byo openai anthropic google claude gemini gpt custom inference endpoint grok supergrok xai subscription codex chatgpt openai subscription oauth";
+
+fn should_render_codex_subscription(show_provider_keys: bool) -> bool {
+    FeatureFlag::CodexSubscription.is_enabled() && show_provider_keys
+}
+
 impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai anthropic google claude gemini gpt custom inference endpoint grok supergrok xai subscription"
+        API_KEYS_SEARCH_TERMS
     }
 
     fn render(
@@ -9107,6 +9447,24 @@ impl SettingsWidget for ApiKeysWidget {
                         .finish(),
                 );
             }
+        }
+
+        if should_render_codex_subscription(show_provider_keys) {
+            #[cfg(not(target_family = "wasm"))]
+            let is_codex_connecting = view.codex_oauth_connecting
+                && ApiKeyManager::as_ref(app).codex_tokens().is_none();
+            #[cfg(target_family = "wasm")]
+            let is_codex_connecting = false;
+            column.add_child(
+                Container::new(self.render_codex_subscription_row(
+                    appearance,
+                    provider_keys_enabled,
+                    is_codex_connecting,
+                    app,
+                ))
+                .with_margin_top(16.)
+                .finish(),
+            );
         }
 
         // Warp credit fallback applies to member-provided API keys, not custom endpoints.
