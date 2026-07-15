@@ -201,14 +201,6 @@ impl FileSearchModel {
         self.get_repo_contents_with_options(query, true, app)
     }
 
-    /// Gets repository files (no directories) for the current working directory.
-    ///
-    /// Intended for search surfaces that only ever open files and cannot act on
-    /// directory entries, such as the Command Palette file filter. Excluding
-    /// directories keeps them from consuming the repo-metadata result cap, which
-    /// otherwise starves file matches when many directories match the query.
-    /// Kept separate from [`Self::get_repo_contents`] so callers
-    /// that do surface directories (e.g. the AI context menu) are unaffected.
     #[cfg(feature = "local_fs")]
     pub fn get_repo_file_contents(
         &self,
