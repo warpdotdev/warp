@@ -18,7 +18,7 @@ use warp_core::ui::theme::Fill as ThemeFill;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Dismiss, Empty, Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable,
+    Empty, Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable,
     HyperlinkLens, HyperlinkUrl, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
     Text,
@@ -44,12 +44,10 @@ use super::remove_custom_endpoint_confirmation_dialog::{
 };
 use super::set_default_model_modal::{SetDefaultModelModalBody, SetDefaultModelModalBodyEvent};
 use super::settings_page::{
-    build_sub_header, build_toggle_element, render_body_item_label,
-    render_body_item_label_with_icon, render_custom_size_header, render_dropdown_item,
-    render_dropdown_item_label, render_full_pane_width_ai_button, render_input_list,
-    render_separator, render_settings_info_banner, InputListItem, LocalOnlyIconState, MatchData,
-    PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
-    HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
+    build_sub_header, build_toggle_element, render_body_item_label, render_dropdown_item,
+    render_full_pane_width_ai_button, render_separator, LocalOnlyIconState, MatchData, PageType,
+    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState, HEADER_PADDING,
+    TOGGLE_BUTTON_RIGHT_PADDING,
 };
 use super::{
     editor_text_colors, flags, SettingActionPairContexts, SettingActionPairDescriptions,
@@ -66,8 +64,7 @@ use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
 };
 use crate::ai::execution_profiles::{
-    long_context_pricing_warning_title, AIExecutionProfile, AIExecutionProfileAppExt,
-    ActionPermission, WriteToPtyPermission,
+    AIExecutionProfile, AIExecutionProfileAppExt, ActionPermission, WriteToPtyPermission,
 };
 use crate::ai::llms::{
     is_using_api_key_for_provider, LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent,
@@ -88,10 +85,9 @@ use crate::editor::{
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::settings::{
     AIAutoDetectionEnabled, AICommandDenylist, AISettingsChangedEvent,
-    AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
-    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
-    AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
-    CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
+    AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate,
+    AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin, AwsBedrockCredentialsEnabled,
+    CanUseWarpCreditsForFallback, CodeSettings, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
     IncludeAgentCommandsInHistory, InputSettings, IntelligentAutosuggestionsEnabled,
     LongRunningCommandSubmissionMode, MemoryEnabled, NLDInTerminalEnabled,
     NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode, PromptSubmissionMode,
@@ -100,15 +96,11 @@ use crate::settings::{
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
     WarpDriveContextEnabled,
 };
-use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, DangerSecondaryTheme, SecondaryTheme,
 };
-use crate::view_components::{
-    render_warning_box, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
-    WarningBoxConfig,
-};
+use crate::view_components::{FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent};
 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 
 /// Identifies which subpage of the AI settings the user is viewing.
@@ -169,8 +161,6 @@ const PRIMARY_HEADER_FONT_SIZE: f32 = 24.;
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
 const AI_SETTINGS_DROPDOWN_MAX_HEIGHT: f32 = 250.;
-const CONTEXT_WINDOW_SLIDER_WIDTH: f32 = 220.;
-const CONTEXT_WINDOW_INPUT_BOX_WIDTH: f32 = 120.;
 
 const NEXT_COMMAND_DESCRIPTION: &str = "Let AI suggest the next command to run based on your command history, outputs, and common workflows.";
 const PROMPT_SUGGESTIONS_DESCRIPTION: &str = "Let AI suggest natural language prompts, as inline banners in the input, based on recent commands and their outputs.";
@@ -519,15 +509,6 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 )),
                 &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
                 flags::SHOW_CONVERSATION_HISTORY,
-            )
-            .with_group(bindings::BindingGroup::WarpAi),
-            ToggleSettingActionPair::new(
-                "model picker in prompt",
-                builder(SettingsAction::AI(
-                    AISettingsPageAction::ToggleShowBaseModelPickerInPrompt,
-                )),
-                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
-                flags::SHOW_BASE_MODEL_PICKER_IN_PROMPT_FLAG,
             )
             .with_group(bindings::BindingGroup::WarpAi),
             ToggleSettingActionPair::new(
@@ -1355,12 +1336,6 @@ impl AISettingsPageView {
                 _ => (),
             }
             ctx.notify();
-        });
-
-        ctx.subscribe_to_model(&SessionSettings::handle(ctx), |_, _, event, ctx| {
-            if let SessionSettingsChangedEvent::ShowModelSelectorsInPrompt { .. } = event {
-                ctx.notify();
-            }
         });
 
         ctx.subscribe_to_model(&InputSettings::handle(ctx), |_, _, _, ctx| {
@@ -2785,7 +2760,7 @@ impl AISettingsPageView {
                 {
                     widgets.push(Box::new(ActiveAIWidget::default()));
                 }
-                widgets.push(Box::new(AgentsWidget::default()));
+                widgets.push(Box::new(AgentsWidget));
                 widgets.push(Box::new(AIInputWidget::default()));
                 if MCPServersWidget::should_show_mcp() {
                     widgets.push(Box::new(MCPServersWidget::default()));
@@ -2858,7 +2833,7 @@ impl AISettingsPageView {
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {
                     widgets.push(Box::new(UsageWidget::default()));
                 }
-                widgets.push(Box::new(AgentsWidget::default()));
+                widgets.push(Box::new(AgentsWidget));
             }
             Some(AISubpage::Knowledge) => {
                 if FeatureFlag::AIRules.is_enabled() {
@@ -3613,7 +3588,6 @@ pub enum AISettingsPageAction {
     RemoveFromProfileDirectoryAllowlist(PathBuf),
     RemoveFromProfileCommandDenylist(AgentModeCommandExecutionPredicate),
     RemoveFromProfileCommandAllowlist(AgentModeCommandExecutionPredicate),
-    ToggleShowBaseModelPickerInPrompt,
     AddToMCPAllowlist(uuid::Uuid),
     RemoveFromMCPAllowlist(uuid::Uuid),
     AddToMCPDenylist(uuid::Uuid),
@@ -4288,19 +4262,6 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
-            AISettingsPageAction::ToggleShowBaseModelPickerInPrompt => {
-                SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    if let Err(e) = settings
-                        .show_model_selectors_in_prompt
-                        .toggle_and_save_value(ctx)
-                    {
-                        log::warn!(
-                            "Failed to set value for Show Base Model Picker in Prompt: {e:?}"
-                        );
-                    }
-                });
-                ctx.notify();
-            }
             AISettingsPageAction::AddToMCPAllowlist(id) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
@@ -4671,34 +4632,6 @@ fn render_ai_feature_switch(
             }
             ctx.dispatch_typed_action(toggle_action.clone());
         })
-        .finish()
-}
-
-fn render_ai_list(
-    header: &str,
-    description: &str,
-    input_list: Box<dyn Element>,
-    view: &AISettingsPageView,
-    ai_settings: &AISettings,
-    app: &AppContext,
-) -> Box<dyn Element> {
-    let setting_header = render_ai_setting_label::<AgentModeCommandExecutionDenylist>(
-        header.to_string(),
-        ai_settings.is_any_ai_enabled(app),
-        &view.local_only_icon_tooltip_states,
-        app,
-    );
-
-    let description = render_ai_setting_description(
-        description.to_string(),
-        ai_settings.is_any_ai_enabled(app),
-        app,
-    );
-
-    Flex::column()
-        .with_child(setting_header)
-        .with_child(Container::new(description).with_margin_bottom(-8.).finish())
-        .with_child(input_list)
         .finish()
 }
 
@@ -5438,11 +5371,7 @@ impl SettingsWidget for ActiveAIWidget {
 }
 
 #[derive(Default)]
-struct AgentsWidget {
-    codebase_context_toggle: SwitchStateHandle,
-    codebase_context_link_index: HighlightedHyperlink,
-    show_in_prompt_checkbox: MouseStateHandle,
-}
+struct AgentsWidget;
 
 impl SettingsWidget for AgentsWidget {
     type View = AISettingsPageView;
@@ -5462,49 +5391,14 @@ impl SettingsWidget for AgentsWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let ai_settings = AISettings::as_ref(app);
-        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
 
         let mut column = Flex::column();
 
-        if FeatureFlag::ProfilesDesignRevamp.is_enabled() {
-            column.add_child(
-                Container::new(self.render_profiles_section(view, ai_settings, appearance, app))
-                    .with_margin_bottom(8.)
-                    .finish(),
-            );
-        } else {
-            // Legacy layout: show Agents header + Models + Permissions
-            let mut agents_header = Flex::column();
-            agents_header.add_child(
-                build_sub_header(
-                    appearance,
-                    "Agents",
-                    Some(styles::header_font_color(is_any_ai_enabled, app)),
-                )
-                .with_padding_bottom(HEADER_PADDING)
+        column.add_child(
+            Container::new(self.render_profiles_section(view, ai_settings, appearance, app))
+                .with_margin_bottom(8.)
                 .finish(),
-            );
-            agents_header.add_child(render_ai_setting_description(
-                "Set the boundaries for how your Agent operates. Choose what it can access, how much autonomy it has, and when it must ask for your approval. You can also fine-tune behavior around natural language input, codebase awareness, and more.",
-                ai_settings.is_any_ai_enabled(app),
-                app,
-            ));
-            let agents_header = agents_header.finish();
-            column.add_children([
-                render_separator(appearance),
-                Container::new(agents_header)
-                    .with_margin_bottom(8.)
-                    .finish(),
-            ]);
-            column.add_children([
-                Container::new(self.render_models_section(view, ai_settings, appearance, app))
-                    .with_margin_bottom(8.)
-                    .finish(),
-                Container::new(self.render_permissions_section(view, ai_settings, appearance, app))
-                    .with_margin_bottom(8.)
-                    .finish(),
-            ]);
-        };
+        );
 
         column.finish()
     }
@@ -5570,852 +5464,6 @@ impl AgentsWidget {
         }
 
         Flex::column().with_children(profile_elements).finish()
-    }
-
-    fn render_models_section(
-        &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-        let model_subheader = Container::new(render_custom_size_header(
-            appearance,
-            "Models",
-            14.0,
-            Some(styles::header_font_color(is_any_ai_enabled, app)),
-        ))
-        .with_margin_bottom(8.0)
-        .finish();
-
-        let base_model_setting =
-            Container::new(self.render_base_model_setting(view, ai_settings, appearance, app))
-                .with_margin_bottom(8.0)
-                .finish();
-
-        let mut children = vec![model_subheader, base_model_setting];
-        if let Some(context_window_setting) =
-            self.render_context_window_setting(view, ai_settings, appearance, app)
-        {
-            children.push(
-                Container::new(context_window_setting)
-                    .with_margin_bottom(8.0)
-                    .finish(),
-            );
-        }
-
-        Flex::column().with_children(children).finish()
-    }
-
-    /// Renders the context window slider + numeric input row shown below the
-    /// base model dropdown. Returns `None` if the active base model does not
-    /// advertise a configurable context window or global AI is disabled.
-    fn render_context_window_setting(
-        &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Option<Box<dyn Element>> {
-        if !ai_settings.is_any_ai_enabled(app) {
-            return None;
-        }
-        let cw = AISettingsPageView::configurable_context_window(app)?;
-        let min = cw.min;
-        let max = cw.max;
-
-        let label = Container::new(render_body_item_label::<AISettingsPageAction>(
-            "Context window (tokens)".to_string(),
-            None,
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-        ))
-        .with_margin_bottom(4.0)
-        .finish();
-
-        let min_label = appearance
-            .ui_builder()
-            .span(format!("{min}"))
-            .with_style(UiComponentStyles {
-                font_size: Some(CONTENT_FONT_SIZE),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-
-        let max_label = appearance
-            .ui_builder()
-            .span(format!("{max}"))
-            .with_style(UiComponentStyles {
-                font_size: Some(CONTENT_FONT_SIZE),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-
-        let current_value = AISettingsPageView::current_context_window_display_value(app)
-            .unwrap_or(cw.default_max)
-            .clamp(min, max);
-        let slider = appearance
-            .ui_builder()
-            .slider(view.context_window_slider_state.clone())
-            .with_range(min as f32..max as f32)
-            .with_default_value(current_value as f32)
-            .with_style(UiComponentStyles {
-                width: Some(CONTEXT_WINDOW_SLIDER_WIDTH),
-                margin: Some(Coords::default().left(8.).right(8.)),
-                ..Default::default()
-            })
-            .on_drag(|ctx, _, val| {
-                ctx.dispatch_typed_action(AISettingsPageAction::ContextWindowSliderDragged(
-                    val.round() as u32,
-                ));
-            })
-            .on_change(|ctx, _, val| {
-                ctx.dispatch_typed_action(AISettingsPageAction::SetContextWindowSize(
-                    val.round() as u32
-                ));
-            })
-            .build()
-            .finish();
-
-        let context_window_editor = view.context_window_editor.clone();
-        let input_box = Dismiss::new(
-            appearance
-                .ui_builder()
-                .text_input(view.context_window_editor.clone())
-                .with_style(UiComponentStyles {
-                    width: Some(CONTEXT_WINDOW_INPUT_BOX_WIDTH),
-                    padding: Some(Coords {
-                        top: 6.,
-                        bottom: 6.,
-                        left: 10.,
-                        right: 10.,
-                    }),
-                    margin: Some(Coords::default().left(12.)),
-                    background: Some(appearance.theme().surface_2().into()),
-                    ..Default::default()
-                })
-                .build()
-                .finish(),
-        )
-        .on_dismiss(move |ctx, app| {
-            let buffer_text = context_window_editor.as_ref(app).buffer_text(app);
-            let cleaned: String = buffer_text
-                .chars()
-                .filter(|c| !c.is_whitespace() && *c != ',')
-                .collect();
-            if let Ok(parsed) = cleaned.parse::<u32>() {
-                ctx.dispatch_typed_action(AISettingsPageAction::SetContextWindowSize(parsed));
-            }
-        })
-        .finish();
-
-        let row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(min_label)
-            .with_child(Shrinkable::new(1., slider).finish())
-            .with_child(max_label)
-            .with_child(input_box)
-            .finish();
-
-        let mut column = Flex::column().with_child(label).with_child(row);
-        if AISettingsPageView::active_profile_data(app)
-            .should_show_long_context_pricing_warning(view.dragged_context_window_value, app)
-        {
-            column.add_child(render_warning_box(
-                WarningBoxConfig::formatted_title(long_context_pricing_warning_title()),
-                appearance,
-            ));
-        }
-
-        Some(column.finish())
-    }
-
-    fn render_permissions_section(
-        &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-        let permissions_subheader = Container::new(render_custom_size_header(
-            appearance,
-            "Permissions",
-            14.0,
-            Some(styles::header_font_color(is_any_ai_enabled, app)),
-        ))
-        .with_margin_bottom(4.0)
-        .finish();
-
-        let code_diff_setting =
-            BlocklistAIPermissions::as_ref(app).get_apply_code_diffs_setting(app, None);
-        let code_diffs = self.render_execution_profile_dropdown(
-            "Apply code diffs",
-            Icon::Code2,
-            code_diff_setting.description(),
-            &view.apply_code_diffs_dropdown_menu,
-            ai_settings,
-            appearance,
-            app,
-        );
-
-        let read_files_setting =
-            BlocklistAIPermissions::as_ref(app).get_read_files_setting(app, None);
-        let mut read_files_flex = Flex::column().with_main_axis_size(MainAxisSize::Min);
-        read_files_flex.add_child(self.render_execution_profile_dropdown(
-            "Read files",
-            Icon::Notebook,
-            read_files_setting.description(),
-            &view.read_files_dropdown_menu,
-            ai_settings,
-            appearance,
-            app,
-        ));
-
-        if read_files_setting == ActionPermission::AlwaysAsk {
-            let directory_allowlist =
-                BlocklistAIPermissions::as_ref(app).get_read_files_allowlist(app, None);
-            read_files_flex.add_child(
-                Container::new(Self::render_directory_allowlist(
-                    directory_allowlist,
-                    view,
-                    ai_settings,
-                    appearance,
-                    app,
-                ))
-                .with_margin_bottom(HEADER_PADDING)
-                .finish(),
-            );
-        }
-        let read_files = read_files_flex.finish();
-
-        let execute_commands_setting =
-            BlocklistAIPermissions::as_ref(app).get_execute_commands_setting(app, None);
-        let mut execute_commands_flex = Flex::column().with_main_axis_size(MainAxisSize::Min);
-        execute_commands_flex.add_child(self.render_execution_profile_dropdown(
-            "Execute commands",
-            Icon::Terminal,
-            execute_commands_setting.description(),
-            &view.execute_commands_dropdown_menu,
-            ai_settings,
-            appearance,
-            app,
-        ));
-
-        if execute_commands_setting == ActionPermission::AlwaysAsk
-            || execute_commands_setting == ActionPermission::AgentDecides
-        {
-            let command_allowlist =
-                BlocklistAIPermissions::as_ref(app).get_execute_commands_allowlist(app, None);
-            execute_commands_flex.add_child(
-                Container::new(Self::render_command_allowlist(
-                    command_allowlist,
-                    view,
-                    ai_settings,
-                    appearance,
-                    app,
-                ))
-                .with_margin_bottom(8.)
-                .finish(),
-            );
-        }
-
-        if execute_commands_setting != ActionPermission::AlwaysAsk {
-            let command_denylist = Container::new(Self::render_command_denylist(
-                BlocklistAIPermissions::as_ref(app).get_execute_commands_denylist(app, None),
-                view,
-                ai_settings,
-                appearance,
-                app,
-            ))
-            .with_margin_bottom(8.)
-            .finish();
-            execute_commands_flex.add_child(command_denylist);
-        }
-        let execute_commands = execute_commands_flex.finish();
-
-        let mut widget_children = vec![permissions_subheader];
-
-        if UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
-            .has_any_overrides()
-        {
-            widget_children.push(
-                Container::new(render_settings_info_banner(
-                    "Some of your permissions are managed by your workspace.",
-                    None,
-                    appearance,
-                ))
-                .with_margin_bottom(12.0)
-                .finish(),
-            );
-        }
-
-        widget_children.extend([code_diffs, read_files, execute_commands]);
-
-        let write_to_pty_setting =
-            BlocklistAIPermissions::as_ref(app).get_write_to_pty_setting(app, None);
-        let write_to_pty = self.render_execution_profile_dropdown(
-            "Interact with running commands",
-            Icon::Workflow,
-            write_to_pty_setting.description(),
-            &view.write_to_pty_autonomy_dropdown_menu,
-            ai_settings,
-            appearance,
-            app,
-        );
-        widget_children.push(write_to_pty);
-
-        if MCPServersWidget::should_show_mcp() {
-            let mcp_permissions = self.render_mcp_permissions(view, ai_settings, appearance, app);
-            widget_children.push(mcp_permissions);
-        }
-
-        if !FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
-            let codebase_context = Self::render_codebase_context_outline_generation_setting(
-                self.codebase_context_toggle.clone(),
-                self.codebase_context_link_index.clone(),
-                view,
-                ai_settings,
-                appearance,
-                app,
-            );
-            widget_children.push(codebase_context);
-        }
-
-        Flex::column().with_children(widget_children).finish()
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn render_execution_profile_dropdown(
-        &self,
-        header_text: &str,
-        header_icon: Icon,
-        permission_description: &'static str,
-        dropdown_menu: &ViewHandle<Dropdown<AISettingsPageAction>>,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &warpui::AppContext,
-    ) -> Box<dyn Element> {
-        let header = Container::new(render_body_item_label_with_icon::<AISettingsPageAction>(
-            header_text.into(),
-            header_icon,
-            Some(styles::header_font_color(
-                ai_settings.is_any_ai_enabled(app),
-                app,
-            )),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-        ))
-        .finish();
-
-        let description_color = appearance.theme().disabled_ui_text_color();
-        let alert_icon = Container::new(
-            ConstrainedBox::new(
-                Icon::AlertCircle
-                    .to_warpui_icon(
-                        appearance
-                            .theme()
-                            .sub_text_color(appearance.theme().surface_2()),
-                    )
-                    .finish(),
-            )
-            .with_width(14.)
-            .with_height(14.)
-            .finish(),
-        )
-        .with_margin_right(4.)
-        .finish();
-        let text = Text::new(
-            permission_description,
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(description_color.into())
-        .finish();
-        let description = Flex::row()
-            .with_children([alert_icon, Shrinkable::new(1.0, text).finish()])
-            .finish();
-
-        Container::new(
-            Flex::column()
-                .with_child(header)
-                .with_child(ChildView::new(dropdown_menu).finish())
-                .with_child(description)
-                .finish(),
-        )
-        .with_margin_bottom(12.)
-        .finish()
-    }
-
-    fn render_command_denylist(
-        command_denylist: Vec<AgentModeCommandExecutionPredicate>,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ai_disabled = !ai_settings.is_any_ai_enabled(app);
-        let org_denylist = BlocklistAIPermissions::get_org_execute_commands_denylist(app);
-        let mut tooltip_idx = 0usize;
-        let list = render_input_list(
-            None,
-            command_denylist
-                .into_iter()
-                .zip(view.command_denylist_mouse_state_handles.clone())
-                .rev()
-                .map(|(cmd, mouse_state_handle)| {
-                    let is_org = org_denylist.contains(&cmd);
-                    let tooltip_mouse_state = if is_org {
-                        let handle = view
-                            .command_denylist_tooltip_mouse_state_handles
-                            .get(tooltip_idx)
-                            .cloned();
-                        tooltip_idx += 1;
-                        handle
-                    } else {
-                        None
-                    };
-                    InputListItem {
-                        item: cmd.to_string(),
-                        mouse_state_handle,
-                        on_remove_action: AISettingsPageAction::RemoveFromProfileCommandDenylist(
-                            cmd,
-                        ),
-                        is_disabled: is_org || ai_disabled,
-                        tooltip_mouse_state,
-                    }
-                }),
-            Some(&view.command_denylist_editor),
-            appearance,
-        );
-        render_ai_list(
-            "Command denylist",
-            "Regular expressions to match commands that the Warp Agent should always ask permission to execute.",
-            list,
-            view,
-            ai_settings,
-            app,
-        )
-    }
-
-    fn render_command_allowlist(
-        command_allowlist: Vec<AgentModeCommandExecutionPredicate>,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let disabled = !ai_settings.is_command_allowlist_editable(app);
-        let list = render_input_list(
-            None,
-            command_allowlist
-                .into_iter()
-                .zip(view.command_allowlist_mouse_state_handles.clone())
-                .rev()
-                .map(move |(cmd, mouse_state_handle)| InputListItem {
-                    item: cmd.to_string(),
-                    mouse_state_handle,
-                    on_remove_action: AISettingsPageAction::RemoveFromProfileCommandAllowlist(cmd),
-                    is_disabled: disabled,
-                    tooltip_mouse_state: None,
-                }),
-            Some(&view.command_allowlist_editor),
-            appearance,
-        );
-
-        render_ai_list(
-            "Command allowlist",
-            "Regular expressions to match commands that can be automatically executed by the Warp Agent.",
-            list,
-            view,
-            ai_settings,
-            app,
-        )
-    }
-
-    fn render_directory_allowlist(
-        directory_allowlist: Vec<PathBuf>,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let disabled = !ai_settings.is_directory_allowlist_editable(app);
-        let list = render_input_list(
-            None,
-            directory_allowlist
-                .clone()
-                .into_iter()
-                .zip(view.directory_allowlist_mouse_state_handles.clone())
-                .rev()
-                .map(move |(path, mouse_state_handle)| InputListItem {
-                    item: path.display().to_string(),
-                    mouse_state_handle,
-                    on_remove_action: AISettingsPageAction::RemoveFromProfileDirectoryAllowlist(
-                        path,
-                    ),
-                    is_disabled: disabled,
-                    tooltip_mouse_state: None,
-                }),
-            Some(&view.directory_allowlist_editor),
-            appearance,
-        );
-
-        render_ai_list(
-            "Directory allowlist",
-            "Give the agent file access to certain directories.",
-            list,
-            view,
-            ai_settings,
-            app,
-        )
-    }
-
-    fn render_base_model_setting(
-        &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let show_in_prompt_checkbox = {
-            let is_checked = *SessionSettings::as_ref(app).show_model_selectors_in_prompt;
-
-            let mut checkbox = appearance
-                .ui_builder()
-                .checkbox(self.show_in_prompt_checkbox.clone(), None)
-                .check(is_checked);
-
-            if !ai_settings.is_any_ai_enabled(app) {
-                checkbox = checkbox.disabled();
-            }
-
-            Container::new(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_children([
-                        checkbox
-                            .build()
-                            .on_click(move |ctx, _, _| {
-                                ctx.dispatch_typed_action(
-                                    AISettingsPageAction::ToggleShowBaseModelPickerInPrompt,
-                                );
-                            })
-                            .finish(),
-                        appearance
-                            .ui_builder()
-                            .span("Show model picker in prompt".to_string())
-                            .with_style(UiComponentStyles {
-                                font_color: Some(
-                                    theme.sub_text_color(theme.surface_2()).into_solid(),
-                                ),
-                                font_size: Some(12.0),
-                                ..Default::default()
-                            })
-                            .build()
-                            .finish(),
-                    ])
-                    .finish(),
-            )
-            .with_margin_top(-6.0)
-            .with_margin_left(-4.0)
-            .finish()
-        };
-
-        render_dropdown_item(
-            appearance,
-            "Base model",
-            Some(
-                "This model serves as the primary engine behind the Warp Agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Warp may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
-            ),
-            Some(show_in_prompt_checkbox),
-            LocalOnlyIconState::Hidden,
-            (!ai_settings.is_any_ai_enabled(app))
-                .then(|| appearance.theme().disabled_ui_text_color()),
-            &view.base_model_dropdown,
-        )
-    }
-
-    fn render_codebase_context_outline_generation_setting(
-        codebase_context_toggle: SwitchStateHandle,
-        codebase_context_link_index: HighlightedHyperlink,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &warpui::AppContext,
-    ) -> Box<dyn Element> {
-        let code_settings = CodeSettings::as_ref(app);
-        let toggle = render_ai_setting_toggle::<CodebaseContextEnabled>(
-            "Codebase Context",
-            AISettingsPageAction::ToggleCodebaseContext,
-            *code_settings.codebase_context_enabled,
-            ai_settings.is_any_ai_enabled(app),
-            codebase_context_toggle,
-            &view.local_only_icon_tooltip_states,
-            app,
-        );
-
-        let codebase_context_description = vec![
-            FormattedTextFragment::plain_text(
-                "Allow the Warp Agent to generate an outline of your codebase that can be used for context. No code is ever stored on our servers. ",
-            ),
-            FormattedTextFragment::hyperlink(
-                "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/codebase-context",
-            ),
-        ];
-        let description = Container::new(
-            FormattedTextElement::new(
-                FormattedText::new([FormattedTextLine::Line(codebase_context_description)]),
-                CONTENT_FONT_SIZE,
-                appearance.ui_font_family(),
-                appearance.ui_font_family(),
-                styles::description_font_color(ai_settings.is_any_ai_enabled(app), app).into(),
-                codebase_context_link_index,
-            )
-            .with_hyperlink_font_color(appearance.theme().accent().into_solid())
-            .register_default_click_handlers(|url, ctx, _| {
-                ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(url));
-            })
-            .finish(),
-        )
-        .with_margin_top(styles::DESCRIPTION_NEGATIVE_MARGIN_OFFSET)
-        .with_margin_bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
-        .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
-        .finish();
-
-        Flex::column()
-            .with_child(toggle)
-            .with_child(description)
-            .finish()
-    }
-
-    fn render_mcp_permissions(
-        &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let all_runnable_mcp_servers =
-            TemplatableMCPServerManager::get_all_cloud_synced_mcp_servers(app);
-        if all_runnable_mcp_servers.is_empty() {
-            self.render_mcp_permissions_zero_state(ai_settings, appearance, app)
-        } else {
-            self.render_mcp_permissions_with_servers(view, ai_settings, appearance, app)
-        }
-    }
-
-    fn render_mcp_permissions_zero_state(
-        &self,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let header = Container::new(render_body_item_label_with_icon::<AISettingsPageAction>(
-            "Call MCP servers".into(),
-            Icon::Dataflow,
-            Some(styles::header_font_color(
-                ai_settings.is_any_ai_enabled(app),
-                app,
-            )),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-        ))
-        .with_margin_bottom(4.)
-        .finish();
-
-        let subtext = {
-            let subtext_fragments = vec![
-                FormattedTextFragment::plain_text(
-                    "You haven't added any MCP servers yet. Once you do, you'll be able to control how much autonomy the Warp Agent has when interacting with them. ",
-                ),
-                FormattedTextFragment::hyperlink_action(
-                    "Add a server",
-                    AISettingsPageAction::OpenMCPServerCollection,
-                ),
-                FormattedTextFragment::plain_text(" or "),
-                FormattedTextFragment::hyperlink(
-                    "learn more about MCPs.",
-                    "https://docs.warp.dev/agent-platform/capabilities/mcp",
-                ),
-            ];
-
-            Container::new(
-                FormattedTextElement::new(
-                    FormattedText::new([FormattedTextLine::Line(subtext_fragments)]),
-                    CONTENT_FONT_SIZE,
-                    appearance.ui_font_family(),
-                    appearance.ui_font_family(),
-                    styles::description_font_color(ai_settings.is_any_ai_enabled(app), app).into(),
-                    HighlightedHyperlink::default(),
-                )
-                .with_hyperlink_font_color(appearance.theme().accent().into_solid())
-                .register_default_click_handlers_with_action_support(|hyperlink_lens, ctx, _app| {
-                    match hyperlink_lens {
-                        HyperlinkLens::Url(url) => {
-                            ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(
-                                HyperlinkUrl {
-                                    url: url.to_owned(),
-                                },
-                            ));
-                        }
-                        HyperlinkLens::Action(action_ref) => {
-                            if let Some(action) =
-                                action_ref.as_any().downcast_ref::<AISettingsPageAction>()
-                            {
-                                ctx.dispatch_typed_action(action.clone());
-                            }
-                        }
-                    }
-                })
-                .finish(),
-            )
-            .with_margin_bottom(4.0)
-            .finish()
-        };
-
-        Flex::column()
-            .with_child(header)
-            .with_child(subtext)
-            .finish()
-    }
-
-    fn render_mcp_permissions_with_servers(
-        &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let mut column = Flex::column();
-
-        let current_mcp_setting =
-            BlocklistAIPermissions::as_ref(app).get_mcp_permissions_setting(app, None);
-
-        let permission_setting = self.render_execution_profile_dropdown(
-            "Call MCP servers",
-            Icon::Dataflow,
-            current_mcp_setting.description(),
-            &view.mcp_permissions_dropdown_menu,
-            ai_settings,
-            appearance,
-            app,
-        );
-        column.add_child(permission_setting);
-
-        if current_mcp_setting == ActionPermission::AlwaysAsk
-            || current_mcp_setting == ActionPermission::AgentDecides
-        {
-            let allowlist = self.render_mcp_list(
-                "MCP allowlist",
-                "Allow the Warp Agent to call these MCP servers.",
-                &view.mcp_allowlist_dropdown,
-                BlocklistAIPermissions::as_ref(app).get_mcp_allowlist(app, None),
-                view.mcp_allowlist_mouse_state_handles.clone(),
-                AISettingsPageAction::RemoveFromMCPAllowlist,
-                ai_settings,
-                appearance,
-                app,
-            );
-            column.add_child(allowlist);
-        }
-
-        if current_mcp_setting == ActionPermission::AlwaysAllow
-            || current_mcp_setting == ActionPermission::AgentDecides
-        {
-            let denylist = self.render_mcp_list(
-                "MCP denylist",
-                "The Warp Agent will always ask for permission before calling any MCP servers on this list.",
-                &view.mcp_denylist_dropdown,
-                BlocklistAIPermissions::as_ref(app).get_mcp_denylist(app, None),
-                view.mcp_denylist_mouse_state_handles.clone(),
-                AISettingsPageAction::RemoveFromMCPDenylist,
-                ai_settings,
-                appearance,
-                app,
-            );
-            column.add_child(denylist);
-        }
-
-        column.finish()
-    }
-
-    // Helper function to render the allow and denylists for mcp servers
-    #[allow(clippy::too_many_arguments)]
-    fn render_mcp_list(
-        &self,
-        title: &str,
-        description: &str,
-        dropdown: &ViewHandle<FilterableDropdown<AISettingsPageAction>>,
-        items: Vec<uuid::Uuid>,
-        mouse_state_handles: Vec<MouseStateHandle>,
-        action: impl Fn(uuid::Uuid) -> AISettingsPageAction,
-        ai_settings: &AISettings,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let selector = Container::new(
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                .with_children(vec![
-                    Shrinkable::new(
-                        1.0,
-                        Container::new(render_dropdown_item_label(
-                            title.to_string(),
-                            Some(description.to_string()),
-                            LocalOnlyIconState::Hidden,
-                            (!ai_settings.is_any_ai_enabled(app))
-                                .then(|| appearance.theme().disabled_ui_text_color()),
-                            appearance,
-                        ))
-                        .with_margin_right(4.)
-                        .finish(),
-                    )
-                    .finish(),
-                    ChildView::new(dropdown).finish(),
-                ])
-                .finish(),
-        )
-        .with_margin_bottom(2.)
-        .finish();
-
-        let disabled = !ai_settings.is_any_ai_enabled(app);
-        let items = render_input_list(
-            None,
-            items
-                .into_iter()
-                .rev()
-                .zip(mouse_state_handles.clone())
-                .filter_map(move |(uuid, mouse_state_handle)| {
-                    let server_name = TemplatableMCPServerManager::get_mcp_name(&uuid, app);
-                    server_name.map(|server_name| InputListItem {
-                        item: server_name,
-                        mouse_state_handle,
-                        on_remove_action: action(uuid),
-                        is_disabled: disabled,
-                        tooltip_mouse_state: None,
-                    })
-                }),
-            None,
-            appearance,
-        );
-
-        Container::new(Flex::column().with_children(vec![selector, items]).finish())
-            .with_margin_bottom(8.)
-            .finish()
     }
 }
 

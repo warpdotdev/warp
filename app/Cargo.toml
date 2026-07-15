@@ -559,7 +559,6 @@ default = [
     "linked_code_blocks",
     "drive_objects_as_context",
     "search_codebase_ui",
-    "profiles_design_revamp",
     "multi_profile",
     "tabbed_editor_view",
     "allow_opening_file_links_using_editor_env",
@@ -903,7 +902,6 @@ preview_channel = []
 ai_context_menu_code = []
 expand_edit_to_pane = []
 fallback_model_load_output_messaging = []
-profiles_design_revamp = []
 search_codebase_ui = []
 linked_code_blocks = []
 tabbed_editor_view = []

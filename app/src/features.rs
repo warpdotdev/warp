@@ -219,8 +219,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::FallbackModelLoadOutputMessaging,
         #[cfg(feature = "tab_close_button_on_left")]
         FeatureFlag::TabCloseButtonOnLeft,
-        #[cfg(feature = "profiles_design_revamp")]
-        FeatureFlag::ProfilesDesignRevamp,
         #[cfg(feature = "search_codebase_ui")]
         FeatureFlag::SearchCodebaseUI,
         #[cfg(feature = "linked_code_blocks")]

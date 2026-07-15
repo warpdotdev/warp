@@ -339,13 +339,6 @@ pub enum FeatureFlag {
     /// Enables close button on left side of tabs
     TabCloseButtonOnLeft,
 
-    /// Enables AI agent profile settings UI and functionality.
-    ///
-    /// TODO: When cleaning up this flag, also remove the `show_model_selectors_in_prompt`
-    /// setting in [`SessionSettings`] (defined in `app/src/terminal/session_settings.rs`),
-    /// as model selectors are always shown when this flag is enabled.
-    ProfilesDesignRevamp,
-
     /// Enables new Search Codebase UI
     SearchCodebaseUI,
 

@@ -816,9 +816,6 @@ impl AgentInputFooter {
         ctx.subscribe_to_model(
             &SessionSettings::handle(ctx),
             move |me, _, event, ctx| match event {
-                SessionSettingsChangedEvent::ShowModelSelectorsInPrompt { .. } => {
-                    ctx.notify();
-                }
                 SessionSettingsChangedEvent::AgentToolbarChipSelectionSetting { .. }
                 | SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. }
                 | SessionSettingsChangedEvent::GithubPrChipDefaultValidation { .. } => {
@@ -2154,9 +2151,7 @@ impl AgentInputFooter {
                     .map(|chip| ChildView::new(chip).finish())
             }
             AgentToolbarItemKind::ModelSelector => {
-                let show = FeatureFlag::ProfilesDesignRevamp.is_enabled()
-                    || *SessionSettings::as_ref(app).show_model_selectors_in_prompt;
-                show.then(|| ChildView::new(&self.model_selector).finish())
+                Some(ChildView::new(&self.model_selector).finish())
             }
             AgentToolbarItemKind::NLDToggle => Some(ChildView::new(&self.nld_button).finish()),
             AgentToolbarItemKind::VoiceInput => {
