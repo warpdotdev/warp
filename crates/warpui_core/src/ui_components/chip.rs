@@ -80,7 +80,7 @@ impl UiComponent for Chip {
         }
 
         let mut container = Container::new(label_and_button.finish())
-            .with_horizontal_padding(4.)
+            .with_horizontal_padding(6.)
             .with_vertical_padding(2.)
             .with_border(
                 Border::all(styles.border_width.unwrap_or_default())
