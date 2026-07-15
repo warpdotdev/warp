@@ -468,25 +468,35 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
 /// require the Kitty keyboard protocol (e.g. Ghostty): entering the TUI must
 /// push the `DISAMBIGUATE_ESCAPE_CODES` enhancement flag (CSI `>1u`) so modified
 /// keys are reported distinctly, and leaving must pop it (CSI `<1u`).
+///
+/// The push/pop are best-effort: crossterm hard-routes these commands to the
+/// (unsupported) legacy Windows console API, so the ANSI sequences are only
+/// emitted off Windows. The enter/leave calls must still succeed on every
+/// platform (the `.unwrap()`s below), and the byte assertions are gated to
+/// non-Windows where the sequences are actually written.
 #[test]
 fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
     let mut enter_output = Vec::new();
     enter_terminal_screen(&mut enter_output).unwrap();
-    assert!(
-        enter_output
-            .windows(b"\x1b[>1u".len())
-            .any(|window| window == b"\x1b[>1u"),
-        "entering the TUI should push the DISAMBIGUATE_ESCAPE_CODES keyboard enhancement flag"
-    );
 
     let mut leave_output = Vec::new();
     leave_terminal_screen(&mut leave_output).unwrap();
-    assert!(
-        leave_output
-            .windows(b"\x1b[<1u".len())
-            .any(|window| window == b"\x1b[<1u"),
-        "leaving the TUI should pop the keyboard enhancement flags"
-    );
+
+    #[cfg(not(windows))]
+    {
+        assert!(
+            enter_output
+                .windows(b"\x1b[>1u".len())
+                .any(|window| window == b"\x1b[>1u"),
+            "entering the TUI should push the DISAMBIGUATE_ESCAPE_CODES keyboard enhancement flag"
+        );
+        assert!(
+            leave_output
+                .windows(b"\x1b[<1u".len())
+                .any(|window| window == b"\x1b[<1u"),
+            "leaving the TUI should pop the keyboard enhancement flags"
+        );
+    }
 }
 #[test]
 fn raw_mode_guard_restores_on_drop() {

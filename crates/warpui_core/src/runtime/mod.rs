@@ -616,28 +616,41 @@ trait TerminalModeControl {
 
 struct CrosstermModeControl;
 fn enter_terminal_screen(out: &mut impl Write) -> io::Result<()> {
+    execute!(
+        out,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste,
+        Hide
+    )?;
     // Opt into the Kitty keyboard protocol so terminals that support it (Ghostty,
     // kitty, foot, WezTerm, ...) report modified keys like Shift+Enter as distinct
     // events. Without this, those terminals send a bare CR for both Enter and
     // Shift+Enter, so the input can't distinguish "submit" from "insert newline".
     // `DISAMBIGUATE_ESCAPE_CODES` alone is sufficient for that disambiguation.
-    execute!(
+    //
+    // Best-effort: terminals that don't support the protocol ignore the escape
+    // sequence, and crossterm hard-routes this command to the unsupported legacy
+    // Windows console API (which errors). Tolerate failure here so keyboard
+    // enhancement never aborts terminal setup — a failed push just means the
+    // enhancement isn't active, matching the pre-fix behavior on that terminal.
+    let _ = execute!(
         out,
-        EnterAlternateScreen,
-        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES),
-        EnableMouseCapture,
-        EnableBracketedPaste,
-        Hide
-    )
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
+    Ok(())
 }
 
 fn leave_terminal_screen(out: &mut impl Write) -> io::Result<()> {
+    // Best-effort pop, mirroring the best-effort push in `enter_terminal_screen`
+    // (see the note there): ignore the error so restoring the terminal never
+    // fails on a terminal/platform that didn't accept the push.
+    let _ = execute!(out, PopKeyboardEnhancementFlags);
     execute!(
         out,
         Show,
         DisableBracketedPaste,
         DisableMouseCapture,
-        PopKeyboardEnhancementFlags,
         LeaveAlternateScreen
     )
 }
