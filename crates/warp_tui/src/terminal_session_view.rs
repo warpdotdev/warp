@@ -24,8 +24,8 @@ use warp::tui_export::{
     ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
     ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
     ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
-    GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, LongRunningCommandControlState,
-    ModelEvent, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
+    GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, ModelEvent,
+    ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
     RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SkillReference,
     SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
     TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
@@ -64,6 +64,10 @@ use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::resume::TuiExitSummaryHandle;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
+use crate::terminal_use::{
+    hide_agent_requested_command_from_top_level, terminal_use_conversation_to_resume,
+    terminal_use_interrupt_action, user_controlled_line_bytes, TerminalUseInterruptAction,
+};
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
 use crate::tui_builder::TuiUiBuilder;
@@ -78,7 +82,6 @@ use crate::zero_state::render_zero_state;
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
-const TERMINAL_USE_DISPATCH_DELAY: Duration = Duration::from_millis(1);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
@@ -124,24 +127,6 @@ const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model."
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
-/// Keeps an agent-requested command's canonical block out of the TUI's
-/// top-level transcript. The shell-command action embeds the block's terminal
-/// content inside its own disclosure, so the canonical block must have zero
-/// layout height even after the shared CLI-subagent transition unhides it for
-/// the GUI's adjacent-block presentation.
-fn hide_agent_requested_command_from_top_level(
-    model: &Arc<FairMutex<TerminalModel>>,
-    action_id: Option<&AIAgentActionId>,
-) -> bool {
-    let Some(action_id) = action_id else {
-        return false;
-    };
-    model
-        .lock()
-        .block_list_mut()
-        .set_visibility_of_block_for_ai_action(action_id, false);
-    true
-}
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
     (!input.trim().is_empty()).then_some(input)
@@ -187,47 +172,6 @@ fn export_file_success_message(export: &ConversationFileExport) -> String {
     } else {
         format!("Conversation exported to {path}")
     }
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TerminalUseInterruptAction {
-    TakeControl,
-    InterruptCommand,
-}
-
-fn terminal_use_interrupt_action(
-    control_state: &LongRunningCommandControlState,
-) -> TerminalUseInterruptAction {
-    match control_state {
-        LongRunningCommandControlState::Agent { .. } => TerminalUseInterruptAction::TakeControl,
-        LongRunningCommandControlState::User { .. } => TerminalUseInterruptAction::InterruptCommand,
-    }
-}
-
-fn routes_submission_to_terminal_use(control_state: &LongRunningCommandControlState) -> bool {
-    control_state.is_agent_in_control()
-}
-fn terminal_use_conversation_to_resume(
-    terminal_model: &TerminalModel,
-    block_id: &BlockId,
-) -> Option<AIConversationId> {
-    let metadata = terminal_model
-        .block_list()
-        .block_with_id(block_id)?
-        .agent_interaction_metadata()?;
-    (metadata.requested_command_action_id().is_some()
-        && metadata
-            .long_running_control_state()
-            .is_some_and(LongRunningCommandControlState::should_auto_resume))
-    .then_some(*metadata.conversation_id())
-}
-
-fn user_controlled_line_bytes(input: &str) -> Vec<u8> {
-    let mut bytes = input.as_bytes().to_vec();
-    #[cfg(target_os = "windows")]
-    bytes.push(b'\r');
-    #[cfg(not(target_os = "windows"))]
-    bytes.push(b'\n');
-    bytes
 }
 
 /// Typed actions handled by [`TuiTerminalSessionView`].
@@ -350,14 +294,8 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(view) = self.cli_subagent_views.remove(block_id) {
-            let conversation_id = view.as_ref(ctx).conversation_id();
             self.transcript.update(ctx, |transcript, ctx| {
-                transcript.detach_cli_subagent(
-                    conversation_id,
-                    initial_requested_command_action_id,
-                    view.id(),
-                    ctx,
-                );
+                transcript.detach_cli_subagent(initial_requested_command_action_id, view.id(), ctx);
             });
         }
         ctx.focus(&self.input_view);
@@ -463,7 +401,7 @@ impl TuiTerminalSessionView {
         self.cli_subagent_controller
             .as_ref(ctx)
             .active_target()
-            .filter(|target| routes_submission_to_terminal_use(&target.control_state))
+            .filter(|target| target.control_state.is_agent_in_control())
     }
 
     fn active_user_controlled_target(&self, ctx: &AppContext) -> Option<CLISubagentTarget> {
@@ -489,29 +427,19 @@ impl TuiTerminalSessionView {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
         ctx.notify();
 
-        ctx.spawn(
-            Timer::after(TERMINAL_USE_DISPATCH_DELAY),
-            move |view, _, ctx| {
-                let dispatched = view.ai_controller.update(ctx, |controller, ctx| {
-                    controller.send_user_query_in_conversation(
-                        prompt.clone(),
-                        conversation_id,
-                        None,
-                        ctx,
-                    )
+        let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
+            controller.send_user_query_in_conversation(prompt.clone(), conversation_id, None, ctx)
+        });
+        if !dispatched {
+            self.cli_subagent_controller.update(ctx, |controller, ctx| {
+                controller.restore_latest_instruction(block_id, previous_instruction, ctx);
+            });
+            if self.input_view.as_ref(ctx).is_empty(ctx) {
+                self.input_view.update(ctx, |input, ctx| {
+                    input.set_text(&prompt, ctx);
                 });
-                if !dispatched {
-                    view.cli_subagent_controller.update(ctx, |controller, ctx| {
-                        controller.restore_latest_instruction(block_id, previous_instruction, ctx);
-                    });
-                    if view.input_view.as_ref(ctx).is_empty(ctx) {
-                        view.input_view.update(ctx, |input, ctx| {
-                            input.set_text(&prompt, ctx);
-                        });
-                    }
-                }
-            },
-        );
+            }
+        }
         true
     }
 

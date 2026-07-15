@@ -1117,12 +1117,12 @@ fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<Tui
         );
         ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiAIBlock::new(
-                (AIConversationId::new(), AIAgentExchangeId::new()),
+                AIConversationId::new(),
+                AIAgentExchangeId::new(),
                 Rc::new(model),
                 action_model,
                 &model_events,
                 terminal_model,
-                Default::default(),
                 ctx,
             )
         })
