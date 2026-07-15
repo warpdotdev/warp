@@ -1,4 +1,4 @@
-# Tech Spec: Customize the Project Explorer font size
+# Tech Spec: Customize the Project Explorer font size (GH11738)
 
 **Issue:** [warpdotdev/warp#11738](https://github.com/warpdotdev/warp/issues/11738)
 
