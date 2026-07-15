@@ -1861,6 +1861,31 @@ fn test_parse_autolink_strips_trailing_sentence_punctuation() {
 }
 
 #[test]
+fn test_parse_autolink_preserves_escaped_trailing_punctuation() {
+    // A backslash-escaped trailing punctuation character is an intentional part
+    // of the URL and must be preserved (unescaped), not trimmed. This guards the
+    // trailing-punctuation trim against splitting an escape sequence — e.g. from
+    // the serializer emitting `\.` for a URL that genuinely ends in `.`.
+    assert_eq!(
+        parse_all("https://example.com\\.", parse_inline),
+        vec![FormattedTextFragment::hyperlink(
+            "https://example.com.",
+            "https://example.com."
+        )]
+    );
+
+    // An escaped backslash (`\\`) is a literal backslash; the `.` after it is not
+    // escaped, so it is still trimmed as trailing punctuation.
+    assert_eq!(
+        parse_all("https://example.com\\\\.", parse_inline),
+        vec![
+            FormattedTextFragment::hyperlink("https://example.com\\", "https://example.com\\"),
+            FormattedTextFragment::plain_text("."),
+        ]
+    );
+}
+
+#[test]
 fn test_parse_escapes_inline() {
     assert_eq!(
         parse_all("\\*not emphasized*", parse_inline),
