@@ -5,8 +5,8 @@ use std::time::Duration;
 use command::blocking::Command;
 use warp::features::FeatureFlag;
 use warp::integration_testing::code_review::{
-    assert_code_review_anchor, assert_code_review_line_text, assert_code_review_loaded,
-    assert_code_review_scroll_region, assert_min_hidden_sections,
+    assert_code_review_anchor, assert_code_review_image_preview, assert_code_review_line_text,
+    assert_code_review_loaded, assert_code_review_scroll_region, assert_min_hidden_sections,
     expand_first_hidden_section_and_assert_full_reveal, scroll_code_review_to_deleted_range,
     scroll_code_review_to_footer, scroll_code_review_to_header, scroll_code_review_to_line,
     ScrollRegion,
@@ -708,4 +708,129 @@ pub fn test_code_review_double_click_fully_expands_hidden_section() -> Builder {
         .with_step(expand_first_hidden_section_and_assert_full_reveal(
             TEST_FILE_NAME,
         ))
+}
+
+// ── Image previews (specs/GH12093) ─────────────────────────────────────
+
+const MODIFIED_IMAGE_FILE_NAME: &str = "logo.png";
+const DELETED_IMAGE_FILE_NAME: &str = "removed.png";
+const ADDED_IMAGE_FILE_NAME: &str = "added.png";
+/// An image-looking extension over non-image binary bytes — must keep the
+/// binary placeholder (misclassification guard, product spec §8).
+const NON_IMAGE_FILE_NAME: &str = "corrupt.png";
+
+/// 1×1 red PNG.
+const BASE_PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0,
+    0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99, 0x3D, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+/// 2×2 blue PNG.
+const MODIFIED_PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x06, 0x00, 0x00, 0x00, 0x72, 0xB6, 0x0D,
+    0x24, 0x00, 0x00, 0x00, 0x10, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0xF8, 0xFF,
+    0x1F, 0x82, 0xA1, 0x0C, 0x00, 0x3F, 0xD2, 0x07, 0xF9, 0xB4, 0x12, 0x4F, 0xCD, 0x00, 0x00, 0x00,
+    0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+fn code_review_image_preview_builder(flag_enabled: bool) -> Builder {
+    FeatureFlag::ImagePreviewInCodeReview.set_enabled(flag_enabled);
+    new_builder()
+        .use_tmp_filesystem_for_test_root_directory()
+        .with_setup(|utils| {
+            let test_dir = utils.test_dir();
+            let repo_dir = test_dir.join("repo");
+            fs::create_dir_all(&repo_dir).expect("should create repo subdirectory");
+            let repo_dir_string = repo_dir
+                .to_str()
+                .expect("repo directory should be valid utf-8");
+
+            write_all_rc_files_for_test(&test_dir, format!("cd {repo_dir_string}"));
+
+            fs::write(repo_dir.join(MODIFIED_IMAGE_FILE_NAME), BASE_PNG)
+                .expect("should write committed image");
+            fs::write(repo_dir.join(DELETED_IMAGE_FILE_NAME), BASE_PNG)
+                .expect("should write to-be-deleted image");
+            run_git(&repo_dir, &["init", "-b", "main"]);
+            run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
+            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["add", "."]);
+            run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
+
+            // Modified, deleted, added (untracked), and non-image binary
+            // (untracked) — one file per product-spec status case.
+            fs::write(repo_dir.join(MODIFIED_IMAGE_FILE_NAME), MODIFIED_PNG)
+                .expect("should overwrite committed image");
+            fs::remove_file(repo_dir.join(DELETED_IMAGE_FILE_NAME))
+                .expect("should delete committed image");
+            fs::write(repo_dir.join(ADDED_IMAGE_FILE_NAME), MODIFIED_PNG)
+                .expect("should write untracked image");
+            fs::write(
+                repo_dir.join(NON_IMAGE_FILE_NAME),
+                b"not an image\x00\xFF\xFE",
+            )
+            .expect("should write non-image binary file");
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            TestStep::new("Wait for the terminal to detect the git repository")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_repo_detected()),
+        )
+        .with_step(
+            TestStep::new("Open the code review panel")
+                .with_action(|app, window_id, _| open_code_review_panel(app, window_id)),
+        )
+        .with_step(
+            TestStep::new("Wait for the code review panel to load file diffs")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_loaded()),
+        )
+}
+
+pub fn test_code_review_image_preview() -> Builder {
+    code_review_image_preview_builder(true).with_step(
+        TestStep::new("Assert per-status image previews")
+            .set_timeout(Duration::from_secs(20))
+            .add_named_assertion(
+                "modified image previews old and new sides",
+                |app, window_id| {
+                    assert_code_review_image_preview(MODIFIED_IMAGE_FILE_NAME, Some((true, true)))(
+                        app, window_id,
+                    )
+                },
+            )
+            .add_named_assertion("deleted image previews old side only", |app, window_id| {
+                assert_code_review_image_preview(DELETED_IMAGE_FILE_NAME, Some((true, false)))(
+                    app, window_id,
+                )
+            })
+            .add_named_assertion("added image previews new side only", |app, window_id| {
+                assert_code_review_image_preview(ADDED_IMAGE_FILE_NAME, Some((false, true)))(
+                    app, window_id,
+                )
+            })
+            .add_named_assertion(
+                "non-image .png keeps the binary placeholder",
+                |app, window_id| {
+                    assert_code_review_image_preview(NON_IMAGE_FILE_NAME, None)(app, window_id)
+                },
+            ),
+    )
+}
+
+pub fn test_code_review_image_preview_flag_off() -> Builder {
+    code_review_image_preview_builder(false).with_step(
+        TestStep::new("Assert no image previews with the feature flag off")
+            .set_timeout(Duration::from_secs(20))
+            .add_named_assertion(
+                "modified image keeps the binary placeholder",
+                |app, window_id| {
+                    assert_code_review_image_preview(MODIFIED_IMAGE_FILE_NAME, None)(app, window_id)
+                },
+            ),
+    )
 }

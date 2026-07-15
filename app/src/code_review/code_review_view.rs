@@ -10,6 +10,7 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 #[cfg(feature = "local_fs")]
 use num_traits::SaturatingSub;
+use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use rand::distributions::Alphanumeric;
@@ -29,21 +30,23 @@ use warp_editor::render::model::LineCount;
 use warp_util::content_version::ContentVersion;
 use warp_util::path::LineAndColumnArg;
 use warp_util::standardized_path::StandardizedPath;
+use warpui::assets::asset_cache::{AssetCache, AssetSource};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{
     NewScrollable, NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
 };
 use warpui::elements::{
-    resizable_state_handle, Align, Border, ChildAnchor, ChildView, Clipped,
+    resizable_state_handle, Align, Border, CacheOption, ChildAnchor, ChildView, Clipped,
     ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DispatchEventResult, DragBarSide, Element, Empty, EventHandler, Flex, Hoverable, List,
-    ListState, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Percentage, PositionedElementAnchor,
+    DispatchEventResult, DragBarSide, Element, Empty, EventHandler, Expanded, Flex, Hoverable,
+    Image, List, ListState, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Percentage, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, Rect, Resizable, ResizableStateHandle, SavePosition,
     ScrollOffset, ScrollStateHandle, ScrollbarWidth, Shrinkable, Stack, Text,
     DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::image_cache::ImageType;
 use warpui::keymap::Keystroke;
 use warpui::platform::Cursor;
 use warpui::text_layout::{default_compute_baseline_position, ClipConfig};
@@ -95,7 +98,7 @@ use crate::code_review::context::{
 use crate::code_review::diff_selector::{DiffSelector, DiffSelectorEvent, DiffTarget};
 use crate::code_review::diff_state::{
     DiffHunk, DiffLineType, DiffMode, DiffState, DiffStateModel, DiffStateModelEvent, DiffStats,
-    FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffWithBaseContent, GitFileStatus,
+    FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffWithBaseContent, GitFileStatus, ImageSide,
 };
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::find_model::CodeReviewFindModel;
@@ -356,6 +359,11 @@ pub enum CodeReviewAction {
 pub struct FileState {
     pub file_diff: FileDiff,
     pub editor_state: Option<CodeReviewEditorState>,
+    /// Inline image preview for a binary image file. Present only when the
+    /// diff model produced a previewable `ImagePreviewData`; the file then
+    /// renders the preview instead of the binary placeholder and shows no
+    /// line-based +/- counts.
+    image_preview_state: Option<ImagePreviewState>,
     pub is_expanded: bool,
     sidebar_mouse_state: MouseStateHandle,
     header_mouse_state: MouseStateHandle,
@@ -364,6 +372,33 @@ pub struct FileState {
     discard_button: ViewHandle<ActionButton>,
     add_context_button: ViewHandle<ActionButton>,
     copy_path_button: ViewHandle<ActionButton>,
+}
+
+/// View state for an inline image preview. The image bytes are registered
+/// in the [`AssetCache`] when the view state is built; `Image` sides
+/// reference them by raw-asset id.
+struct ImagePreviewState {
+    /// Base revision (HEAD or merge-base) side; `None` when the side does
+    /// not apply to the file's status.
+    old: Option<ImagePreviewSideState>,
+    /// Working tree side; `None` when the side does not apply.
+    new: Option<ImagePreviewSideState>,
+}
+
+/// Per-side render state, mirroring [`ImageSide`] with bytes swapped for a
+/// registered asset id.
+enum ImagePreviewSideState {
+    Image {
+        asset_id: String,
+        width: u32,
+        height: u32,
+        byte_len: u64,
+    },
+    TooLarge {
+        byte_len: u64,
+    },
+    Unavailable,
+    Rejected,
 }
 
 pub(crate) struct LoadedState {
@@ -2601,7 +2636,12 @@ impl CodeReviewView {
 
         let mut file_states = vec![];
         for file in files {
-            let editor_state = {
+            let editor_state = if file.image_preview.is_some() {
+                // Image files render an inline preview; never load their
+                // bytes into an editor buffer (matters for untracked images,
+                // which aren't flagged `is_binary`).
+                None
+            } else {
                 // `LocalCodeEditorView::new_with_global_buffer` natively
                 // supports both `LocalOrRemotePath::Local` and `Remote`
                 // (it sets language by extension and skips local-only
@@ -2621,6 +2661,21 @@ impl CodeReviewView {
                 }
             };
             let is_expanded = self.should_auto_expand_file(&file.file_diff);
+
+            let image_preview_state = file.image_preview.as_ref().map(|preview| {
+                let mut build_side = |side: &ImageSide, side_key: &str| {
+                    Self::build_image_preview_side_state(
+                        side,
+                        side_key,
+                        &file.file_diff.file_path,
+                        ctx,
+                    )
+                };
+                ImagePreviewState {
+                    old: preview.old.as_ref().map(|side| build_side(side, "old")),
+                    new: preview.new.as_ref().map(|side| build_side(side, "new")),
+                }
+            });
 
             let file_path = file.file_diff.file_path.clone();
             let file_line = file_line_for_open(&file.file_diff);
@@ -2706,6 +2761,7 @@ impl CodeReviewView {
             file_states.push(FileState {
                 file_diff: file.file_diff.clone(),
                 editor_state,
+                image_preview_state,
                 is_expanded,
                 chevron_button,
                 open_in_tab_button,
@@ -2722,6 +2778,44 @@ impl CodeReviewView {
             self.viewported_list_state.add_item();
         }
         file_states
+    }
+
+    /// Converts one model-side [`ImageSide`] into its render state,
+    /// registering image bytes in the [`AssetCache`] under a stable
+    /// per-view/per-side/per-path raw-asset id. Re-inserting under the same
+    /// id on a diff reload replaces the cached asset, so working-tree edits
+    /// show fresh bytes.
+    fn build_image_preview_side_state(
+        side: &ImageSide,
+        side_key: &str,
+        file_path: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> ImagePreviewSideState {
+        match side {
+            ImageSide::Image {
+                bytes,
+                width,
+                height,
+                byte_len,
+                ..
+            } => {
+                let asset_id = format!("code-review-img-{}-{side_key}-{file_path}", ctx.view_id());
+                AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
+                    asset_cache.insert_raw_asset_bytes::<ImageType>(asset_id.clone(), bytes, ctx);
+                });
+                ImagePreviewSideState::Image {
+                    asset_id,
+                    width: *width,
+                    height: *height,
+                    byte_len: *byte_len,
+                }
+            }
+            ImageSide::TooLarge { byte_len } => ImagePreviewSideState::TooLarge {
+                byte_len: *byte_len,
+            },
+            ImageSide::Unavailable => ImagePreviewSideState::Unavailable,
+            ImageSide::Rejected => ImagePreviewSideState::Rejected,
+        }
     }
 
     fn render_diff_at_index(
@@ -4993,7 +5087,11 @@ impl CodeReviewView {
             .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
             .finish(),
         );
-        left_section.add_child(self.render_file_stats(&file.file_diff, appearance));
+        // Image files show per-side dimensions/size in the preview itself;
+        // a line-based +/- count would be misleading (product spec §3).
+        if file.image_preview_state.is_none() {
+            left_section.add_child(self.render_file_stats(&file.file_diff, appearance));
+        }
 
         let mut right_row = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::End)
@@ -5232,7 +5330,12 @@ impl CodeReviewView {
             );
         }
 
-        if file.file_diff.is_binary {
+        if let Some(preview) = file.image_preview_state.as_ref() {
+            Self::styled_file_content_container(
+                Self::render_image_preview(preview, &file.file_diff.status, appearance),
+                theme,
+            )
+        } else if file.file_diff.is_binary {
             Self::styled_file_content_container(
                 Text::new(
                     "Binary file - no diff available",
@@ -5298,6 +5401,175 @@ impl CodeReviewView {
         }
     }
 
+    /// Renders the inline image preview for a binary image file
+    /// (specs/GH12093/PRODUCT.md §2): a single image for added, deleted and
+    /// renamed-without-changes files; the old and new image side by side for
+    /// modified files, each side taking exactly half of the available pane
+    /// content width. A side that can't render an image shows its
+    /// side-specific note instead, so neither half of a comparison is
+    /// silently hidden.
+    fn render_image_preview(
+        preview: &ImagePreviewState,
+        status: &GitFileStatus,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let both_sides = preview.old.is_some() && preview.new.is_some();
+
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_main_axis_size(MainAxisSize::Max);
+        if let Some(old) = preview.old.as_ref() {
+            let label = if both_sides {
+                Some(("Old", remove_color(appearance)))
+            } else {
+                // Only the base side remains: the image was removed.
+                Some(("Removed", remove_color(appearance)))
+            };
+            let side = Self::render_image_preview_side(old, label, appearance);
+            if both_sides {
+                row.add_child(
+                    Expanded::new(1., Container::new(side).with_margin_right(12.).finish())
+                        .finish(),
+                );
+            } else {
+                row.add_child(side);
+            }
+        }
+        if let Some(new) = preview.new.as_ref() {
+            let label = if both_sides {
+                Some(("New", add_color(appearance)))
+            } else if status.is_new_file() {
+                Some(("Added", add_color(appearance)))
+            } else {
+                // Renamed/copied without a content change: a single image,
+                // with the rename carried by the path/status presentation.
+                None
+            };
+            let side = Self::render_image_preview_side(new, label, appearance);
+            if both_sides {
+                row.add_child(
+                    Expanded::new(1., Container::new(side).with_margin_left(12.).finish()).finish(),
+                );
+            } else {
+                row.add_child(side);
+            }
+        }
+        row.finish()
+    }
+
+    fn render_image_preview_side(
+        side: &ImagePreviewSideState,
+        label: Option<(&'static str, ColorU)>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        /// Max rendered height for one preview side. Width is bounded by the
+        /// available pane content (half of it for a two-sided comparison)
+        /// and by the image's natural size; taller/wider images scale down
+        /// with aspect preserved rather than being clipped.
+        const MAX_RENDERED_HEIGHT: f32 = 280.;
+
+        let theme = appearance.theme();
+        let note_color = theme.sub_text_color(theme.background());
+        let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+
+        if let Some((label_text, label_color)) = label {
+            column.add_child(
+                Container::new(
+                    Text::new(
+                        label_text,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(label_color)
+                    .finish(),
+                )
+                .with_margin_bottom(6.)
+                .finish(),
+            );
+        }
+
+        match side {
+            ImagePreviewSideState::Image {
+                asset_id,
+                width,
+                height,
+                byte_len,
+            } => {
+                column.add_child(
+                    Container::new(
+                        ConstrainedBox::new(
+                            Image::new(
+                                AssetSource::Raw {
+                                    id: asset_id.clone(),
+                                },
+                                CacheOption::Original,
+                            )
+                            .first_frame_preview()
+                            .layout_using_paint_bounds()
+                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                            .finish(),
+                        )
+                        // Cap at the natural size so small images never
+                        // upscale; the incoming constraint (pane or half-pane
+                        // width) bounds the box further and the contain-fit
+                        // scales the image down into it.
+                        .with_max_width(*width as f32)
+                        .with_max_height((*height as f32).min(MAX_RENDERED_HEIGHT))
+                        .finish(),
+                    )
+                    .finish(),
+                );
+                column.add_child(
+                    Container::new(
+                        Text::new(
+                            format!(
+                                "{width} × {height} px • {}",
+                                format_image_byte_size(*byte_len)
+                            ),
+                            appearance.ui_font_family(),
+                            appearance.ui_font_size(),
+                        )
+                        .with_color(note_color.into())
+                        .finish(),
+                    )
+                    .with_margin_top(6.)
+                    .finish(),
+                );
+            }
+            ImagePreviewSideState::TooLarge { byte_len } => column.add_child(
+                Text::new(
+                    format!(
+                        "Too large to preview ({})",
+                        format_image_byte_size(*byte_len)
+                    ),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(note_color.into())
+                .finish(),
+            ),
+            ImagePreviewSideState::Unavailable => column.add_child(
+                Text::new(
+                    "This version is unavailable",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(note_color.into())
+                .finish(),
+            ),
+            ImagePreviewSideState::Rejected => column.add_child(
+                Text::new(
+                    "Not a valid image — can't preview",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(note_color.into())
+                .finish(),
+            ),
+        }
+        column.finish()
+    }
+
     fn revert_hunk_toast_id(&self, ctx: &mut ViewContext<Self>) -> String {
         format!("diff_removed_{}", ctx.view_id())
     }
@@ -5331,6 +5603,10 @@ impl CodeReviewView {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         if let Some(file_state) = loaded.file_states.get(file_path) {
+            // No line-based +/- counts for image files (product spec §3).
+            if file_state.image_preview_state.is_some() {
+                return Empty::new().finish();
+            }
             let additions = file_state.file_diff.additions();
             let deletions = file_state.file_diff.deletions();
             let file_diff_stats = DiffStats {
@@ -6997,6 +7273,21 @@ impl CodeReviewView {
 }
 
 /// Returns the line number of the first line in the file affected by the diff.
+/// Formats an image byte size for the preview metadata line, e.g. "845 B",
+/// "12.3 KB", "4.0 MB".
+fn format_image_byte_size(bytes: u64) -> String {
+    const KB: f64 = 1000.;
+    const MB: f64 = KB * 1000.;
+    let bytes = bytes as f64;
+    if bytes >= MB {
+        format!("{:.1} MB", bytes / MB)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 fn file_line_for_open(file_diff: &FileDiff) -> Option<usize> {
     file_diff.hunks.first().and_then(|hunk| {
         let mut last_context_line_number = None;

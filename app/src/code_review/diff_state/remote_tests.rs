@@ -102,6 +102,7 @@ fn simple_file_with_content(path: &str, content_at_base: Option<&str>) -> FileDi
             size: DiffSize::Normal,
         },
         content_at_head: content_at_base.map(str::to_string),
+        image_preview: None,
     }
 }
 

@@ -300,6 +300,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_code_review_scroll_preserved_header_range);
     register_test!(test_code_review_scroll_preserved_footer_range);
     register_test!(test_code_review_double_click_fully_expands_hidden_section);
+    register_test!(test_code_review_image_preview);
+    register_test!(test_code_review_image_preview_flag_off);
     register_test!(test_alt_screen_context_menu_with_sgr_with_mouse_reporting);
     register_test!(test_alt_screen_context_menu_with_sgr_without_mouse_reporting);
     register_test!(test_alt_screen_context_menu_without_sgr_with_mouse_reporting);
