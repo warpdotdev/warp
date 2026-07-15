@@ -18,10 +18,7 @@ use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::AppContext;
 
 use crate::agent_block::{CollapsibleSectionStates, TuiAIBlockAction};
-use crate::tool_call_labels::{
-    tool_call_display_state, tool_call_glyph, tool_call_label, ResolvedCommandBlock,
-    ToolCallDisplayState,
-};
+use crate::tool_call_labels::{tool_call_display_state, tool_call_label, ResolvedCommandBlock};
 use crate::tui_builder::TuiUiBuilder;
 
 const INPUT_PREFIX: &str = "> ";
@@ -73,41 +70,6 @@ pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiE
         .finish()
 }
 
-/// Shared leading-glyph style for all rich and fallback TUI tool-call rows.
-pub(crate) fn tool_call_glyph_style(
-    state: ToolCallDisplayState,
-    builder: &TuiUiBuilder,
-) -> TuiStyle {
-    match state {
-        ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
-            builder.dim_text_style()
-        }
-        ToolCallDisplayState::AwaitingApproval | ToolCallDisplayState::Running => {
-            builder.attention_glyph_style()
-        }
-        ToolCallDisplayState::Succeeded => builder.success_glyph_style(),
-        ToolCallDisplayState::Failed => builder.error_text_style(),
-        ToolCallDisplayState::Cancelled => builder.muted_text_style(),
-    }
-}
-
-/// Shared label style for all rich and fallback TUI tool-call rows.
-pub(crate) fn tool_call_label_style(
-    state: ToolCallDisplayState,
-    builder: &TuiUiBuilder,
-) -> TuiStyle {
-    match state {
-        ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
-            builder.dim_text_style()
-        }
-        ToolCallDisplayState::AwaitingApproval
-        | ToolCallDisplayState::Running
-        | ToolCallDisplayState::Succeeded
-        | ToolCallDisplayState::Failed
-        | ToolCallDisplayState::Cancelled => builder.primary_text_style(),
-    }
-}
-
 /// Renders the fallback plain-text status row for an agent tool call, used
 /// for every tool call without a richer registered child view (the GUI's
 /// view-based action rendering has no TUI equivalent for these yet): a
@@ -116,7 +78,7 @@ pub(crate) fn tool_call_label_style(
 /// hanging indent under itself. State lives in the glyph, so labels keep the
 /// normal foreground except in-flight rows, which stay dim until execution
 /// starts. `output_streaming` marks tool calls whose arguments are still
-/// streaming in (see `ToolCallDisplayState::Constructing`); `block` carries
+/// streaming in (see `TuiStatusState::Constructing`); `block` carries
 /// the terminal block's ground truth for shell-command tool calls (see
 /// `ResolvedCommandBlock`).
 pub(crate) fn render_fallback_tool_call_section(
@@ -128,12 +90,12 @@ pub(crate) fn render_fallback_tool_call_section(
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     let state = tool_call_display_state(status, output_streaming, block.map(|block| block.state));
-    let glyph_style = tool_call_glyph_style(state, &builder);
-    let label_style = tool_call_label_style(state, &builder);
+    let glyph_style = state.glyph_style(&builder);
+    let label_style = state.label_style(&builder);
     let label = tool_call_label(action, status, output_streaming, block);
     TuiFlex::row()
         .child(
-            TuiText::new(format!("{} ", tool_call_glyph(state)))
+            TuiText::new(format!("{} ", state.glyph()))
                 .with_style(glyph_style)
                 .finish(),
         )

@@ -9,6 +9,7 @@
 
 mod agent_block;
 mod agent_block_sections;
+mod agent_message;
 mod alt_screen_view;
 mod autoupdate;
 mod clipboard;
@@ -40,6 +41,7 @@ mod resume;
 mod session_registry;
 mod skills_menu;
 mod slash_commands;
+mod status;
 mod terminal_background;
 mod terminal_block;
 mod terminal_content_element;
