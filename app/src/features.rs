@@ -513,6 +513,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::NldPromptHistoryMatch,
         #[cfg(feature = "prompt_cache_expiry_warning")]
         FeatureFlag::PromptCacheExpiryWarning,
+        #[cfg(feature = "terminal_lifecycle_recovery")]
+        FeatureFlag::TerminalLifecycleRecovery,
     ]);
 
     flags

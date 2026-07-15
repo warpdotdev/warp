@@ -694,6 +694,7 @@ default = [
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
+    "terminal_lifecycle_recovery",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -844,6 +845,7 @@ tab_close_button_on_left = []
 team_features_override = []
 test-util = ["cloud_object_client/test-util", "warp_server_auth/test-util"]
 team_workflows = ["team_features_override"]
+terminal_lifecycle_recovery = []
 toggle_bootstrap_block = []
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = [
