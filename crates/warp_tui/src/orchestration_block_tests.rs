@@ -414,6 +414,31 @@ fn selector_actions_commit_edits_and_follow_the_dynamic_page_sequence() {
 }
 
 #[test]
+fn confirming_a_search_result_returns_focus_to_the_acceptance_card() {
+    App::test((), |mut app| async move {
+        let (block, _) = test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+        block.update(&mut app, |block, ctx| {
+            block.open_page(ConfigPage::Model, ctx);
+        });
+        let window_id = app.read(|ctx| block.window_id(ctx));
+        let selector = app.read(|ctx| block.as_ref(ctx).selector.clone());
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::FocusSearchAndInsert('a'), ctx);
+        });
+        assert_ne!(app.focused_view_id(window_id), Some(block.id()));
+
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::SelectItem(0), ctx);
+        });
+
+        assert_eq!(
+            block.read(&app, |block, _| block.mode),
+            CardMode::Acceptance
+        );
+        assert_eq!(app.focused_view_id(window_id), Some(block.id()));
+    });
+}
+#[test]
 fn accepting_dispatches_once_and_releases_focus() {
     App::test((), |mut app| async move {
         let request = request("oz", RunAgentsExecutionMode::Local);

@@ -32,14 +32,14 @@ use warpui_core::{
 mod configuration;
 mod render;
 
+use configuration::{
+    build_request, ConfigPage, ModelOrchestrationBlockController, OrchestrationBlockController,
+};
+
 use crate::agent_identity::AgentIdentity;
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::option_selector::{OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent};
 use crate::tui_builder::TuiUiBuilder;
-
-use configuration::{
-    build_request, ConfigPage, ModelOrchestrationBlockController, OrchestrationBlockController,
-};
 
 const ORCHESTRATION_BLOCK_TITLE: &str = "Can I start additional agents for this task?";
 
@@ -485,6 +485,14 @@ impl TuiOrchestrationBlock {
         ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
         ctx.notify();
     }
+    /// Returns from configuration to the interactive acceptance card.
+    fn return_to_acceptance(&mut self, ctx: &mut ViewContext<Self>) {
+        self.mode = CardMode::Acceptance;
+        self.confirmation_navigation = None;
+        ctx.focus_self();
+        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
+        ctx.notify();
+    }
 
     /// Refreshes the active page's snapshot in place after a catalog or
     /// state change, updating the header so the dynamic page count stays
@@ -498,8 +506,7 @@ impl TuiOrchestrationBlock {
         if !sequence.contains(&page) {
             // The active page no longer applies (e.g. auth page removed by a
             // catalog change); fall back to the acceptance card.
-            self.mode = CardMode::Acceptance;
-            ctx.notify();
+            self.return_to_acceptance(ctx);
             return;
         }
         let snapshot = self.snapshot_for_page(page, ctx);
@@ -561,11 +568,7 @@ impl TuiOrchestrationBlock {
             .copied();
         match next {
             Some(next) => self.open_page(next, ctx),
-            None => {
-                self.mode = CardMode::Acceptance;
-                ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
-                ctx.notify();
-            }
+            None => self.return_to_acceptance(ctx),
         }
     }
 
@@ -580,9 +583,7 @@ impl TuiOrchestrationBlock {
         let sequence =
             Self::page_sequence(&self.orchestration_edit_state.orchestration_config_state);
         let Some(index) = sequence.iter().position(|candidate| *candidate == page) else {
-            self.mode = CardMode::Acceptance;
-            ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
-            ctx.notify();
+            self.return_to_acceptance(ctx);
             return;
         };
         let target = match navigation {
@@ -726,9 +727,7 @@ impl TuiOrchestrationBlock {
             return;
         }
         if matches!(self.mode, CardMode::Configuring { .. }) {
-            self.mode = CardMode::Acceptance;
-            ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
-            ctx.notify();
+            self.return_to_acceptance(ctx);
         }
     }
 
