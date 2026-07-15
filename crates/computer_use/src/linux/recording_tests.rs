@@ -73,9 +73,7 @@ fn create_solid_window(
     window
 }
 
-/// Paints `window` a solid `color` via a graphics-context fill. When the window is redirected
-/// (as the recorder does), the fill lands in the off-screen backing pixmap even while the window
-/// is covered on-screen.
+/// Paints `window` a solid `color` via a graphics-context fill.
 fn paint_window(
     conn: &RustConnection,
     window: xproto::Window,
@@ -154,20 +152,22 @@ async fn probe_dimensions(path: &Path) -> (u32, u32) {
     panic!("could not parse dimensions from ffmpeg output:\n{stderr}");
 }
 
-/// Records a window that is fully covered by another window, then asserts a covered pixel in the
-/// recording matches the target window's color (proving the Composite per-frame path captured
-/// the covered window instead of the window on top of it).
+/// Records a window that starts fully covered, asserting recording start raises it and native
+/// x11grab captures the target window's dimensions and pixels.
 #[tokio::test]
-async fn records_covered_window_via_composite() {
+async fn records_window_target_via_native_x11grab_after_raise() {
     if !recorder_env_available().await {
-        eprintln!("skipping records_covered_window_via_composite: no X11/ffmpeg environment");
+        eprintln!(
+            "skipping records_window_target_via_native_x11grab_after_raise: no X11/ffmpeg \
+             environment"
+        );
         return;
     }
 
     let (conn, screen_index) = RustConnection::connect(None).expect("connect X11");
     let screen = conn.setup().roots[screen_index].clone();
 
-    // A red target window, fully covered by a blue window stacked on top of it.
+    // A red target window, initially fully covered by a blue window stacked on top of it.
     let width: u16 = 200;
     let height: u16 = 200;
     let target = create_solid_window(&conn, &screen, 100, 100, width, height, RED_PIXEL);
@@ -193,33 +193,37 @@ async fn records_covered_window_via_composite() {
     let out_width = handle.width();
     let out_height = handle.height();
 
-    // Keep repainting the (now redirected) target so its off-screen backing pixmap holds red for
-    // the duration of the capture, even though the blue window covers it on-screen.
+    // Once recording starts, the target should have been raised. Repaint it while capture is
+    // live so the final frames are unambiguously target-red.
     for _ in 0..12 {
         paint_window(&conn, target, width, height, RED_PIXEL);
-        // Yield to the runtime (rather than blocking) so the background capture task is scheduled.
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     let output = recorder.stop(handle).await.expect("stop window recording");
     assert_eq!(output.width, u32::from(width));
     assert_eq!(output.height, u32::from(height));
+    let (probed_width, probed_height) = probe_dimensions(&output.path).await;
+    assert_eq!(
+        (probed_width, probed_height),
+        (u32::from(width), u32::from(height)),
+        "encoded window recording should match the target window size"
+    );
 
     let frame = decode_last_frame_rgb(&output.path, out_width, out_height).await;
-    // Sample the center of the window, which lies under the blue cover.
+    // Sample the center of the window. If the cover were recorded instead, this would be blue.
     let (px, py) = (out_width / 2, out_height / 2);
     let offset = ((py * out_width + px) * 3) as usize;
     let (r, g, b) = (frame[offset], frame[offset + 1], frame[offset + 2]);
     assert!(
         r > g && r > b && r > 100,
-        "covered pixel at ({px},{py}) should be the target's red, got rgb=({r},{g},{b}) \
+        "recorded pixel at ({px},{py}) should be the target's red, got rgb=({r},{g},{b}) \
          (blue cover would give a dominant blue channel)"
     );
 
-    // Optionally preserve the recording as a visual-evidence artifact (a screen recording of
-    // the covered target being captured correctly) when a destination dir is provided.
+    // Optionally preserve the recording as a visual-evidence artifact when requested.
     if let Ok(dir) = std::env::var("WARP_RECORDING_TEST_OUTPUT_DIR") {
-        let dest = Path::new(&dir).join("covered_window_recording.mp4");
+        let dest = Path::new(&dir).join("window_target_recording.mp4");
         let _ = std::fs::copy(&output.path, &dest);
     }
 
@@ -230,15 +234,22 @@ async fn records_covered_window_via_composite() {
     let _ = conn.flush();
 }
 
-/// The per-frame capture cap rejects windows large enough to risk an OOM before ffmpeg's
-/// duration/size limits apply, while still allowing real displays (up to 8K).
 #[test]
-fn rejects_windows_over_capture_cap() {
-    // A normal 1080p window and a full 8K window are within the cap.
-    assert!(!super::exceeds_capture_cap(1920, 1080));
-    assert!(!super::exceeds_capture_cap(7680, 4320));
-    // A window beyond the cap is rejected.
-    assert!(super::exceeds_capture_cap(8000, 5000));
+fn visibility_samples_stay_inside_window() {
+    let geometry = super::windows::WindowGeometry {
+        x: 10,
+        y: 20,
+        width: 100,
+        height: 50,
+        border_width: 0,
+    };
+    let samples = super::visibility_sample_points(geometry);
+
+    assert_eq!(samples.len(), 5);
+    for sample in samples {
+        assert!(sample.x() >= 10 && sample.x() < 110);
+        assert!(sample.y() >= 20 && sample.y() < 70);
+    }
 }
 
 /// Records with a `Screen` target and asserts the encoded video is the full (even-rounded)

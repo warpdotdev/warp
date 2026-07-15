@@ -121,6 +121,7 @@ fn start_recording_tool_call() -> api::message::tool_call::Tool {
         frame_rate: 15,
         limits: None,
         summary: String::new(),
+        target: None,
     })
 }
 

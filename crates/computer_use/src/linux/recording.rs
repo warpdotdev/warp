@@ -5,28 +5,23 @@
 //! - `Target::Screen` (default, legacy): ffmpeg `x11grab` captures the whole X display straight
 //!   to an ephemeral MP4 on disk (H.264 / yuv420p). `stop` sends SIGINT so ffmpeg finalizes the
 //!   container (writes the moov atom) instead of leaving a truncated file.
-//! - `Target::Window`: a background loop captures just the targeted window every frame via the
-//!   X Composite extension's off-screen backing pixmap — so the window is recorded even while
-//!   covered by another window — and pipes raw RGB frames into an ffmpeg `rawvideo` encoder over
-//!   stdin. `stop` closes ffmpeg's stdin; the resulting EOF is what finalizes a stdin/rawvideo
-//!   ffmpeg (SIGINT is the finalize trigger only for the x11grab path).
+//! - `Target::Window`: the target window is raised if needed, verified as foreground-visible at
+//!   representative points, and captured via ffmpeg `x11grab -window_id`.
 
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use instant::Instant;
-use tokio::io::AsyncWriteExt as _;
+use pathfinder_geometry::vector::Vector2I;
 use tokio::process::{Child, Command};
 use x11rb::connection::Connection;
-use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
-use x11rb::protocol::xproto::{self, ConnectionExt as _, ImageFormat};
+use x11rb::protocol::xproto;
 use x11rb::rust_connection::RustConnection;
 
-use super::x11::{MAX_WINDOW_CAPTURE_PIXELS, convert_x11_image_to_rgb, windows};
+use super::x11::windows;
 use crate::{
     RecordingCompletionStatus, RecordingConfig, RecordingError, RecordingHandle, RecordingOutput,
     Target,
@@ -38,6 +33,10 @@ const START_TIMEOUT: Duration = Duration::from_secs(15);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Poll interval while waiting for capture to begin.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How often to check whether a requested window raise has taken effect.
+const RAISE_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// How long to wait for a target window to become visible enough for native recording.
+const RAISE_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub struct Recorder;
 
@@ -51,8 +50,6 @@ impl Recorder {
 impl crate::Recorder for Recorder {
     async fn start(&self, config: RecordingConfig) -> Result<RecordingHandle, RecordingError> {
         match config.target {
-            // Record a single window via the Composite per-frame path, which sees the window even
-            // when it is covered by another window.
             Target::Window { window_id, .. } => start_window(config, window_id).await,
             // Record the whole display via ffmpeg x11grab (legacy behavior).
             Target::Screen => start_screen(config).await,
@@ -65,10 +62,6 @@ impl crate::Recorder for Recorder {
         let path = handle.path.clone();
         let duration = handle.started_at.elapsed();
 
-        // The window-capture path finalizes ffmpeg by closing its stdin (EOF); the x11grab path
-        // finalizes via SIGINT. Presence of a capture task/stop-flag distinguishes them.
-        let is_window_capture = handle.capture_stop.is_some();
-
         let mut process = handle
             .process
             .take()
@@ -76,11 +69,7 @@ impl crate::Recorder for Recorder {
                 reason: "recording process is unavailable".to_string(),
             })?;
 
-        let completion_status = if is_window_capture {
-            finalize_window_capture(&mut handle, &mut process, &path).await?
-        } else {
-            finalize_screen_capture(&mut process, &path).await?
-        };
+        let completion_status = finalize_capture(&mut process, &path).await?;
 
         let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         if size_bytes == 0 {
@@ -175,69 +164,18 @@ async fn start_screen(config: RecordingConfig) -> Result<RecordingHandle, Record
         started_at: Instant::now(),
         process: Some(process),
         cleanup_on_drop: true,
-        capture_stop: None,
-        capture_task: None,
     })
 }
 
-/// Starts a single-window recording via the Composite per-frame capture path.
+/// Starts a single-window recording via ffmpeg `x11grab -window_id`.
 ///
-/// The window's geometry is locked at start; every captured frame is padded (letterboxed) or
-/// cropped to that constant `W`x`H` so the encoder never sees a dimension change.
+/// This is a foreground-visible capture path: the target is raised if representative points are
+/// not already visible, then ffmpeg records that window directly.
 async fn start_window(
     config: RecordingConfig,
     window: xproto::Window,
 ) -> Result<RecordingHandle, RecordingError> {
-    let (conn, screen_index) =
-        RustConnection::connect(None).map_err(|e| RecordingError::Environment {
-            reason: format!("failed to connect to X11: {e}"),
-        })?;
-    let root = conn.setup().roots[screen_index].root;
-
-    // Lock the capture dimensions to the window's geometry at start. libx264 with yuv420p
-    // requires even dimensions.
-    let geometry =
-        windows::geometry(&conn, root, window).map_err(|e| RecordingError::Environment {
-            reason: format!("failed to resolve window {window} geometry: {e}"),
-        })?;
-    let width = u32::from(geometry.width) & !1;
-    let height = u32::from(geometry.height) & !1;
-    let border_width = geometry.border_width;
-    if width == 0 || height == 0 {
-        return Err(RecordingError::Environment {
-            reason: format!("invalid window dimensions {width}x{height}"),
-        });
-    }
-    // The capture loop allocates a `width * height * 3` RGB frame every tick, so bound the
-    // capture size up front (mirroring the window-screenshot cap). ffmpeg's `-t`/`-fs` limits
-    // bound the output but not our per-frame memory, so a huge target window could otherwise OOM
-    // the recorder before those limits apply.
-    if exceeds_capture_cap(width, height) {
-        return Err(RecordingError::Environment {
-            reason: format!(
-                "window {window} is {width}x{height} ({} px), exceeding the \
-                 {MAX_WINDOW_CAPTURE_PIXELS}-pixel recording capture limit",
-                (width as usize).saturating_mul(height as usize),
-            ),
-        });
-    }
-
-    // Redirect the window so the server maintains its full contents off-screen, mirroring the
-    // window-screenshot path. AUTOMATIC redirections are per-client and released when this
-    // connection closes (so the connection must live for the whole recording). A redundant
-    // redirect error is ignored: under a compositor's existing manual redirection,
-    // NameWindowPixmap already works.
-    conn.composite_query_version(0, 4)
-        .map_err(|e| RecordingError::Environment {
-            reason: format!("Composite extension not available: {e}"),
-        })?
-        .reply()
-        .map_err(|e| RecordingError::Environment {
-            reason: format!("Composite extension not available: {e}"),
-        })?;
-    if let Ok(cookie) = conn.composite_redirect_window(window, Redirect::AUTOMATIC) {
-        let _ = cookie.check();
-    }
+    let (display, width, height) = prepare_window_capture(window).await?;
 
     let path = std::env::temp_dir().join(format!("warp-recording-{}.mp4", uuid::Uuid::new_v4()));
     let log_path = path.with_extension("log");
@@ -248,11 +186,11 @@ async fn start_window(
     let mut command = Command::new("ffmpeg");
     command
         .arg("-y")
-        .args(["-f", "rawvideo"])
-        .args(["-pix_fmt", "rgb24"])
-        .args(["-video_size", &format!("{width}x{height}")])
+        .args(["-f", "x11grab"])
         .args(["-framerate", &config.frame_rate.to_string()])
-        .args(["-i", "-"])
+        .args(["-video_size", &format!("{width}x{height}")])
+        .args(["-window_id", &format!("0x{window:x}")])
+        .args(["-i", &display])
         .args(["-c:v", "libx264"])
         .args(["-preset", "ultrafast"])
         .args(["-pix_fmt", "yuv420p"])
@@ -263,7 +201,7 @@ async fn start_window(
     command.arg("-fs").arg(config.max_size_bytes.to_string());
     command
         .arg(&path)
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(log_file))
         .kill_on_drop(true);
@@ -271,31 +209,9 @@ async fn start_window(
     let mut process = command.spawn().map_err(|e| RecordingError::Environment {
         reason: format!("failed to spawn ffmpeg: {e}"),
     })?;
-    let stdin = process.stdin.take().ok_or_else(|| RecordingError::Start {
-        reason: "failed to capture ffmpeg stdin".to_string(),
-    })?;
 
-    // Run the capture loop in the background, paced at the configured frame rate. It owns the X
-    // connection (keeping the redirect alive) and ffmpeg's stdin; closing stdin on stop yields
-    // the EOF that finalizes the encoder.
-    let stop = Arc::new(AtomicBool::new(false));
-    let capture_task = tokio::spawn(run_capture_loop(
-        conn,
-        root,
-        window,
-        border_width,
-        width,
-        height,
-        config.frame_rate.max(1),
-        stdin,
-        stop.clone(),
-    ));
-
-    // Resolve once capture is confirmed live (ffmpeg has produced output from the frames the
-    // loop is feeding it).
+    // Resolve once capture is confirmed live (the output file has grown).
     if let Err(e) = wait_for_first_output(&path, &mut process).await {
-        stop.store(true, Ordering::Release);
-        capture_task.abort();
         let _ = process.start_kill();
         let detail = ffmpeg_error_tail(&std::fs::read_to_string(&log_path).unwrap_or_default());
         let _ = std::fs::remove_file(&path);
@@ -314,123 +230,101 @@ async fn start_window(
         started_at: Instant::now(),
         process: Some(process),
         cleanup_on_drop: true,
-        capture_stop: Some(stop),
-        capture_task: Some(capture_task),
     })
 }
-
-/// The background loop that captures the window every frame and writes raw RGB frames into
-/// ffmpeg's stdin. Returns when stopped, when the window disappears, or when ffmpeg's stdin is
-/// closed; on return it drops `stdin`, whose EOF finalizes the encoder.
-#[allow(clippy::too_many_arguments)]
-async fn run_capture_loop(
-    conn: RustConnection,
-    root: xproto::Window,
+async fn prepare_window_capture(
     window: xproto::Window,
-    border_width: u16,
-    width: u32,
-    height: u32,
-    frame_rate: u32,
-    mut stdin: tokio::process::ChildStdin,
-    stop: Arc<AtomicBool>,
-) {
-    let frame_interval = Duration::from_secs_f64(1.0 / f64::from(frame_rate));
-    loop {
-        if stop.load(Ordering::Acquire) {
-            break;
-        }
-        match capture_window_frame(&conn, root, window, border_width, width, height) {
-            Ok(frame) => {
-                if stdin.write_all(&frame).await.is_err() {
-                    // ffmpeg exited (a limit was reached, or it crashed); stop feeding it.
-                    break;
-                }
-            }
-            // The window disappeared or a GetImage failed: finalize gracefully with whatever was
-            // captured rather than error out a partial-but-valid recording.
-            Err(_) => break,
-        }
-        tokio::time::sleep(frame_interval).await;
+) -> Result<(String, u32, u32), RecordingError> {
+    let display = std::env::var("DISPLAY").map_err(|_| RecordingError::Environment {
+        reason: "DISPLAY is not set (X11 required)".to_string(),
+    })?;
+    let (conn, screen_index) =
+        RustConnection::connect(None).map_err(|e| RecordingError::Environment {
+            reason: format!("failed to connect to X11: {e}"),
+        })?;
+    let root = conn.setup().roots[screen_index].root;
+    let geometry =
+        windows::geometry(&conn, root, window).map_err(|e| RecordingError::Environment {
+            reason: format!("failed to resolve window {window} geometry: {e}"),
+        })?;
+    let width = u32::from(geometry.width) & !1;
+    let height = u32::from(geometry.height) & !1;
+    if width == 0 || height == 0 {
+        return Err(RecordingError::Environment {
+            reason: format!("invalid window dimensions {width}x{height}"),
+        });
     }
-    // Dropping stdin sends EOF, which ffmpeg needs to finalize the container.
-    let _ = stdin.shutdown().await;
+    ensure_window_visible_for_recording(&conn, root, window, geometry)
+        .await
+        .map_err(|e| RecordingError::Start { reason: e })?;
+    Ok((display, width, height))
 }
 
-/// Captures one frame of `window` via the Composite backing pixmap and returns exactly
-/// `width * height * 3` RGB bytes. If the window is now smaller than the locked capture size the
-/// frame is padded with black; if larger it is cropped, so the encoder always sees constant
-/// dimensions.
-fn capture_window_frame(
+async fn ensure_window_visible_for_recording(
     conn: &RustConnection,
     root: xproto::Window,
     window: xproto::Window,
-    border_width: u16,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, String> {
-    let mut frame = vec![0u8; (width as usize) * (height as usize) * 3];
-
-    // Clamp the capture rectangle to the window's current content box, so a shrunk window does
-    // not read past its pixmap.
-    let geometry = windows::geometry(conn, root, window)?;
-    let capture_width = u32::from(geometry.width).min(width) as u16;
-    let capture_height = u32::from(geometry.height).min(height) as u16;
-    if capture_width == 0 || capture_height == 0 {
-        // Nothing to copy this frame; emit a black frame to keep the stream going.
-        return Ok(frame);
+    geometry: windows::WindowGeometry,
+) -> Result<(), String> {
+    let points = visibility_sample_points(geometry);
+    if window_visible_at_points(conn, root, window, &points)? {
+        return Ok(());
     }
 
-    let pixmap = conn
-        .generate_id()
-        .map_err(|e| format!("Failed to allocate a pixmap id: {e}"))?;
-    conn.composite_name_window_pixmap(window, pixmap)
-        .map_err(|e| format!("Failed to name the window pixmap: {e}"))?
-        .check()
-        .map_err(|e| format!("Failed to name the window pixmap: {e}"))?;
-    // The backing pixmap includes the window border; the content box starts at
-    // (border_width, border_width).
-    let image = conn
-        .get_image(
-            ImageFormat::Z_PIXMAP,
-            pixmap,
-            border_width as i16,
-            border_width as i16,
-            capture_width,
-            capture_height,
-            !0, // plane_mask: all planes
-        )
-        .map_err(|e| format!("Failed to request window frame: {e}"))
-        .and_then(|cookie| {
-            cookie
-                .reply()
-                .map_err(|e| format!("Failed to capture window {window}: {e}"))
-        });
-    let _ = conn.free_pixmap(pixmap);
-    let _ = conn.flush();
-    let image = image?;
-
-    let rgb = convert_x11_image_to_rgb(
-        &image.data,
-        capture_width as usize,
-        capture_height as usize,
-        image.depth,
-    )?;
-
-    // Copy the captured region into the top-left of the constant-size (letterboxed) frame.
-    let src_stride = capture_width as usize * 3;
-    let dst_stride = width as usize * 3;
-    for row in 0..capture_height as usize {
-        let src = row * src_stride;
-        let dst = row * dst_stride;
-        if src + src_stride <= rgb.len() && dst + src_stride <= frame.len() {
-            frame[dst..dst + src_stride].copy_from_slice(&rgb[src..src + src_stride]);
+    windows::raise(conn, window)?;
+    let start = Instant::now();
+    loop {
+        if window_visible_at_points(conn, root, window, &points)? {
+            return Ok(());
         }
+        if start.elapsed() >= RAISE_TIMEOUT {
+            return Err(format!(
+                "Target window {window} could not be made foreground-visible for native recording."
+            ));
+        }
+        tokio::time::sleep(RAISE_POLL_INTERVAL).await;
     }
-    Ok(frame)
 }
 
-/// Finalizes an x11grab (screen) recording: SIGINT makes ffmpeg flush and write the moov atom.
-async fn finalize_screen_capture(
+fn window_visible_at_points(
+    conn: &RustConnection,
+    root: xproto::Window,
+    window: xproto::Window,
+    points: &[Vector2I],
+) -> Result<bool, String> {
+    for &point in points {
+        if !windows::window_hit_at_point(conn, root, window, point)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn visibility_sample_points(geometry: windows::WindowGeometry) -> Vec<Vector2I> {
+    let x = geometry.x;
+    let y = geometry.y;
+    let width = i32::from(geometry.width);
+    let height = i32::from(geometry.height);
+    let mut points = vec![Vector2I::new(x + width / 2, y + height / 2)];
+
+    if width > 2 && height > 2 {
+        let inset_x = (width / 10).clamp(1, 8);
+        let inset_y = (height / 10).clamp(1, 8);
+        let right = x + width - 1;
+        let bottom = y + height - 1;
+        points.extend([
+            Vector2I::new(x + inset_x, y + inset_y),
+            Vector2I::new(right - inset_x, y + inset_y),
+            Vector2I::new(x + inset_x, bottom - inset_y),
+            Vector2I::new(right - inset_x, bottom - inset_y),
+        ]);
+    }
+
+    points
+}
+
+/// Finalizes an x11grab recording: SIGINT makes ffmpeg flush and write the moov atom.
+async fn finalize_capture(
     process: &mut Child,
     path: &Path,
 ) -> Result<RecordingCompletionStatus, RecordingError> {
@@ -450,30 +344,6 @@ async fn finalize_screen_capture(
             }
             wait_for_finalization(process, path, completion_status).await
         }
-    }
-}
-
-/// Finalizes a window-capture recording: stop the capture loop, then close ffmpeg's stdin (the
-/// EOF is what finalizes a stdin/rawvideo ffmpeg).
-async fn finalize_window_capture(
-    handle: &mut RecordingHandle,
-    process: &mut Child,
-    path: &Path,
-) -> Result<RecordingCompletionStatus, RecordingError> {
-    if let Some(stop) = handle.capture_stop.take() {
-        stop.store(true, Ordering::Release);
-    }
-    // Wait for the capture loop to exit; it drops ffmpeg's stdin on the way out, sending EOF.
-    if let Some(task) = handle.capture_task.take() {
-        let _ = tokio::time::timeout(STOP_TIMEOUT, task).await;
-    }
-
-    match process.try_wait().map_err(|e| RecordingError::Finalize {
-        reason: format!("failed to poll ffmpeg: {e}"),
-    })? {
-        // ffmpeg already exited (e.g. a capture limit was reached before stop).
-        Some(_) => Ok(RecordingCompletionStatus::StoppedEarly),
-        None => wait_for_finalization(process, path, RecordingCompletionStatus::Completed).await,
     }
 }
 
@@ -499,12 +369,6 @@ async fn wait_for_finalization(
             })
         }
     }
-}
-
-/// Whether a `width`x`height` window exceeds the per-frame capture cap. Kept as a small pure
-/// helper so the bound is unit-testable without a live display.
-fn exceeds_capture_cap(width: u32, height: u32) -> bool {
-    (width as usize).saturating_mul(height as usize) > MAX_WINDOW_CAPTURE_PIXELS
 }
 
 /// Queries the X11 root window's dimensions in physical pixels via `$DISPLAY`.

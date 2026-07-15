@@ -24,8 +24,6 @@ fn removes_unclaimed_output_when_handle_is_dropped() {
         started_at: instant::Instant::now(),
         process: None,
         cleanup_on_drop: true,
-        capture_stop: None,
-        capture_task: None,
     };
 
     drop(handle);

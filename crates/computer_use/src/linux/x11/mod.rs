@@ -12,14 +12,11 @@ mod screenshot;
 mod seat;
 pub(crate) mod windows;
 
-// Re-exported for the window-capture recording path, which reuses the same X11 image-to-RGB
-// conversion and native-capture pixel cap as window screenshots rather than duplicating them.
 use std::time::Duration;
 
 use async_trait::async_trait;
 use instant::Instant;
 use pathfinder_geometry::vector::Vector2I;
-pub(crate) use screenshot::{MAX_WINDOW_CAPTURE_PIXELS, convert_x11_image_to_rgb};
 use warpui_core::r#async::Timer;
 use x11rb::connection::Connection;
 use x11rb::protocol::xinput::ConnectionExt as _;
