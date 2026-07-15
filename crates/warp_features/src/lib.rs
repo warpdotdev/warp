@@ -907,6 +907,11 @@ pub enum FeatureFlag {
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
     McpJsonTreeView,
+
+    /// Enables enhancements to the Agent Mode edit-file tool call card:
+    /// a Rendered/Raw toggle for single markdown file creation, and an
+    /// "Open" button that opens the affected file(s) in a new pane.
+    EditFileCardEnhancements,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -982,6 +987,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
+    FeatureFlag::EditFileCardEnhancements,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

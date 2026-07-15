@@ -3369,6 +3369,28 @@ impl AIBlock {
                         });
                     }
                 }
+                #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
+                CodeDiffViewEvent::OpenInPane { locations } => {
+                    #[cfg(feature = "local_fs")]
+                    if let Some((first, rest)) = locations.split_first() {
+                        let source = CodeSource::FileTree {
+                            location: first.clone(),
+                        };
+                        let additional_paths: Vec<PathBuf> = rest
+                            .iter()
+                            .filter_map(|loc| loc.to_local_path().map(Path::to_path_buf))
+                            .collect();
+                        ctx.emit(AIBlockEvent::OpenFilesInPane {
+                            source,
+                            additional_paths,
+                            layout: *crate::util::file::external_editor::EditorSettings::as_ref(
+                                ctx,
+                            )
+                            .open_file_layout
+                            .value(),
+                        });
+                    }
+                }
                 _ => (),
             }
         });
@@ -6094,6 +6116,15 @@ pub enum AIBlockEvent {
     #[cfg(feature = "local_fs")]
     OpenCodeInWarp {
         source: CodeSource,
+        layout: crate::util::file::external_editor::settings::EditorLayout,
+    },
+    /// Emitted when the user clicks the "Open" button on an edit-file card to
+    /// open the affected file(s) in a new pane. When multiple files are
+    /// affected, `additional_paths` holds the extra local files opened as tabs.
+    #[cfg(feature = "local_fs")]
+    OpenFilesInPane {
+        source: CodeSource,
+        additional_paths: Vec<PathBuf>,
         layout: crate::util::file::external_editor::settings::EditorLayout,
     },
     /// Emitted when the resume conversation button is clicked

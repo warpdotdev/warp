@@ -562,6 +562,12 @@ pub enum Event {
         line_col: Option<LineAndColumnArg>,
     },
     #[cfg(feature = "local_fs")]
+    OpenFilesInPane {
+        source: CodeSource,
+        additional_paths: Vec<PathBuf>,
+        layout: crate::util::file::external_editor::settings::EditorLayout,
+    },
+    #[cfg(feature = "local_fs")]
     PreviewCodeInWarp {
         source: CodeSource,
     },

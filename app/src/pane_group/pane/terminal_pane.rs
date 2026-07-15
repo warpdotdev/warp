@@ -1138,6 +1138,18 @@ fn handle_terminal_view_event(
                     },
                 });
             }
+            #[cfg(feature = "local_fs")]
+            Event::OpenFilesInPane {
+                source,
+                additional_paths,
+                layout,
+            } => {
+                ctx.emit(pane_group::Event::OpenFilesInPane {
+                    source: source.clone(),
+                    additional_paths: additional_paths.clone(),
+                    layout: *layout,
+                });
+            }
             Event::OpenCodeDiff { view } => {
                 ctx.emit(pane_group::Event::OpenCodeDiff { view: view.clone() });
             }

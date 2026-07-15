@@ -8711,6 +8711,63 @@ impl Workspace {
         }
     }
 
+    /// Test-only: builds a standalone edit-file card for a single markdown file
+    /// creation and opens it in a pane, so the Rendered/Raw toggle + Open button
+    /// can be captured without a live agent session.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn open_dummy_edit_file_card(
+        &mut self,
+        file_path: String,
+        content: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use ai::diff_validation::DiffType;
+
+        use crate::ai::blocklist::diff_types::FileDiff;
+        use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
+
+        let file_diff = FileDiff::new(String::new(), file_path, DiffType::creation(content));
+        let view = ctx.add_typed_action_view(CodeDiffView::new_for_test);
+        view.update(ctx, |diff_view, ctx| {
+            diff_view.set_candidate_diffs(vec![file_diff], ctx);
+        });
+        self.open_code_diff(view, ctx);
+    }
+
+    /// Test-only: toggles the rendered/raw markdown mode on any open edit-file card.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn set_dummy_edit_file_card_rendered(
+        &mut self,
+        rendered: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
+
+        let window_id = ctx.window_id();
+        if let Some(views) = ctx.views_of_type::<CodeDiffView>(window_id) {
+            for view in views {
+                view.update(ctx, |diff_view, ctx| {
+                    diff_view.set_rendered_for_test(rendered, ctx);
+                });
+            }
+        }
+    }
+
+    /// Test-only: returns the edit-file card's feature-gate diagnostic string.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn dummy_edit_file_card_gate_state(&self, ctx: &AppContext) -> Option<String> {
+        use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
+
+        for window_id in ctx.window_ids() {
+            if let Some(views) = ctx.views_of_type::<CodeDiffView>(window_id) {
+                if let Some(view) = views.first() {
+                    return Some(view.as_ref(ctx).debug_gate_state_for_test(ctx));
+                }
+            }
+        }
+        None
+    }
+
     /// Open the AI Fact Collection pane in a split pane (default direction is left).
     pub fn open_ai_fact_collection_pane(
         &mut self,
@@ -16136,6 +16193,14 @@ impl Workspace {
                 line_col,
             } => {
                 self.open_code(source.clone(), *layout, *line_col, false, &[], ctx);
+            }
+            #[cfg(feature = "local_fs")]
+            pane_group::Event::OpenFilesInPane {
+                source,
+                additional_paths,
+                layout,
+            } => {
+                self.open_code(source.clone(), *layout, None, false, additional_paths, ctx);
             }
             #[cfg(feature = "local_fs")]
             pane_group::Event::PreviewCodeInWarp { source } => {

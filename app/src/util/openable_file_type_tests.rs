@@ -117,6 +117,9 @@ fn test_renders_in_warp_notebook_viewer() {
     // Markdown always renders in the notebook viewer, independent of the flag.
     let off = FeatureFlag::JupyterNotebookRendering.override_enabled(false);
     assert!(renders_in_warp_notebook_viewer(Path::new("README.md")));
+    assert!(renders_in_warp_notebook_viewer(Path::new("doc.markdown")));
+    assert!(renders_in_warp_notebook_viewer(Path::new("README")));
+    assert!(!renders_in_warp_notebook_viewer(Path::new("notes.txt")));
     assert!(!renders_in_warp_notebook_viewer(Path::new(
         "notebook.ipynb"
     )));

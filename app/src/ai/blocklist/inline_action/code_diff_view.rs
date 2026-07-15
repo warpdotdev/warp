@@ -78,11 +78,14 @@ use crate::ai::skills::{
     SkillOpenOrigin, SkillReference, SkillTelemetryEvent,
 };
 use crate::code::diff_viewer::{DiffViewer, DisplayMode};
+use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
 use crate::code::editor::{add_color, remove_color};
 use crate::code::inline_diff::{InlineDiffView, InlineDiffViewEvent};
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
+use crate::notebooks::editor::view::RichTextEditorView;
+use crate::notebooks::file::MarkdownDisplayMode;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::{view, PaneId};
 use crate::pane_group::{BackingView, PaneEvent};
@@ -95,6 +98,7 @@ use crate::terminal::ShellLaunchData;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::util::openable_file_type::renders_in_warp_notebook_viewer;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, KeystrokeSource, NakedTheme,
 };
@@ -104,6 +108,7 @@ use crate::view_components::compactible_action_button::{
 };
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::DismissibleToast;
+use crate::view_components::{MarkdownToggleEvent, MarkdownToggleView};
 use crate::workspace::ToastStack;
 use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx, TelemetryEvent};
 
@@ -251,6 +256,11 @@ pub enum CodeDiffViewEvent {
         provider: MCPProvider,
         path: PathBuf,
     },
+    /// Emitted when the user clicks the "Open" button to open the affected
+    /// file(s) in a new pane.
+    OpenInPane {
+        locations: Vec<LocalOrRemotePath>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -322,6 +332,11 @@ pub enum CodeDiffViewAction {
         path: PathBuf,
         mouse_state: MouseStateHandle,
     },
+    /// Toggle the markdown rendered/raw display mode on a single markdown
+    /// file creation card.
+    ToggleMarkdownRender(MarkdownDisplayMode),
+    /// Open the affected file(s) in a new pane.
+    OpenInPane,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -413,6 +428,15 @@ pub struct CodeDiffView {
     diff_session_type: DiffSessionType,
     /// Number of dispatched saves still in flight; guards revert while saving.
     pending_saves: usize,
+    /// Display mode (rendered vs raw) for a single markdown file creation card.
+    markdown_render_mode: MarkdownDisplayMode,
+    /// Segmented control toggling between rendered and raw markdown.
+    markdown_toggle_view: ViewHandle<MarkdownToggleView>,
+    /// Lazily-built rendered markdown viewer, shown when `markdown_render_mode`
+    /// is `Rendered`.
+    rendered_markdown_view: Option<ViewHandle<RichTextEditorView>>,
+    /// Header button that opens the affected file(s) in a new pane.
+    open_button: ViewHandle<ActionButton>,
 }
 
 impl CodeDiffView {
@@ -816,6 +840,25 @@ impl CodeDiffView {
                 })
         });
 
+        let markdown_toggle_view =
+            ctx.add_typed_action_view(|ctx| MarkdownToggleView::new(MarkdownDisplayMode::Raw, ctx));
+        ctx.subscribe_to_view(&markdown_toggle_view, |me, _, event, ctx| {
+            let MarkdownToggleEvent::ModeSelected(mode) = event;
+            me.set_markdown_render_mode(*mode, ctx);
+        });
+
+        let open_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new("", NakedTheme)
+                .with_icon(Icon::LinkExternal)
+                .with_tooltip("Open in new pane")
+                .with_width(icon_size(ctx))
+                .with_height(icon_size(ctx))
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(CodeDiffViewAction::OpenInPane);
+                    ctx.notify();
+                })
+        });
+
         Self {
             action_id: action_id.clone(),
             pending_diffs: Vec::new(),
@@ -847,6 +890,10 @@ impl CodeDiffView {
             session_platform,
             diff_session_type: DiffSessionType::Local,
             pending_saves: 0,
+            markdown_render_mode: MarkdownDisplayMode::Raw,
+            markdown_toggle_view,
+            rendered_markdown_view: None,
+            open_button,
         }
     }
 
@@ -877,6 +924,145 @@ impl CodeDiffView {
 
     pub fn is_passive(&self) -> bool {
         self.is_passive
+    }
+
+    /// Test-only constructor: builds a standalone, non-passive edit-file card in
+    /// the expanded `WaitingForUser` state so the Rendered/Raw toggle and Open
+    /// button can be rendered and captured without a live agent session.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn new_for_test(ctx: &mut ViewContext<Self>) -> Self {
+        Self::build(
+            &AIAgentActionId::from("edit-file-card-demo".to_string()),
+            false,
+            CodeDiffState::WaitingForUser,
+            Some("Created DEMO_FEATURE.md".to_string()),
+            AIIdentifiers::default(),
+            RequestFileEditsFormatKind::Unknown,
+            false,
+            None,
+            ctx,
+        )
+    }
+
+    /// Test-only diagnostic describing which feature gates are active, so
+    /// integration tests can assert the enhancements are rendering.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn debug_gate_state_for_test(&self, app: &AppContext) -> String {
+        let is_create = self
+            .pending_diffs
+            .first()
+            .map(|d| {
+                matches!(
+                    d.diff_view.as_ref(app).diff(),
+                    Some(DiffType::Create { .. })
+                )
+            })
+            .unwrap_or(false);
+        format!(
+            "flag={} pending_diffs={} is_create={} single_md={} toggle={} open={}",
+            FeatureFlag::EditFileCardEnhancements.is_enabled(),
+            self.pending_diffs.len(),
+            is_create,
+            self.is_single_markdown_creation(app),
+            self.show_markdown_toggle(app),
+            self.should_show_open_button(app),
+        )
+    }
+
+    /// Test-only helper to flip the markdown rendered/raw display mode.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn set_rendered_for_test(&mut self, rendered: bool, ctx: &mut ViewContext<Self>) {
+        let mode = if rendered {
+            MarkdownDisplayMode::Rendered
+        } else {
+            MarkdownDisplayMode::Raw
+        };
+        self.set_markdown_render_mode(mode, ctx);
+    }
+
+    /// Returns the created markdown `(path, content)` if this card represents a
+    /// single markdown file creation with real content and the feature is
+    /// enabled. Used to gate the rendered/raw toggle.
+    fn single_markdown_creation(&self, app: &AppContext) -> Option<(String, String)> {
+        if !FeatureFlag::EditFileCardEnhancements.is_enabled() {
+            return None;
+        }
+        if self.pending_diffs.len() != 1 {
+            return None;
+        }
+        let diff_view = self.pending_diffs.first()?.diff_view.as_ref(app);
+        let path = diff_view.file_path()?.to_string();
+        let DiffType::Create { delta } = diff_view.diff()? else {
+            return None;
+        };
+        if delta.insertion.is_empty() {
+            return None;
+        }
+        if !renders_in_warp_notebook_viewer(Path::new(&path)) {
+            return None;
+        }
+        Some((path, delta.insertion.clone()))
+    }
+
+    fn is_single_markdown_creation(&self, app: &AppContext) -> bool {
+        self.single_markdown_creation(app).is_some()
+    }
+
+    /// Whether the card-owned rendered/raw markdown toggle footer should show.
+    fn show_markdown_toggle(&self, app: &AppContext) -> bool {
+        !self.display_mode().is_inline_banner()
+            && !self.is_passive
+            && self.is_single_markdown_creation(app)
+    }
+
+    /// Whether the "Open" button should be shown in the header.
+    fn should_show_open_button(&self, app: &AppContext) -> bool {
+        FeatureFlag::EditFileCardEnhancements.is_enabled()
+            && !self.is_passive
+            && !self.display_mode().is_inline_banner()
+            && !matches!(self.state, CodeDiffState::ViewOnly { .. })
+            && self.open_in_pane_locations(app).next().is_some()
+    }
+
+    /// Iterator over the openable file locations for the affected diffs, in
+    /// pending-diff order.
+    fn open_in_pane_locations<'a>(
+        &'a self,
+        app: &'a AppContext,
+    ) -> impl Iterator<Item = LocalOrRemotePath> + 'a {
+        self.pending_diffs.iter().filter_map(move |diff| {
+            self.location_for_standardized_path(diff.diff_view.as_ref(app).file_path()?)
+        })
+    }
+
+    fn set_markdown_render_mode(&mut self, mode: MarkdownDisplayMode, ctx: &mut ViewContext<Self>) {
+        if self.markdown_render_mode == mode {
+            return;
+        }
+        self.markdown_render_mode = mode;
+        if mode == MarkdownDisplayMode::Rendered && self.rendered_markdown_view.is_none() {
+            if let Some((_, content)) = self.single_markdown_creation(ctx) {
+                let view = create_readonly_comment_markdown_editor(&content, false, None, ctx);
+                self.rendered_markdown_view = Some(view);
+            }
+        }
+        self.markdown_toggle_view
+            .update(ctx, |toggle, ctx| toggle.set_selected_mode(mode, ctx));
+        ctx.notify();
+    }
+
+    fn render_markdown_toggle_footer(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let row = Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(ChildView::new(&self.markdown_toggle_view).finish());
+        Container::new(row.finish())
+            .with_background(theme.surface_1())
+            .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
+            .with_vertical_padding(6.)
+            .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
+            .finish()
     }
 
     /// Sets the set of candidate diffs to be displayed to the user to accept.
@@ -1590,6 +1776,14 @@ impl CodeDiffView {
             );
         }
 
+        if self.should_show_open_button(app) {
+            right_side_row.add_child(
+                Container::new(ChildView::new(&self.open_button).finish())
+                    .with_margin_right(HEADER_MARGIN)
+                    .finish(),
+            );
+        }
+
         if matches!(self.state, CodeDiffState::WaitingForUser) {
             right_side_row.add_child(action_buttons);
         } else {
@@ -1934,8 +2128,17 @@ impl CodeDiffView {
             };
         }
 
-        let inner_editor = Container::new(ChildView::new(diff_view.as_ref(app).editor()).finish())
-            .with_background(theme.background());
+        let body: Box<dyn Element> = if self.markdown_render_mode == MarkdownDisplayMode::Rendered
+            && self.is_single_markdown_creation(app)
+        {
+            match &self.rendered_markdown_view {
+                Some(rendered) => ChildView::new(rendered).finish(),
+                None => ChildView::new(diff_view.as_ref(app).editor()).finish(),
+            }
+        } else {
+            ChildView::new(diff_view.as_ref(app).editor()).finish()
+        };
+        let inner_editor = Container::new(body).with_background(theme.background());
 
         match self.display_mode() {
             DisplayMode::Embedded { max_height } => Container::new(
@@ -2450,6 +2653,10 @@ impl View for CodeDiffView {
             let editor = self.render_editor(appearance, app);
             flex.add_children([file_selection, editor]);
 
+            if self.show_markdown_toggle(app) {
+                flex.add_child(self.render_markdown_toggle_footer(appearance));
+            }
+
             if self.display_mode().is_inline_banner()
                 && !self.is_inline_banner_expanded()
                 && !self.is_inline_banner_dismissed()
@@ -2710,6 +2917,15 @@ impl TypedActionView for CodeDiffView {
                     provider: *provider,
                     path: path.clone(),
                 });
+            }
+            CodeDiffViewAction::ToggleMarkdownRender(mode) => {
+                self.set_markdown_render_mode(*mode, ctx);
+            }
+            CodeDiffViewAction::OpenInPane => {
+                let locations: Vec<LocalOrRemotePath> = self.open_in_pane_locations(ctx).collect();
+                if !locations.is_empty() {
+                    ctx.emit(CodeDiffViewEvent::OpenInPane { locations });
+                }
             }
         }
     }
