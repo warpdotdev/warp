@@ -151,6 +151,17 @@ pub fn is_jupyter_notebook_file(path: impl AsRef<Path>) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case(JUPYTER_NOTEBOOK_EXTENSION))
 }
 
+/// File extension for CSV (comma-separated values) files.
+const CSV_EXTENSION: &str = "csv";
+
+/// Guess whether or not `path` is a CSV file based on its `.csv` extension
+/// (case-insensitive), mirroring [`is_jupyter_notebook_file`].
+pub fn is_csv_file(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(CSV_EXTENSION))
+}
+
 /// Determines if a file is likely to be a text file based on its filename.
 ///
 /// This function uses a hybrid approach:

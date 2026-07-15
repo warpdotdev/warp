@@ -19,9 +19,10 @@ use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 #[cfg(feature = "local_fs")]
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Align, Container, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Flex,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
-    Stack, Text,
+    Align, ClippedScrollStateHandle, Container, CrossAxisAlignment, DispatchEventResult, Empty,
+    EventHandler, Fill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, NewScrollable,
+    ParentElement, RowBackground, SavePosition, ScrollbarWidth, Shrinkable, Stack, Table,
+    TableColumnWidth, TableConfig, TableHeader, TableStateHandle, TableVerticalSizing, Text,
 };
 use warpui::keymap::EditableBinding;
 use warpui::presenter::ChildView;
@@ -35,7 +36,7 @@ use warpui::{
 use super::context_menu::{show_rich_editor_context_menu, ContextMenuAction, ContextMenuState};
 use super::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
 use super::link::{NotebookLinks, SessionSource};
-use super::telemetry::NotebookTelemetryAction;
+use super::telemetry::{NotebookFileKind, NotebookTelemetryAction};
 use super::{styles, NotebookLocation};
 use crate::appearance::Appearance;
 #[cfg(feature = "local_fs")]
@@ -68,6 +69,14 @@ use crate::view_components::{MarkdownToggleEvent, MarkdownToggleView};
 use crate::workflows::{WorkflowSource, WorkflowType};
 use crate::workspace::ActiveSession;
 use crate::{cmd_or_ctrl_shift, safe_warn, send_telemetry_from_ctx};
+
+mod csv_viewer;
+use csv_viewer::{parse_csv_for_render, CsvRender, CsvTable};
+use pathfinder_color::ColorU;
+use warpui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
+
+use crate::notebooks::editor::markdown_table_appearance;
+use crate::util::openable_file_type::is_csv_file;
 
 /// Display mode for markdown files shown via the header segmented control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +112,15 @@ pub struct FileNotebookView {
     code_source: Option<CodeSource>,
     /// Persistent hover state for the header title tooltip.
     header_title_mouse_state: MouseStateHandle,
+    /// Cached CSV parse result. `Some(Table)` when a `.csv` is loaded and
+    /// renders as a table; `Some(FallbackToRaw)` when it fell back to raw;
+    /// `None` for non-CSV files or before content is loaded.
+    csv_render: Option<CsvRender>,
+    /// Persistent table state (row virtualization + scroll) for the rendered
+    /// CSV table, reused across renders.
+    csv_table_state: TableStateHandle,
+    /// Persistent horizontal scroll state for wide CSV tables.
+    csv_horizontal_scroll: ClippedScrollStateHandle,
 }
 
 #[derive(Debug, Clone)]
@@ -304,6 +322,9 @@ impl FileNotebookView {
             #[cfg(feature = "local_fs")]
             code_source: None,
             header_title_mouse_state: Default::default(),
+            csv_render: None,
+            csv_table_state: TableStateHandle::default(),
+            csv_horizontal_scroll: ClippedScrollStateHandle::default(),
         }
     }
 
@@ -339,6 +360,40 @@ impl FileNotebookView {
         let doc_path = self.file_state.local_path().map(|p| p.to_path_buf());
         let render_as_ipynb =
             FeatureFlag::JupyterNotebookRendering.is_enabled() && self.is_jupyter_notebook_file();
+        let render_as_csv = FeatureFlag::CsvViewerRendering.is_enabled() && self.is_csv_file();
+
+        if render_as_csv {
+            let render = parse_csv_for_render(content);
+            match &render {
+                CsvRender::Table(table) => {
+                    let table = table.clone();
+                    // Reset cached column widths so a new file with a different
+                    // shape is re-measured, and arm the lazy row renderer.
+                    self.csv_table_state.invalidate_all_intrinsic_widths();
+                    self.csv_table_state.set_row_count(table.rows.len());
+                    self.csv_table_state
+                        .set_row_render_fn(move |row_index, app| {
+                            render_csv_row_cells(&table, row_index, app)
+                        });
+                }
+                CsvRender::FallbackToRaw { reason } => {
+                    // Fall back to the code editor (Raw) so the user can always
+                    // see and edit the raw content, mirroring ipynb_parser's
+                    // render-only-with-raw-fallback philosophy.
+                    safe_warn!(
+                        safe: ("Falling back to raw text for CSV file"),
+                        full: ("Falling back to raw text for CSV file: {reason:?}")
+                    );
+                    #[cfg(feature = "local_fs")]
+                    self.open_as_code(ctx);
+                }
+            }
+            self.csv_render = Some(render);
+            return;
+        }
+
+        // Non-CSV content: clear any cached CSV render and load into the editor.
+        self.csv_render = None;
         self.editor.update(ctx, |editor, ctx| {
             if render_as_ipynb {
                 editor.reset_with_ipynb(content, ctx);
@@ -728,11 +783,42 @@ impl FileNotebookView {
             .unwrap_or(false)
     }
 
-    /// We show raw/rendered toggle for Jupyter notebook and markdown
+    fn is_csv_file(&self) -> bool {
+        self.file_state
+            .path()
+            .map(|p| is_csv_file(Path::new(&p.display_path())))
+            .unwrap_or(false)
+    }
+
+    /// Whether the view is currently showing a CSV table in Rendered mode.
+    fn is_csv_rendered_table(&self) -> bool {
+        matches!(self.csv_render, Some(CsvRender::Table(_)))
+            && self.markdown_display_mode == MarkdownDisplayMode::Rendered
+    }
+
+    /// The kind of file rendered in the notebook viewer, for toggle telemetry.
+    fn notebook_file_kind(&self) -> Option<NotebookFileKind> {
+        if self.is_csv_file() {
+            Some(NotebookFileKind::Csv)
+        } else if self.is_jupyter_notebook_file() {
+            Some(NotebookFileKind::JupyterNotebook)
+        } else if self.is_markdown_file() {
+            Some(NotebookFileKind::Markdown)
+        } else {
+            None
+        }
+    }
+
+    /// We show the raw/rendered toggle for markdown, Jupyter notebooks, and CSV
+    /// files that rendered as a table (a CSV that fell back to Raw lands in the
+    /// code editor and does not show the toggle).
     fn shows_markdown_toggle(&self) -> bool {
         self.is_markdown_file()
             || (FeatureFlag::JupyterNotebookRendering.is_enabled()
                 && self.is_jupyter_notebook_file())
+            || (FeatureFlag::CsvViewerRendering.is_enabled()
+                && self.is_csv_file()
+                && matches!(self.csv_render, Some(CsvRender::Table(_))))
     }
 
     fn update_editor_display_mode(&mut self, ctx: &mut ViewContext<Self>) {
@@ -962,7 +1048,13 @@ impl FileNotebookView {
             FileState::NoFile => self.render_no_file(appearance),
             FileState::Loading(source) => self.render_loading(source, appearance),
             FileState::Error(source) => self.render_error(source, appearance),
-            FileState::Loaded(_) => ChildView::new(&self.editor).finish(),
+            FileState::Loaded(_) => {
+                if self.is_csv_rendered_table() {
+                    self.render_csv_table(appearance)
+                } else {
+                    ChildView::new(&self.editor).finish()
+                }
+            }
         };
 
         #[cfg(not(target_family = "wasm"))]
@@ -977,6 +1069,97 @@ impl FileNotebookView {
 
         styles::wrap_body(body)
     }
+
+    /// Render the cached CSV table as a read-only, fixed-header, striped table
+    /// with intrinsic columns and horizontal scrolling for wide files. Vertical
+    /// virtualization for large files is handled by the `Table` component's
+    /// SumTree row virtualization. Colors are sourced from theme tokens (via
+    /// [`markdown_table_appearance`]) rather than hardcoded defaults.
+    fn render_csv_table(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let table_appearance = markdown_table_appearance(appearance);
+        let header_text_color = table_appearance.header_text_color;
+        let font_family = appearance.monospace_font_family();
+        let font_size = appearance.monospace_font_size();
+
+        let Some(CsvRender::Table(table)) = &self.csv_render else {
+            return ChildView::new(&self.editor).finish();
+        };
+        let table = table.clone();
+
+        let headers: Vec<TableHeader> = (0..table.width())
+            .map(|col| {
+                TableHeader::new(
+                    Text::new(
+                        table.header.get(col).cloned().unwrap_or_default(),
+                        font_family,
+                        font_size,
+                    )
+                    .with_color(header_text_color)
+                    .finish(),
+                )
+                .with_width(TableColumnWidth::Intrinsic)
+            })
+            .collect();
+
+        let table_element = Table::new(self.csv_table_state.clone(), 0.0, 0.0)
+            .with_headers(headers)
+            .with_row_count(table.rows.len())
+            .with_config(TableConfig {
+                border_width: 1.0,
+                border_color: table_appearance.border_color,
+                outer_border: table_appearance.outer_border,
+                column_dividers: table_appearance.column_dividers,
+                row_dividers: table_appearance.row_dividers,
+                cell_padding: table_appearance.cell_padding,
+                header_background: theme.surface_2().into_solid(),
+                row_background: RowBackground::striped(
+                    ColorU::transparent_black(),
+                    theme.surface_1().into_solid(),
+                ),
+                fixed_header: true,
+                vertical_sizing: TableVerticalSizing::Viewported,
+                measure_body_cells_for_intrinsic_widths: true,
+            });
+
+        // Horizontal scroll for wide tables; the Table component virtualizes
+        // the vertical axis internally.
+        NewScrollable::horizontal(
+            SingleAxisConfig::Clipped {
+                handle: self.csv_horizontal_scroll.clone(),
+                child: table_element.finish(),
+            },
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            Fill::None,
+        )
+        .with_horizontal_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Auto, true))
+        .with_propagate_mousewheel_if_not_handled(true)
+        .finish()
+    }
+}
+
+/// Render one table row's cells as text elements for the `Table` component's
+/// lazy row renderer. Font and text colors are read from the current
+/// [`Appearance`] at render time so they track theme changes.
+fn render_csv_row_cells(
+    table: &CsvTable,
+    row_index: usize,
+    app: &AppContext,
+) -> Vec<Box<dyn Element>> {
+    let appearance = Appearance::as_ref(app);
+    let font_family = appearance.monospace_font_family();
+    let font_size = appearance.monospace_font_size();
+    let text_color = markdown_table_appearance(appearance).text_color;
+    let row = table.rows.get(row_index);
+    (0..table.width())
+        .map(|col| {
+            let cell = row.and_then(|r| r.get(col)).cloned().unwrap_or_default();
+            Text::new(cell, font_family, font_size)
+                .with_color(text_color)
+                .finish()
+        })
+        .collect()
 }
 
 impl Entity for FileNotebookView {
@@ -1052,7 +1235,7 @@ impl TypedActionView for FileNotebookView {
             }
             #[cfg(feature = "local_fs")]
             FileNotebookAction::OpenInEditor => {
-                if self.is_jupyter_notebook_file() {
+                if self.is_jupyter_notebook_file() || self.is_csv_file() {
                     self.open_as_code(ctx);
                 } else if let Some(local_path) = self.local_path() {
                     use crate::util::file::external_editor::EditorSettings;
@@ -1089,6 +1272,12 @@ impl TypedActionView for FileNotebookView {
                     .update(ctx, |control, ctx| {
                         control.set_selected_mode(*mode, ctx);
                     });
+                if let Some(file_kind) = self.notebook_file_kind() {
+                    self.send_telemetry_action(
+                        NotebookTelemetryAction::ToggleMarkdownDisplayMode { file_kind },
+                        ctx,
+                    );
+                }
 
                 match mode {
                     MarkdownDisplayMode::Rendered => {

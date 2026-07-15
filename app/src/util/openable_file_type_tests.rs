@@ -163,6 +163,53 @@ fn test_resolve_file_target_jupyter_notebook_flag_off() {
 }
 
 #[test]
+fn test_renders_in_warp_notebook_viewer_csv() {
+    // With the flag off, CSV does not render in the notebook viewer.
+    let off = FeatureFlag::CsvViewerRendering.override_enabled(false);
+    assert!(!renders_in_warp_notebook_viewer(Path::new("data.csv")));
+    assert!(renders_in_warp_notebook_viewer(Path::new("README.md")));
+    drop(off);
+
+    // With the flag on, CSV also renders in the notebook viewer.
+    let _on = FeatureFlag::CsvViewerRendering.override_enabled(true);
+    assert!(renders_in_warp_notebook_viewer(Path::new("data.csv")));
+    assert!(renders_in_warp_notebook_viewer(Path::new("export.CSV")));
+    assert!(renders_in_warp_notebook_viewer(Path::new("README.md")));
+    assert!(!renders_in_warp_notebook_viewer(Path::new("main.rs")));
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_resolve_file_target_csv_flag_on() {
+    let _flag = FeatureFlag::CsvViewerRendering.override_enabled(true);
+    // Even with prefer_markdown_viewer off and an explicit Warp editor choice,
+    // a CSV routes to the notebook viewer (not the code editor).
+    let target = resolve_file_target_with_editor_choice(
+        Path::new("data.csv"),
+        EditorChoice::Warp,
+        false, /* prefer_markdown_viewer */
+        EditorLayout::SplitPane,
+        None,
+    );
+    assert_eq!(target, FileTarget::MarkdownViewer(EditorLayout::SplitPane));
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_resolve_file_target_csv_flag_off() {
+    let _flag = FeatureFlag::CsvViewerRendering.override_enabled(false);
+    // With the flag off, a CSV opens as text in the code editor, exactly as today.
+    let target = resolve_file_target_with_editor_choice(
+        Path::new("data.csv"),
+        EditorChoice::Warp,
+        true, /* prefer_markdown_viewer */
+        EditorLayout::SplitPane,
+        None,
+    );
+    assert_eq!(target, FileTarget::CodeEditor(EditorLayout::SplitPane));
+}
+
+#[test]
 fn test_markdown_files() {
     assert_eq!(
         is_file_openable_in_warp(Path::new("README.md")),
