@@ -81,3 +81,13 @@ fn foreign_encoded_remote_skills_root_resolves_provider_parent_directory() {
         )))
     );
 }
+
+#[test]
+fn omp_provider_path_is_classified_by_structure() {
+    let path = LocalOrRemotePath::Remote(RemotePath::new(
+        HostId::new("remote-host".to_string()),
+        StandardizedPath::try_new("/repo/.omp/skills/my-skill/SKILL.md").unwrap(),
+    ));
+
+    assert_eq!(get_provider_for_path(&path), Some(SkillProvider::Omp));
+}
