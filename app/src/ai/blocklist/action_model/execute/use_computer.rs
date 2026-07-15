@@ -63,6 +63,9 @@ impl UseComputerExecutor {
         // it inside the future would run it on a background executor thread and abort with a
         // libdispatch main-thread assertion. This mirrors `request_computer_use.rs`.
         let mut actor = computer_use::create_actor();
+        // Tag this session's background-window activations with the owning conversation so its
+        // teardown (on completion or cancellation) only tears down this conversation's windows.
+        actor.set_background_session_owner(Some(conversation_id.to_string()));
         ActionExecution::new_async(
             async move {
                 match actor

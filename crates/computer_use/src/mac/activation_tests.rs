@@ -3,38 +3,48 @@ use std::sync::atomic::AtomicBool;
 
 use super::*;
 
-/// Regression guard for the background-computer-use focus-stuck bug: `end_all_sessions` must
-/// remove the `(pid, window_number)` entry from the registry. Without this, a stale entry makes
-/// the next `ensure_activated` hit the "already activated" no-op, leaving the target window
-/// activated (keyboard focus stuck on it) and breaking a restart targeting the same window.
+fn untapped_session(owner: Option<&str>) -> ActiveSession {
+    ActiveSession {
+        suppress: Arc::new(AtomicBool::new(true)),
+        stop: Arc::new(AtomicBool::new(false)),
+        thread: None,
+        has_taps: false,
+        previous: None,
+        owner: owner.map(str::to_owned),
+    }
+}
+
+/// Regression guard for the background-computer-use focus-stuck bug: ending a session must remove
+/// that owner's `(pid, window_number)` entries from the registry (so the next `ensure_activated`
+/// re-primes rather than hitting the "already activated" no-op), while leaving other owners'
+/// concurrent sessions intact.
 #[test]
-fn end_session_clears_registry_so_restart_reactivates() {
-    // Target our own process so the teardown's `ApplicationDeactivated` post is harmless; use a
-    // window number that won't collide with a real activated window. `previous: None` means no
-    // re-activation post is attempted.
-    let key = (std::process::id() as libc::pid_t, i64::MAX);
+fn end_sessions_for_owner_clears_only_that_owners_entries() {
+    // Target our own process so any `ApplicationDeactivated` post is harmless; use distinct
+    // window numbers per fake entry so keys don't collide.
+    let pid = std::process::id() as libc::pid_t;
+    let key_a = (pid, i64::MAX);
+    let key_b = (pid, i64::MAX - 1);
     {
         let mut registry = registry().lock().unwrap();
-        registry.insert(
-            key,
-            ActiveSession {
-                suppress: Arc::new(AtomicBool::new(true)),
-                stop: Arc::new(AtomicBool::new(false)),
-                thread: None,
-                has_taps: false,
-                previous: None,
-            },
-        );
-        assert!(registry.contains_key(&key));
+        registry.insert(key_a, untapped_session(Some("conversation-a")));
+        registry.insert(key_b, untapped_session(Some("conversation-b")));
     }
 
-    end_all_sessions();
+    end_sessions_for_owner("conversation-a");
 
-    // The entry must be gone, so a subsequent `ensure_activated` runs the full fresh activation
-    // path rather than returning early on the stale key.
-    assert!(!registry().lock().unwrap().contains_key(&key));
+    {
+        let registry = registry().lock().unwrap();
+        // Owner A's entry is gone so a restart re-primes; owner B's concurrent session survives.
+        assert!(!registry.contains_key(&key_a));
+        assert!(registry.contains_key(&key_b));
+    }
 
-    // Idempotent: calling again with an empty registry is a harmless no-op.
-    end_all_sessions();
-    assert!(registry().lock().unwrap().is_empty());
+    // Idempotent: ending an owner with no active session is a harmless no-op.
+    end_sessions_for_owner("conversation-a");
+    assert!(registry().lock().unwrap().contains_key(&key_b));
+
+    // Clean up the surviving entry so the process-global registry doesn't leak across tests.
+    end_sessions_for_owner("conversation-b");
+    assert!(!registry().lock().unwrap().contains_key(&key_b));
 }

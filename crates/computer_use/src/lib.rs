@@ -107,19 +107,25 @@ pub fn background_supported() -> bool {
     }
 }
 
-/// Ends any in-progress background computer-use session, restoring the user's original keyboard
-/// focus.
+/// Ends the background computer-use session owned by `owner` (the client conversation id),
+/// restoring the user's original keyboard focus.
 ///
 /// On macOS a background session activates the target window and installs focus-suppression
-/// taps; this tears those down, deactivates the driven window, and re-activates the app that was
-/// frontmost before the session, so the user's keystrokes return to where they were. Idempotent
-/// and a no-op when no session is active, and on platforms without background per-window control.
+/// taps; this tears down only the windows owned by `owner`, deactivates them, and re-activates the
+/// app that was frontmost before the session, so the user's keystrokes return to where they were.
+/// Scoping by owner keeps concurrent background sessions (e.g. another conversation driving a
+/// different window) intact. Idempotent and a no-op when `owner` has no active session, and on
+/// platforms without background per-window control.
 ///
 /// Call this whenever a computer-use session ends — normal completion, cancellation, or teardown.
-pub fn end_background_session() {
+pub fn end_background_session(owner: &str) {
     #[cfg(macos)]
     {
-        imp::end_background_session();
+        imp::end_background_session(owner);
+    }
+    #[cfg(not(macos))]
+    {
+        let _ = owner;
     }
 }
 
@@ -239,6 +245,12 @@ pub struct CapturedWindow {
 pub trait Actor: Send + Sync + 'static {
     /// Returns the platform that this actor is running on, if known.
     fn platform(&self) -> Option<Platform>;
+
+    /// Records the owner of the background computer-use session this actor drives (the client
+    /// conversation id), so that when the session ends [`end_background_session`] tears down only
+    /// this owner's background-activation state and leaves concurrent sessions untouched. Set it
+    /// before performing actions. Default no-op; only the macOS actor tracks per-session ownership.
+    fn set_background_session_owner(&mut self, _owner: Option<String>) {}
 
     async fn perform_actions(
         &mut self,
