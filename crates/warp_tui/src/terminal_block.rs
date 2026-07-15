@@ -11,9 +11,8 @@ use warp_terminal::model::ansi::{Color, NamedColor};
 use warp_terminal::model::grid::cell::{Cell, Flags};
 use warp_terminal::model::grid::Dimensions as _;
 use warpui_core::elements::tui::{
-    Color as TuiColor, Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext,
-    TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPoint, TuiScreenPosition, TuiSize,
-    TuiStyle,
+    Color as TuiColor, Modifier, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
 };
 use warpui_core::AppContext;
 
@@ -222,28 +221,26 @@ fn render_block_rows(
 }
 
 /// Paints the visible rows of a raw [`GridHandler`] (e.g. the alt screen,
-/// which has no scrollback) into `area`, reusing the same per-cell styling as
+/// which has no scrollback) at `origin`, reusing the same per-cell styling as
 /// the block renderer. Unlike a block grid, the alt screen is a plain viewport,
 /// so rows map directly to screen rows (offset past any history defensively).
 pub(super) fn render_grid_handler(
     grid: &GridHandler,
-    area: TuiRect,
-    buffer: &mut TuiBuffer,
+    origin: TuiScreenPosition,
+    size: TuiSize,
+    surface: &mut TuiPaintSurface<'_>,
     colors: &TerminalColorList,
 ) {
     let history = grid.history_size();
-    let rows = grid.visible_rows().min(usize::from(area.height));
-    let cols = grid.columns().min(usize::from(area.width));
-    let mut surface = TuiPaintSurface::new(buffer);
+    let rows = grid.visible_rows().min(usize::from(size.height));
+    let cols = grid.columns().min(usize::from(size.width));
     for screen_row in 0..rows {
-        let origin =
-            TuiScreenPosition::new(i32::from(area.x), i32::from(area.y) + screen_row as i32);
         render_grid_row(
             grid,
             history + screen_row,
             cols,
-            origin,
-            &mut surface,
+            origin.offset(0, screen_row as i32),
+            surface,
             colors,
         );
     }

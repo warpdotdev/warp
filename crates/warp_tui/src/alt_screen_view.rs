@@ -139,9 +139,9 @@ impl TuiElement for AltScreenElement {
         if *is_composing {
             return false;
         }
-        // Forward the key to the app. `key_event_to_pty_bytes` layers the
-        // fallbacks a single-`KeyDown` frontend needs — `Ctrl+<letter>` → C0,
-        // printable `chars`, and named control keys — on top of the shared
+        // Forward the key to the app. `to_pty_bytes` layers the fallbacks a
+        // single-`KeyDown` frontend needs — `Ctrl+<letter>` → C0, printable
+        // `chars`, and named control keys — on top of the shared
         // `to_escape_sequence` encoder in `warp_terminal`. (ctrl-c never reaches
         // here: the session view's interrupt handler forwards it to the app.)
         let bytes = {
@@ -151,7 +151,7 @@ impl TuiElement for AltScreenElement {
                 key_without_modifiers: details.key_without_modifiers.as_deref(),
                 chars: Some(chars.as_str()),
             }
-            .key_event_to_pty_bytes(model.deref())
+            .to_pty_bytes(model.deref())
         };
         let Some(bytes) = bytes else {
             return false;
