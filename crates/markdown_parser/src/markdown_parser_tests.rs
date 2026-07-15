@@ -537,7 +537,7 @@ fn test_parse_html_line_break_spellings() {
             test_parse_markdown(source),
             vec![FormattedTextLine::Line(vec![
                 FormattedTextFragment::plain_text("first"),
-                FormattedTextFragment::hard_line_break(),
+                FormattedTextFragment::plain_text("\n"),
                 FormattedTextFragment::plain_text("second"),
             ])],
             "source: {source:?}"
@@ -551,16 +551,97 @@ fn test_parse_trailing_and_consecutive_html_line_breaks() {
         test_parse_markdown("A<br>"),
         vec![FormattedTextLine::Line(vec![
             FormattedTextFragment::plain_text("A"),
-            FormattedTextFragment::hard_line_break(),
+            FormattedTextFragment::plain_text("\n"),
         ])]
     );
     assert_eq!(
         test_parse_markdown("A<br><br>"),
         vec![FormattedTextLine::Line(vec![
             FormattedTextFragment::plain_text("A"),
-            FormattedTextFragment::hard_line_break(),
-            FormattedTextFragment::hard_line_break(),
+            FormattedTextFragment::plain_text("\n"),
+            FormattedTextFragment::plain_text("\n"),
         ])]
+    );
+}
+
+#[test]
+fn test_parse_html_line_break_at_physical_line_end_continues_paragraph() {
+    assert_eq!(
+        test_parse_markdown("first<br>\nsecond"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("first"),
+            FormattedTextFragment::plain_text("\n"),
+            FormattedTextFragment::plain_text("second"),
+        ])]
+    );
+
+    assert_eq!(
+        test_parse_markdown("first<br>  \nsecond"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("first"),
+            FormattedTextFragment::plain_text("\n"),
+            FormattedTextFragment::plain_text("  second"),
+        ])]
+    );
+}
+
+#[test]
+fn test_literal_html_break_at_physical_line_end_does_not_continue_paragraph() {
+    for source in [
+        "first\\<br>\nsecond",
+        "first<br>middle\\<br>\nsecond",
+        "`first<br>`\nsecond",
+    ] {
+        let lines = test_parse_markdown(source);
+        assert_eq!(lines.len(), 2, "source: {source:?}");
+        assert!(matches!(lines[0], FormattedTextLine::Line(_)));
+        assert!(matches!(lines[1], FormattedTextLine::Line(_)));
+    }
+}
+
+#[test]
+fn test_parse_html_line_break_at_physical_line_end_preserves_following_blocks() {
+    let heading = test_parse_markdown("first<br>\n# heading");
+    assert!(matches!(heading[0], FormattedTextLine::Line(_)));
+    assert!(matches!(heading[1], FormattedTextLine::Heading(_)));
+
+    let list = test_parse_markdown("first<br>\n- item");
+    assert!(matches!(list[0], FormattedTextLine::Line(_)));
+    assert!(matches!(list[1], FormattedTextLine::UnorderedList(_)));
+
+    let code = test_parse_markdown("first<br>\n```text\ncode\n```");
+    assert!(matches!(code[0], FormattedTextLine::Line(_)));
+    assert!(matches!(code[1], FormattedTextLine::CodeBlock(_)));
+
+    let table = test_parse_markdown_with_gfm_tables(
+        "first<br>\n| Feature | Notes |\n| --- | --- |\n| Export | CSV |\n",
+    );
+    assert!(matches!(table[0], FormattedTextLine::Line(_)));
+    assert!(matches!(table[1], FormattedTextLine::Table(_)));
+}
+
+#[test]
+fn test_parse_newline_entity_does_not_continue_physical_paragraph_line() {
+    let lines = test_parse_markdown("first&#10;\nsecond");
+    assert_eq!(lines.len(), 2);
+    assert!(matches!(lines[0], FormattedTextLine::Line(_)));
+    assert!(matches!(lines[1], FormattedTextLine::Line(_)));
+}
+
+#[test]
+fn test_parse_html_line_break_is_limited_to_paragraphs_and_table_cells() {
+    assert_eq!(
+        test_parse_markdown("# first<br>second\n- first<br>second"),
+        vec![
+            FormattedTextLine::Heading(FormattedTextHeader {
+                heading_size: 1,
+                text: vec![FormattedTextFragment::plain_text("first<br>second")],
+            }),
+            FormattedTextLine::UnorderedList(FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![FormattedTextFragment::plain_text("first<br>second")],
+            }),
+        ]
     );
 }
 
@@ -571,14 +652,7 @@ fn test_parse_html_line_break_preserves_inline_formatting() {
         vec![FormattedTextLine::Line(vec![
             FormattedTextFragment::plain_text("before "),
             FormattedTextFragment::bold("bold"),
-            FormattedTextFragment {
-                text: "\n".to_string(),
-                styles: FormattedTextStyles {
-                    weight: Some(CustomWeight::Bold),
-                    hard_line_break: true,
-                    ..Default::default()
-                },
-            },
+            FormattedTextFragment::bold("\n"),
             FormattedTextFragment::bold("still bold"),
             FormattedTextFragment::plain_text(" after"),
         ])]
@@ -590,13 +664,13 @@ fn test_parse_html_line_break_is_literal_in_code_or_when_malformed() {
     assert_eq!(
         test_parse_markdown("`first<br>second`"),
         vec![FormattedTextLine::Line(vec![
-            FormattedTextFragment::inline_code("first<br>second")
+            FormattedTextFragment::inline_code("first<br>second"),
         ])]
     );
     assert_eq!(
         test_parse_markdown(r"first\<br>second"),
         vec![FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text("first<br>second")
+            FormattedTextFragment::plain_text("first<br>second"),
         ])]
     );
 
@@ -610,7 +684,7 @@ fn test_parse_html_line_break_is_literal_in_code_or_when_malformed() {
         assert_eq!(
             test_parse_markdown(source),
             vec![FormattedTextLine::Line(vec![
-                FormattedTextFragment::plain_text(source)
+                FormattedTextFragment::plain_text(source),
             ])],
             "source: {source:?}"
         );
@@ -2934,14 +3008,7 @@ fn test_parse_table_with_html_line_breaks() {
         table.rows[0][1],
         vec![
             FormattedTextFragment::bold("CSV"),
-            FormattedTextFragment {
-                text: "\n".to_string(),
-                styles: FormattedTextStyles {
-                    weight: Some(CustomWeight::Bold),
-                    hard_line_break: true,
-                    ..Default::default()
-                },
-            },
+            FormattedTextFragment::bold("\n"),
             FormattedTextFragment::bold("JSON"),
         ]
     );
@@ -2952,6 +3019,48 @@ fn test_parse_table_with_html_line_breaks() {
     assert_eq!(
         table.to_plain_text(),
         "| Feature | Notes |\n| --- | --- |\n| Export | CSV<br>JSON |"
+    );
+}
+
+#[test]
+fn test_table_literal_html_breaks_remain_literal_in_internal_format() {
+    let source = concat!(
+        "| Kind | Notes |\n",
+        "| --- | --- |\n",
+        "| Escaped | first\\<br>second |\n",
+        "| Entity | first&lt;br&gt;second |\n",
+        "| Break | first<br>second |\n",
+        r"| Backslash | first\\\<br>second |",
+        "\n",
+    );
+    let result = test_parse_markdown_with_gfm_tables(source);
+    let FormattedTextLine::Table(table) = &result[0] else {
+        panic!("Expected table");
+    };
+
+    assert_eq!(
+        table.to_internal_format(),
+        concat!(
+            "Kind\tNotes\n",
+            "Escaped\tfirst\\<br>second\n",
+            "Entity\tfirst\\<br>second\n",
+            "Break\tfirst<br>second\n",
+            "Backslash\t",
+            r"first\\\<br>second",
+            "\n",
+        )
+    );
+    assert_eq!(
+        table.to_plain_text(),
+        concat!(
+            "| Kind | Notes |\n",
+            "| --- | --- |\n",
+            "| Escaped | first\\<br>second |\n",
+            "| Entity | first\\<br>second |\n",
+            "| Break | first<br>second |",
+            "\n",
+            r"| Backslash | first\\\<br>second |",
+        )
     );
 }
 

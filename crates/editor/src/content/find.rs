@@ -335,9 +335,7 @@ impl Engine {
                         }
                     };
                 }
-                BufferText::Newline
-                | BufferText::HardLineBreak
-                | BufferText::BlockMarker { .. } => {
+                BufferText::Newline | BufferText::BlockMarker { .. } => {
                     state = dfa.next_state(cache, state, b'\n')?;
                     if state.is_quit() {
                         bail!("DFA entered quit state");

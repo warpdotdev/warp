@@ -476,7 +476,6 @@ fn phrasing_to_formatted_text(text: impl Into<String>, styling: &Styling) -> For
             strikethrough: styling.strikethrough,
             hyperlink: styling.link.clone().map(Hyperlink::Url),
             inline_code: styling.inline_code,
-            hard_line_break: false,
         },
     }
 }

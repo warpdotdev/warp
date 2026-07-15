@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use markdown_parser::FormattedTextFragment;
+use markdown_parser::{FormattedTable, TableAlignment, parse_inline_markdown};
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -11,7 +11,7 @@ use warpui_core::{App, SingletonEntity};
 
 use super::{
     BlockLocation, LayOutArgs, layout_mermaid_diagram_block, layout_table_block, layout_text_block,
-    table_cell_runs,
+    measure_table_cells, table_cell_runs,
 };
 use crate::content::buffer::{StyledBufferRun, StyledTextBlock};
 use crate::content::edit::{
@@ -783,7 +783,7 @@ fn test_layout_table_block_caches_cell_text_frames() {
 }
 
 #[test]
-fn test_table_cell_runs_preserve_mid_trailing_and_consecutive_hard_breaks() {
+fn test_layout_table_block_preserves_inline_html_line_breaks() {
     App::test((), |app| async move {
         app.read(|ctx| {
             let layout_cache = LayoutCache::new();
@@ -793,71 +793,35 @@ fn test_table_cell_runs_preserve_mid_trailing_and_consecutive_hard_breaks() {
                 &TEST_STYLES,
                 f32::MAX,
             );
-            let paragraph_styles = text_layout.paragraph_styles(&BufferBlockStyle::PlainText);
-            let cases = [
-                (
-                    "mid-cell <br>",
-                    vec![
-                        FormattedTextFragment::plain_text("A"),
-                        FormattedTextFragment::hard_line_break(),
-                        FormattedTextFragment::plain_text("B"),
-                    ],
-                    vec!["A", "\n", "B"],
-                    vec![false, true, false],
-                    "A\nB",
-                ),
-                (
-                    "trailing <br>",
-                    vec![
-                        FormattedTextFragment::plain_text("A"),
-                        FormattedTextFragment::hard_line_break(),
-                    ],
-                    vec!["A", "\n"],
-                    vec![false, true],
-                    "A\n",
-                ),
-                (
-                    "consecutive trailing <br>",
-                    vec![
-                        FormattedTextFragment::plain_text("A"),
-                        FormattedTextFragment::hard_line_break(),
-                        FormattedTextFragment::hard_line_break(),
-                    ],
-                    vec!["A", "\n", "\n"],
-                    vec![false, true, true],
-                    "A\n\n",
-                ),
-            ];
+            let table = FormattedTable {
+                headers: vec![parse_inline_markdown("Header")],
+                alignments: vec![TableAlignment::Left],
+                rows: vec![
+                    vec![parse_inline_markdown("A<br>B")],
+                    vec![parse_inline_markdown("A<br>")],
+                    vec![parse_inline_markdown("A<br><br>")],
+                ],
+            };
 
-            for (description, fragments, expected_runs, expected_flags, expected_text) in cases {
-                let runs = table_cell_runs(&fragments);
-                assert_eq!(
-                    runs.iter().map(|run| run.run.as_str()).collect::<Vec<_>>(),
-                    expected_runs,
-                    "{description}"
-                );
-                assert_eq!(
-                    runs.iter()
-                        .map(|run| run.text_styles.is_hard_line_break())
-                        .collect::<Vec<_>>(),
-                    expected_flags,
-                    "{description}"
-                );
+            let styled_runs = table_cell_runs(&parse_inline_markdown("A<br>**B**"));
+            assert_eq!(
+                styled_runs
+                    .iter()
+                    .map(|run| run.run.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["A", "\nB"]
+            );
 
-                let mut line = LayOutArgs::new();
-                for run in &runs {
-                    assert!(
-                        !line.layout_run(&text_layout, run, &paragraph_styles),
-                        "{description} must not become a structural trailing newline"
-                    );
-                }
-                assert_eq!(line.text, expected_text, "{description}");
-                assert_eq!(
-                    line.content_length,
-                    CharOffset::from(expected_text.chars().count()),
-                    "{description}"
-                );
-            }
+            let table_style = text_layout.rich_text_styles().table_style;
+            let header_style = text_layout.paragraph_styles(&BufferBlockStyle::PlainText);
+            let body_style = text_layout.paragraph_styles(&BufferBlockStyle::PlainText);
+            let (_, cells) =
+                measure_table_cells(&table, &text_layout, &table_style, header_style, body_style);
+
+            assert_eq!(cells[0][0].text_layout.text, "Header");
+            assert_eq!(cells[1][0].text_layout.text, "A\nB");
+            assert_eq!(cells[2][0].text_layout.text, "A\n");
+            assert_eq!(cells[3][0].text_layout.text, "A\n\n");
         });
     })
 }

@@ -10,7 +10,7 @@ use itertools::Itertools;
 use markdown_parser::{
     CodeBlockText, FormattedIndentTextInline, FormattedTableAlignment, FormattedTaskList,
     FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextInline,
-    FormattedTextLine, OrderedFormattedIndentTextInline,
+    FormattedTextLine, OrderedFormattedIndentTextInline, html_line_break_tag_len,
 };
 use markup5ever::ns;
 use string_offset::CharOffset;
@@ -358,13 +358,6 @@ impl<'a> BufferMarkdownParser<'a> {
             if run.run.is_empty() || run.text_styles.is_placeholder() {
                 continue;
             }
-            if run.text_styles.is_hard_line_break() {
-                debug_assert!(matches!(run.run.as_str(), "\n" | "\r\n"));
-                Self::append_formatting(&prev_styles, &run.text_styles, "", buf);
-                prev_styles.clone_from(&run.text_styles);
-                buf.push_str("<br>");
-                continue;
-            }
             let (content, has_trailing_newline) = match run.run.strip_suffix('\n') {
                 Some(without_newline) => (without_newline, true),
                 _ => (run.run.as_str(), false),
@@ -530,11 +523,8 @@ impl<'a> BufferToFormattedText<'a> {
 
 impl StyledBufferRun {
     fn to_formatted_text_fragment(&self) -> FormattedTextFragment {
-        let text = match (
-            self.text_styles.is_hard_line_break(),
-            self.run.strip_suffix('\n'),
-        ) {
-            (false, Some(without_newline)) => without_newline.to_string(),
+        let text = match self.run.strip_suffix('\n') {
+            Some(without_newline) => without_newline.to_string(),
             _ => self.run.clone(),
         };
 
@@ -960,7 +950,6 @@ impl Serialize for ExportedBufferBlocks<'_> {
                         let mut text = runs.run.as_str();
                         // Strip trailing newline since <p> or <code> already includes a linebreak.
                         if idx == text_block.block.len() - 1
-                            && !runs.text_styles.is_hard_line_break()
                             && let Some(removed_trailing_newline) = runs.run.strip_suffix('\n')
                         {
                             text = removed_trailing_newline;
@@ -1000,14 +989,7 @@ impl Serialize for ExportedBufferBlocks<'_> {
                             serializer.start_elem(tag_name, iter::empty())?;
                         }
 
-                        if runs.text_styles.is_hard_line_break() {
-                            debug_assert!(matches!(text, "\n" | "\r\n"));
-                            let tag_name = QualName::new(None, ns!(html), "br".into());
-                            serializer.start_elem(tag_name.clone(), iter::empty())?;
-                            serializer.end_elem(tag_name)?;
-                        } else {
-                            serializer.write_text(text)?;
-                        }
+                        serializer.write_text(text)?;
 
                         if runs.text_styles.is_inline_code() {
                             serializer.end_elem(QualName::new(None, ns!(html), "code".into()))?;
@@ -1163,20 +1145,16 @@ fn serialize_table_cell_inline<S>(
 where
     S: Serializer,
 {
-    let mut consolidated = Vec::<FormattedTextFragment>::new();
-    for fragment in inline {
-        let mut fragment = fragment.clone();
-        fragment.styles.hard_line_break = false;
-        match consolidated.last_mut() {
-            Some(previous) if previous.styles == fragment.styles => {
-                previous.text.push_str(&fragment.text);
-            }
-            _ => consolidated.push(fragment),
+    let fragments = inline.iter().cloned().coalesce(|mut prev, current| {
+        if prev.styles == current.styles {
+            prev.text.push_str(&current.text);
+            Ok(prev)
+        } else {
+            Err((prev, current))
         }
-    }
-
-    for fragment in &consolidated {
-        let styles = TextStylesWithMetadata::from(fragment.styles.clone());
+    });
+    for fragment in fragments {
+        let styles = TextStylesWithMetadata::from(fragment.styles);
 
         if let Some(link) = styles.link_content() {
             let tag = QualName::new(None, ns!(html), "a".into());
@@ -1202,14 +1180,13 @@ where
             serializer.start_elem(QualName::new(None, ns!(html), "code".into()), iter::empty())?;
         }
 
-        let mut lines = fragment.text.split('\n').peekable();
-        while let Some(line) = lines.next() {
-            serializer.write_text(line)?;
-            if lines.peek().is_some() {
+        for (index, text) in fragment.text.split('\n').enumerate() {
+            if index > 0 {
                 let tag = QualName::new(None, ns!(html), "br".into());
                 serializer.start_elem(tag.clone(), iter::empty())?;
                 serializer.end_elem(tag)?;
             }
+            serializer.write_text(text)?;
         }
 
         if styles.is_inline_code() {
@@ -1287,19 +1264,19 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
     let mut previous_styles = TextStylesWithMetadata::default();
     for fragment in inline {
         let next_styles = TextStylesWithMetadata::from(fragment.styles.clone());
-        let text = if fragment.styles.hard_line_break {
-            "<br>".to_string()
-        } else {
+        let text = if fragment.styles.inline_code {
             fragment.text.clone()
+        } else {
+            escape_table_cell_markdown_text(&fragment.text)
         };
         let content = BufferMarkdownParser::append_formatting(
             &previous_styles,
             &next_styles,
-            text.as_str(),
+            &text,
             &mut markdown,
         );
         previous_styles = next_styles;
-        BufferMarkdownParser::append_content(content, true, &mut markdown);
+        BufferMarkdownParser::append_content(content, fragment.styles.inline_code, &mut markdown);
     }
     BufferMarkdownParser::append_formatting(
         &previous_styles,
@@ -1308,6 +1285,35 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
         &mut markdown,
     );
     markdown
+}
+
+fn escape_table_cell_markdown_text(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        if let Some(rest) = remaining.strip_prefix('\n') {
+            escaped.push_str("<br>");
+            remaining = rest;
+            continue;
+        }
+        if let Some(tag_len) = html_line_break_tag_len(remaining) {
+            escaped.push('\\');
+            escaped.push_str(&remaining[..tag_len]);
+            remaining = &remaining[tag_len..];
+            continue;
+        }
+
+        let ch = remaining
+            .chars()
+            .next()
+            .expect("remaining text should not be empty");
+        if BufferMarkdownParser::is_markdown_special_char(ch) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+        remaining = &remaining[ch.len_utf8()..];
+    }
+    escaped
 }
 
 fn append_gfm_table_row(cells: &[String], buf: &mut String) {

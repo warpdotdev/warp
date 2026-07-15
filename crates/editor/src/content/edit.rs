@@ -256,24 +256,42 @@ struct TableCellTextLayout {
 }
 
 fn table_cell_runs(cell_inline: &FormattedTextInline) -> Vec<StyledBufferRun> {
-    let mut runs = Vec::<StyledBufferRun>::new();
+    let mut runs: Vec<StyledBufferRun> = Vec::new();
+    let mut pending_line_breaks = String::new();
+    let mut pending_styles = TextStylesWithMetadata::default();
+
     for fragment in cell_inline {
-        let text_styles: TextStylesWithMetadata = fragment.styles.clone().into();
+        let text_styles = fragment.styles.clone().into();
+        if fragment.text == "\n" {
+            pending_line_breaks.push('\n');
+            pending_styles = text_styles;
+            continue;
+        }
+
+        let mut run = std::mem::take(&mut pending_line_breaks);
+        run.push_str(&fragment.text);
         match runs.last_mut() {
-            Some(previous)
-                if !previous.text_styles.is_hard_line_break()
-                    && !text_styles.is_hard_line_break()
-                    && previous.text_styles == text_styles =>
-            {
-                previous.run.push_str(&fragment.text);
-            }
+            Some(previous) if previous.text_styles == text_styles => previous.run.push_str(&run),
             _ => runs.push(StyledBufferRun {
-                run: fragment.text.clone(),
+                run,
                 text_styles,
                 block_style: BufferBlockStyle::PlainText,
             }),
         }
     }
+
+    if !pending_line_breaks.is_empty() {
+        if let Some(previous) = runs.last_mut() {
+            previous.run.push_str(&pending_line_breaks);
+        } else {
+            runs.push(StyledBufferRun {
+                run: pending_line_breaks,
+                text_styles: pending_styles,
+                block_style: BufferBlockStyle::PlainText,
+            });
+        }
+    }
+
     runs
 }
 
@@ -306,7 +324,11 @@ fn measure_table_cells(
             let mut line = LayOutArgs::new();
             line.highlighted_urls = highlight_urls(&runs);
             for run in &runs {
-                line.layout_run(layout, run, &paragraph_style);
+                if line.layout_run(layout, run, &paragraph_style) {
+                    // Table cells are laid out as one text frame instead of separate paragraphs,
+                    // so retain inline newlines that `layout_run` normally reports to its caller.
+                    line.text.push('\n');
+                }
             }
             let text_layout = InlineTextLayoutInput {
                 text: line.text,
@@ -403,9 +425,7 @@ impl LayOutArgs {
         content: &StyledBufferRun,
         paragraph_styles: &ParagraphStyles,
     ) -> bool {
-        let (run_content, has_new_line) = if !content.text_styles.is_hard_line_break()
-            && let Some(content) = content.run.strip_suffix('\n')
-        {
+        let (run_content, has_new_line) = if let Some(content) = content.run.strip_suffix('\n') {
             (content, true)
         } else {
             (content.run.as_str(), false)
@@ -1448,9 +1468,7 @@ fn highlight_urls(runs: &[StyledBufferRun]) -> Vec<ParsedUrl> {
     let mut state = UrlDetectionState::default();
 
     for content in runs {
-        let (run_content, has_newline) = if !content.text_styles.is_hard_line_break()
-            && let Some(content) = content.run.strip_suffix('\n')
-        {
+        let (run_content, has_newline) = if let Some(content) = content.run.strip_suffix('\n') {
             (content, true)
         } else {
             (content.run.as_str(), false)

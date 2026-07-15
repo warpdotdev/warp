@@ -54,9 +54,7 @@ where
 
                 fragment.chars().nth(ix.as_usize())
             }
-            Some(BufferText::BlockMarker { .. })
-            | Some(BufferText::Newline)
-            | Some(BufferText::HardLineBreak) => Some('\n'),
+            Some(BufferText::BlockMarker { .. }) | Some(BufferText::Newline) => Some('\n'),
             _ => None,
         }
     }

@@ -312,9 +312,7 @@ impl<'a> Iterator for Bytes<'a> {
 
             self.cursor.next();
             match item {
-                BufferText::BlockMarker { .. }
-                | BufferText::Newline
-                | BufferText::HardLineBreak => return Some(b"\n"),
+                BufferText::BlockMarker { .. } | BufferText::Newline => return Some(b"\n"),
                 BufferText::Text { fragment, .. } => {
                     let mut slice_start = 0;
                     let mut slice_end = fragment.len();
@@ -558,10 +556,6 @@ pub enum BufferText {
     Color(ColorMarker),
     /// A newline.
     Newline,
-    /// An explicit inline line break, such as a Markdown `<br>` tag.
-    ///
-    /// Unlike [`Self::Newline`], this does not end a paragraph-style block.
-    HardLineBreak,
     /// Block-level item that takes up an entire line.
     BlockItem {
         item_type: BufferBlockItem,
@@ -581,7 +575,6 @@ impl Display for BufferText {
         match self {
             Self::Text { fragment, .. } => write!(f, "{fragment}"),
             Self::Newline => f.write_str("\\n"),
-            Self::HardLineBreak => f.write_str("<br>"),
             Self::Marker { marker_type, dir } => {
                 let start = match marker_type {
                     BufferTextStyle::Weight(_) => "b",
@@ -1097,7 +1090,6 @@ pub struct TextStylesWithMetadata {
     strikethrough: bool,
     link: Option<String>,
     color: Option<ColorU>,
-    hard_line_break: bool,
 }
 
 impl TextStylesWithMetadata {
@@ -1229,10 +1221,6 @@ impl TextStylesWithMetadata {
         self.color
     }
 
-    pub fn is_hard_line_break(&self) -> bool {
-        self.hard_line_break
-    }
-
     pub fn from_text_styles(
         text_styles: TextStyles,
         link: Option<String>,
@@ -1247,7 +1235,6 @@ impl TextStylesWithMetadata {
             strikethrough: text_styles.strikethrough,
             link,
             color,
-            hard_line_break: false,
         }
     }
 
@@ -1265,11 +1252,6 @@ impl TextStylesWithMetadata {
     /// we report placeholders as inline styles.
     pub fn for_placeholder(mut self) -> Self {
         self.placeholder = true;
-        self
-    }
-
-    pub fn for_hard_line_break(mut self) -> Self {
-        self.hard_line_break = true;
         self
     }
 
@@ -1301,9 +1283,6 @@ impl TextStylesWithMetadata {
             link,
             color,
             placeholder: self.placeholder && other.placeholder,
-            // Hard-line-break provenance belongs to a specific run, not a visual style shared
-            // by an arbitrary selection.
-            hard_line_break: false,
         }
     }
 }
@@ -1319,7 +1298,6 @@ impl From<FormattedTextStyles> for TextStylesWithMetadata {
             placeholder: false,
             link: styles.hyperlink.and_then(Hyperlink::url),
             color: None, // TODO: Update this when adding strikethrough support.
-            hard_line_break: styles.hard_line_break,
         }
     }
 }
@@ -1333,7 +1311,6 @@ impl From<TextStylesWithMetadata> for FormattedTextStyles {
             strikethrough: styles.strikethrough,
             hyperlink: styles.link.map(Hyperlink::Url),
             inline_code: styles.inline_code,
-            hard_line_break: styles.hard_line_break,
         }
     }
 }
@@ -1786,7 +1763,7 @@ impl sum_tree::Item for BufferText {
 
     fn summary(&self) -> Self::Summary {
         let text_summary = match &self {
-            BufferText::Newline | BufferText::HardLineBreak => TextSummary {
+            BufferText::Newline => TextSummary {
                 chars: 1.into(),
                 bytes: 1.into(),
                 lines: Point::new(1, 0),

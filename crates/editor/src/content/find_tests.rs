@@ -41,26 +41,6 @@ fn test_search_inline_styles() {
 }
 
 #[test]
-fn test_search_across_inline_hard_line_break() {
-    App::test((), |mut app| async move {
-        let (buffer, _selection) = Buffer::mock_from_markdown(
-            "first<br>second",
-            None,
-            Box::new(|_, _| IndentBehavior::Ignore),
-            &mut app,
-        );
-
-        buffer.read(&app, |buffer, _| {
-            assert_matches(
-                buffer,
-                &SearchConfig::new("first\nsecond"),
-                [(1, 13, "first\nsecond")],
-            );
-        });
-    });
-}
-
-#[test]
 fn test_search_across_link() {
     App::test((), |mut app| async move {
         let (buffer, _selection) = Buffer::mock_from_markdown(

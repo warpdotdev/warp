@@ -192,9 +192,28 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
     let mut remaining = markdown;
     let mut lines = Vec::new();
+    let mut previous_paragraph_ends_with_html_line_break = false;
     while !remaining.is_empty() {
+        let block_source = remaining;
         let (remaining_after_block, mut line) = block(remaining)?;
         remaining = remaining_after_block;
+        let consumed_len = block_source.len() - remaining.len();
+        let consumed_source = &block_source[..consumed_len];
+        let paragraph_ends_with_html_line_break =
+            matches!(
+                &line,
+                FormattedTextLine::Line(inline) if inline_ends_with_newline(inline)
+            ) && source_line_ends_with_html_line_break(consumed_source);
+
+        if previous_paragraph_ends_with_html_line_break
+            && let Some(FormattedTextLine::Line(previous)) = lines.last_mut()
+            && let FormattedTextLine::Line(continuation) = &line
+        {
+            previous.extend(continuation.iter().cloned());
+            *previous = consolidate_fragments(std::mem::take(previous));
+            previous_paragraph_ends_with_html_line_break = paragraph_ends_with_html_line_break;
+            continue;
+        }
 
         // Clear indentation context for non-list content and handle ordered list numbering
         match &mut line {
@@ -221,6 +240,7 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             }
         }
         lines.push(line);
+        previous_paragraph_ends_with_html_line_break = paragraph_ends_with_html_line_break;
     }
 
     Ok((remaining, lines))
@@ -232,8 +252,30 @@ fn parse_paragraph<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 ) -> IResult<&'a str, FormattedTextLine, E> {
     context(
         "paragraph",
-        map(parse_markdown_line, FormattedTextLine::Line),
+        map(
+            parse_markdown_line_with_html_line_breaks,
+            FormattedTextLine::Line,
+        ),
     )(markdown)
+}
+
+fn source_line_ends_with_html_line_break(source: &str) -> bool {
+    let line = source.trim_end_matches([' ', '\t', '\r', '\n']);
+    (4..=6).any(|tag_len| {
+        line.get(line.len().saturating_sub(tag_len)..)
+            .is_some_and(|suffix| html_line_break_tag_len(suffix) == Some(tag_len))
+    })
+}
+
+fn inline_ends_with_newline(inline: &FormattedTextInline) -> bool {
+    inline
+        .iter()
+        .rev()
+        .find_map(|fragment| {
+            let text = fragment.text.trim_end_matches([' ', '\t']);
+            (!text.is_empty()).then(|| text.ends_with('\n'))
+        })
+        .unwrap_or(false)
 }
 
 /// Parse a blank line.
@@ -287,6 +329,15 @@ fn parse_markdown_line<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     markdown: &'a str,
 ) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
     map_parser(parse_line, all_consuming(parse_inline))(markdown)
+}
+
+fn parse_markdown_line_with_html_line_breaks<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    markdown: &'a str,
+) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
+    map_parser(
+        parse_line,
+        all_consuming(parse_inline_with_html_line_breaks),
+    )(markdown)
 }
 
 fn parse_header<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
@@ -676,7 +727,7 @@ fn parse_separator_cell<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
 /// Parse cell content as inline markdown
 fn parse_cell_content(cell: &str) -> Vec<FormattedTextFragment> {
-    match all_consuming(parse_inline::<nom::error::Error<_>>)(cell) {
+    match all_consuming(parse_inline_with_html_line_breaks::<nom::error::Error<_>>)(cell) {
         Ok((_, fragments)) => fragments,
         Err(_) => vec![FormattedTextFragment::plain_text(cell)],
     }
@@ -981,23 +1032,41 @@ fn not_markdown_line_ending<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 }
 
 fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
+    parse_inline_impl(input, false)
+}
+
+fn parse_inline_with_html_line_breaks<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
+    parse_inline_impl(input, true)
+}
+
+fn parse_inline_impl<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     mut input: &'a str,
+    parse_html_line_breaks: bool,
 ) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
     // We're parsing inline tokens "by hand" instead of using `fold_many0` to allow lookahead.
     let mut state = InlineState::default();
     while !input.is_empty() {
-        let (remaining, token) = parse_inline_token(input)?;
+        let (remaining, token) = if parse_html_line_breaks {
+            parse_inline_token_with_html_line_breaks(input)?
+        } else {
+            parse_inline_token(input)?
+        };
         input = remaining;
 
         match token {
             InlineToken::CodeSpan(text) => {
                 state.push_closed_node(FormattedTextFragment::inline_code(text));
             }
-            InlineToken::HtmlLineBreak => {
-                state.push_closed_node(FormattedTextFragment::hard_line_break());
-            }
             InlineToken::Text(text) => {
-                state.push_text(text);
+                if text == "\n" {
+                    state.push_closed_node(FormattedTextFragment::plain_text(text));
+                } else {
+                    state.push_text(text);
+                }
             }
             InlineToken::AutoLink(url) => {
                 // Per GFM spec, autolinks can follow whitespace, line beginning, or formatting
@@ -1508,9 +1577,12 @@ fn consolidate_fragments(
     fragments
         .into_iter()
         .coalesce(|mut prev, current| {
-            // Each hard line-break fragment represents one source tag. Keep consecutive breaks
-            // separate so lowering and serialization preserve their exact count.
-            if prev.styles == current.styles && !prev.styles.hard_line_break {
+            // Keep inline newlines isolated so source-to-rendered offset maps can associate the
+            // single rendered character with the complete raw HTML tag that produced it.
+            if prev.styles == current.styles
+                && !prev.text.contains('\n')
+                && !current.text.contains('\n')
+            {
                 prev.text.push_str(&current.text);
                 Ok(prev)
             } else {
@@ -1546,7 +1618,6 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             backslash_escape,
             html_entity,
             code_span,
-            parse_inline_token_html_line_break,
             parse_inline_token_link_start,
             parse_inline_token_link_end,
             parse_inline_token_asterisk,
@@ -1565,24 +1636,64 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     )(input)
 }
 
-/// Parse an HTML line break tag.
-///
-/// The tag name is case-insensitive, like HTML, but this intentionally accepts only the common
-/// no-attribute forms. Other raw HTML remains literal Markdown text.
-fn parse_inline_token_html_line_break<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+fn parse_inline_token_with_html_line_breaks<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, InlineToken<'a>, E> {
     context(
-        "html_line_break",
-        value(
-            InlineToken::HtmlLineBreak,
-            alt((
-                tag_no_case("<br />"),
-                tag_no_case("<br/>"),
-                tag_no_case("<br>"),
-            )),
-        ),
+        "inline_token",
+        alt((parse_inline_token_html_line_break, parse_inline_token)),
     )(input)
+}
+
+/// Return the byte length of a supported raw HTML line-break tag at the start of `input`.
+pub fn html_line_break_tag_len(input: &str) -> Option<usize> {
+    ["<br />", "<br/>", "<br>"]
+        .into_iter()
+        .find(|tag| {
+            input
+                .get(..tag.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(tag))
+        })
+        .map(str::len)
+}
+
+/// Escape supported raw HTML line-break tags so reparsing keeps them as literal text.
+pub fn escape_literal_html_line_break_tags(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    let mut remaining = text;
+
+    while let Some(tag_start) = remaining.find('<') {
+        escaped.push_str(&remaining[..tag_start]);
+        remaining = &remaining[tag_start..];
+        if let Some(tag_len) = html_line_break_tag_len(remaining) {
+            let preceding_backslashes = escaped.chars().rev().take_while(|&ch| ch == '\\').count();
+            escaped.extend(std::iter::repeat_n('\\', preceding_backslashes + 1));
+            escaped.push_str(&remaining[..tag_len]);
+            remaining = &remaining[tag_len..];
+        } else {
+            escaped.push('<');
+            remaining = &remaining[1..];
+        }
+    }
+    escaped.push_str(remaining);
+    escaped
+}
+
+/// Parse an HTML line-break tag as an ordinary newline in inline formatted text.
+///
+/// Keeping the result on the existing text path lets every consumer render it without adding a
+/// separate editor or buffer concept. Raw HTML inside code spans is handled earlier and remains
+/// literal text.
+fn parse_inline_token_html_line_break<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context("html_line_break", |input| {
+        let Some(tag_len) = html_line_break_tag_len(input) else {
+            return Err(nom::Err::Error(E::from_error_kind(input, ErrorKind::Tag)));
+        };
+        let (remaining, _) = take(tag_len)(input)?;
+        Ok((remaining, InlineToken::Text("\n")))
+    })(input)
 }
 
 /// Parse a `*` delimiter run.
@@ -1719,8 +1830,6 @@ enum InlineToken<'a> {
     /// An entire code span. Code spans have higher precedence than all other inline constructs,
     /// so we parse them into discrete tokens.
     CodeSpan(&'a str),
-    /// A raw HTML `<br>` tag, represented in formatted text as a newline character.
-    HtmlLineBreak,
     /// An autolink URL. Owned because backslash escapes are processed (e.g., `\.` → `.`),
     /// so the result may differ from the input slice.
     AutoLink(String),

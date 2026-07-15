@@ -5826,18 +5826,6 @@ impl Iterator for StyledBufferBlocks<'_> {
                     }
                 }
 
-                BufferText::HardLineBreak => {
-                    let line_end = self.line_end_mode.as_str().to_string();
-                    let text = active_text!(self);
-                    self.cursor.next();
-                    text.runs.push(StyledBufferRun {
-                        run: line_end,
-                        text_styles: text.current_text_styles.clone().for_hard_line_break(),
-                        block_style: text.block_style.clone(),
-                    });
-                    text.last_run_open = false;
-                }
-
                 BufferText::Marker { marker_type, dir } => {
                     let text = active_text!(self);
                     self.cursor.next();
