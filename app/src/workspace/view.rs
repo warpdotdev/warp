@@ -605,6 +605,8 @@ const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_
 const NEW_SESSION_SIDECAR_POSITION_ID: &str = "new_session_sidecar";
 const NEW_SESSION_MENU_WIDTH: f32 = 300.;
 const NEW_SESSION_MENU_WINDOW_MARGIN: f32 = 8.;
+const NEW_SESSION_MENU_FALLBACK_MAX_HEIGHT: f32 = 480.;
+const NEW_SESSION_MENU_MIN_HEIGHT: f32 = 120.;
 const NEW_SESSION_MENU_VERTICAL_BUTTON_OFFSET_Y: f32 = 4.;
 const NEW_SESSION_SIDECAR_WIDTH: f32 = 300.;
 
@@ -6751,11 +6753,11 @@ impl Workspace {
         ctx: &ViewContext<Self>,
     ) -> f32 {
         let Some(window) = ctx.windows().platform_window(ctx.window_id()) else {
-            return 480.;
+            return NEW_SESSION_MENU_FALLBACK_MAX_HEIGHT;
         };
         let anchor_y = self.new_session_menu_height_anchor_y(anchor, ctx);
         let available_height = window.size().y() - anchor_y - NEW_SESSION_MENU_WINDOW_MARGIN;
-        available_height.max(120.)
+        available_height.max(NEW_SESSION_MENU_MIN_HEIGHT)
     }
 
     fn new_session_menu_height_anchor_y(

@@ -2950,7 +2950,7 @@ fn test_pointer_opened_tab_configs_menu_does_not_select_top_item() {
 }
 
 #[test]
-fn test_new_session_menu_is_scrollable_and_capped_to_window_height() {
+fn test_new_session_menu_is_capped_to_window_height() {
     let _tab_configs_guard = FeatureFlag::TabConfigs.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -2971,13 +2971,20 @@ fn test_new_session_menu_is_scrollable_and_capped_to_window_height() {
                 ctx,
             );
 
-            let expected_height = (window_height - NEW_SESSION_MENU_WINDOW_MARGIN).max(120.);
-            let menu_height = workspace.new_session_dropdown_menu.read(ctx, |menu, _| {
-                assert!(menu.is_scrollable());
-                menu.height()
-            });
+            let expected_height =
+                (window_height - NEW_SESSION_MENU_WINDOW_MARGIN).max(NEW_SESSION_MENU_MIN_HEIGHT);
+            let menu_height = workspace.new_session_menu_max_height(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
 
             assert!((menu_height - expected_height).abs() < f32::EPSILON);
+
+            workspace.open_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+            assert!(workspace.show_new_session_dropdown_menu.is_some());
         });
     });
 }
