@@ -653,3 +653,241 @@ fn test_remote_global_rules_only_layer_for_matching_remote_host() {
         ["local_global", "remote_project"]
     );
 }
+
+// ============================================================================
+// Tests for the flag-on walk-based local rule discovery path
+// ============================================================================
+
+#[cfg(feature = "local_fs")]
+mod standing_query_walk_tests {
+    use std::collections::{HashMap, HashSet};
+    use std::fs;
+    use std::time::Duration;
+
+    use futures::FutureExt as _;
+    use repo_metadata::repositories::DetectedRepositories;
+    use repo_metadata::{
+        DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate, TargetFile,
+    };
+    use warp_core::features::FeatureFlag;
+    use warpui_core::r#async::Timer;
+    use warpui_core::App;
+
+    use super::*;
+
+    /// Test rule content reader that reads local files directly.
+    fn read_local_rule_contents(
+        rule_paths: Vec<LocalOrRemotePath>,
+        _ctx: &AppContext,
+    ) -> BoxFuture<'static, anyhow::Result<ProjectRuleContents>> {
+        async move {
+            Ok(rule_paths
+                .into_iter()
+                .filter_map(|path| {
+                    let local_path = path.to_local_path()?.to_path_buf();
+                    fs::read_to_string(local_path).ok().map(|c| (path, c))
+                })
+                .collect())
+        }
+        .boxed()
+    }
+
+    /// Polls until the model reports active project rules for `path`, returning
+    /// the active rule paths sorted for stable assertions.
+    async fn wait_for_active_rules(
+        app: &App,
+        model_handle: &warpui_core::ModelHandle<ProjectContextModel>,
+        path: &LocalOrRemotePath,
+        expected_count: usize,
+    ) -> Vec<LocalOrRemotePath> {
+        for _ in 0..500 {
+            let active = model_handle.read(app, |model, _| {
+                model
+                    .find_applicable_project_rules(path)
+                    .map(|result| {
+                        result
+                            .active_rules
+                            .iter()
+                            .map(|rule| rule.path.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            });
+            if active.len() >= expected_count {
+                let mut active = active;
+                active.sort_by_key(LocalOrRemotePath::display_path);
+                return active;
+            }
+            Timer::after(Duration::from_millis(10)).await;
+        }
+        panic!("Timed out waiting for {expected_count} active rules at {path:?}");
+    }
+
+    fn rule_update(paths: Vec<std::path::PathBuf>) -> RepositoryUpdate {
+        RepositoryUpdate {
+            added: HashSet::new(),
+            modified: paths
+                .into_iter()
+                .map(|path| TargetFile::new(path, false))
+                .collect(),
+            deleted: HashSet::new(),
+            moved: HashMap::new(),
+            commit_updated: false,
+            index_lock_detected: false,
+            remote_ref_updated: false,
+        }
+    }
+
+    #[test]
+    fn walk_discovers_rules_for_git_repo_at_any_depth() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::OnTheFlyStandingQueries.override_enabled(true);
+            app.add_singleton_model(DirectoryWatcher::new_for_testing);
+            app.add_singleton_model(|_| DetectedRepositories::default());
+            app.add_singleton_model(RepoMetadataModel::new);
+            let model_handle = app.add_singleton_model(|ctx| {
+                ProjectContextModel::new_from_persisted(Vec::new(), read_local_rule_contents, ctx)
+            });
+
+            let temp_dir = tempfile::tempdir().unwrap();
+            let repo = dunce::canonicalize(temp_dir.path()).unwrap();
+            fs::create_dir_all(repo.join(".git")).unwrap();
+            fs::create_dir_all(repo.join("packages/api")).unwrap();
+            fs::write(repo.join("WARP.md"), "root rules").unwrap();
+            fs::write(repo.join("packages/api/AGENTS.md"), "nested rules").unwrap();
+
+            let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
+            model_handle.update(&mut app, |model, ctx| {
+                model.ensure_local_rule_discovery(&repo_id, ctx);
+            });
+
+            let active = wait_for_active_rules(
+                &app,
+                &model_handle,
+                &LocalOrRemotePath::Local(repo.join("packages/api/src")),
+                2,
+            )
+            .await;
+            let mut expected = vec![
+                LocalOrRemotePath::Local(repo.join("WARP.md")),
+                LocalOrRemotePath::Local(repo.join("packages/api/AGENTS.md")),
+            ];
+            expected.sort_by_key(LocalOrRemotePath::display_path);
+            assert_eq!(active, expected);
+        });
+    }
+
+    #[test]
+    fn walk_limits_non_git_directories_to_first_level_rules() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::OnTheFlyStandingQueries.override_enabled(true);
+            app.add_singleton_model(DirectoryWatcher::new_for_testing);
+            app.add_singleton_model(|_| DetectedRepositories::default());
+            app.add_singleton_model(RepoMetadataModel::new);
+            let model_handle = app.add_singleton_model(|ctx| {
+                ProjectContextModel::new_from_persisted(Vec::new(), read_local_rule_contents, ctx)
+            });
+
+            let temp_dir = tempfile::tempdir().unwrap();
+            let dir = dunce::canonicalize(temp_dir.path()).unwrap();
+            fs::create_dir_all(dir.join("nested/deep")).unwrap();
+            fs::write(dir.join("WARP.md"), "root rules").unwrap();
+            fs::write(dir.join("nested/deep/WARP.md"), "deep rules").unwrap();
+
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_and_store_rules(dir.clone(), read_local_rule_contents, ctx)
+                    .unwrap();
+            });
+
+            let active = wait_for_active_rules(
+                &app,
+                &model_handle,
+                &LocalOrRemotePath::Local(dir.join("nested/deep")),
+                1,
+            )
+            .await;
+            // Only the first-level rule is discovered, matching the coverage of
+            // the lazily-loaded path behavior with the flag off.
+            assert_eq!(active, vec![LocalOrRemotePath::Local(dir.join("WARP.md"))]);
+        });
+    }
+
+    #[test]
+    fn walk_rediscovers_rules_after_rule_file_edit() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::OnTheFlyStandingQueries.override_enabled(true);
+            app.add_singleton_model(DirectoryWatcher::new_for_testing);
+            app.add_singleton_model(|_| DetectedRepositories::default());
+            app.add_singleton_model(RepoMetadataModel::new);
+            let model_handle = app.add_singleton_model(|ctx| {
+                ProjectContextModel::new_from_persisted(Vec::new(), read_local_rule_contents, ctx)
+            });
+
+            let temp_dir = tempfile::tempdir().unwrap();
+            let repo = dunce::canonicalize(temp_dir.path()).unwrap();
+            fs::create_dir_all(repo.join(".git")).unwrap();
+            fs::write(repo.join("WARP.md"), "root rules").unwrap();
+
+            let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
+            let root_dir = StandardizedPath::try_from_local(&repo).unwrap();
+            model_handle.update(&mut app, |model, ctx| {
+                model.ensure_local_rule_discovery(&repo_id, ctx);
+            });
+            wait_for_active_rules(
+                &app,
+                &model_handle,
+                &LocalOrRemotePath::Local(repo.join("src")),
+                1,
+            )
+            .await;
+
+            // A new rule file appears; the watcher update triggers a re-walk.
+            fs::create_dir_all(repo.join("packages")).unwrap();
+            fs::write(repo.join("packages/AGENTS.md"), "new rules").unwrap();
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_local_rule_watch_update(
+                    root_dir,
+                    &rule_update(vec![repo.join("packages/AGENTS.md")]),
+                    ctx,
+                );
+            });
+
+            let active = wait_for_active_rules(
+                &app,
+                &model_handle,
+                &LocalOrRemotePath::Local(repo.join("packages/src")),
+                2,
+            )
+            .await;
+            assert!(active.contains(&LocalOrRemotePath::Local(repo.join("packages/AGENTS.md"))));
+        });
+    }
+
+    #[test]
+    fn irrelevant_updates_do_not_schedule_rule_refreshes() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::OnTheFlyStandingQueries.override_enabled(true);
+            app.add_singleton_model(DirectoryWatcher::new_for_testing);
+            app.add_singleton_model(|_| DetectedRepositories::default());
+            app.add_singleton_model(RepoMetadataModel::new);
+            let model_handle = app.add_singleton_model(|ctx| {
+                ProjectContextModel::new_from_persisted(Vec::new(), read_local_rule_contents, ctx)
+            });
+
+            let temp_dir = tempfile::tempdir().unwrap();
+            let repo = dunce::canonicalize(temp_dir.path()).unwrap();
+            let root_dir = StandardizedPath::try_from_local(&repo).unwrap();
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_local_rule_watch_update(
+                    root_dir,
+                    &rule_update(vec![repo.join("src/main.rs")]),
+                    ctx,
+                );
+                // No refresh was scheduled for an irrelevant change.
+                assert!(model.rule_refresh_generations.is_empty());
+            });
+        });
+    }
+}

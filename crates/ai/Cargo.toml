@@ -82,6 +82,7 @@ notify-debouncer-full.workspace = true
 
 [dev-dependencies]
 filetime = "0.2.25"
+repo_metadata = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 virtual-fs.workspace = true
 warp_core = { workspace = true, features = ["test-util"] }
