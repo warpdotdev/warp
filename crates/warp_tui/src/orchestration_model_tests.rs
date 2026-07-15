@@ -246,13 +246,11 @@ fn tab_snapshot_is_shared_across_tree_and_filters_non_sessions() {
             });
         });
         app.read(|ctx| {
-            assert_eq!(
-                TuiOrchestrationModel::as_ref(ctx)
-                    .tab_snapshot(parent_conversation_id, 32, ctx)
-                    .unwrap()
-                    .page_anchor,
-                Some(second_child_id)
-            );
+            let snapshot = TuiOrchestrationModel::as_ref(ctx)
+                .tab_snapshot(parent_conversation_id, 32, ctx)
+                .unwrap();
+            assert_eq!(snapshot.page_anchor, Some(second_child_id));
+            assert!(!snapshot.reveal_selected);
         });
 
         app.update(|ctx| {
@@ -262,17 +260,15 @@ fn tab_snapshot_is_shared_across_tree_and_filters_non_sessions() {
             assert_eq!(selected, Some(first_session_id));
         });
         app.read(|ctx| {
+            let snapshot = TuiOrchestrationModel::as_ref(ctx)
+                .tab_snapshot(first_child_id, 32, ctx)
+                .unwrap();
             assert_eq!(
                 TuiSessions::as_ref(ctx).focused_session_id(),
                 Some(first_session_id)
             );
-            assert_eq!(
-                TuiOrchestrationModel::as_ref(ctx)
-                    .tab_snapshot(first_child_id, 32, ctx)
-                    .unwrap()
-                    .page_anchor,
-                Some(first_child_id)
-            );
+            assert_eq!(snapshot.page_anchor, Some(second_child_id));
+            assert!(snapshot.reveal_selected);
         });
     });
 }

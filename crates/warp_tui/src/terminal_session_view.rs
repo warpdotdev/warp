@@ -1415,6 +1415,7 @@ impl TuiTerminalSessionView {
         config.selected_key = Some(snapshot.selected_conversation_id.to_string());
         config.focused = self.orchestration_tabs_focused;
         config.page_anchor = snapshot.page_anchor.map(|id| id.to_string());
+        config.reveal_selected = snapshot.reveal_selected;
         config.maximum_label_columns = Some(ORCHESTRATION_TAB_LABEL_MAX_COLUMNS);
         config.secondary_gap_columns = 3;
         config.styles = builder.orchestration_tab_bar_styles();

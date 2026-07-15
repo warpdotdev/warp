@@ -90,7 +90,7 @@ The Warp TUI shows a tab bar for an orchestration tree so users can see and swit
    - It does not select a tab.
    - It does not change keyboard focus. In particular, clicking an arrow while the input is focused leaves the input focused.
 39. The selected page is shared across all sessions in the same orchestration tree. Switching conversations does not reset it.
-40. The active tab is automatically revealed after session selection or dynamic reordering unless the user explicitly paged away with an overflow arrow.
+40. The active tab is automatically revealed after session selection or dynamic reordering unless the user explicitly paged away with an overflow arrow. Selecting another tab already on the visible page does not shift or re-anchor that page.
 41. After an explicit overflow click, the chosen page remains visible even if the active tab is on another page. The next keyboard selection follows (26).
 42. Selecting a tab clears the explicit paged-away state and keeps the selected tab visible.
 43. Terminal resizing recomputes which complete or truncated tabs fit, preserves a valid page when possible, and never clips an overflow arrow or writes outside the row.

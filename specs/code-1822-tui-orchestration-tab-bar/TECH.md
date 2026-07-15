@@ -42,10 +42,10 @@ Extend `TuiOrchestrationModel` from launch coordination to the owner of semantic
 - The child page-anchor conversation ID.
 - Whether the user explicitly paged away from the active tab.
 
-Expose a plain-data snapshot for `TuiTerminalSessionView` containing the root, ordered child tabs, active conversation ID, spawn-order-derived identity indices, and page anchor. The session view maps identity indices and semantic tab states to current-theme styles before updating the generalized component. Snapshot construction reads live history and session state each time; cached UI state never becomes the source of truth for membership, status, ordering, or selection.
+Expose a plain-data snapshot for `TuiTerminalSessionView` containing the root, ordered child tabs, active conversation ID, spawn-order-derived identity indices, page anchor, and whether the component should reveal an off-page selection. The session view maps identity indices and semantic tab states to current-theme styles before updating the generalized component. Snapshot construction reads live history and session state each time; cached UI state never becomes the source of truth for membership, status, ordering, or selection.
 
 Model operations:
-- `select_conversation` resolves the target's retained session, calls `TuiSessions::focus_session`, clears explicit paging, and anchors the page so the selected child is visible.
+- `select_conversation` resolves the target's retained session, calls `TuiSessions::focus_session`, and clears explicit paging without replacing the current page anchor. The component reveals the deterministic page containing an off-page selection.
 - `select_first_child`/`select_last_child` exclude the orchestrator.
 - `set_explicit_page` records the page anchor emitted by the tab bar and marks it explicit. It never calls `focus_session`.
 - A dynamic ordering update automatically re-anchors to the active child only when explicit paging is false.

@@ -44,6 +44,7 @@ pub(crate) struct TuiOrchestrationTabSnapshot {
     pub(crate) selected_conversation_id: AIConversationId,
     pub(crate) tabs: Vec<TuiOrchestrationTab>,
     pub(crate) page_anchor: Option<AIConversationId>,
+    pub(crate) reveal_selected: bool,
 }
 
 
@@ -230,20 +231,15 @@ impl TuiOrchestrationModel {
         let state = self.tab_state_by_root.get(&root_conversation_id);
         let explicitly_paged = state.is_some_and(|state| state.explicitly_paged);
         let stored_anchor = state.and_then(|state| state.page_anchor);
-        let selected_child = (selected_conversation_id != root_conversation_id)
-            .then_some(selected_conversation_id)
-            .filter(|selected| tabs.iter().any(|tab| tab.conversation_id == *selected));
-        let page_anchor = if explicitly_paged {
-            stored_anchor.filter(|anchor| tabs.iter().any(|tab| tab.conversation_id == *anchor))
-        } else {
-            selected_child
-        }
-        .or_else(|| tabs.first().map(|tab| tab.conversation_id));
+        let page_anchor = stored_anchor
+            .filter(|anchor| tabs.iter().any(|tab| tab.conversation_id == *anchor))
+            .or_else(|| tabs.first().map(|tab| tab.conversation_id));
         Some(TuiOrchestrationTabSnapshot {
             root_conversation_id,
             selected_conversation_id,
             tabs,
             page_anchor,
+            reveal_selected: !explicitly_paged,
         })
     }
 
@@ -274,13 +270,10 @@ impl TuiOrchestrationModel {
         let history = BlocklistAIHistoryModel::as_ref(ctx);
         let root_conversation_id = orchestration_root(history, conversation_id)?;
         let session_id = navigable_session_id(history, TuiSessions::as_ref(ctx), conversation_id)?;
-        self.tab_state_by_root.insert(
-            root_conversation_id,
-            TuiOrchestrationTabState {
-                page_anchor: (conversation_id != root_conversation_id).then_some(conversation_id),
-                explicitly_paged: false,
-            },
-        );
+        self.tab_state_by_root
+            .entry(root_conversation_id)
+            .or_default()
+            .explicitly_paged = false;
         TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
             sessions.focus_session(session_id, ctx);
         });
