@@ -1,6 +1,6 @@
 //! Skill provider definitions and utilities.
 //!
-//! This module defines the supported skill providers (i.e. Agents, Claude, Codex, Warp) and their
+//! This module defines the supported skill providers (i.e. Agents, Claude, Codex, Kiro, Warp) and their
 //! associated skills directory paths. It provides utilities for looking up providers
 //! from paths and vice versa.
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::Fill;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
-/// Represents a skill provider/origin (Agents, Claude, Codex, or Warp).
+/// Represents a skill provider/origin (Agents, Claude, Codex, Cursor, Gemini, Copilot, Droid, Github, OpenCode, Kiro, or Warp).
 #[derive(
     Debug,
     Clone,
@@ -39,6 +39,7 @@ pub enum SkillProvider {
     Droid,
     Github,
     OpenCode,
+    Kiro,
 }
 
 /// Represents the scope of a skill (home directory vs project directory).
@@ -86,7 +87,8 @@ impl SkillProvider {
             | SkillProvider::Agents
             | SkillProvider::Cursor
             | SkillProvider::Copilot
-            | SkillProvider::Github => Icon::WarpLogoLight,
+            | SkillProvider::Github
+            | SkillProvider::Kiro => Icon::WarpLogoLight,
         }
     }
 
@@ -143,6 +145,10 @@ pub static SKILL_PROVIDER_DEFINITIONS: LazyLock<Vec<SkillProviderDefinition>> =
             SkillProviderDefinition {
                 provider: SkillProvider::OpenCode,
                 skills_path: PathBuf::from(".opencode").join("skills"),
+            },
+            SkillProviderDefinition {
+                provider: SkillProvider::Kiro,
+                skills_path: PathBuf::from(".kiro").join("skills"),
             },
         ]
     });
