@@ -21,6 +21,24 @@ pub fn main_display_scale_factor() -> f64 {
     CGDisplayMode::pixel_width(Some(&mode)) as f64 / width_points as f64
 }
 
+/// Returns the main display's current-mode pixel dimensions as `(width, height)`.
+///
+/// Mirrors [`main_display_scale_factor`] by reading the main display's current
+/// mode through thread-safe Core Graphics calls. Returns `(0, 0)` when the
+/// display or its mode cannot be resolved (for example on a truly headless
+/// host), which the recorder treats as an unsupported environment.
+pub fn main_display_dimensions() -> (u32, u32) {
+    use objc2_core_graphics::{CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID};
+
+    let Some(mode) = CGDisplayCopyDisplayMode(CGMainDisplayID()) else {
+        return (0, 0);
+    };
+    (
+        CGDisplayMode::pixel_width(Some(&mode)) as u32,
+        CGDisplayMode::pixel_height(Some(&mode)) as u32,
+    )
+}
+
 /// Returns the backing scale factor of the display that fully contains a window.
 ///
 /// A window spanning displays with different backing scale factors does not have one valid
