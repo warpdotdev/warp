@@ -2081,20 +2081,29 @@ impl LaidOutTable {
     }
 
     /// Source character offset (within the table's flattened content stream) for the
-    /// start of `sub_line` within source row `row`.
+    /// leftmost cell that occupies `sub_line` within source row `row`.
     ///
-    /// Falls back to the start of the row's first cell when offset maps or layouts are
-    /// unavailable. Returns `None` when the row is out of bounds.
+    /// A row's visual height is the maximum across all cells, so later visual lines may
+    /// begin in a column other than column zero. Selecting the first cell that actually
+    /// has the requested sub-line keeps visual line starts monotonic across the flattened
+    /// table source. Empty rows still resolve their sole visual line to column zero.
     fn row_sub_line_source_offset(&self, row: usize, sub_line: usize) -> Option<CharOffset> {
-        let cell_range = self.offset_map.cell_range(row, 0)?;
-        let cell_offset_map = self.cell_offset_maps.get(row).and_then(|r| r.first())?;
-        let rendered_start = self
-            .cell_layouts
-            .get(row)
-            .and_then(|row_layouts| row_layouts.first())
-            .and_then(|cell_layout| cell_layout.line_char_ranges.get(sub_line))
-            .map(|range| range.start)
-            .unwrap_or(CharOffset::zero());
+        let row_layouts = self.cell_layouts.get(row)?;
+        let (col, rendered_start) = if sub_line == 0 {
+            (!row_layouts.is_empty()).then_some((0, CharOffset::zero()))
+        } else {
+            row_layouts
+                .iter()
+                .enumerate()
+                .find_map(|(col, cell_layout)| {
+                    cell_layout
+                        .line_char_ranges
+                        .get(sub_line)
+                        .map(|range| (col, range.start))
+                })
+        }?;
+        let cell_range = self.offset_map.cell_range(row, col)?;
+        let cell_offset_map = self.cell_offset_maps.get(row).and_then(|r| r.get(col))?;
         Some(
             cell_range.start
                 + cell_offset_map
