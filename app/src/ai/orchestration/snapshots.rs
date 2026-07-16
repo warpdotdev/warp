@@ -86,8 +86,8 @@ pub enum OptionSourceStatus {
 pub enum OptionFooter {
     /// Free-form text entry (e.g. custom host slug).
     CustomText { label: String },
-    /// "New API key…" affordance. Emitted for GUI parity; the TUI ignores
-    /// it since resource creation is out of scope there.
+    /// "New API key…" affordance. The GUI renders it for harnesses that
+    /// support managed secrets; the TUI intentionally omits resource creation.
     CreateNewAuthSecret,
 }
 
@@ -273,6 +273,7 @@ fn build_harness_snapshot(
 struct ModelChoiceInput {
     id: String,
     label: String,
+    disabled_reason: Option<String>,
 }
 
 /// Builds the model options for the active harness, mirroring the GUI's
@@ -304,6 +305,10 @@ pub fn model_snapshot(state: &OrchestrationConfigState, ctx: &AppContext) -> Opt
                 .map(|llm| ModelChoiceInput {
                     id: llm.id.to_string(),
                     label: llm.menu_display_name(),
+                    disabled_reason: llm
+                        .disable_reason
+                        .as_ref()
+                        .map(|reason| reason.tooltip_text().to_string()),
                 })
                 .collect();
             build_oz_model_snapshot(choices, &state.model_id)
@@ -324,6 +329,7 @@ pub fn model_snapshot(state: &OrchestrationConfigState, ctx: &AppContext) -> Opt
                         .map(|model| ModelChoiceInput {
                             id: model.id.clone(),
                             label: model.display_name.clone(),
+                            disabled_reason: None,
                         })
                         .collect::<Vec<_>>()
                 });
@@ -343,7 +349,10 @@ fn build_oz_model_snapshot(
         .map(|choice| choice.id.clone());
     let rows: Vec<OptionRow> = choices
         .into_iter()
-        .map(|choice| OptionRow::new(choice.id, choice.label))
+        .map(|choice| OptionRow {
+            disabled_reason: choice.disabled_reason,
+            ..OptionRow::new(choice.id, choice.label)
+        })
         .collect();
     if rows.is_empty() {
         return OptionSnapshot {
@@ -480,23 +489,23 @@ fn build_host_snapshot(
     current: &str,
 ) -> OptionSnapshot {
     let mut rows: Vec<OptionRow> = Vec::new();
-    let mut known_slugs: Vec<String> = Vec::new();
+    let mut added_slugs: Vec<String> = Vec::new();
     if let Some(slug) = default_host.filter(|s| !s.trim().is_empty()) {
         rows.push(OptionRow {
             badge: Some(OptionBadge::Default),
             ..OptionRow::new(slug.clone(), slug.clone())
         });
-        known_slugs.push(slug);
+        added_slugs.push(slug);
     }
     rows.push(OptionRow::new(
         ORCHESTRATION_WARP_WORKER_HOST,
         ORCHESTRATION_WARP_WORKER_HOST,
     ));
-    known_slugs.push(ORCHESTRATION_WARP_WORKER_HOST.to_string());
+    added_slugs.push(ORCHESTRATION_WARP_WORKER_HOST.to_string());
 
     for slug in connected_hosts {
         if slug.trim().is_empty()
-            || known_slugs
+            || added_slugs
                 .iter()
                 .any(|known| known.eq_ignore_ascii_case(&slug))
         {
@@ -506,10 +515,12 @@ fn build_host_snapshot(
             badge: Some(OptionBadge::Connected),
             ..OptionRow::new(slug.clone(), slug.clone())
         });
-        known_slugs.push(slug);
+        added_slugs.push(slug);
     }
+    // `recent_host` already comes from the persisted last selection. Only add
+    // its row when the same slug was not emitted from a higher-priority source.
     if let Some(slug) = recent_host.filter(|s| !s.trim().is_empty()) {
-        if !known_slugs
+        if !added_slugs
             .iter()
             .any(|known| known.eq_ignore_ascii_case(&slug))
         {

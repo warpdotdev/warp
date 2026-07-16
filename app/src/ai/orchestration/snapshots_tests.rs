@@ -134,6 +134,7 @@ fn model(id: &str, label: &str) -> ModelChoiceInput {
     ModelChoiceInput {
         id: id.to_string(),
         label: label.to_string(),
+        disabled_reason: None,
     }
 }
 
@@ -141,6 +142,19 @@ fn model(id: &str, label: &str) -> ModelChoiceInput {
 fn oz_model_snapshot_empty_catalog_reports_empty_status() {
     let snapshot = build_oz_model_snapshot(Vec::new(), "auto");
     assert!(matches!(snapshot.status, OptionSourceStatus::Empty { .. }));
+}
+/// Disabled model metadata remains available to every snapshot consumer.
+#[test]
+fn oz_model_snapshot_carries_disabled_reason() {
+    let mut disabled_model = model("unavailable", "Unavailable");
+    disabled_model.disabled_reason = Some("This model is unavailable.".to_string());
+
+    let snapshot = build_oz_model_snapshot(vec![disabled_model], "");
+
+    assert_eq!(
+        snapshot.rows[0].disabled_reason.as_deref(),
+        Some("This model is unavailable.")
+    );
 }
 
 #[test]
