@@ -34,7 +34,8 @@ use super::{
     input_keymap_context, TuiInputAction, TuiInputView, TuiInputViewEvent,
     INPUT_HANDLES_ESCAPE_FLAG,
 };
-use crate::editor_element::TuiEditorElement;
+use crate::editor_element::{TuiEditorAction, TuiEditorElement};
+use crate::editor_interaction::TuiEditorCommand;
 use crate::inline_menu::{
     TuiInlineMenu, TuiInlineMenuAccepted, TuiInlineMenuHandle, TuiInlineMenuHeader,
     TuiInlineMenuSnapshot, TuiInlineMenuStatus,
@@ -465,10 +466,18 @@ fn inline_menu_navigation_routes_before_editor_navigation() {
             let (view, menu_model, ids) = build_view_with_inline_menu(ctx);
             assert_eq!(selected_slash_command_id(&menu_model, ctx), Some(ids[0]));
 
-            dispatch(&view, ctx, &[TuiInputAction::MoveDown]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveDown)],
+            );
             assert_eq!(selected_slash_command_id(&menu_model, ctx), Some(ids[1]));
 
-            dispatch(&view, ctx, &[TuiInputAction::MoveUp]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp)],
+            );
             assert_eq!(selected_slash_command_id(&menu_model, ctx), Some(ids[0]));
         });
     });
@@ -587,7 +596,9 @@ fn multiline_paste_inserts_without_submitting_until_enter() {
             dispatch(
                 &view,
                 ctx,
-                &[TuiInputAction::InsertText(payload.to_owned())],
+                &[TuiInputAction::Editor(TuiEditorAction::InsertText(
+                    payload.to_owned(),
+                ))],
             );
         });
         app.read(|ctx| {
@@ -633,7 +644,10 @@ fn clear_selection_collapses_to_head_without_changing_text() {
 }
 
 fn type_str(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, s: &str) {
-    let actions: Vec<TuiInputAction> = s.chars().map(TuiInputAction::InsertChar).collect();
+    let actions: Vec<TuiInputAction> = s
+        .chars()
+        .map(|c| TuiInputAction::Editor(TuiEditorAction::InsertChar(c)))
+        .collect();
     dispatch(view, ctx, &actions);
 }
 
@@ -711,7 +725,11 @@ fn move_left_on_empty_buffer_opens_conversation_menu() {
             let (view, menu_model, inline_menu) = build_view_with_conversation_menu(ctx);
             assert!(!menu_model.as_ref(ctx).is_open);
 
-            dispatch(&view, ctx, &[TuiInputAction::MoveLeft]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft)],
+            );
 
             assert!(menu_model.as_ref(ctx).is_open);
             let lines = render_element_lines(
@@ -739,7 +757,11 @@ fn move_left_on_non_empty_buffer_only_moves_cursor() {
             type_str(&view, ctx, "ab");
             assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0)));
 
-            dispatch(&view, ctx, &[TuiInputAction::MoveLeft]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft)],
+            );
 
             assert!(!menu_model.as_ref(ctx).is_open);
             assert_eq!(cursor_and_height(&view, ctx).0, Some((1, 0)));
@@ -763,7 +785,11 @@ fn move_left_in_shell_mode_does_not_open_conversation_menu() {
                 "the `!` prefix is not buffered"
             );
 
-            dispatch(&view, ctx, &[TuiInputAction::MoveLeft]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft)],
+            );
 
             assert!(
                 !menu_model.as_ref(ctx).is_open,
@@ -802,12 +828,12 @@ fn navigation_on_empty_buffer_does_not_panic() {
                 &view,
                 ctx,
                 &[
-                    TuiInputAction::MoveToLineStart,
-                    TuiInputAction::MoveToLineEnd,
-                    TuiInputAction::MoveLeft,
-                    TuiInputAction::MoveRight,
-                    TuiInputAction::MoveUp,
-                    TuiInputAction::MoveDown,
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveToLineStart),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveToLineEnd),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveRight),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveDown),
                 ],
             );
             let (cursor, height) = cursor_and_height(&view, ctx);
@@ -839,7 +865,13 @@ fn cursor_renders_at_start_of_new_line() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, "ab");
-            dispatch(&view, ctx, &[TuiInputAction::InsertNewline]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::InsertNewline,
+                )],
+            );
             let (cursor, height) = cursor_and_height(&view, ctx);
             assert_eq!(cursor, Some((0, 1)), "cursor should be at row 1, col 0");
             assert!(height >= 2, "two visual rows expected, got height {height}");
@@ -859,7 +891,10 @@ fn interior_empty_line_does_not_collapse() {
             dispatch(
                 &view,
                 ctx,
-                &[TuiInputAction::InsertNewline, TuiInputAction::InsertNewline],
+                &[
+                    TuiInputAction::EditorCommand(TuiEditorCommand::InsertNewline),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::InsertNewline),
+                ],
             );
             type_str(&view, ctx, "b");
             let (cursor, height) = cursor_and_height(&view, ctx);
@@ -880,11 +915,18 @@ fn move_up_through_empty_line_positions_cursor() {
             dispatch(
                 &view,
                 ctx,
-                &[TuiInputAction::InsertNewline, TuiInputAction::InsertNewline],
+                &[
+                    TuiInputAction::EditorCommand(TuiEditorCommand::InsertNewline),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::InsertNewline),
+                ],
             );
             type_str(&view, ctx, "b");
             // Cursor on row 2 ("b"); move up to the empty row 1.
-            dispatch(&view, ctx, &[TuiInputAction::MoveUp]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp)],
+            );
             let (cursor, height) = cursor_and_height(&view, ctx);
             assert_eq!(height, 3);
             assert_eq!(
@@ -908,9 +950,18 @@ fn kill_to_line_end_from_midline() {
             dispatch(
                 &view,
                 ctx,
-                &[TuiInputAction::MoveLeft, TuiInputAction::MoveLeft],
+                &[
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft),
+                ],
             );
-            dispatch(&view, ctx, &[TuiInputAction::KillToLineEnd]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::KillToLineEnd,
+                )],
+            );
             assert_eq!(text(&view, ctx), "ab");
         });
     });
@@ -923,7 +974,13 @@ fn kill_to_line_end_at_eol_is_noop() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, "abcd");
-            dispatch(&view, ctx, &[TuiInputAction::KillToLineEnd]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::KillToLineEnd,
+                )],
+            );
             assert_eq!(text(&view, ctx), "abcd");
         });
     });
@@ -940,9 +997,18 @@ fn kill_to_line_start_from_midline() {
             dispatch(
                 &view,
                 ctx,
-                &[TuiInputAction::MoveLeft, TuiInputAction::MoveLeft],
+                &[
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft),
+                ],
             );
-            dispatch(&view, ctx, &[TuiInputAction::KillToLineStart]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::KillToLineStart,
+                )],
+            );
             assert_eq!(text(&view, ctx), "cd");
         });
     });
@@ -958,10 +1024,23 @@ fn kill_then_yank_round_trips() {
             dispatch(
                 &view,
                 ctx,
-                &[TuiInputAction::MoveLeft, TuiInputAction::MoveLeft],
+                &[
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft),
+                ],
             );
-            dispatch(&view, ctx, &[TuiInputAction::KillToLineEnd]); // kills "cd" -> "ab"
-            dispatch(&view, ctx, &[TuiInputAction::Yank]); // yanks "cd" -> "abcd"
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::KillToLineEnd,
+                )],
+            ); // kills "cd" -> "ab"
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::Yank)],
+            ); // yanks "cd" -> "abcd"
             assert_eq!(text(&view, ctx), "abcd");
         });
     });
@@ -994,7 +1073,13 @@ fn select_word_left_selects_previous_word() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, "hello world");
-            dispatch(&view, ctx, &[TuiInputAction::SelectWordLeft]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::SelectWordLeft,
+                )],
+            );
             assert_eq!(selected_text(&view, ctx).as_deref(), Some("world"));
         });
     });
@@ -1007,8 +1092,20 @@ fn select_word_right_selects_next_word() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, "hello world");
-            dispatch(&view, ctx, &[TuiInputAction::MoveToLineStart]);
-            dispatch(&view, ctx, &[TuiInputAction::SelectWordRight]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::MoveToLineStart,
+                )],
+            );
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::SelectWordRight,
+                )],
+            );
             assert_eq!(selected_text(&view, ctx).as_deref(), Some("hello"));
         });
     });
@@ -1021,12 +1118,30 @@ fn move_to_line_start_and_end_multiline() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, "abc");
-            dispatch(&view, ctx, &[TuiInputAction::InsertNewline]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::InsertNewline,
+                )],
+            );
             type_str(&view, ctx, "def");
             // Cursor is at end of "def" (row 1, col 3).
-            dispatch(&view, ctx, &[TuiInputAction::MoveToLineStart]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::MoveToLineStart,
+                )],
+            );
             assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 1)));
-            dispatch(&view, ctx, &[TuiInputAction::MoveToLineEnd]);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::MoveToLineEnd,
+                )],
+            );
             assert_eq!(cursor_and_height(&view, ctx).0, Some((3, 1)));
         });
     });
@@ -1190,7 +1305,13 @@ fn scroll_wheel(x: u16, y: u16, delta_rows: isize) -> TuiEvent {
 fn type_lines(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, n: usize) {
     for i in 0..n {
         if i > 0 {
-            dispatch(view, ctx, &[TuiInputAction::InsertNewline]);
+            dispatch(
+                view,
+                ctx,
+                &[TuiInputAction::EditorCommand(
+                    TuiEditorCommand::InsertNewline,
+                )],
+            );
         }
         type_str(view, ctx, &i.to_string());
     }
@@ -1242,7 +1363,7 @@ fn mouse(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, event: &TuiEvent
     };
     match action {
         Some(action) => {
-            dispatch(view, ctx, &[TuiInputAction::from(action)]);
+            dispatch(view, ctx, &[TuiInputAction::Editor(action)]);
             true
         }
         None => false,
@@ -1388,13 +1509,23 @@ fn drag_past_last_visible_row_autoscrolls() {
             // 10 logical lines, exceeding the 6-row viewport.
             for i in 0..10 {
                 if i > 0 {
-                    dispatch(&view, ctx, &[TuiInputAction::InsertNewline]);
+                    dispatch(
+                        &view,
+                        ctx,
+                        &[TuiInputAction::EditorCommand(
+                            TuiEditorCommand::InsertNewline,
+                        )],
+                    );
                 }
                 type_str(&view, ctx, &i.to_string());
             }
             // Scroll back to the top.
             for _ in 0..9 {
-                dispatch(&view, ctx, &[TuiInputAction::MoveUp]);
+                dispatch(
+                    &view,
+                    ctx,
+                    &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp)],
+                );
             }
             assert_eq!(scroll_offset(&view, ctx), 0);
 
@@ -1505,7 +1636,11 @@ fn explicit_shell_mode_survives_deleting_the_buffer() {
             let view = build_view(ctx);
             type_str(&view, ctx, "!cargo");
             for _ in 0.."cargo".chars().count() {
-                dispatch(&view, ctx, &[TuiInputAction::Backspace]);
+                dispatch(
+                    &view,
+                    ctx,
+                    &[TuiInputAction::EditorCommand(TuiEditorCommand::Backspace)],
+                );
             }
 
             assert_eq!(text(&view, ctx), "");
@@ -1720,9 +1855,10 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
                 let event_ctx = TuiEventContext::new(scene, &mut rendered_views);
                 element
                     .mouse_action(&left_down(2 + 3, 0, 1, false), &event_ctx, ctx)
-                    .map(TuiInputAction::from)
+                    .map(TuiInputAction::Editor)
             };
-            let Some(TuiInputAction::SelectionStartAt { offset }) = action else {
+            let Some(TuiInputAction::Editor(TuiEditorAction::SelectionStartAt { offset })) = action
+            else {
                 panic!("expected SelectionStartAt, got {action:?}");
             };
             // Screen column 5 = content column 3 = gap offset 4 (1-based).

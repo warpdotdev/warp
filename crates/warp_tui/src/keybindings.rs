@@ -19,9 +19,15 @@
 //! would otherwise match everywhere and, for multi-keystroke chords, swallow
 //! prefix keys via a pending match.
 
-use warpui_core::keymap::{BindingLens, Context, IsBindingValid, Trigger};
-use warpui_core::{AppContext, TuiView};
+use warpui_core::keymap::macros::*;
+use warpui_core::keymap::{
+    BindingLens, Context, ContextPredicate, EditableBinding, IsBindingValid, Trigger,
+};
+use warpui_core::{Action, AppContext, TuiView};
 
+use crate::editor_interaction::{editor_binding_specs, TuiEditorBindingTarget, TuiEditorCommand};
+use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
+use crate::input::view::TuiInputAction;
 use crate::input::TuiInputView;
 use crate::root_view::RootTuiView;
 use crate::terminal_session_view::TuiTerminalSessionView;
@@ -60,8 +66,51 @@ pub(crate) fn init(app: &mut AppContext) {
     crate::root_view::init(app);
     crate::terminal_session_view::init(app);
     crate::input::init(app);
+    register_editor_bindings(
+        app,
+        TuiEditorBindingTarget::Input,
+        id!("TuiInputView"),
+        TuiInputAction::EditorCommand,
+    );
+    register_editor_bindings(
+        app,
+        TuiEditorBindingTarget::Editor,
+        id!("TuiEditorView"),
+        TuiEditorViewAction::Command,
+    );
 
     register_binding_validators(app);
+}
+
+/// Registers one editor binding target from interaction-owned metadata.
+fn register_editor_bindings<A>(
+    app: &mut AppContext,
+    target: TuiEditorBindingTarget,
+    context: ContextPredicate,
+    action_for: impl Fn(TuiEditorCommand) -> A,
+) where
+    A: Action,
+{
+    let action_for = &action_for;
+    let bindings = editor_binding_specs(target).flat_map(|spec| {
+        let context = context.clone();
+        spec.keys.iter().map(move |key| {
+            let context = if matches!(target, TuiEditorBindingTarget::Input)
+                && matches!(spec.command, TuiEditorCommand::MoveUp)
+                && *key == "ctrl-p"
+            {
+                context.clone()
+                    & (!id!(PLAN_TOGGLE_AVAILABLE_FLAG) | id!(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG))
+            } else {
+                context.clone()
+            };
+            EditableBinding::new(spec.name, spec.description, action_for(spec.command))
+                .with_context_predicate(context)
+                .with_group(TUI_BINDING_GROUP)
+                .with_key_binding(key)
+        })
+    });
+    app.register_editable_bindings(bindings);
 }
 
 /// Debug-time guard (no-op in release): every keystroke binding that matches a
@@ -70,6 +119,7 @@ fn register_binding_validators(app: &mut AppContext) {
     app.register_tui_binding_validator::<RootTuiView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTerminalSessionView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiInputView>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiEditorView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTranscriptView>(is_tui_owned_binding);
 }
 
