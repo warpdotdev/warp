@@ -82,6 +82,9 @@ use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_r
 use crate::usage::UsageToggle;
 use crate::warping_indicator::{render_response_summary, render_warping_indicator};
 use crate::zero_state::render_zero_state;
+mod input_detection;
+
+use self::input_detection::InputDetectionState;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
@@ -160,7 +163,6 @@ fn render_left_footer_hint(
         None => None,
     }
 }
-
 /// Entry point that requested conversation restoration.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum TuiConversationRestoreOrigin {
@@ -254,6 +256,7 @@ pub(crate) struct TuiTerminalSessionView {
     usage_toggle: UsageToggle,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
+    input_detection: InputDetectionState,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Last dimensions applied to the terminal model and PTY.
     size_info: SizeInfo,
@@ -347,6 +350,7 @@ impl TuiTerminalSessionView {
             );
         });
     }
+
     fn detach_cli_subagent_view(
         &mut self,
         block_id: &BlockId,
@@ -689,9 +693,9 @@ impl TuiTerminalSessionView {
         // window it arms survives its own clear.
         let editor_for_footer = input_editor_model.clone();
         ctx.subscribe_to_model(&input_editor_model, move |view, _, event, ctx| {
-            if !matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
+            let CodeEditorModelEvent::ContentChanged { origin } = event else {
                 return;
-            }
+            };
             let is_empty = editor_for_footer
                 .as_ref(ctx)
                 .content()
@@ -700,6 +704,7 @@ impl TuiTerminalSessionView {
             if !is_empty {
                 view.exit_confirmation.disarm();
             }
+            view.handle_input_content_changed(origin.from_user(), ctx);
             ctx.notify();
         });
 
@@ -854,13 +859,16 @@ impl TuiTerminalSessionView {
         // change (click or settings-file hot reload), when model display
         // names arrive from the server post-login, or when the session's
         // working directory changes.
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |view, _, event, ctx| {
             if matches!(
                 event,
                 AISettingsChangedEvent::TuiAgentModel { .. }
                     | AISettingsChangedEvent::TuiUsageDisplayMode { .. }
             ) {
                 ctx.notify();
+            }
+            if matches!(event, AISettingsChangedEvent::AIAutoDetectionEnabled { .. }) {
+                view.schedule_input_detection(ctx);
             }
         });
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |_, _, event, ctx| {
@@ -984,6 +992,7 @@ impl TuiTerminalSessionView {
             usage_toggle: UsageToggle::default(),
             ai_context_model: context_model,
             ai_input_model,
+            input_detection: InputDetectionState::default(),
             terminal_model: model,
             size_info,
             terminal_resize_tx,
@@ -1584,7 +1593,7 @@ impl TuiTerminalSessionView {
             })
     }
 
-    /// Whether the input is in `!` shell mode (locked shell input).
+    /// Whether the input is in detected or explicitly locked shell mode.
     fn is_shell_mode(&self, ctx: &AppContext) -> bool {
         input_mode_policy::is_shell_mode(self.ai_input_model.as_ref(ctx))
     }
@@ -1675,11 +1684,10 @@ impl TuiTerminalSessionView {
             },
         )));
 
-        // The submission was accepted: clear the input and return to agent mode.
-        self.input_view.update(ctx, |input_view, ctx| {
-            input_view.clear(ctx);
-            input_view.exit_shell_mode(ctx);
-        });
+        // The submission was accepted: clear the input and return to the
+        // setting-derived agent default.
+        self.input_view
+            .update(ctx, |input_view, ctx| input_view.clear(ctx));
     }
 
     /// Sends a prompt to the TUI session's eagerly selected conversation.

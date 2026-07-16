@@ -10,8 +10,10 @@ use std::rc::Rc;
 use string_offset::CharOffset;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
+use warp::settings::AISettingsChangedEvent;
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, LLMId, SlashCommandId,
+    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, ConversationSelectionEvent,
+    InputConfig, InputModePolicy, InputType, LLMId, PolicyConfigUpdate, SlashCommandId,
     SlashCommandMixer,
 };
 use warp_editor::model::CoreEditorModel;
@@ -37,7 +39,7 @@ use crate::inline_menu::{
     TuiInlineMenu, TuiInlineMenuAccepted, TuiInlineMenuHandle, TuiInlineMenuHeader,
     TuiInlineMenuSnapshot, TuiInlineMenuStatus,
 };
-use crate::input_mode_policy::TuiInputModePolicy;
+use crate::input_mode_policy::AI_LOCKED_CONFIG;
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::model_menu::TuiModelMenuModel;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
@@ -45,6 +47,41 @@ use crate::test_fixtures::add_test_semantic_selection;
 use crate::tui_builder::TuiUiBuilder;
 
 const W: u16 = 80;
+
+struct TestInputModePolicy;
+
+impl InputModePolicy for TestInputModePolicy {
+    fn initial_config(&self, _app: &AppContext) -> InputConfig {
+        AI_LOCKED_CONFIG
+    }
+
+    fn allows_locked_ai_input(&self, _app: &AppContext) -> bool {
+        true
+    }
+
+    fn is_autodetection_enabled(&self, _app: &AppContext) -> bool {
+        false
+    }
+
+    fn config_on_conversation_selection_changed(
+        &self,
+        _event: &ConversationSelectionEvent,
+        _current: InputConfig,
+        _app: &AppContext,
+    ) -> Option<PolicyConfigUpdate> {
+        None
+    }
+
+    fn config_on_ai_settings_changed(
+        &self,
+        _event: &AISettingsChangedEvent,
+        _current: InputConfig,
+        _is_autodetection_enabled_for_current_context: bool,
+        _app: &AppContext,
+    ) -> Option<PolicyConfigUpdate> {
+        None
+    }
+}
 
 #[test]
 fn input_escape_context_is_present_only_while_escape_is_handled() {
@@ -255,7 +292,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
     // singleton, so register a mock one before constructing the editor.
     ctx.add_singleton_model(|_| Appearance::mock());
     add_test_semantic_selection(ctx);
-    let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
     let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::Closed);
     let (_window_id, view) = ctx.add_tui_window(
         AddWindowOptions {
@@ -280,7 +317,7 @@ fn build_view_with_conversation_menu(
     ctx.add_singleton_model(|_| Appearance::mock());
     add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-    let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
     let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::Closed);
     let menu_model = ctx.add_model(|_| TestConversationMenu {
         is_open: false,
@@ -316,7 +353,7 @@ fn build_view_with_inline_menu(
     ctx.add_singleton_model(|_| Appearance::mock());
     add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-    let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
     let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::SlashCommands);
     let mixer = ctx.add_model(|_| SlashCommandMixer::new());
     let ids = [SlashCommandId::new(), SlashCommandId::new()];
@@ -367,7 +404,7 @@ fn build_view_with_model_menu(
     ctx.add_singleton_model(|_| Appearance::mock());
     add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-    let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
     let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::ModelSelector);
     let id = LLMId::from("gpt-5");
     let id_for_model = id.clone();
@@ -1445,6 +1482,67 @@ fn bang_at_start_enters_shell_mode() {
             type_str(&view, ctx, "!ls");
             assert!(view.as_ref(ctx).is_shell_mode(ctx));
             assert_eq!(text(&view, ctx), "ls", "the `!` must not be inserted");
+        });
+    });
+}
+
+#[test]
+fn explicit_shell_mode_survives_deleting_the_buffer() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "!cargo");
+            for _ in 0.."cargo".chars().count() {
+                dispatch(&view, ctx, &[TuiInputAction::Backspace]);
+            }
+
+            assert_eq!(text(&view, ctx), "");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+        });
+    });
+}
+
+#[test]
+fn autodetected_unlocked_shell_uses_shell_mode_ui() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            let input_mode = view.as_ref(ctx).input_mode.clone();
+            input_mode.update(ctx, |input_mode, ctx| {
+                input_mode.set_input_config(
+                    InputConfig {
+                        input_type: InputType::Shell,
+                        is_locked: false,
+                    },
+                    false,
+                    None,
+                    ctx,
+                );
+            });
+
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            let mut element = view.as_ref(ctx).render(ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = element.layout(
+                TuiConstraint::loose(TuiSize::new(W, 20)),
+                &mut layout_ctx,
+                ctx,
+            );
+            let area = TuiRect::new(0, 0, size.width, size.height);
+            let mut buffer = TuiBuffer::empty(area);
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            {
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(
+                    TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+                    &mut surface,
+                    &mut paint_ctx,
+                );
+            }
+            assert!(buffer.to_lines()[0].starts_with("! "));
         });
     });
 }
