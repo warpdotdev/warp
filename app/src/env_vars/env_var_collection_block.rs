@@ -44,9 +44,6 @@ use crate::view_components::compactible_action_button::{
 /// For horizontal padding, use [`INLINE_ACTION_HORIZONTAL_PADDING`] for consistency.
 const ENV_VAR_COLLECTION_BODY_VERTICAL_PADDING: f32 = 16.;
 
-const ENV_VAR_COLLECTION_CANCEL_LABEL: &str = "Cancel";
-const ENV_VAR_COLLECTION_ACCEPT_LABEL: &str = "Run";
-
 lazy_static! {
     static ref CANCEL_ENV_VAR_COLLECTION_KEYSTROKE: Keystroke = Keystroke {
         ctrl: true,
@@ -147,7 +144,7 @@ impl EnvVarCollectionBlock {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let cancel_button = CompactibleActionButton::new(
-            ENV_VAR_COLLECTION_CANCEL_LABEL.to_string(),
+            crate::menu_label("common.cancel", "Cancel").to_string(),
             Some(KeystrokeSource::Fixed(
                 CANCEL_ENV_VAR_COLLECTION_KEYSTROKE.clone(),
             )),
@@ -159,7 +156,7 @@ impl EnvVarCollectionBlock {
         );
 
         let accept_button = CompactibleActionButton::new(
-            ENV_VAR_COLLECTION_ACCEPT_LABEL.to_string(),
+            crate::menu_label("requested_command.accept_label", "Run").to_string(),
             Some(KeystrokeSource::Fixed(
                 ACCEPT_ENV_VAR_COLLECTION_KEYSTROKE.clone(),
             )),
