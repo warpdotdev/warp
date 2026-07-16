@@ -329,9 +329,9 @@ impl TuiOrchestrationBlock {
         }
     }
 
-    /// Seeds the run-wide edit state from the streamed request, resolving
-    /// empty fields from an approved plan config (state parity with the
-    /// GUI card's `RunAgentsEditState::from_request` + `resolve_from_config`).
+    /// Seeds the run-wide edit state from the streamed request. An approved
+    /// plan config unconditionally supplies the executor-owned fields;
+    /// otherwise the TUI's Local mode is normalized to its Oz-only policy.
     fn config_state_from_request(
         request: &RunAgentsRequest,
         active_config: Option<&(OrchestrationConfig, OrchestrationConfigStatus)>,
@@ -345,14 +345,13 @@ impl TuiOrchestrationBlock {
         // becomes `Unset`; defaults re-resolve from persisted settings.
         state.auth_secret_selection =
             AuthSecretSelection::from_optional_name(request.harness_auth_secret_name.clone());
-        if matches!(request.execution_mode, RunAgentsExecutionMode::Local) {
-            // Re-applying Local sanitizes product-disabled local harnesses.
-            state.toggle_execution_mode_to_remote(false);
-        }
-        if let Some((config, status)) = active_config {
-            if status.is_approved() {
-                state.resolve_from_config(config);
-            }
+        let approved_config = active_config
+            .filter(|(_, status)| status.is_approved())
+            .map(|(config, _)| config);
+        if let Some(config) = approved_config {
+            state.override_from_approved_config(config);
+        } else {
+            configuration::normalize_tui_local_harness(&mut state);
         }
         state
     }
@@ -645,6 +644,7 @@ impl TuiOrchestrationBlock {
             ctx,
         ) {
             self.accept_error = Some(reason);
+            ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
             ctx.notify();
             return;
         }

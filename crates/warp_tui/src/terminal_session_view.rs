@@ -1069,16 +1069,16 @@ impl TuiTerminalSessionView {
         let blocker = self.active_blocking_child(ctx);
         let blocker_view_id = blocker.as_ref().map(ViewHandle::id);
         if blocker_view_id != self.active_blocker_view_id {
-            // A foreground process owns the rendered pane and keyboard. Track
-            // blocker changes while it is active, but defer focus handoff
-            // until the process releases input.
+            // A foreground process owns the rendered pane and keyboard. Defer
+            // both the focus handoff and its completion marker until the
+            // process releases input, so the transition remains retryable.
             if !self.process_owns_input() {
                 match &blocker {
                     Some(child) => ctx.focus(child),
                     None => ctx.focus(&self.input_view),
                 }
+                self.active_blocker_view_id = blocker_view_id;
             }
-            self.active_blocker_view_id = blocker_view_id;
         }
         ctx.notify();
     }

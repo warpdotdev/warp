@@ -4,12 +4,24 @@ use warp::tui_export::{
     accept_disabled_reason_with_auth, api_key_snapshot, environment_snapshot, harness_snapshot,
     host_snapshot, location_snapshot, model_snapshot, persist_environment_selection,
     persist_host_selection, AIActionStatus, AIAgentActionId, BlocklistAIActionModel,
-    OptionSnapshot, OrchestrationConfigState, OrchestrationEditState, RunAgentsRequest,
+    OptionSnapshot, OrchestrationConfigState, OrchestrationEditState, RunAgentsExecutionMode,
+    RunAgentsRequest,
 };
 use warpui_core::{AppContext, ModelHandle};
 
 /// Row id emitted by `location_snapshot` for remote execution.
 const LOCATION_CLOUD_ID: &str = "cloud";
+
+/// Applies the TUI policy that Local configuration has no harness page and
+/// therefore always uses Oz.
+pub(super) fn normalize_tui_local_harness(state: &mut OrchestrationConfigState) {
+    if matches!(state.execution_mode, RunAgentsExecutionMode::Local)
+        && !state.harness_type.eq_ignore_ascii_case("oz")
+    {
+        state.harness_type = "oz".to_string();
+        state.model_id.clear();
+    }
+}
 
 /// Builds a dispatched request from immutable card fields and edited run-wide state.
 pub(super) fn build_request(
@@ -147,6 +159,7 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
                 edit_state
                     .orchestration_config_state
                     .apply_execution_mode_change(is_remote, fallback_base_model_id, ctx);
+                normalize_tui_local_harness(&mut edit_state.orchestration_config_state);
             }
             ConfigPage::Harness => {
                 edit_state.apply_harness_change(id, fallback_base_model_id, ctx);

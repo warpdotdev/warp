@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use ai::agent::orchestration_config::{
@@ -128,11 +128,10 @@ fn edit_state_carries_the_request_auth_secret() {
 }
 
 #[test]
-fn edit_state_resolves_empty_fields_from_an_approved_config() {
-    let mut inherit_all = request("", RunAgentsExecutionMode::Local);
-    inherit_all.model_id = String::new();
+fn edit_state_is_overridden_by_an_approved_config() {
+    let incoming = request("oz", RunAgentsExecutionMode::Local);
     let config = OrchestrationConfig {
-        model_id: "auto".to_string(),
+        model_id: "sonnet".to_string(),
         harness_type: "claude".to_string(),
         execution_mode: OrchestrationExecutionMode::Remote {
             environment_id: "env-2".to_string(),
@@ -140,20 +139,32 @@ fn edit_state_resolves_empty_fields_from_an_approved_config() {
         },
     };
     let state = TuiOrchestrationBlock::config_state_from_request(
-        &inherit_all,
+        &incoming,
         Some(&(config.clone(), OrchestrationConfigStatus::Approved)),
     );
     assert_eq!(state.harness_type, "claude");
-    assert_eq!(state.model_id, "auto");
+    assert_eq!(state.model_id, "sonnet");
     assert!(state.execution_mode.is_remote());
 
-    // A disapproved config does not resolve inherited fields.
+    // A disapproved config does not override the request.
     let state = TuiOrchestrationBlock::config_state_from_request(
-        &inherit_all,
+        &incoming,
         Some(&(config, OrchestrationConfigStatus::Disapproved)),
     );
-    assert_eq!(state.harness_type, "");
+    assert_eq!(state.harness_type, "oz");
+    assert_eq!(state.model_id, "auto");
     assert!(!state.execution_mode.is_remote());
+}
+
+#[test]
+fn unapproved_local_request_forces_oz_harness() {
+    let state = TuiOrchestrationBlock::config_state_from_request(
+        &request("claude", RunAgentsExecutionMode::Local),
+        None,
+    );
+
+    assert_eq!(state.harness_type, "oz");
+    assert_eq!(state.model_id, "");
 }
 
 #[test]
@@ -202,6 +213,7 @@ fn build_request_omits_the_auth_secret_when_the_picker_is_not_applicable() {
 #[derive(Default)]
 struct TestController {
     executed_requests: RefCell<Vec<RunAgentsRequest>>,
+    accept_error: RefCell<Option<String>>,
 }
 
 impl OrchestrationBlockController for TestController {
@@ -274,6 +286,9 @@ impl OrchestrationBlockController for TestController {
         _state: &OrchestrationConfigState,
         _ctx: &mut warpui::AppContext,
     ) -> Result<(), String> {
+        if let Some(reason) = self.accept_error.borrow().clone() {
+            return Err(reason);
+        }
         self.executed_requests.borrow_mut().push(request);
         Ok(())
     }
@@ -413,6 +428,33 @@ fn selector_actions_commit_edits_and_follow_the_dynamic_page_sequence() {
                 }
             );
         });
+    });
+}
+
+#[test]
+fn blocked_accept_invalidates_card_layout() {
+    App::test((), |mut app| async move {
+        let (block, controller) =
+            test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+        *controller.accept_error.borrow_mut() = Some("Choose a model.".to_string());
+        let invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiOrchestrationBlockEvent::BlockingStateChanged => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+                TuiOrchestrationBlockEvent::RejectRequested => {}
+            });
+        });
+
+        act(&mut app, &block, TuiOrchestrationBlockAction::Accept);
+
+        assert_eq!(invalidations.get(), 1);
+        assert_eq!(
+            block.read(&app, |block, _| block.accept_error.clone()),
+            Some("Choose a model.".to_string())
+        );
     });
 }
 
