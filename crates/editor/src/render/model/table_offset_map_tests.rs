@@ -232,6 +232,115 @@ fn test_table_cell_offset_map_handles_backslash_escaped_punctuation() {
 }
 
 #[test]
+fn test_table_cell_offset_map_maps_br_source_offsets() {
+    // `<br>` is 4 source chars but renders as a single `\n`. The map must map offsets in
+    // the post-break region ("two") to their true source positions, not collapse them to
+    // the break.
+    let source = "one<br>two";
+    let inline = parse_inline_markdown(source);
+    let rendered_text: String = inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect();
+    assert_eq!(rendered_text, "one\ntwo");
+
+    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+    assert_eq!(
+        map.source_length(),
+        CharOffset::from(source.chars().count())
+    );
+    assert_eq!(
+        map.rendered_length(),
+        CharOffset::from(rendered_text.chars().count())
+    );
+
+    // Rendered "two" begins at rendered offset 4 and source offset 7 (after `one<br>`).
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(4)),
+        CharOffset::from(7),
+        "rendered 't' should map to source 't' after the <br> token"
+    );
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(6)),
+        CharOffset::from(9),
+    );
+    assert_eq!(
+        map.source_to_rendered(CharOffset::from(7)),
+        CharOffset::from(4),
+        "source 't' should map to rendered 't'"
+    );
+    assert_eq!(
+        map.source_to_rendered(CharOffset::from(9)),
+        CharOffset::from(6),
+    );
+
+    // Every rendered char (including the break) should map back to a source position whose
+    // char matches, except the break which corresponds to the `<` of `<br>`.
+    for (rendered_idx, rendered_char) in rendered_text.chars().enumerate() {
+        if rendered_char == '\n' {
+            continue;
+        }
+        let source_pos = map.rendered_to_source(CharOffset::from(rendered_idx));
+        assert_eq!(
+            source.chars().nth(source_pos.as_usize()),
+            Some(rendered_char),
+            "rendered {rendered_idx} ({rendered_char:?}) should map to same char in source",
+        );
+    }
+}
+
+#[test]
+fn test_table_cell_offset_map_maps_self_closing_br_source_offsets() {
+    // `<br/>` is 5 source chars, still a single rendered `\n`.
+    let source = "one<br/>two";
+    let inline = parse_inline_markdown(source);
+    let rendered_text: String = inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect();
+    assert_eq!(rendered_text, "one\ntwo");
+
+    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+    // Rendered "two" begins at rendered offset 4 and source offset 8 (after `one<br/>`).
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(4)),
+        CharOffset::from(8),
+    );
+    assert_eq!(
+        map.source_to_rendered(CharOffset::from(8)),
+        CharOffset::from(4),
+    );
+}
+
+#[test]
+fn test_table_cell_offset_map_maps_br_at_style_boundary() {
+    // The break falls between a bold fragment ("a") and a plain one that begins with the
+    // break ("\nb"), so the walk must handle a `\n` as the *first* rendered char too.
+    let source = "**a**<br>b";
+    let inline = parse_inline_markdown(source);
+    let rendered_text: String = inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect();
+    assert_eq!(rendered_text, "a\nb");
+
+    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+    assert_eq!(
+        map.source_length(),
+        CharOffset::from(source.chars().count())
+    );
+    // Rendered 'b' is at rendered offset 2 and source offset 9 (after `**a**<br>`).
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(2)),
+        CharOffset::from(9),
+    );
+    assert_eq!(
+        map.source_to_rendered(CharOffset::from(9)),
+        CharOffset::from(2),
+    );
+}
+
+#[test]
 fn test_table_cell_offset_map_handles_nested_styles() {
     let source = "**a *b* c**";
     let inline = parse_inline_markdown(source);
