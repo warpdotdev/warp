@@ -65,6 +65,16 @@ pub use crate::ai::conversation_export::{
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
+pub use crate::ai::orchestration::{
+    accept_disabled_reason_with_auth, api_key_snapshot, auth_secret_selection_required,
+    empty_env_recommendation_message, environment_snapshot, harness_is_selectable,
+    harness_snapshot, host_snapshot, location_snapshot, model_snapshot,
+    persist_environment_selection, persist_host_selection,
+    resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
+    resolve_default_host_slug, should_show_auth_secret_picker, AuthSecretSelection, OptionBadge,
+    OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus, OrchestrationConfigState,
+    OrchestrationEditState, ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
+};
 pub use crate::ai::skills::{SkillManager, SkillReference};
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
@@ -80,6 +90,7 @@ pub use crate::search::slash_command_menu::static_commands::commands::{
 };
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 pub use crate::settings::AISettingsChangedEvent;
+pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::conversation_restoration::{
     prepare_conversation_block_restoration, ConversationBlockRestorationPlan,
@@ -116,6 +127,8 @@ pub use crate::terminal::model::blockgrid::BlockGrid;
 pub use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
 };
+pub use crate::terminal::model::escape_sequences::{KeystrokeWithDetails, ToEscapeSequence};
+pub use crate::terminal::model::grid::grid_handler::{GridHandler, TermMode};
 pub use crate::terminal::model::rich_content::RichContentType;
 pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 pub use crate::terminal::model::session::Sessions;
@@ -126,11 +139,15 @@ pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};
 pub use crate::terminal::{
-    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData,
+    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData, SizeInfo, SizeUpdate,
     TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
 };
 pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
+pub use crate::tui::{
+    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
+    TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
+};
 pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 pub use crate::util::time_format::format_elapsed_seconds;
 

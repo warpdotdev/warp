@@ -175,6 +175,29 @@ fn test_mouse_actions_to_escape_sequence() {
 }
 
 #[test]
+fn test_alt_screen_scroll_to_pty_bytes() {
+    let terminal_model = TerminalModelMock::new();
+    let point = Point::new(3, 2);
+
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(2, point, false, &terminal_model),
+        Some(b"\x1bOA\x1bOA".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(-2, point, false, &terminal_model),
+        Some(b"\x1bOB\x1bOB".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(1, point, true, &terminal_model),
+        Some(b"\x1b[<64;3;4M".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(0, point, true, &terminal_model),
+        None
+    );
+}
+
+#[test]
 fn test_cursor_movement_keystroke_without_modifier_to_escape_sequence() {
     // Expected mapping taken from the xterm spec
     // [here](https://www.xfree86.org/current/ctlseqs.html).
@@ -497,6 +520,71 @@ fn test_unmatched_keystroke_does_not_yield_escape_sequence() {
         .to_escape_sequence(&terminal_model_mock);
         assert_eq!(result, None);
     }
+}
+
+#[test]
+fn test_to_pty_bytes_layers_fallbacks_over_the_encoder() {
+    let mock = TerminalModelMock::new();
+    let pty_bytes = |keystroke: &Keystroke, chars: Option<&str>| {
+        KeystrokeWithDetails {
+            keystroke,
+            key_without_modifiers: None,
+            chars,
+        }
+        .to_pty_bytes(&mock)
+    };
+    // A key with no `chars` and no encoder mapping, built the way the
+    // crossterm→key-event conversion supplies named keys (tab is "\t").
+    let named = |key: &str| Keystroke {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        cmd: false,
+        meta: false,
+        key: key.to_owned(),
+    };
+
+    // 1. The shared encoder still wins for special keys.
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("up").unwrap(), None),
+        Some(vec![C0::ESC, b'[', b'A'])
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("backspace").unwrap(), None),
+        Some(vec![C0::DEL])
+    );
+
+    // 2. Ctrl+letter -> C0 (0x01..0x1A); the encoder leaves these alone here.
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("ctrl-a").unwrap(), Some("a")),
+        Some(vec![0x01])
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("ctrl-c").unwrap(), Some("c")),
+        Some(vec![0x03])
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("ctrl-d").unwrap(), Some("d")),
+        Some(vec![0x04])
+    );
+
+    // 3. Printable text -> its UTF-8 bytes.
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("a").unwrap(), Some("a")),
+        Some(b"a".to_vec())
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("1").unwrap(), Some("1")),
+        Some(b"1".to_vec())
+    );
+
+    // 4. Named control keys with no `chars` -> their C0 bytes.
+    assert_eq!(pty_bytes(&named("enter"), None), Some(vec![C0::CR]));
+    assert_eq!(pty_bytes(&named("escape"), None), Some(vec![C0::ESC]));
+    assert_eq!(pty_bytes(&named("\t"), None), Some(vec![C0::HT]));
+
+    // Nothing to send.
+    assert_eq!(pty_bytes(&named("insert"), None), None);
 }
 
 struct TerminalModelMock {

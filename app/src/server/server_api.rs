@@ -3,6 +3,7 @@ pub mod auth;
 pub mod block;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod download;
+pub mod factory;
 pub mod harness_support;
 pub mod integrations;
 pub mod managed_mcp;
@@ -25,6 +26,7 @@ use auth::AuthClient;
 use block::BlockClient;
 use channel_versions::ChannelVersions;
 use chrono::{DateTime, FixedOffset};
+use factory::FactoryClient;
 use instant::Instant;
 use managed_mcp::ManagedMcpClient;
 use object::ObjectClient;
@@ -1339,6 +1341,11 @@ impl ServerApiProvider {
 
     #[cfg_attr(target_family = "wasm", expect(dead_code))]
     pub fn get_managed_mcp_client(&self) -> Arc<dyn ManagedMcpClient> {
+        self.server_api.clone()
+    }
+
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
+    pub fn get_factory_client(&self) -> Arc<dyn FactoryClient> {
         self.server_api.clone()
     }
 

@@ -273,7 +273,109 @@ if the expected text isn't in the capture, the change isn't rendering.
   press cancels/clears input and arms a ~1s window; a second within the window
   exits). Always `tmux kill-session` at the end so a stray session doesn't linger.
 
-## Step 4 — Lock it in with a snapshot test
+## Step 4 — Capture screenshots and video (asciinema + agg)
+
+`capture-pane` text is the fast inner-loop check (Step 3) and enough to *assert*
+on a change. But for PR evidence — and for attaching durable image/video
+artifacts — you often want an actual **screenshot** or a short **video** of the
+rendered TUI. Because the TUI is a console program, capture it by recording its
+PTY session with **asciinema**, rendering that recording with **agg**, and
+transcoding it to an **MP4** (the same format Warp's `computer_use` screen
+recording produces) with `ffmpeg`; pull a still frame out with `ffmpeg` too.
+
+**Install the tooling (cloud runner — one-time).** asciinema and ffmpeg are
+packaged; `agg` ships as a prebuilt binary rather than in apt:
+
+```bash
+sudo apt-get update && sudo apt-get install -y asciinema ffmpeg tmux
+# agg is not in apt — install a PINNED release binary and verify its checksum before
+# installing as root (don't pull an unpinned `latest`). The checksum below is for the
+# x86_64 build; on another arch use that asset's published checksum from the release.
+AGG_VERSION=v1.9.0
+AGG_SHA256=f111e315cd71056b116302342553dd765b7297579ed511f111d0cedb442aeda6
+curl -fsSL -o /tmp/agg \
+  "https://github.com/asciinema/agg/releases/download/${AGG_VERSION}/agg-$(uname -m)-unknown-linux-gnu"
+echo "${AGG_SHA256}  /tmp/agg" | sha256sum -c -   # aborts on mismatch
+sudo install -m 0755 /tmp/agg /usr/local/bin/agg
+```
+
+**Record the session.** asciinema needs a real PTY, so run it **inside tmux** (a
+bare `asciinema rec` in a non-interactive runner shell fails with "not a
+terminal"). Drive the TUI with `tmux send-keys` exactly as in Step 2 — the keys
+reach the binary running under asciinema:
+
+```bash
+cd <warp-repo-root>
+tmux kill-session -t tuicap 2>/dev/null     # clear only THIS capture session (not kill-server)
+# asciinema records the TUI's PTY; -c runs the binary; --overwrite replaces a prior cast.
+tmux new-session -d -s tuicap -x 120 -y 40 \
+  'asciinema rec --overwrite -c "./target/debug/warp-tui-oss" /tmp/tui.cast'
+sleep 1                                     # let it draw + answer the theme probe
+# ...drive the interaction you want to show, e.g.:
+# tmux send-keys -t tuicap "hello" Enter && sleep 3
+# Quit the TUI so asciinema finalizes the cast. The logged-out placeholder exits on one
+# Ctrl-C, but a live/logged-in session needs a SECOND press within its ~1s window (see
+# "Quitting" under Pitfalls) — so send two; the extra press is a harmless no-op if it
+# already exited (the session is gone, hence 2>/dev/null).
+tmux send-keys -t tuicap C-c && sleep 0.5 && tmux send-keys -t tuicap C-c 2>/dev/null
+sleep 1
+```
+
+For a **logged-in** capture, build/run `warp-tui-dev` with `WARP_API_KEY` per
+Step 1 instead of `warp-tui-oss`.
+
+**Render the video (MP4).** Match the format Warp's `computer_use` screen
+recording uses — an **H.264 / yuv420p MP4** with `+faststart` (see
+`crates/computer_use/src/linux/recording.rs`) — so TUI captures are consistent
+with GUI/computer-use recordings. `agg` only emits GIF, so render to GIF and then
+transcode to MP4 with those settings. libx264 + yuv420p require **even**
+dimensions, so pad up by a pixel when the terminal render is odd-sized:
+
+```bash
+agg --cols 120 --rows 40 /tmp/tui.cast /tmp/tui.gif
+ffmpeg -y -i /tmp/tui.gif -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" \
+  -c:v libx264 -pix_fmt yuv420p -movflags +faststart /tmp/tui.mp4
+# /tmp/tui.gif is just the intermediate; /tmp/tui.mp4 is the artifact you keep.
+```
+
+**Pull a still (PNG)** from a frame *while the surface is on screen* — see the
+frame-timing pitfall below:
+
+```bash
+ffmpeg -y -ss 1.5 -i /tmp/tui.mp4 -frames:v 1 /tmp/tui.png
+```
+
+**Attach the capture as conversation artifacts (required, not an afterthought).**
+Once you have the still and/or the recording, attach *each* to the run as a
+**conversation artifact** so the proof persists beyond `/tmp`, travels with the
+task, and can surface into the PR description in the native Oz flow — don't leave
+it sitting in a temp file. Call the `upload_artifact` tool once per file, passing
+the local `file_path` and a short `description` (e.g. `file_path=/tmp/tui.png`,
+`description="TUI <surface> after <change> — verification screenshot"`, and
+likewise `/tmp/tui.mp4` for the recording). For any user-visible TUI change you
+verified here, attaching the screenshot and any recording is **expected**. These
+are FILE artifacts capped at 25 MB each, so keep recordings short (see below). If
+you're running somewhere the `upload_artifact` tool isn't available (a plain
+local dev shell rather than a cloud/ambient agent), keep the files and reference
+them in the PR instead.
+
+Capture pitfalls:
+- **asciinema must run under a PTY.** Wrap it in tmux (above) or `script`; a
+  bare `asciinema rec` in a non-interactive runner shell errors out.
+- **Don't take the still from the first or last video frame.** The first frame
+  is the blank terminal *before* the TUI draws, and once you quit the TUI the alt
+  screen is restored — so the final frames show the normal terminal (e.g. the
+  OSS `WARP_API_KEY ... IGNORED` startup warning), **not** the TUI surface.
+  Extract a mid-recording timestamp (when the surface is up), or stop recording
+  while the surface is still displayed so the last frame *is* the surface.
+- **Keep it short.** A few seconds at 120x40 renders to tens of KB; downstream
+  sinks (Slack, and conversation FILE artifacts) cap uploads at 25 MB, so don't
+  record minutes of idle.
+
+Keep `capture-pane` text as the fast inner loop; reach for asciinema+agg when you
+need the image/video to attach.
+
+## Step 5 — Lock it in with a snapshot test
 
 A live run proves the change works now; it is not a regression guard. For any
 non-trivial TUI rendering/behavior change, add or update a render-to-lines unit
@@ -287,10 +389,16 @@ cargo nextest run -p warpui_core
 
 ## Evidence for the PR
 
-For a user-visible TUI change, attach the concrete rendered result — the relevant
-lines from `tmux capture-pane` (and/or the `render_to_lines` snapshot diff) — as
-the verification evidence. This is the TUI equivalent of the GUI's `computer_use`
-screenshot (see the TUI caveat in `review-pr-local`).
+For a user-visible TUI change, **prefer a screenshot or short video as the
+primary evidence** — an actual image/clip of the rendered surface is always more
+convincing to a reviewer than raw text. Capture it per Step 4 (a still, or an
+H.264 MP4 matching computer-use recordings), attach it to the run as a
+conversation artifact, and reference it in the PR. Include the `tmux
+capture-pane` lines (and/or a `render_to_lines` snapshot diff) as a
+**supplement** — handy for asserting on exact text — not as the main proof. Only
+fall back to text alone when an image/clip genuinely can't be produced, and say
+so. This is the TUI equivalent of the GUI's `computer_use` screenshot (see the
+TUI caveat in `review-pr-local`).
 
 ## Related skills
 

@@ -24,20 +24,20 @@ use crate::tool_call_labels::{
 };
 use crate::tui_builder::TuiUiBuilder;
 
-const INPUT_PREFIX: &str = "≫ ";
+const INPUT_PREFIX: &str = "> ";
 
 /// Task-list header glyph. Visually interchangeable with the design's `☰`,
 /// whose inconsistent cell width across terminals leaves ghost cells behind.
 const TASK_LIST_HEADER_GLYPH: &str = "≡";
 
 /// Renders the input section: the user's submitted query on a highlighted
-/// background with a `≫` prompt marker.
+/// background with a `>` prompt marker.
 pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     let text_style = builder.input_text_style();
     let prefix_style = builder.input_prefix_style();
 
-    // Only the first line carries the `≫` prompt marker; continuation
+    // Only the first line carries the `>` prompt marker; continuation
     // lines are indented to the marker's width so they align beneath it.
     // The column stretches to the full offered width so the highlighted
     // background spans the whole row, not just the text.

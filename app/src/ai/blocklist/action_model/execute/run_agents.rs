@@ -14,7 +14,6 @@ use ai::agent::orchestration_config::OrchestrationConfig;
 use ai::skills::SkillReference;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use settings::Setting;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -26,14 +25,15 @@ use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentInput,
     StartAgentExecutionMode,
 };
-use crate::ai::auth_secret_types::auth_secret_types_for_harness;
-use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::document::plan_publication::{
     prepare_plan_publications, wait_for_plan_publications,
 };
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
+use crate::ai::orchestration::{
+    can_execute_with_auth_secret, populate_default_auth_secret_for_execution,
+    OrchestrationConfigState,
+};
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
@@ -610,80 +610,21 @@ fn normalize_agent_name(name: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_ascii_lowercase())
 }
 
-fn requires_default_auth_secret_for_execution(request: &RunAgentsRequest) -> bool {
-    if !request.execution_mode.is_remote() {
-        return false;
-    }
-    let Some(harness) = Harness::parse_orchestration_harness(&request.harness_type) else {
-        return false;
-    };
-    harness != Harness::Oz && !auth_secret_types_for_harness(harness).is_empty()
-}
-
-fn can_execute_with_auth_secret(
-    request: &RunAgentsRequest,
-    ctx: &ModelContext<RunAgentsExecutor>,
-) -> bool {
-    if !requires_default_auth_secret_for_execution(request) {
-        return true;
-    }
-    if request
-        .harness_auth_secret_name
-        .as_deref()
-        .is_some_and(|name| !name.trim().is_empty())
-    {
-        return true;
-    }
-    default_auth_secret_name_for_harness(&request.harness_type, ctx).is_some()
-}
-
-fn default_auth_secret_name_for_harness(
-    harness_type: &str,
-    ctx: &ModelContext<RunAgentsExecutor>,
-) -> Option<String> {
-    let harness = Harness::parse_orchestration_harness(harness_type)?;
-    if harness == Harness::Oz {
-        return None;
-    }
-    CloudAgentSettings::as_ref(ctx)
-        .last_selected_auth_secret
-        .value()
-        .get(harness.config_name())
-        .cloned()
-        .filter(|name| !name.trim().is_empty())
-}
-
-fn populate_default_auth_secret_for_execution(
-    request: &mut RunAgentsRequest,
-    ctx: &ModelContext<RunAgentsExecutor>,
-) {
-    if !requires_default_auth_secret_for_execution(request)
-        || request
-            .harness_auth_secret_name
-            .as_deref()
-            .is_some_and(|name| !name.trim().is_empty())
-    {
-        return;
-    }
-    request.harness_auth_secret_name =
-        default_auth_secret_name_for_harness(&request.harness_type, ctx);
-}
-
 /// Unconditionally overrides run-wide fields on a `RunAgentsRequest`
 /// from the approved orchestration config, delegating to
-/// `OrchestrationEditState::override_from_approved_config`.
+/// `OrchestrationConfigState::override_from_approved_config`.
 fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &OrchestrationConfig) {
     // The approved plan config is the source of truth for these run-wide fields,
     // so callers pass a mutable request and continue with the normalized value.
-    let mut edit_state = OrchestrationEditState::from_run_agents_fields(
-        &request.model_id,
-        &request.harness_type,
+    let mut config_state = OrchestrationConfigState::from_run_agents_fields(
+        Some(&request.model_id),
+        Some(&request.harness_type),
         &request.execution_mode,
     );
-    edit_state.override_from_approved_config(config);
-    request.model_id = edit_state.model_id;
-    request.harness_type = edit_state.harness_type;
-    request.execution_mode = edit_state.execution_mode;
+    config_state.override_from_approved_config(config);
+    request.model_id = config_state.model_id;
+    request.harness_type = config_state.harness_type;
+    request.execution_mode = config_state.execution_mode;
 }
 
 /// Defence-in-depth validation; mirrors the card view's

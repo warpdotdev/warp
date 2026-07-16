@@ -22,7 +22,7 @@ use warpui::{
     SizeConstraint,
 };
 
-use super::{should_intercept_mouse, should_intercept_scroll};
+use super::should_intercept_mouse;
 use crate::appearance::Appearance;
 use crate::pane_group::SplitPaneState;
 use crate::settings::EnforceMinimumContrast;
@@ -445,7 +445,6 @@ impl AltScreenElement {
         delta: Vector2F,
         precise: bool,
         ctx: &mut EventContext,
-        app: &AppContext,
     ) -> bool {
         let cell_height = self.grid_render_params.size_info.cell_height_px;
         let delta = if precise {
@@ -472,20 +471,8 @@ impl AltScreenElement {
             .alt_screen_mut()
             .accumulate_lines_to_scroll(delta);
 
-        if should_intercept_scroll(&self.model.lock(), app) {
-            ctx.dispatch_typed_action(TerminalAction::AltScroll { delta });
-        } else {
-            let point = self.coord_to_point(local_position);
-
-            ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
-                MouseState::new(
-                    MouseButton::Wheel,
-                    MouseAction::Scrolled { delta },
-                    Default::default(),
-                )
-                .set_point(point),
-            ));
-        }
+        let point = self.coord_to_point(local_position);
+        ctx.dispatch_typed_action(TerminalAction::AltScroll { delta, point });
         true
     }
 
@@ -883,7 +870,7 @@ impl Element for AltScreenElement {
                 delta,
                 precise,
                 modifiers: ModifiersState { ctrl: false, .. },
-            } if in_bounds => self.on_scroll(to_local(*position), *delta, *precise, ctx, app),
+            } if in_bounds => self.on_scroll(to_local(*position), *delta, *precise, ctx),
             Event::LeftMouseDown {
                 position,
                 click_count,

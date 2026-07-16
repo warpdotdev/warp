@@ -279,6 +279,7 @@ impl TuiSlashCommandModel {
             TuiInputSuggestionsMode::ConversationMenu
                 | TuiInputSuggestionsMode::ModelSelector
                 | TuiInputSuggestionsMode::SkillMenu
+                | TuiInputSuggestionsMode::Mcp
         ) {
             self.set_highlighted_prefix_len(None, ctx);
             self.set_argument_hint_text(None, ctx);

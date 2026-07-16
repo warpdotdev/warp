@@ -27,6 +27,7 @@ use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputTypeAutoDetectionSource, LLMId,
+    TuiMcpAction,
 };
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::selection::TextUnit;
@@ -35,7 +36,10 @@ use warpui_core::elements::MouseStateHandle;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding};
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
-use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
+use warpui_core::{
+    AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
+    ViewContext,
+};
 
 use super::kill_buffer::KillBuffer;
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
@@ -470,6 +474,8 @@ pub enum TuiInputViewEvent {
     AcceptedConversation(warp::tui_export::AgentConversationEntryId),
     /// The user selected a model menu item.
     AcceptedModel(LLMId),
+    /// The user selected an action from the MCP menu.
+    AcceptedMcp(TuiMcpAction),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -582,6 +588,10 @@ pub struct TuiInputView {
     /// Mouse state for the shell-mode `!` gutter; created once here (not inline
     /// during render) so mouse tracking survives per-frame element rebuilds.
     prefix_mouse_state: MouseStateHandle,
+    /// Whether this view is focused, tracked via `on_focus`/`on_blur` like
+    /// the GUI's `EditorView::focused`. Snapshotted into the editor element
+    /// so it only consumes typed text while the input is focused.
+    focused: bool,
 }
 
 impl Entity for TuiInputView {
@@ -626,6 +636,7 @@ impl TuiInputView {
             kill_buffer: KillBuffer::default(),
             max_visible_rows: 6,
             prefix_mouse_state: MouseStateHandle::default(),
+            focused: false,
         }
     }
 
@@ -671,6 +682,7 @@ impl TuiInputView {
         }
         let mut element = TuiEditorElement::new(&self.model, ctx)
             .editable()
+            .with_view_focused(self.focused)
             .with_viewport_rows(self.max_visible_rows)
             .with_styles(styles)
             .on_action(|action, event_ctx| {
@@ -752,6 +764,20 @@ impl TuiView for TuiInputView {
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
         input_keymap_context(self.active_inline_menu(ctx).is_some() || self.is_shell_mode(ctx))
+    }
+
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() {
+            self.focused = true;
+            ctx.notify();
+        }
+    }
+
+    fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
+        if blur_ctx.is_self_blurred() {
+            self.focused = false;
+            ctx.notify();
+        }
     }
 }
 
@@ -1144,6 +1170,9 @@ impl TuiInputView {
                         }
                         TuiInlineMenuAccepted::Model(id) => {
                             ctx.emit(TuiInputViewEvent::AcceptedModel(id));
+                        }
+                        TuiInlineMenuAccepted::Mcp(action) => {
+                            ctx.emit(TuiInputViewEvent::AcceptedMcp(action));
                         }
                     }
                 }
