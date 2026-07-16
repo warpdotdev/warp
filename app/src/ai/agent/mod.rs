@@ -860,6 +860,10 @@ impl From<&Arc<AIApiError>> for RenderableAIError {
                 "Grok subscription token could not be refreshed. Please try reconnecting your subscription.",
                 true,
             ),
+            AIApiError::CodexSubscriptionTokenRefreshFailed => Self::other(
+                "Codex subscription token could not be refreshed. Please try reconnecting your subscription.",
+                true,
+            ),
             AIApiError::Deserialization(DeserializationError::Json(_))
             | AIApiError::NoContextFound
             | AIApiError::ErrorStatus(_, _)

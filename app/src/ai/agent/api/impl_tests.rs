@@ -91,6 +91,7 @@ fn api_keys_with_warp_credit_fallback_setting_preserves_existing_keys() {
             allow_use_of_warp_credits: false,
             aws_credentials: None,
             google_cloud_credentials: None,
+            codex_oauth_credentials: None,
         }),
         true,
     )

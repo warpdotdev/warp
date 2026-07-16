@@ -499,6 +499,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CustomModelRouters,
         #[cfg(feature = "supergrok")]
         FeatureFlag::SuperGrok,
+        #[cfg(feature = "codex_subscription")]
+        FeatureFlag::CodexSubscription,
         #[cfg(feature = "gemini_enterprise")]
         FeatureFlag::GeminiEnterprise,
         #[cfg(feature = "nld_prompt_history_match")]

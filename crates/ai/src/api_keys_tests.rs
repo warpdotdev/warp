@@ -1,6 +1,9 @@
 use std::time::{Duration, SystemTime};
 
+use warp_core::features::FeatureFlag;
+
 use super::*;
+use crate::codex_subscription::{finish_codex_refresh, register_codex_refresh};
 
 fn make_manager(keys: ApiKeys) -> ApiKeyManager {
     make_manager_with_grok(keys, None)
@@ -14,12 +17,26 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         grok_refresh_allowed: false,
         #[cfg(not(target_family = "wasm"))]
         grok_refresh_waiters: None,
+        codex_tokens: None,
+        #[cfg(not(target_family = "wasm"))]
+        codex_refresh_allowed: false,
+        #[cfg(not(target_family = "wasm"))]
+        codex_refresh_state: None,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         geap_credentials_state: GeapCredentialsState::Missing,
         secure_storage_write_version: 0,
         grok_secure_storage_write_version: 0,
+        codex_secure_storage_write_version: 0,
+        #[cfg(test)]
+        codex_refresh_scheduled_count: 0,
     }
+}
+
+fn make_manager_with_codex(codex_tokens: Option<CodexTokens>) -> ApiKeyManager {
+    let mut manager = make_manager(ApiKeys::default());
+    manager.codex_tokens = codex_tokens;
+    manager
 }
 
 fn make_manager_with_geap(geap_credentials_state: GeapCredentialsState) -> ApiKeyManager {
@@ -32,6 +49,17 @@ fn grok_tokens(access_token: &str, expires_in: Option<u64>) -> GrokTokens {
     GrokTokens {
         access_token: access_token.into(),
         refresh_token: Some("refresh".into()),
+        expires_at: expires_in.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
+        connected_at: None,
+    }
+}
+
+fn codex_tokens(access_token: &str, expires_in: Option<u64>) -> CodexTokens {
+    CodexTokens {
+        access_token: access_token.into(),
+        refresh_token: Some("codex-refresh".into()),
+        id_token: Some("id-token".into()),
+        chatgpt_account_id: "account-123".into(),
         expires_at: expires_in.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
         connected_at: None,
     }
@@ -164,6 +192,25 @@ fn serde_ignores_unknown_fields() {
     let keys: ApiKeys = serde_json::from_str(json).unwrap();
     assert_eq!(keys.openai, Some("sk-x".into()));
     assert!(keys.custom_endpoints.is_empty());
+}
+
+#[test]
+fn codex_tokens_secure_storage_round_trip_preserves_refresh_state() {
+    let tokens = codex_tokens("access", Some(3600));
+    let json = serde_json::to_string(&tokens).unwrap();
+    let restored: CodexTokens = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, tokens);
+}
+
+#[test]
+fn codex_tokens_deserialize_optional_refresh_fields_from_older_storage() {
+    let restored: CodexTokens =
+        serde_json::from_str(r#"{"access_token":"access","chatgpt_account_id":"account"}"#)
+            .unwrap();
+    assert_eq!(restored.refresh_token, None);
+    assert_eq!(restored.id_token, None);
+    assert_eq!(restored.expires_at, None);
+    assert_eq!(restored.connected_at, None);
 }
 
 // ── has_any_key ─────────────────────────────────────────────────
@@ -517,6 +564,94 @@ fn has_grok_subscription_false_when_token_blank() {
     assert!(!mgr.has_grok_subscription());
 }
 
+// ── codex oauth credentials ─────────────────────────────────────
+
+#[test]
+fn codex_access_token_is_sent_even_when_expired() {
+    let tokens = codex_tokens("codex-access", Some(0));
+    assert!(tokens.is_expired());
+    assert_eq!(tokens.access_token_for_request(), Some("codex-access"));
+}
+
+#[test]
+fn api_keys_for_request_includes_codex_credentials_when_enabled() {
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(true);
+    let manager = make_manager_with_codex(Some(codex_tokens("codex-access", Some(3600))));
+    let credentials = manager
+        .api_keys_for_request(true, false, None)
+        .unwrap()
+        .codex_oauth_credentials
+        .unwrap();
+    assert_eq!(credentials.access_token, "codex-access");
+    assert_eq!(credentials.chatgpt_account_id, "account-123");
+}
+
+#[test]
+fn pasted_openai_key_takes_precedence_over_codex_credentials() {
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(true);
+    let mut manager = make_manager_with_codex(Some(codex_tokens("codex-access", Some(3600))));
+    manager.keys.openai = Some("sk-pasted".into());
+
+    let keys = manager.api_keys_for_request(true, false, None).unwrap();
+    assert_eq!(keys.openai, "sk-pasted");
+    assert!(keys.codex_oauth_credentials.is_none());
+
+    manager.keys.openai = Some("   ".into());
+    assert!(manager
+        .api_keys_for_request(true, false, None)
+        .unwrap()
+        .codex_oauth_credentials
+        .is_some());
+}
+
+#[test]
+fn api_keys_for_request_omits_codex_credentials_when_feature_disabled() {
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(false);
+    let manager = make_manager_with_codex(Some(codex_tokens("codex-access", Some(3600))));
+    assert!(manager.api_keys_for_request(true, false, None).is_none());
+}
+
+#[test]
+fn api_keys_for_request_omits_codex_credentials_when_byo_disabled() {
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(true);
+    let manager = make_manager_with_codex(Some(codex_tokens("codex-access", Some(3600))));
+    assert!(manager.api_keys_for_request(false, false, None).is_none());
+}
+
+#[test]
+fn api_keys_for_request_includes_expired_codex_credentials() {
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(true);
+    let manager = make_manager_with_codex(Some(codex_tokens("stale-codex-access", Some(0))));
+    let credentials = manager
+        .api_keys_for_request(true, false, None)
+        .unwrap()
+        .codex_oauth_credentials
+        .unwrap();
+    assert_eq!(credentials.access_token, "stale-codex-access");
+}
+
+#[test]
+fn has_codex_subscription_requires_token_and_account_id() {
+    let manager = make_manager_with_codex(Some(codex_tokens("codex-access", Some(0))));
+    assert!(manager.has_codex_subscription());
+
+    let mut missing_account = codex_tokens("codex-access", Some(3600));
+    missing_account.chatgpt_account_id = " ".into();
+    assert!(!make_manager_with_codex(Some(missing_account)).has_codex_subscription());
+    assert!(!make_manager_with_codex(Some(codex_tokens(" ", None))).has_codex_subscription());
+}
+
+#[test]
+fn manager_has_any_key_counts_codex_only_when_feature_enabled() {
+    let manager = make_manager_with_codex(Some(codex_tokens("codex-access", Some(3600))));
+    {
+        let _feature = FeatureFlag::CodexSubscription.override_enabled(false);
+        assert!(!manager.has_any_key());
+    }
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(true);
+    assert!(manager.has_any_key());
+}
+
 // ── ApiKeyManager::has_any_key ──────────────────
 
 #[test]
@@ -785,5 +920,72 @@ fn grok_expired_refresh_token_ignores_in_flight_refresh() {
     assert_eq!(
         mgr.grok_expired_refresh_token(true),
         Some("refresh".to_string())
+    );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn codex_expired_refresh_eligibility_respects_feature_byo_and_expiry() {
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(true);
+    let mut expired = codex_tokens("stale", Some(0));
+    expired.expires_at = Some(SystemTime::now() - Duration::from_secs(60));
+    let manager = make_manager_with_codex(Some(expired));
+    assert_eq!(
+        manager.codex_expired_refresh_token(true),
+        Some("codex-refresh".to_string())
+    );
+    assert_eq!(manager.codex_expired_refresh_token(false), None);
+
+    let valid = make_manager_with_codex(Some(codex_tokens("valid", Some(3600))));
+    assert_eq!(valid.codex_expired_refresh_token(true), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn codex_expired_refresh_is_ineligible_when_feature_is_off() {
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(false);
+    let mut expired = codex_tokens("stale", Some(0));
+    expired.expires_at = Some(SystemTime::now() - Duration::from_secs(60));
+    let manager = make_manager_with_codex(Some(expired));
+
+    assert_eq!(manager.codex_expired_refresh_token(true), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn codex_single_flight_joins_and_wakes_all_waiters() {
+    let mut manager = make_manager_with_codex(Some(codex_tokens("stale", Some(0))));
+    let (first_sender, first_receiver) = oneshot::channel();
+    let (second_sender, second_receiver) = oneshot::channel();
+
+    assert!(register_codex_refresh(
+        &mut manager,
+        "codex-refresh",
+        vec![first_sender],
+    ));
+    assert!(!register_codex_refresh(
+        &mut manager,
+        "codex-refresh",
+        vec![second_sender],
+    ));
+    assert_eq!(
+        manager.codex_refresh_state.as_ref().unwrap().waiters.len(),
+        2
+    );
+
+    assert!(finish_codex_refresh(
+        &mut manager,
+        "codex-refresh",
+        CodexRefreshOutcome::Refreshed,
+    )
+    .is_none());
+    assert!(manager.codex_refresh_state.is_none());
+    assert_eq!(
+        warpui_core::r#async::block_on(first_receiver).unwrap(),
+        CodexRefreshOutcome::Refreshed
+    );
+    assert_eq!(
+        warpui_core::r#async::block_on(second_receiver).unwrap(),
+        CodexRefreshOutcome::Refreshed
     );
 }

@@ -28,6 +28,8 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 /// Returns `true` if BYO API key is enabled and a key exists for the provider.
 /// For xAI, a connected Grok subscription counts: its OAuth access token is
 /// sent like a BYO key (see `ApiKeyManager::api_keys_for_request`).
+/// For OpenAI, a connected ChatGPT (Codex) subscription counts: its OAuth
+/// credentials are sent like a BYO key (see `ApiKeyManager::api_keys_for_request`).
 pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
     if !UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app) {
         return false;
@@ -35,7 +37,10 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
     let manager = ApiKeyManager::as_ref(app);
 
     match provider {
-        LLMProvider::OpenAI => manager.keys().openai.is_some(),
+        LLMProvider::OpenAI => {
+            manager.keys().openai.is_some()
+                || (FeatureFlag::CodexSubscription.is_enabled() && manager.has_codex_subscription())
+        }
         LLMProvider::Anthropic => manager.keys().anthropic.is_some(),
         LLMProvider::Google => manager.keys().google.is_some(),
         LLMProvider::Xai => manager.grok_tokens().is_some(),
