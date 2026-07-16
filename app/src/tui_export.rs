@@ -87,6 +87,7 @@ pub use crate::search::slash_command_menu::static_commands::commands::{
 };
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 pub use crate::settings::AISettingsChangedEvent;
+pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::conversation_restoration::{
     prepare_conversation_block_restoration, ConversationBlockRestorationPlan,
