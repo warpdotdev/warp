@@ -250,31 +250,11 @@ fn get_minimum_pane_size(app: &AppContext) -> f32 {
     }
 }
 
-/// Resolves a tab config `shell` value (e.g. `"pwsh"` or
-/// `"/opt/homebrew/bin/pwsh"`) into an [`AvailableShell`], using the fallback
-/// order expected by tab configs:
-///
-/// 1. If `name` contains a path separator, trust it directly so users can
-///    still point at arbitrary binaries.
-/// 2. Otherwise look up by command name in the already-discovered
-///    [`AvailableShells`]. Its shell discovery supplements the process `PATH`
-///    with well-known install locations (e.g. `/opt/homebrew/bin` on macOS,
-///    MSYS2/WSL on Windows) that a raw `PATH` lookup would miss when Warp is
-///    launched outside an interactive shell.
-/// 3. As a final fallback, perform a plain `PATH` lookup via
-///    [`AvailableShell::try_from`] in case the user put something exotic in
-///    `shell`.
+/// Resolves both stable generated tab-config shell values and the command/path
+/// forms accepted for user-authored configs.
 #[cfg(feature = "local_tty")]
 fn resolve_tab_config_shell(name: &str, ctx: &AppContext) -> Option<AvailableShell> {
-    if name.contains(std::path::MAIN_SEPARATOR) {
-        return AvailableShell::try_from(name).ok();
-    }
-
-    if let Some(matched) = AvailableShells::as_ref(ctx).find_by_command_name(name) {
-        return Some(matched);
-    }
-
-    AvailableShell::try_from(name).ok()
+    AvailableShells::as_ref(ctx).find_by_tab_config_name(name)
 }
 const WARP_SHELL_COMPATIBILITY_DOCS: &str =
     "https://docs.warp.dev/getting-started/supported-shells";

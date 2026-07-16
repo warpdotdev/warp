@@ -101,12 +101,14 @@ fn config_name(directory: &Path, enable_worktree: bool) -> String {
 /// that can be either rendered directly (via `render_tab_config`) or
 /// serialized to disk (via `write_tab_config`).
 ///
-/// `shell_family` must match the pane's eventual shell because `shell` is left unset.
+/// `shell_name` pins worktree configs to the shell whose escaping is baked into
+/// their commands, so saved configs remain valid if the preferred shell changes.
 pub fn build_tab_config(
     session_type: &SessionType,
     directory: &Path,
     enable_worktree: bool,
     autogenerate_worktree_branch_name: bool,
+    shell_name: &str,
     shell_family: ShellFamily,
 ) -> TabConfig {
     let mut commands: Vec<String> = Vec::new();
@@ -171,7 +173,7 @@ pub fn build_tab_config(
             } else {
                 Some(commands)
             },
-            shell: None,
+            shell: enable_worktree.then(|| shell_name.to_string()),
         }],
         params,
         source_path: None,

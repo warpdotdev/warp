@@ -51,6 +51,7 @@ fn build_worktree_config_toml(
         repo,
         base_branch,
         worktree_branch_name,
+        "default",
         OperatingSystem::get().default_shell_family(),
     )
 }
@@ -232,10 +233,10 @@ fn test_render_tab_config_shell_quotes_commands_with_spaces() {
         commands, ..
     } = pane_template
     {
-        // Values with spaces should be quoted in commands.
+        // Values with spaces should be escaped as one shell argument.
         assert!(
-            commands[0].exec.contains("'my feature'"),
-            "Expected shell-quoted worktree branch name in command: {}",
+            commands[0].exec.contains("my\\ feature"),
+            "Expected shell-escaped worktree branch name in command: {}",
             commands[0].exec
         );
     } else {
@@ -903,6 +904,7 @@ fn test_build_worktree_toml_autogenerate_shell_quotes_worktree_path() {
         repo_path,
         "main",
         None,
+        "zsh",
         ShellFamily::Posix,
     );
     let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
@@ -941,6 +943,7 @@ fn test_build_worktree_toml_manual_shell_quotes_worktree_path() {
         repo_path,
         "main",
         Some("my-feature"),
+        "zsh",
         ShellFamily::Posix,
     );
     let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
@@ -981,6 +984,7 @@ fn test_build_worktree_toml_shell_quotes_base_branch() {
             "/Users/me/my project",
             base_branch,
             None,
+            "zsh",
             ShellFamily::Posix,
         );
         let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
@@ -1001,6 +1005,7 @@ fn test_build_worktree_toml_shell_quotes_base_branch() {
             "C:\\Users\\me\\my project",
             base_branch,
             None,
+            "pwsh",
             ShellFamily::PowerShell,
         );
         let powershell_config: TabConfig =
@@ -1013,6 +1018,69 @@ fn test_build_worktree_toml_shell_quotes_base_branch() {
         assert!(powershell_command
             .ends_with(&format!(" {}", ShellFamily::PowerShell.escape(base_branch))));
     }
+}
+
+#[test]
+fn test_render_tab_config_uses_explicit_powershell_for_dynamic_values() {
+    let config: TabConfig = toml::from_str(
+        r#"
+name = "PowerShell params"
+
+[[panes]]
+id = "main"
+type = "terminal"
+shell = "pwsh"
+commands = ["echo {{value}}"]
+"#,
+    )
+    .expect("tab config should parse");
+    let value = "it's & safe";
+    let params = HashMap::from([("value".to_string(), value.to_string())]);
+
+    let (_, template) =
+        render_tab_config_with_shell_family(&config, &params, None, ShellFamily::Posix);
+
+    let PaneTemplateType::PaneTemplate { commands, .. } = template else {
+        panic!("Expected PaneTemplate");
+    };
+    assert_eq!(
+        commands[0].exec,
+        format!("echo {}", ShellFamily::PowerShell.escape(value))
+    );
+}
+
+#[test]
+fn test_saved_worktree_config_pins_shell_and_dynamic_escaping() {
+    let toml_str = super::build_worktree_config_toml(
+        "Worktree: my project",
+        "C:\\Users\\me\\my project",
+        "main",
+        None,
+        "pwsh",
+        ShellFamily::PowerShell,
+    );
+    let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
+    assert_eq!(config.panes[0].shell.as_deref(), Some("pwsh"));
+
+    let branch_name = "feature's&safe";
+    let (_, template) = render_tab_config_with_shell_family(
+        &config,
+        &HashMap::new(),
+        Some(branch_name),
+        ShellFamily::Posix,
+    );
+    let PaneTemplateType::PaneTemplate {
+        commands, shell, ..
+    } = template
+    else {
+        panic!("Expected PaneTemplate");
+    };
+
+    let escaped_branch = ShellFamily::PowerShell.escape(branch_name).into_owned();
+    assert_eq!(shell.as_deref(), Some("pwsh"));
+    assert!(commands[0].exec.contains(&format!("-b {escaped_branch} ")));
+    assert_eq!(commands[0].exec.matches(escaped_branch.as_str()).count(), 2);
+    assert_eq!(commands[1].exec.matches(escaped_branch.as_str()).count(), 1);
 }
 
 #[test]

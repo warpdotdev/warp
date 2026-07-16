@@ -56,6 +56,7 @@ fn test_materialize_default_worktree_config_bakes_repo_and_pane_type_only() {
         "Worktree: example-repo",
         repo_path,
         "agent",
+        "default",
         OperatingSystem::get().default_shell_family(),
     )
     .expect("expected template materialization to succeed");
@@ -78,6 +79,7 @@ fn test_materialize_default_worktree_config_bakes_repo_and_pane_type_only() {
     assert!(tab_config.params.is_empty());
     assert_eq!(tab_config.name, "Worktree: example-repo");
     assert_eq!(tab_config.panes.len(), 1);
+    assert_eq!(tab_config.panes[0].shell.as_deref(), Some("default"));
     assert_eq!(tab_config.panes[0].directory.as_deref(), Some(repo_path));
     assert_eq!(
         tab_config.panes[0].pane_type,
@@ -95,6 +97,7 @@ fn test_materialized_default_worktree_config_renders_full_worktree_path() {
         "Worktree: example-repo",
         repo_path,
         "agent",
+        "default",
         OperatingSystem::get().default_shell_family(),
     )
     .expect("expected template materialization to succeed");
@@ -127,6 +130,7 @@ fn test_materialized_default_worktree_config_shell_quotes_worktree_path() {
         "Worktree: example repo",
         repo_path,
         "agent",
+        "zsh",
         ShellFamily::Posix,
     )
     .expect("expected template materialization to succeed");

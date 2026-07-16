@@ -273,13 +273,15 @@ pub(crate) fn ensure_default_worktree_config() -> PathBuf {
     path
 }
 
-/// `shell_family` must match the pane's eventual shell because `shell` is left unset.
+/// `shell_name` pins the pane to the shell whose escaping is baked into the
+/// materialized commands.
 #[cfg(feature = "local_fs")]
 pub(crate) fn materialize_default_worktree_config(
     template_toml: &str,
     config_name: &str,
     repo_path: &str,
     pane_type: &str,
+    shell_name: &str,
     shell_family: ShellFamily,
 ) -> Result<(String, TabConfig), String> {
     let worktree_path = crate::tab_configs::tab_config::generated_worktree_command_path(
@@ -300,6 +302,17 @@ pub(crate) fn materialize_default_worktree_config(
     replace_default_worktree_placeholders(&mut toml_value, repo_path, pane_type, &worktree_path);
 
     if let Some(doc) = toml_value.as_table_mut() {
+        if let Some(pane) = doc
+            .get_mut("panes")
+            .and_then(toml::Value::as_array_mut)
+            .and_then(|panes| panes.first_mut())
+            .and_then(toml::Value::as_table_mut)
+        {
+            pane.insert(
+                "shell".to_string(),
+                toml::Value::String(shell_name.to_string()),
+            );
+        }
         if let Some(params) = doc.get_mut("params").and_then(toml::Value::as_table_mut) {
             params.remove("repo");
             params.remove("pane_type");

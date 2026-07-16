@@ -20,6 +20,10 @@ use super::ShellLaunchData;
 #[cfg(feature = "local_tty")]
 use crate::util::path::file_exists_and_is_executable;
 
+pub(crate) const TAB_CONFIG_SYSTEM_DEFAULT_SHELL: &str = "default";
+const TAB_CONFIG_WSL_PREFIX: &str = "wsl:";
+const TAB_CONFIG_MSYS2_PREFIX: &str = "msys2:";
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct LocalConfig {
     command: String,
@@ -170,13 +174,37 @@ impl AvailableShell {
     }
 
     #[cfg(feature = "local_tty")]
-    fn shell_family(&self) -> ShellFamily {
+    pub(crate) fn shell_family(&self) -> ShellFamily {
         match self.state.as_ref() {
             Config::SystemDefault => OperatingSystem::get().default_shell_family(),
             Config::KnownLocal(LocalConfig { shell_type, .. })
             | Config::MSYS2(LocalConfig { shell_type, .. })
             | Config::Custom(LocalConfig { shell_type, .. }) => (*shell_type).into(),
             Config::Wsl { .. } | Config::DockerSandbox { .. } => ShellFamily::Posix,
+        }
+    }
+
+    /// Returns a stable tab-config `shell` value that launches this same shell
+    /// even if the user's preferred shell changes after the config is saved.
+    fn tab_config_name(&self) -> Option<String> {
+        match self.state.as_ref() {
+            Config::SystemDefault => Some(TAB_CONFIG_SYSTEM_DEFAULT_SHELL.to_string()),
+            Config::KnownLocal(LocalConfig {
+                executable_path, ..
+            })
+            | Config::Custom(LocalConfig {
+                executable_path, ..
+            }) => Some(executable_path.display().to_string()),
+            Config::Wsl { distro } => Some(format!("{TAB_CONFIG_WSL_PREFIX}{distro}")),
+            Config::MSYS2(LocalConfig {
+                executable_path, ..
+            }) => Some(format!(
+                "{TAB_CONFIG_MSYS2_PREFIX}{}",
+                executable_path.display()
+            )),
+            // Docker sandboxes are launched on demand and cannot be selected as
+            // the persisted preferred shell today.
+            Config::DockerSandbox { .. } => None,
         }
     }
 }
@@ -454,6 +482,16 @@ impl AvailableShells {
     pub fn user_preferred_shell_family(&self, _ctx: &warpui::AppContext) -> ShellFamily {
         OperatingSystem::get().default_shell_family()
     }
+
+    pub fn user_preferred_tab_config_shell(
+        &self,
+        _ctx: &warpui::AppContext,
+    ) -> (String, ShellFamily) {
+        (
+            TAB_CONFIG_SYSTEM_DEFAULT_SHELL.to_string(),
+            OperatingSystem::get().default_shell_family(),
+        )
+    }
 }
 
 #[cfg(feature = "local_tty")]
@@ -616,6 +654,16 @@ impl AvailableShells {
     /// Returns the family of the available shell selected for new sessions, including fallback.
     pub fn user_preferred_shell_family(&self, ctx: &AppContext) -> ShellFamily {
         self.get_user_preferred_shell(ctx).shell_family()
+    }
+
+    /// Returns the persisted tab-config shell name and its escaping family.
+    pub fn user_preferred_tab_config_shell(&self, ctx: &AppContext) -> (String, ShellFamily) {
+        let shell = self.get_user_preferred_shell(ctx);
+        let shell_family = shell.shell_family();
+        let shell_name = shell
+            .tab_config_name()
+            .unwrap_or_else(|| TAB_CONFIG_SYSTEM_DEFAULT_SHELL.to_string());
+        (shell_name, shell_family)
     }
 
     /// Sets the user-preferred shell for new sessions. Saves the value back to user settings.
@@ -967,6 +1015,42 @@ impl AvailableShells {
                 command_name_matches(command, name, cfg!(windows))
             })
             .cloned()
+    }
+
+    /// Resolves the stable shell values written by generated tab configs, then
+    /// falls back to the command/path forms accepted for user-authored configs.
+    pub fn find_by_tab_config_name(&self, name: &str) -> Option<AvailableShell> {
+        if name == TAB_CONFIG_SYSTEM_DEFAULT_SHELL {
+            return Some(AvailableShell::default());
+        }
+
+        if let Some(distro) = name.strip_prefix(TAB_CONFIG_WSL_PREFIX) {
+            return self
+                .shells
+                .iter()
+                .find(|shell| {
+                    matches!(shell.state.as_ref(), Config::Wsl { distro: known } if known == distro)
+                })
+                .cloned()
+                .or_else(|| Some(AvailableShell::new_wsl(distro.to_string())));
+        }
+
+        if let Some(path) = name.strip_prefix(TAB_CONFIG_MSYS2_PREFIX) {
+            return self
+                .shells
+                .iter()
+                .find(|shell| {
+                    matches!(shell.state.as_ref(), Config::MSYS2(config) if config.executable_path == Path::new(path))
+                })
+                .cloned();
+        }
+
+        if name.contains(std::path::MAIN_SEPARATOR) {
+            return AvailableShell::try_from(name).ok();
+        }
+
+        self.find_by_command_name(name)
+            .or_else(|| AvailableShell::try_from(name).ok())
     }
 }
 

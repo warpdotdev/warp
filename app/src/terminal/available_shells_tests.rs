@@ -239,6 +239,41 @@ fn test_find_by_command_name_matches_msys2_shell() {
 }
 
 #[test]
+fn test_generated_tab_config_shell_names_round_trip() {
+    let wsl_shell = AvailableShell::new_wsl("Ubuntu".to_string());
+    let msys2_path = PathBuf::from("C:\\msys64\\usr\\bin\\bash.exe");
+    let msys2_shell = AvailableShell {
+        id: Some(format!("msys2:{}", msys2_path.display())),
+        state: Arc::new(Config::MSYS2(LocalConfig {
+            command: "bash-msys2".to_string(),
+            executable_path: msys2_path.clone(),
+            shell_type: ShellType::Bash,
+        })),
+    };
+    let shells = make_available_shells(vec![wsl_shell.clone(), msys2_shell.clone()]);
+
+    let default_shell = shells
+        .find_by_tab_config_name(TAB_CONFIG_SYSTEM_DEFAULT_SHELL)
+        .expect("default shell should resolve");
+    assert_eq!(default_shell, AvailableShell::default());
+
+    let wsl_name = wsl_shell
+        .tab_config_name()
+        .expect("WSL shell should be persistable");
+    assert_eq!(wsl_name, "wsl:Ubuntu");
+    assert_eq!(shells.find_by_tab_config_name(&wsl_name), Some(wsl_shell));
+
+    let msys2_name = msys2_shell
+        .tab_config_name()
+        .expect("MSYS2 shell should be persistable");
+    assert_eq!(msys2_name, format!("msys2:{}", msys2_path.display()));
+    assert_eq!(
+        shells.find_by_tab_config_name(&msys2_name),
+        Some(msys2_shell)
+    );
+}
+
+#[test]
 fn test_command_name_matches_unix() {
     // Unix matching is a plain case-sensitive equality check: no case
     // folding, no `.exe` suffix handling.
