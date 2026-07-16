@@ -220,12 +220,12 @@ impl TemplatableMCPServerManager {
             .unwrap_or_default()
     }
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "tui")]
     pub fn authorization_url(&self, uuid: Uuid) -> Option<&str> {
         self.authorization_urls.get(&uuid).map(String::as_str)
     }
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "tui")]
     pub fn has_credentials(&self, installation_uuid: Uuid, app: &warpui::AppContext) -> bool {
         if let Some(hash) = FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) {
             return self.file_based_server_credentials.contains_key(&hash);
@@ -319,11 +319,17 @@ pub enum TemplatableMCPServerManagerEvent {
     /// A server managed by this shared runtime needs interactive OAuth.
     /// Frontends choose how to present and receive the authorization flow.
     AuthenticationRequired {
+        // Only read by the TUI front-end; other frontends match this variant
+        // without binding the field.
+        #[cfg_attr(not(feature = "tui"), allow(dead_code))]
         uuid: Uuid,
     },
     /// The shared secure credential cache changed for an installation.
     /// Frontends can refresh any authentication controls or status they expose.
     CredentialsChanged {
+        // Only read by the TUI front-end; other frontends match this variant
+        // without binding the field.
+        #[cfg_attr(not(feature = "tui"), allow(dead_code))]
         uuid: Uuid,
     },
     // TODO(aeybel) Right now most of the app doesn't use these events to communicate
