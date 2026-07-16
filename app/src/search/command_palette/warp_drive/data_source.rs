@@ -93,7 +93,7 @@ impl DataSource {
                     self.searcher
                         .insert_searchable_object(obj, type_and_id.object_type(), ctx)
                         .unwrap_or_else(|err| {
-                            report_error!(err.context("Error inserting object into search index"));
+                            log::warn!("Error inserting object into search index: {err:#}");
                         });
                 } else {
                     report_error!("Object not found in CloudModel", extra: { "id" => ?type_and_id });
@@ -103,7 +103,7 @@ impl DataSource {
                 .searcher
                 .delete_searchable_object(type_and_id.uid(), type_and_id.object_type(), ctx)
                 .unwrap_or_else(|err| {
-                    report_error!(err.context("Error deleting object from search index"));
+                    log::warn!("Error deleting object from search index: {err:#}");
                 }),
             CloudModelEvent::ObjectSynced {
                 type_and_id,

@@ -29,7 +29,6 @@ mod remote_server_log;
 #[cfg(not(target_family = "wasm"))]
 pub use remote_server_log::RemoteServerLog;
 use warp_core::{safe_error, safe_warn, SessionId};
-use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::TransportStream;
 
@@ -975,10 +974,7 @@ impl RemoteServerClient {
                     );
                 }
                 if !e.is_write_recoverable() {
-                    report_error!(
-                        anyhow::Error::new(e).context("Writer task fatal error"),
-                        extra: { "request_id" => %request_id }
-                    );
+                    log::warn!("Writer task fatal error: {e:#} request_id={request_id}");
                     pending_requests.clear();
                     break;
                 }
@@ -1071,7 +1067,7 @@ impl RemoteServerClient {
                             log::info!("Reader task: server disconnected (EOF)");
                         }
                         _ => {
-                            report_error!(anyhow::Error::new(e).context("Reader task fatal error"))
+                            log::warn!("Reader task fatal error: {e:#}")
                         }
                     }
                     break;

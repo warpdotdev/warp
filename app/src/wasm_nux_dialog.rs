@@ -272,7 +272,7 @@ impl TypedActionView for WasmNUXDialog {
                         },
                     );
                 } else {
-                    report_error!("Failed to open in app. Could not determine current url");
+                    log::warn!("Failed to open in app. Could not determine current url");
                 }
             }
             WasmNUXDialogAction::OpenDownloadDesktopAppLink => {

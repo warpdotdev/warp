@@ -1,7 +1,6 @@
 use std::ffi::OsString;
 
 use warp_core::channel::ChannelState;
-use warp_errors::report_error;
 use windows_registry::{CURRENT_USER, HSTRING};
 
 pub(super) fn register_uri_handler() {
@@ -9,7 +8,7 @@ pub(super) fn register_uri_handler() {
     // HKEY_CURRENT_USER\Software\Classes instead of under HKEY_CLASSES_ROOT since only an
     // administrator can modify it. It gets merged into HKEY_CLASSES_ROOT later.
     let Ok(classes_key) = CURRENT_USER.open("Software\\Classes") else {
-        report_error!("Failed to get current_user\\software\\classes");
+        log::warn!("Failed to get current_user\\software\\classes");
         return;
     };
 
@@ -28,15 +27,11 @@ pub(super) fn register_uri_handler() {
         Ok(parent_key) => {
             // The empty string represents the "(Default)" value for a registry key.
             if let Err(err) = parent_key.set_string("", ChannelState::app_id().application_name()) {
-                report_error!(
-                    anyhow::Error::new(err).context("Could not set URI Scheme display name")
-                );
+                log::warn!("Could not set URI Scheme display name: {err:#}");
                 return;
             }
             if let Err(err) = parent_key.set_string("URL Protocol", "") {
-                report_error!(
-                    anyhow::Error::new(err).context("Could not set URI Scheme URL Protocol Key")
-                );
+                log::warn!("Could not set URI Scheme URL Protocol Key: {err:#}");
                 return;
             };
 
@@ -46,8 +41,7 @@ pub(super) fn register_uri_handler() {
             let command_key = match parent_key.create("shell\\open\\command") {
                 Ok(command_key) => command_key,
                 Err(err) => {
-                    report_error!(anyhow::Error::new(err)
-                        .context("Could not create shell\\open\\command key"));
+                    log::warn!("Could not create shell\\open\\command key: {err:#}");
                     return;
                 }
             };
@@ -60,22 +54,19 @@ pub(super) fn register_uri_handler() {
                     HSTRING::from(command.as_os_str())
                 }
                 Err(err) => {
-                    report_error!(anyhow::Error::new(err).context(
-                        "Could not get path to current executable for registering URI scheme"
-                    ));
+                    log::warn!(
+                        "Could not get path to current executable for registering URI scheme: {err:#}"
+                    );
                     return;
                 }
             };
             // The empty string represents the "(Default)" value for a registry key.
             if let Err(err) = command_key.set_hstring("", &command) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Could not set shell command path for URI Scheme"));
+                log::warn!("Could not set shell command path for URI Scheme: {err:#}");
             }
         }
         Err(err) => {
-            report_error!(
-                anyhow::Error::new(err).context("Failed to create URI Scheme registry entry")
-            );
+            log::warn!("Failed to create URI Scheme registry entry: {err:#}");
         }
     }
 }

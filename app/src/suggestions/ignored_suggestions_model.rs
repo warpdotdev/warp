@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
-use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::persistence::ModelEvent;
@@ -80,8 +79,7 @@ impl IgnoredSuggestionsModel {
                 suggestion_type,
             };
             if let Err(err) = sender.send(event) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to save ignored suggestion to database"));
+                log::warn!("Failed to save ignored suggestion to database: {err:#}");
             }
         }
 
@@ -113,8 +111,7 @@ impl IgnoredSuggestionsModel {
                 suggestion_type,
             };
             if let Err(err) = sender.send(event) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to remove ignored suggestion from database"));
+                log::warn!("Failed to remove ignored suggestion from database: {err:#}");
             }
         }
     }

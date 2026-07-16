@@ -400,10 +400,10 @@ fn wait_for_parent_crash(args: &warp_cli::AppArgs) {
                 log::info!("Parent has crashed; continuing execution.");
                 break;
             } else if result == WAIT_FAILED {
-                report_error!(anyhow::anyhow!(
+                log::warn!(
                     "Encountered error while waiting on parent process: {:?}",
                     GetLastError()
-                ));
+                );
             }
         }
     }

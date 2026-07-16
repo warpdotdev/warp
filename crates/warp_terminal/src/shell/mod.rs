@@ -17,7 +17,6 @@ use warp_completer::completer::{CommandExitStatus, CommandOutput};
 #[cfg(windows)]
 use warp_core::paths::base_config_dir;
 use warp_core::platform::SessionPlatform;
-use warp_errors::report_error;
 use warp_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
 };
@@ -936,12 +935,12 @@ impl From<ShellLaunchData> for SessionPlatform {
 fn unescape_alias_key_value(key: &str, value: &str) -> Option<(SmolStr, String)> {
     let key = unescape_quotes(key)
         .inspect_err(|e| {
-            report_error!(e);
+            log::warn!("Failed to unescape alias key: {e:#}");
         })
         .ok()?;
     let value = unescape_quotes(value)
         .inspect_err(|e| {
-            report_error!(e);
+            log::warn!("Failed to unescape alias value: {e:#}");
         })
         .ok()?;
     Some((key.into(), value))

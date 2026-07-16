@@ -168,8 +168,6 @@ struct LoadedFileMetadata {
     location: BufferFileLocation,
 }
 
-use warp_errors::report_error;
-
 pub use super::diff_viewer::DisplayMode;
 
 type TerminalTargetFn = dyn Fn(WindowId, &AppContext) -> Option<ViewHandle<TerminalView>>;
@@ -534,7 +532,7 @@ impl LocalCodeEditorView {
         {
             Ok(future) => future,
             Err(e) => {
-                report_error!(e.context("Failed to call lsp.goto_definition"));
+                log::warn!("Failed to call lsp.goto_definition: {e:#}");
                 return false;
             }
         };
@@ -1138,7 +1136,7 @@ impl LocalCodeEditorView {
         };
 
         if let Err(err) = result {
-            report_error!(&err);
+            log::warn!("Failed to save file: {err:#}");
             ctx.emit(LocalCodeEditorEvent::FailedToSave {
                 error: Arc::new(err),
             });
@@ -1683,7 +1681,7 @@ impl LocalCodeEditorView {
             .update(ctx, move |model, ctx| {
                 model.save(file_id, content, buffer_version, ctx)
             }) {
-            report_error!(&err);
+            log::warn!("Failed to save file: {err:#}");
             ctx.emit(LocalCodeEditorEvent::FailedToSave {
                 error: Arc::new(err),
             });
@@ -2095,7 +2093,7 @@ impl DiffViewer for LocalCodeEditorView {
             }
             if let Some(path) = self.file_path().map(|p| p.to_path_buf()) {
                 if let Err(e) = std::fs::remove_file(&path) {
-                    report_error!(anyhow::Error::new(e).context("Failed to delete file after save"));
+                    log::warn!("Failed to delete file after save: {e:#}");
                 } else {
                     // This will close tabs with the file open
                     ctx.dispatch_typed_action(&WorkspaceAction::FileDeleted { path });
@@ -2287,7 +2285,7 @@ impl TypedActionView for LocalCodeEditorView {
             }
             LocalCodeEditorAction::SaveFile => {
                 if let Err(ImmediateSaveError::FailedToSave(err)) = self.save_local(ctx) {
-                    report_error!(&err);
+                    log::warn!("Failed to save file: {err:#}");
                     ctx.emit(LocalCodeEditorEvent::FailedToSave {
                         error: Arc::new(err),
                     });

@@ -1559,7 +1559,7 @@ impl TuiTerminalSessionView {
         let next = AISettings::as_ref(ctx).usage_display_mode.toggled();
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
             if let Err(error) = settings.usage_display_mode.set_value(next, ctx) {
-                report_error!("failed to persist the TUI usage display mode: {error:#}");
+                log::warn!("failed to persist the TUI usage display mode: {error:#}");
             }
         });
     }
@@ -1875,7 +1875,7 @@ impl TuiTerminalSessionView {
             settings.agent_model.set_value(id.as_str().to_owned(), ctx)
         });
         if let Err(error) = result {
-            report_error!(error.context("Failed to persist the TUI agent model"));
+            log::warn!("Failed to persist the TUI agent model: {error:#}");
             self.show_transient_hint(MODEL_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
             return;
         }
@@ -2036,10 +2036,9 @@ impl TuiTerminalSessionView {
                     Err(error) => {
                         let message = error.user_message();
                         let path = error.path().to_path_buf();
-                        report_error!(
-                            anyhow::Error::new(error)
-                                .context("Failed to write TUI conversation to file"),
-                            extra: { "path" => %path.display() }
+                        log::warn!(
+                            "Failed to write TUI conversation to file: {error:#} path={}",
+                            path.display()
                         );
                         self.show_transient_hint(message, ctx);
                     }
@@ -2351,7 +2350,7 @@ impl TerminalSurface for TuiTerminalSessionView {
     }
 
     fn on_pty_spawn_failed(&mut self, error: anyhow::Error, ctx: &mut ViewContext<Self>) {
-        report_error!(error.context("TUI PTY spawn failed"));
+        log::warn!("TUI PTY spawn failed: {error:#}");
         ctx.notify();
     }
 }

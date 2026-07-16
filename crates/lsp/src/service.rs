@@ -19,7 +19,6 @@ use lsp_types::{
 use serde_json::Value;
 #[cfg(not(target_arch = "wasm32"))]
 use simple_logger::SimpleLogger;
-use warp_errors::report_error;
 use warp_util::on_cancel::OnCancelFutureExt;
 
 use crate::config::{lsp_uri_to_path, path_to_lsp_uri, LanguageId};
@@ -313,7 +312,7 @@ impl LspService {
             .jsonrpc_service
             .send_notification(notification::Cancel::METHOD.to_string(), cancel)
         {
-            report_error!(e.context("Failed to send cancel notification"));
+            log::warn!("Failed to send cancel notification: {e:#}");
         }
     }
 }

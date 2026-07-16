@@ -13,7 +13,6 @@ use bytes::Bytes;
 use derivative::Derivative;
 use futures::future::BoxFuture;
 use futures::{Future, FutureExt as _};
-use warp_errors::report_error;
 
 use super::AssetProvider;
 use crate::image_cache::ImageCache;
@@ -553,7 +552,7 @@ impl AssetCache {
                 let result = future.await;
                 // When the fetch finished, send the results to the future running on the foreground executor.
                 if tx.send(result).is_err() {
-                    report_error!("Error sending background task result to main thread");
+                    log::warn!("Error sending background task result to main thread");
                 }
             })
             .detach();
@@ -566,7 +565,7 @@ impl AssetCache {
                 let result = match rx.await {
                     Ok(result) => result,
                     Err(_) => {
-                        report_error!("sender unexpectedly dropped before receiver");
+                        log::warn!("sender unexpectedly dropped before receiver");
                         Err(anyhow!("sender unexpectedly dropped before receiver"))
                     }
                 };

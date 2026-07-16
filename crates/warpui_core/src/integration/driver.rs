@@ -22,7 +22,6 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use futures::{Future, FutureExt};
 use instant::{Duration, Instant};
-use warp_errors::report_error;
 
 use crate::integration::step::PersistedDataMap;
 use crate::platform::TerminationMode;
@@ -443,7 +442,7 @@ impl TestDriver {
             if let Err(e) = video_recorder::save_captured_frame_as_png(&frame, &path)
                 .context("VideoRecorder: failed to save screenshot")
             {
-                report_error!(e, extra: { "path" => %path.display() });
+                log::warn!("{e:#} path={}", path.display());
             } else {
                 log::info!("VideoRecorder: screenshot saved to {}", path.display());
             }
@@ -471,7 +470,7 @@ impl TestDriver {
                 if let Some(ref dir) = artifacts_dir {
                     let output = dir.join("recording.mp4");
                     if let Err(e) = recorder.finalize(&output, overlay_log.as_ref()) {
-                        report_error!(e.context("VideoRecorder: finalization failed"));
+                        log::warn!("VideoRecorder: finalization failed: {e:#}");
                     }
                 }
             }
@@ -484,7 +483,7 @@ impl TestDriver {
                     .write_to_file(&log_output)
                     .context("ActionLog: finalization failed")
                 {
-                    report_error!(e);
+                    log::warn!("{e:#}");
                 }
             }
         }
@@ -512,9 +511,9 @@ impl TestDriver {
                     .context("Failed to write runtime tags to file")
                 {
                     Ok(_) => log::info!("Runtime tags exported to: {output_file}"),
-                    Err(e) => report_error!(e, extra: { "file" => %output_file }),
+                    Err(e) => log::warn!("{e:#} file={output_file}"),
                 },
-                Err(e) => report_error!(e),
+                Err(e) => log::warn!("{e:#}"),
             }
         } else {
             log::debug!("RUNTIME_TAGS_OUTPUT_FILE environment variable not set, skipping runtime tags export");

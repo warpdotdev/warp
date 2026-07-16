@@ -5,7 +5,6 @@ use std::sync::OnceLock;
 
 use command::blocking::Command;
 use freedesktop_desktop_entry::DesktopEntry;
-use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::AppContext;
 
@@ -335,10 +334,7 @@ pub fn open_file_path_with_line_and_col(
         if let Some(editor) = with_editor {
             if let Some(mut command) = editor.command(full_path, line_column_number) {
                 if let Err(err) = command.spawn() {
-                    report_error!(
-                        anyhow::Error::new(err).context("Error launching editor"),
-                        extra: { "editor" => ?editor }
-                    );
+                    log::warn!("Error launching editor editor={editor:?}: {err:#}");
                 }
                 return;
             }
@@ -621,9 +617,7 @@ impl Editor {
                 Some(metadata) => match metadata.build_default_command(file_path) {
                     Ok(command) => Some(command),
                     Err(err) => {
-                        report_error!(
-                            anyhow::Error::new(err).context("Failed to build editor open command")
-                        );
+                        log::warn!("Failed to build editor open command: {err:#}");
                         None
                     }
                 },

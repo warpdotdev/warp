@@ -4,7 +4,6 @@ use std::sync::Arc;
 use async_channel::Receiver;
 use futures::channel::oneshot;
 use parking_lot::Mutex;
-use warp_errors::report_error;
 use warp_js::JsFunctionId;
 use warpui::r#async::executor::Background;
 
@@ -100,16 +99,13 @@ impl PluginRunners {
                 AppServiceCallers::new(app_client),
                 registered_js_function_id,
             ) else {
-                report_error!(
-                    "Failed to instantiate PluginRunner for plugin",
-                    extra: { "plugin_ref" => ?plugin_ref }
+                log::warn!(
+                    "Failed to instantiate PluginRunner for plugin plugin_ref={plugin_ref:?}"
                 );
                 return;
             };
-            if let Err(e) =
-                anyhow::Context::context(runner.run(&plugin_ref), "Failed to run plugin")
-            {
-                report_error!(e);
+            if let Err(e) = runner.run(&plugin_ref) {
+                log::warn!("Failed to run plugin: {e:#}");
             }
         });
     }

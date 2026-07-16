@@ -776,10 +776,7 @@ impl<'a> Frame<'a> {
                 }
                 Ok(None) => {}
                 Err(_) => {
-                    report_error!(
-                        "Unable to get glyph out of glyph cache",
-                        extra: { "glyph" => ?glyph }
-                    );
+                    log::debug!("Unable to get glyph out of glyph cache glyph={glyph:?}");
                     return;
                 }
             }

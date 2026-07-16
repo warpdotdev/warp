@@ -21,12 +21,10 @@ cfg_if::cfg_if! {
         use warp_errors::report_if_error;
         use crate::telemetry::AITelemetryEvent;
         use instant::Instant;
-        use warp_core::channel::ChannelState;
         use warp_core::safe_warn;
     }
 }
 use warp_core::safe_anyhow;
-use warp_errors::report_error;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress};
@@ -914,9 +912,7 @@ impl CodebaseIndexManager {
             ) {
                 Ok(path) => path,
                 Err(e) => {
-                    report_error!(
-                        anyhow::Error::new(e).context("Failed to canonicalize repository path")
-                    );
+                    log::warn!("Failed to canonicalize repository path: {e:#}");
                     return false;
                 }
             };
@@ -927,7 +923,7 @@ impl CodebaseIndexManager {
         }) {
             Ok(handle) => handle,
             Err(e) => {
-                report_error!(anyhow::Error::new(e).context("Failed to start tracking repository"));
+                log::warn!("Failed to start tracking repository: {e:#}");
                 return false;
             }
         };
@@ -1287,14 +1283,7 @@ impl CodebaseIndexManager {
             },
             |_me, (repo_path, result), ctx| {
                 if let Err(err) = result {
-                    if ChannelState::enable_debug_features() {
-                        report_error!(
-                            err.context("Unable to write snapshot"),
-                            extra: { "repo_path" => ?repo_path }
-                        );
-                    } else {
-                        log::warn!("Unable to write snapshot: {err:?}");
-                    }
+                    log::warn!("Unable to write snapshot: {err:#} repo_path={repo_path:?}");
                 }
                 Self::schedule_next_snapshot_write(repo_path, ctx);
             },

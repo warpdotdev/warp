@@ -15,7 +15,6 @@ use geometry::rect::RectF;
 use itertools::Itertools;
 use parking_lot::Mutex;
 use serde::de::IntoDeserializer;
-use warp_errors::report_error;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 
 #[cfg(not(target_family = "wasm"))]
@@ -202,8 +201,7 @@ impl AppDelegate {
                 let global_hotkey_handler = match GlobalHotKeyHandler::new(event_loop_proxy.clone()) {
                     Ok(handler) => Some(handler),
                     Err(err) => {
-                        report_error!(anyhow::Error::new(err)
-                            .context("Error creating global hotkey handler"));
+                        log::warn!("Error creating global hotkey handler: {err:#}");
                         None
                     }
                 };
@@ -229,14 +227,14 @@ impl AppDelegate {
                 match super::linux::LinuxClipboard::new() {
                     Ok(clipboard) => self.clipboard = Box::new(clipboard),
                     Err(err) => {
-                        report_error!(anyhow::Error::new(err).context("Error creating Linux clipboard"));
+                        log::warn!("Error creating Linux clipboard: {err:#}");
                     }
                 }
             } else if #[cfg(target_os = "windows")] {
                 match super::windows::WindowsClipboard::new() {
                     Ok(clipboard) => self.clipboard = Box::new(clipboard),
                     Err(err) => {
-                        report_error!(anyhow::Error::new(err).context("Error creating Windows clipboard"));
+                        log::warn!("Error creating Windows clipboard: {err:#}");
                     }
                 }
             }
@@ -449,9 +447,7 @@ impl platform::Delegate for AppDelegate {
                     }
 
                     let file_result = file_dialog.show_save_single_file().unwrap_or_else(|err| {
-                        report_error!(
-                            anyhow::Error::new(err).context("unable to show save file dialog")
-                        );
+                        log::warn!("unable to show save file dialog: {err:#}");
                         None
                     });
 

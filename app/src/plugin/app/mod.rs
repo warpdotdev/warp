@@ -5,7 +5,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use command::blocking::Command;
 use service_impl::{LogServiceImpl, PluginHostBootstrapServiceImpl};
-use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{PLUGIN_HOST_ADDRESS_ENV_VAR, PLUGIN_HOST_FLAG};
@@ -47,16 +46,15 @@ impl PluginHost {
                         match ipc::Client::connect(connection_address, background_executor).await {
                             Ok(client) => Some(client),
                             Err(e) => {
-                                report_error!(anyhow::Error::new(e)
-                                    .context("Failed to instantiate LocalSocketClient"));
+                                log::warn!("Failed to instantiate LocalSocketClient: {e:#}");
                                 None
                             }
                         }
                     }
                     Err(e) => {
-                        report_error!(anyhow::Error::new(e).context(
-                            "Failed to receive connection address for PluginHost services"
-                        ));
+                        log::warn!(
+                            "Failed to receive connection address for PluginHost services: {e:#}"
+                        );
                         None
                     }
                 }
@@ -95,7 +93,7 @@ impl PluginHost {
                     (Some(server), Some(plugin_host_process))
                 }
                 Err(e) => {
-                    report_error!(anyhow::Error::new(e).context("Could not initialize server"));
+                    log::warn!("Could not initialize server: {e:#}");
                     (None, None)
                 }
             };
@@ -120,10 +118,7 @@ impl Drop for PluginHost {
     fn drop(&mut self) {
         if let Some(mut host_process) = self.host_process.take() {
             if let Ok(Some(exit_status)) = host_process.try_wait() {
-                report_error!(
-                    "Plugin host process had exited early",
-                    extra: { "status" => ?exit_status }
-                );
+                log::warn!("Plugin host process had exited early status={exit_status:?}");
             } else {
                 // Calling `wait()` is necessary for the OS to release process resources on some
                 // systems; processes that have exited but not been `wait`-ed upon are "zombie"

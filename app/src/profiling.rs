@@ -242,7 +242,7 @@ pub fn teardown() {
         .map_err(Into::into)
         .and_then(write_pprof_report)
     {
-        warp_errors::report_error!(err.context("Failed to write pprof data"));
+        log::warn!("Failed to write pprof data: {err:#}");
     }
 }
 

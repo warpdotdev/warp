@@ -10,8 +10,6 @@ use std::process::{Child, CommandArgs, CommandEnvs, ExitStatus, Output, Stdio};
 #[cfg(windows)]
 use anyhow::Context as _;
 #[cfg(windows)]
-use warp_errors::report_error;
-#[cfg(windows)]
 use {super::windows::JobObject, std::os::windows::io::AsRawHandle};
 
 /// Wrapper around a [`std::process::Command`] that ensures any new Command is set with the windows
@@ -519,7 +517,7 @@ impl Command {
                 .create()
                 .context("Failed to create job object for command")
             {
-                report_error!(e, extra: { "program" => ?self.inner.get_program() });
+                log::warn!("{e:#} program={:?}", self.inner.get_program());
             }
         }
 
