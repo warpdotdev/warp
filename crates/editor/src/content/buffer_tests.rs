@@ -13020,11 +13020,20 @@ fn test_clipboard_table_copy_uses_source_offsets_for_later_formatted_cells() {
 }
 
 #[test]
-fn test_clipboard_table_copy_preserves_br_without_splitting_row() {
+fn test_clipboard_table_copy_emits_real_newline_for_in_cell_break() {
     App::test((), |mut app| async move {
-        // A cell containing an authored hard break (`<br>`) must not split the tab-delimited
-        // clipboard row: the break has to survive as a literal `<br>`, matching the internal
-        // tab/newline format guards, so re-pasting into Warp re-parses the same single row.
+        // Product decision (#13732): the two clipboard flavors carry a `<br>` differently.
+        //
+        // - The plain-text flavor is *rendered text*: it already strips styling, so an
+        //   authored hard break emits a real `\n`, never the literal HTML string "<br>".
+        //   Injecting HTML the user didn't select would violate that rendered-text contract.
+        // - The HTML flavor (see serialize_table_cell_inline / selected_text_as_html) carries
+        //   the break as a real `<br>` element, so Warp-to-Warp paste round-trips faithfully.
+        //
+        // Accepted cost: a plain-text-only re-paste of this row into a Warp table may split it,
+        // because the in-cell newline collides with the tab/newline row delimiter. That is a
+        // standard TSV-class limitation we consciously accept — it is NOT an oversight. Do not
+        // "fix" it by re-emitting "<br>" here; that regresses the plain-text contract above.
         let table_source = "a<br>b\tc";
         let markdown = format!("```{TABLE_BLOCK_MARKDOWN_LANG}\n{table_source}\n```\n");
         let (buffer, _selection) = Buffer::mock_from_markdown(
@@ -13045,14 +13054,13 @@ fn test_clipboard_table_copy_preserves_br_without_splitting_row() {
             );
 
             assert!(
-                !copied.contains("a\nb"),
-                "in-cell break must not emit a raw newline that splits the row, got {copied:?}"
+                !copied.contains("<br>"),
+                "plain-text flavor must not contain literal HTML the user didn't select, got {copied:?}"
             );
-            // The single row copies as one line (the trailing `\n` is the row terminator, not a
-            // cell break): the in-cell break survives as a literal `<br>`.
+            // The in-cell break renders as a real newline; the trailing `\n` terminates the row.
             assert_eq!(
-                copied, "a<br>b\tc\n",
-                "cell break should survive as a literal <br> in the tab-delimited row"
+                copied, "a\nb\tc\n",
+                "in-cell break should emit a real newline in the plain-text flavor"
             );
         });
     });

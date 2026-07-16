@@ -2477,20 +2477,10 @@ impl Buffer {
                     let slice_end = cell_offset_map
                         .source_to_rendered(relative_end.min(cell_range.end) - cell_range.start);
                     if slice_end > slice_start {
-                        let slice = char_slice(cell, slice_start.as_usize(), slice_end.as_usize())
-                            .unwrap_or(cell);
-                        // An authored hard break (raw HTML `<br>`) is stored as an embedded
-                        // newline. Emitting it raw into this tab/newline-delimited clipboard row
-                        // would split the row, so a re-paste re-parses a spurious extra row.
-                        // Translate it back to a literal `<br>`, scoped to the table-cell context
-                        // (unlike a global change to `inline_to_text`, whose other callers may
-                        // legitimately want the newline). A cell's rendered text never contains a
-                        // newline for any other reason.
-                        if slice.contains('\n') {
-                            text.push_str(&slice.replace('\n', "<br>"));
-                        } else {
-                            text.push_str(slice);
-                        }
+                        text.push_str(
+                            char_slice(cell, slice_start.as_usize(), slice_end.as_usize())
+                                .unwrap_or(cell),
+                        );
                     }
                 }
 
