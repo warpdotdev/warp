@@ -2480,8 +2480,9 @@ fn register_parent_on_wait_flag_off_is_noop() {
 
 #[test]
 fn register_parent_on_wait_child_short_circuits() {
-    // One-level-tree invariant: a child (has_parent_agent) can never be a
-    // parent, so no server fetch is issued and no parent role is taken.
+    // One-level-tree invariant: a child (is_child_agent_conversation) can
+    // never be a parent, so no server fetch is issued and no parent role is
+    // taken.
     App::test((), |mut app| async move {
         let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
 

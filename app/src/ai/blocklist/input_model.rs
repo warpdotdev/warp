@@ -376,6 +376,17 @@ impl BlocklistAIInputModel {
     pub fn input_config(&self) -> InputConfig {
         self.input_config
     }
+
+    pub fn is_terminal_use_active_or_pending(&self) -> bool {
+        let model = self.model.lock();
+        let active_block = model.block_list().active_block();
+        // Keep AI input locked while an agent-requested command is waiting for its
+        // CLI subagent, while the user has tagged the agent in, or while the user
+        // can hand control of an active monitored command back to the agent.
+        active_block.is_agent_driving_command()
+            || active_block.is_agent_tagged_in()
+            || active_block.is_eligible_for_agent_handoff()
+    }
     pub fn last_ai_autodetection_source(&self) -> Option<InputTypeAutoDetectionSource> {
         self.last_ai_autodetection_source
     }
@@ -527,13 +538,7 @@ impl BlocklistAIInputModel {
     /// guards (agent in control, pending attachments) over the view policy's setting lookup.
     pub fn is_autodetection_enabled_for_current_context(&self, app: &AppContext) -> bool {
         // If the agent is in control or tagged in, don't run autodetection.
-        if self
-            .model
-            .lock()
-            .block_list()
-            .active_block()
-            .is_agent_in_control_or_tagged_in()
-        {
+        if self.is_terminal_use_active_or_pending() {
             return false;
         }
 
@@ -572,14 +577,9 @@ impl BlocklistAIInputModel {
     /// Handles the input buffer being submitted.
     pub fn handle_input_buffer_submitted(&mut self, ctx: &mut ModelContext<Self>) {
         // If the agent is still in control of a long-running command, keep the input locked to AI mode.
-        let is_agent_in_control_or_tagged_in = self
-            .model
-            .lock()
-            .block_list()
-            .active_block()
-            .is_agent_in_control_or_tagged_in();
+        let is_terminal_use_active_or_pending = self.is_terminal_use_active_or_pending();
 
-        let new_config = if is_agent_in_control_or_tagged_in {
+        let new_config = if is_terminal_use_active_or_pending {
             InputConfig {
                 input_type: InputType::AI,
                 is_locked: true,

@@ -4,7 +4,9 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warp::tui_export::{Block, BlockGrid, BlockId, BlockList, TerminalColorList, TerminalModel};
+use warp::tui_export::{
+    Block, BlockGrid, BlockId, BlockList, GridHandler, TermMode, TerminalColorList, TerminalModel,
+};
 use warp_terminal::model::ansi::{Color, NamedColor};
 use warp_terminal::model::grid::cell::{Cell, Flags};
 use warp_terminal::model::grid::Dimensions as _;
@@ -13,6 +15,8 @@ use warpui_core::elements::tui::{
     TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
 };
 use warpui_core::AppContext;
+
+use crate::terminal_use::user_controls_running_command;
 
 /// Selects which rows of a terminal block an element paints.
 enum TerminalBlockRows {
@@ -78,6 +82,45 @@ impl TerminalBlockElement {
     }
 }
 
+fn terminal_block_cursor(
+    block: &Block,
+    visible_rows: &Range<usize>,
+    size: TuiSize,
+) -> Option<(u16, u16)> {
+    if !user_controls_running_command(block) || !block.is_mode_set(TermMode::SHOW_CURSOR) {
+        return None;
+    }
+    let (grid, grid_start_row) = if block.is_command_grid_active() {
+        if block.should_hide_command_grid() {
+            return None;
+        }
+        (
+            block.prompt_and_command_grid(),
+            block
+                .prompt_and_command_grid_offset()
+                .as_f64()
+                .ceil()
+                .max(0.0) as usize,
+        )
+    } else {
+        if block.should_hide_output_grid() {
+            return None;
+        }
+        (
+            block.output_grid(),
+            block.output_grid_offset().as_f64().ceil().max(0.0) as usize,
+        )
+    };
+    let (column, grid_row) = grid.visible_cursor_display_position()?;
+    let block_row = grid_start_row.saturating_add(grid_row);
+    if !visible_rows.contains(&block_row) {
+        return None;
+    }
+    let column = u16::try_from(column).ok()?;
+    let row = u16::try_from(block_row.saturating_sub(visible_rows.start)).ok()?;
+    (column < size.width && row < size.height).then_some((column, row))
+}
+
 impl TuiElement for TerminalBlockElement {
     fn layout(
         &mut self,
@@ -125,6 +168,7 @@ impl TuiElement for TerminalBlockElement {
             TerminalBlockRows::Visible { rows, width } => (rows.clone(), (*width).min(size.width)),
             TerminalBlockRows::Content => (block_content_rows(block), size.width),
         };
+        let cursor = terminal_block_cursor(block, &rows, size);
         render_block_rows(
             block,
             rows,
@@ -133,6 +177,10 @@ impl TuiElement for TerminalBlockElement {
             surface,
             &colors,
         );
+        drop(model);
+        if let Some((col, row)) = cursor {
+            ctx.set_terminal_cursor(ctx.scene_point(origin.offset(i32::from(col), i32::from(row))));
+        }
     }
 
     fn size(&self) -> Option<TuiSize> {
@@ -218,6 +266,32 @@ fn render_block_rows(
     }
 }
 
+/// Paints the visible rows of a raw [`GridHandler`] (e.g. the alt screen,
+/// which has no scrollback) at `origin`, reusing the same per-cell styling as
+/// the block renderer. Unlike a block grid, the alt screen is a plain viewport,
+/// so rows map directly to screen rows (offset past any history defensively).
+pub(super) fn render_grid_handler(
+    grid: &GridHandler,
+    origin: TuiScreenPosition,
+    size: TuiSize,
+    surface: &mut TuiPaintSurface<'_>,
+    colors: &TerminalColorList,
+) {
+    let history = grid.history_size();
+    let rows = grid.visible_rows().min(usize::from(size.height));
+    let cols = grid.columns().min(usize::from(size.width));
+    for screen_row in 0..rows {
+        render_grid_row(
+            grid,
+            history + screen_row,
+            cols,
+            origin.offset(0, screen_row as i32),
+            surface,
+            colors,
+        );
+    }
+}
+
 /// Returns whether the TUI transcript should include this terminal block.
 pub(super) fn should_render_terminal_block(block: &Block, block_list: &BlockList) -> bool {
     // Agent-requested command blocks are rendered inline inside their agent
@@ -250,22 +324,39 @@ fn render_displayed_rows(
             break;
         }
         let original_row = grid.maybe_translate_row_from_displayed_to_original(displayed_row);
-        let Some(row) = grid.row(original_row) else {
-            continue;
-        };
-        for column in 0..grid.columns().min(usize::from(max_width)) {
-            let cell = &row[column];
-            if let Some(buffer_cell) = surface.cell_mut(
-                bounds
-                    .origin
-                    .offset(i32::try_from(column).unwrap_or(i32::MAX), i32::from(*y)),
-            ) {
-                buffer_cell
-                    .set_symbol(&sanitized_symbol(cell))
-                    .set_style(cell_to_style(cell, colors));
-            }
-        }
+        render_grid_row(
+            grid,
+            original_row,
+            grid.columns().min(usize::from(max_width)),
+            bounds.origin.offset(0, i32::from(*y)),
+            surface,
+            colors,
+        );
         *y = (*y).saturating_add(1);
+    }
+}
+
+/// Paints one grid row with terminal cell styling.
+fn render_grid_row(
+    grid: &GridHandler,
+    row: usize,
+    columns: usize,
+    origin: TuiScreenPosition,
+    surface: &mut TuiPaintSurface<'_>,
+    colors: &TerminalColorList,
+) {
+    let Some(row) = grid.row(row) else {
+        return;
+    };
+    for column in 0..columns {
+        let cell = &row[column];
+        if let Some(buffer_cell) =
+            surface.cell_mut(origin.offset(i32::try_from(column).unwrap_or(i32::MAX), 0))
+        {
+            buffer_cell
+                .set_symbol(&sanitized_symbol(cell))
+                .set_style(cell_to_style(cell, colors));
+        }
     }
 }
 

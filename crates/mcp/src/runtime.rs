@@ -377,8 +377,9 @@ async fn determine_transport(
 
             // Go through the OAuth flow to get an authenticated client.
             // This will first attempt to use cached credentials before starting interactive OAuth.
+            let http_client = build_client_with_headers(headers)?;
             let (client, did_require_login) =
-                crate::oauth::make_authenticated_client(url, auth_context)
+                crate::oauth::make_authenticated_client(url, http_client, auth_context)
                     .await
                     .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
 

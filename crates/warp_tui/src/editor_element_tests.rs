@@ -12,6 +12,8 @@ use warpui_core::elements::tui::{
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
     TuiStyle,
 };
+use warpui_core::event::KeyEventDetails;
+use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext, ModelHandle};
 
 use super::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
@@ -109,7 +111,19 @@ fn render_lines(
         .map(|line| line.trim_end().to_string())
         .collect()
 }
-fn dispatch_event(ctx: &AppContext, mut element: TuiEditorElement, event: &TuiEvent) -> bool {
+fn dispatch_event(ctx: &AppContext, element: TuiEditorElement, event: &TuiEvent) -> bool {
+    dispatch_event_with_view_focus(ctx, element, event, true)
+}
+
+/// Like [`dispatch_event`], but supplies the owning view's focus snapshot,
+/// mirroring the GUI's `EditorView::focused` → `EditorElement` path.
+fn dispatch_event_with_view_focus(
+    ctx: &AppContext,
+    mut element: TuiEditorElement,
+    event: &TuiEvent,
+    view_focused: bool,
+) -> bool {
+    element = element.with_view_focused(view_focused);
     let mut rendered_views = EntityIdMap::default();
     let mut layout_ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -162,6 +176,46 @@ fn editable_paste_emits_one_complete_text_action() {
                 panic!("expected InsertText");
             };
             assert_eq!(text, payload);
+        });
+    });
+}
+
+#[test]
+fn editable_editor_ignores_text_when_another_view_is_focused() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let actions = Rc::new(RefCell::new(Vec::new()));
+
+            // Focus elsewhere: the editable editor declines typed text.
+            let actions_for_handler = actions.clone();
+            let model_unfocused = model(ctx, "");
+            let element = TuiEditorElement::new(&model_unfocused, ctx)
+                .editable()
+                .on_action(move |action, _| actions_for_handler.borrow_mut().push(action));
+            let key = TuiEvent::KeyDown {
+                keystroke: Keystroke {
+                    key: "a".to_owned(),
+                    ..Default::default()
+                },
+                chars: "a".to_owned(),
+                details: KeyEventDetails::default(),
+                is_composing: false,
+            };
+            assert!(!dispatch_event_with_view_focus(ctx, element, &key, false));
+            assert!(actions.borrow().is_empty());
+
+            // Focus on the owning view: typed text is consumed.
+            let actions_for_handler = actions.clone();
+            let model_focused = model(ctx, "");
+            let element = TuiEditorElement::new(&model_focused, ctx)
+                .editable()
+                .on_action(move |action, _| actions_for_handler.borrow_mut().push(action));
+            assert!(dispatch_event_with_view_focus(ctx, element, &key, true));
+            assert!(matches!(
+                actions.borrow().as_slice(),
+                [TuiEditorAction::InsertChar('a')]
+            ));
         });
     });
 }

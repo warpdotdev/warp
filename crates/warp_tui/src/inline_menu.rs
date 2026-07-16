@@ -3,7 +3,9 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use string_offset::CharOffset;
-use warp::tui_export::{AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId};
+use warp::tui_export::{
+    AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId, TuiMcpAction,
+};
 use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InlineMenuSelection};
 use warpui_core::elements::tui::{
     TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
@@ -14,7 +16,10 @@ use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::{AppContext, ModelHandle};
 
 use crate::conversation_menu::TuiConversationMenuModel;
+use crate::input_suggestions_mode::TuiInputSuggestionsMode;
+use crate::mcp_menu::TuiMcpMenuModel;
 use crate::model_menu::TuiModelMenuModel;
+use crate::skills_menu::TuiSkillMenuModel;
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_column_layout::{
@@ -33,11 +38,58 @@ const SLASH_COMMAND_COLUMN_CONSTRAINTS: TuiTwoColumnConstraints = TuiTwoColumnCo
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TuiInlineMenuRowStyle {
     Default,
-    SlashCommand,
+    InlineMenuItem,
+}
+pub(crate) fn active_inline_menu(
+    inline_menus: &[TuiInlineMenu],
+    mode: TuiInputSuggestionsMode,
+    ctx: &AppContext,
+) -> Option<TuiInlineMenu> {
+    inline_menus
+        .iter()
+        .find(|menu| menu.mode() == mode && menu.is_open(ctx))
+        .cloned()
+}
+
+impl TuiInlineMenuHandle for ModelHandle<TuiMcpMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::Mcp
+    }
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open(ctx)
+    }
+
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.update(ctx, |model, ctx| model.accept_selected(ctx))
+            .map(TuiInlineMenuAccepted::Mcp)
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot(ctx)
+    }
 }
 
 pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
-const INLINE_MENU_BORDER_ROWS: usize = 2;
 
 /// A presentation-only row in a TUI inline menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,12 +261,17 @@ pub(crate) enum TuiInlineMenuAccepted {
     SlashCommand(AcceptSlashCommandOrSavedPrompt),
     Conversation(AgentConversationEntryId),
     Model(LLMId),
+    Mcp(TuiMcpAction),
 }
 
 /// Type-erased operations shared by TUI inline-menu model handles.
 pub(crate) trait TuiInlineMenuHandle {
+    /// Returns the input-suggestions mode represented by this menu.
+    fn mode(&self) -> TuiInputSuggestionsMode;
     /// Returns whether this menu is open.
     fn is_open(&self, ctx: &AppContext) -> bool;
+    /// Opens the menu when it supports explicit opening.
+    fn open(&self, _ctx: &mut AppContext) {}
     /// Returns the input range highlighted by this menu.
     fn input_highlight_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>>;
     /// Returns the input argument hint shown by this menu.
@@ -242,6 +299,13 @@ impl TuiInlineMenu {
     }
     pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
         self.0.is_open(ctx)
+    }
+    pub(crate) fn open(&self, ctx: &mut AppContext) {
+        self.0.open(ctx);
+    }
+
+    pub(crate) fn mode(&self) -> TuiInputSuggestionsMode {
+        self.0.mode()
     }
 
     pub(crate) fn render(&self, ctx: &AppContext) -> Option<Box<dyn TuiElement>> {
@@ -278,8 +342,11 @@ impl TuiInlineMenu {
 }
 
 impl TuiInlineMenuHandle for ModelHandle<TuiSlashCommandModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::SlashCommands
+    }
     fn is_open(&self, ctx: &AppContext) -> bool {
-        self.as_ref(ctx).is_open()
+        self.as_ref(ctx).is_open(ctx)
     }
     fn input_highlight_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
         self.as_ref(ctx).highlighted_prefix_range()
@@ -307,13 +374,19 @@ impl TuiInlineMenuHandle for ModelHandle<TuiSlashCommandModel> {
     }
 
     fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
-        self.as_ref(ctx).snapshot()
+        self.as_ref(ctx).snapshot(ctx)
     }
 }
 
 impl TuiInlineMenuHandle for ModelHandle<TuiConversationMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::ConversationMenu
+    }
     fn is_open(&self, ctx: &AppContext) -> bool {
-        self.as_ref(ctx).is_open()
+        self.as_ref(ctx).is_open(ctx)
+    }
+    fn open(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.open(ctx));
     }
 
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
@@ -342,13 +415,16 @@ impl TuiInlineMenuHandle for ModelHandle<TuiConversationMenuModel> {
     }
 
     fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
-        self.as_ref(ctx).snapshot()
+        self.as_ref(ctx).snapshot(ctx)
     }
 }
 
 impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::ModelSelector
+    }
     fn is_open(&self, ctx: &AppContext) -> bool {
-        self.as_ref(ctx).is_open()
+        self.as_ref(ctx).is_open(ctx)
     }
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
         None
@@ -368,7 +444,7 @@ impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
 
     fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
         self.as_ref(ctx)
-            .accept_selected()
+            .accept_selected(ctx)
             .map(TuiInlineMenuAccepted::Model)
     }
 
@@ -377,7 +453,50 @@ impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
     }
 
     fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
-        self.as_ref(ctx).snapshot()
+        self.as_ref(ctx).snapshot(ctx)
+    }
+}
+
+impl TuiInlineMenuHandle for ModelHandle<TuiSkillMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::SkillMenu
+    }
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open(ctx)
+    }
+
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.update(ctx, |model, ctx| model.accept_selected(ctx))
+            .map(|skill| {
+                TuiInlineMenuAccepted::SlashCommand(AcceptSlashCommandOrSavedPrompt::Skill {
+                    reference: skill.skill_reference,
+                    name: skill.skill_name,
+                })
+            })
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot(ctx)
     }
 }
 
@@ -457,7 +576,7 @@ impl TuiElement for TuiInlineMenuElement {
     }
 }
 
-/// Returns the result rows available after reserving border and header chrome.
+/// Returns the result rows available after reserving header chrome.
 pub(crate) const fn result_row_capacity(
     allocated_height: u16,
     has_title: bool,
@@ -465,7 +584,7 @@ pub(crate) const fn result_row_capacity(
 ) -> usize {
     let title_rows = if has_title { 1 } else { 0 };
     let tab_rows = if has_tabs { 1 } else { 0 };
-    (allocated_height as usize).saturating_sub(INLINE_MENU_BORDER_ROWS + title_rows + tab_rows)
+    (allocated_height as usize).saturating_sub(title_rows + tab_rows)
 }
 
 fn visible_result_capacity(snapshot: &TuiInlineMenuSnapshot, allocated_height: u16) -> usize {
@@ -487,9 +606,9 @@ fn build_inline_menu(
     allocated_height: u16,
 ) -> Box<dyn TuiElement> {
     let slash_command_columns = tui_two_column_layout(
-        usize::from(allocated_width.saturating_sub(2)),
+        usize::from(allocated_width),
         snapshot.rows.iter().filter_map(|row| {
-            if row.style != TuiInlineMenuRowStyle::SlashCommand {
+            if row.style != TuiInlineMenuRowStyle::InlineMenuItem {
                 return None;
             }
             Some((row.title.as_str(), row.description.as_deref()?))
@@ -499,7 +618,7 @@ fn build_inline_menu(
     let mut column = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
     if let Some(header) = &snapshot.header {
         if let Some(title) = &header.title {
-            column = column.child(menu_status_row(title, builder));
+            column = column.child(menu_header_row(title, builder));
         }
         if !header.tabs.is_empty() {
             let labels = header
@@ -514,7 +633,7 @@ fn build_inline_menu(
                 })
                 .collect::<Vec<_>>()
                 .join("  ");
-            column = column.child(menu_status_row(&labels, builder));
+            column = column.child(menu_header_row(&labels, builder));
         }
     }
 
@@ -554,8 +673,13 @@ fn build_inline_menu(
         }
     }
 
-    TuiContainer::new(column.finish())
-        .with_border_style(builder.accent_border_style())
+    column.finish()
+}
+
+fn menu_header_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+    TuiText::new(label)
+        .with_style(builder.dim_text_style())
+        .truncate()
         .finish()
 }
 
@@ -603,16 +727,16 @@ fn menu_result_row(
         builder.slash_command_selection_text_style()
     } else {
         match (row.is_selectable, row.style) {
-            (true, TuiInlineMenuRowStyle::SlashCommand) => builder.slash_command_text_style(),
+            (true, TuiInlineMenuRowStyle::InlineMenuItem) => builder.slash_command_text_style(),
             (true, TuiInlineMenuRowStyle::Default) => builder.primary_text_style(),
-            (false, TuiInlineMenuRowStyle::Default | TuiInlineMenuRowStyle::SlashCommand) => {
+            (false, TuiInlineMenuRowStyle::Default | TuiInlineMenuRowStyle::InlineMenuItem) => {
                 builder.dim_text_style()
             }
         }
     };
     let show_description = match row.style {
         TuiInlineMenuRowStyle::Default => row.description.is_some(),
-        TuiInlineMenuRowStyle::SlashCommand => {
+        TuiInlineMenuRowStyle::InlineMenuItem => {
             slash_command_columns.show_second && row.description.is_some()
         }
     };
@@ -623,7 +747,7 @@ fn menu_result_row(
     };
     let title = match row.style {
         TuiInlineMenuRowStyle::Default => row.title.clone(),
-        TuiInlineMenuRowStyle::SlashCommand => format_tui_first_column(
+        TuiInlineMenuRowStyle::InlineMenuItem => format_tui_first_column(
             &row.title,
             slash_command_columns.with_second_visible(show_description),
         ),
@@ -637,7 +761,7 @@ fn menu_result_row(
     } else {
         match row.style {
             TuiInlineMenuRowStyle::Default => builder.muted_text_style(),
-            TuiInlineMenuRowStyle::SlashCommand => builder.primary_text_style(),
+            TuiInlineMenuRowStyle::InlineMenuItem => builder.primary_text_style(),
         }
     };
 
@@ -645,7 +769,7 @@ fn menu_result_row(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .child(match row.style {
             TuiInlineMenuRowStyle::Default => title,
-            TuiInlineMenuRowStyle::SlashCommand => TuiConstrainedBox::new(title)
+            TuiInlineMenuRowStyle::InlineMenuItem => TuiConstrainedBox::new(title)
                 .with_max_cols(
                     u16::try_from(title_columns)
                         .expect("title columns come from the u16 width constraint"),
@@ -655,7 +779,7 @@ fn menu_result_row(
     if let Some(description) = row.description.as_ref().filter(|_| show_description) {
         let description = match row.style {
             TuiInlineMenuRowStyle::Default => format!("  {description}"),
-            TuiInlineMenuRowStyle::SlashCommand => description.clone(),
+            TuiInlineMenuRowStyle::InlineMenuItem => description.clone(),
         };
         content = content.child(
             TuiText::new(description)

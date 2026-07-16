@@ -91,6 +91,23 @@ impl<'de> Deserialize<'de> for UserTakeOverReason {
 struct ActiveCLISubagentState {
     task_id: Option<TaskId>,
     last_snapshot_at: Option<Instant>,
+    latest_instruction: Option<String>,
+}
+/// Read-only identity and control state for a terminal command currently
+/// associated with a CLI subagent.
+///
+/// The terminal block remains the canonical owner of this state. Front-ends
+/// use this snapshot to keep rendering and input routing in agreement without
+/// exposing mutable block internals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CLISubagentTarget {
+    pub block_id: BlockId,
+    pub task_id: TaskId,
+    pub conversation_id: AIConversationId,
+    pub requested_command_action_id: Option<AIAgentActionId>,
+    pub control_state: LongRunningCommandControlState,
+    pub last_snapshot_at: Option<Instant>,
+    pub latest_instruction: Option<String>,
 }
 
 impl UserTakeOverReason {
@@ -359,6 +376,69 @@ impl CLISubagentController {
         self.active_subagents_by_block
             .get(block_id)
             .and_then(|state| state.last_snapshot_at)
+    }
+
+    pub fn set_latest_instruction(
+        &mut self,
+        block_id: BlockId,
+        instruction: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<String> {
+        let previous = self
+            .active_subagents_by_block
+            .entry(block_id.clone())
+            .or_default()
+            .latest_instruction
+            .replace(instruction);
+        ctx.emit(CLISubagentEvent::UpdatedInstruction { block_id });
+        previous
+    }
+
+    pub fn restore_latest_instruction(
+        &mut self,
+        block_id: BlockId,
+        instruction: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(state) = self.active_subagents_by_block.get_mut(&block_id) {
+            state.latest_instruction = instruction;
+            ctx.emit(CLISubagentEvent::UpdatedInstruction { block_id });
+        }
+    }
+    /// Returns the CLI subagent associated with the active command block.
+    pub fn active_target(&self) -> Option<CLISubagentTarget> {
+        let terminal_model = self.terminal_model.lock();
+        let block = terminal_model.block_list().active_block();
+        if !block.is_active_and_long_running() {
+            return None;
+        }
+        self.target_for_block_in_model(block.id(), &terminal_model)
+    }
+
+    /// Returns the CLI subagent associated with `block_id`.
+    pub fn target_for_block(&self, block_id: &BlockId) -> Option<CLISubagentTarget> {
+        let terminal_model = self.terminal_model.lock();
+        self.target_for_block_in_model(block_id, &terminal_model)
+    }
+
+    fn target_for_block_in_model(
+        &self,
+        block_id: &BlockId,
+        terminal_model: &TerminalModel,
+    ) -> Option<CLISubagentTarget> {
+        let block = terminal_model.block_list().block_with_id(block_id)?;
+        Some(CLISubagentTarget {
+            block_id: block.id().clone(),
+            task_id: block.cli_subagent_task_id()?.clone(),
+            conversation_id: block.ai_conversation_id()?,
+            requested_command_action_id: block.requested_command_action_id().cloned(),
+            control_state: block.long_running_control_state()?.clone(),
+            last_snapshot_at: self.last_snapshot_at(block_id),
+            latest_instruction: self
+                .active_subagents_by_block
+                .get(block_id)
+                .and_then(|state| state.latest_instruction.clone()),
+        })
     }
 
     /// Force the currently in-flight poll for the given long-running command block to
@@ -680,11 +760,28 @@ pub enum CLISubagentEvent {
         requested_command_action_id: Option<AIAgentActionId>,
         agent_has_control: bool,
     },
+    UpdatedInstruction {
+        block_id: BlockId,
+    },
     UpdatedLastSnapshot,
     ToggledHideResponses,
     /// Emitted when the user hands control back to the agent after a
     /// TransferShellCommandControlToUser action.
     ControlHandedBackAfterTransfer,
+}
+
+impl CLISubagentEvent {
+    pub fn block_id(&self) -> Option<&BlockId> {
+        match self {
+            Self::SpawnedSubagent { block_id, .. }
+            | Self::FinishedSubagent { block_id, .. }
+            | Self::UpdatedControl { block_id, .. }
+            | Self::UpdatedInstruction { block_id } => Some(block_id),
+            Self::UpdatedLastSnapshot
+            | Self::ToggledHideResponses
+            | Self::ControlHandedBackAfterTransfer => None,
+        }
+    }
 }
 
 impl Entity for CLISubagentController {

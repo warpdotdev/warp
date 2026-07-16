@@ -4,7 +4,8 @@ use parking_lot::FairMutex;
 use warp::tui_export::{
     AIConversationId, AgentConversationListEntryState, AgentRunDisplayStatus, AgentViewEntryOrigin,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationSelection,
-    ConversationSelectionHandle, Harness, TerminalModel, TranscriptScope,
+    ConversationSelectionEvent, ConversationSelectionHandle, Harness, TerminalModel,
+    TranscriptScope,
 };
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{App, EntityId, ModelHandle};
@@ -239,6 +240,25 @@ fn tui_selection_reconciles_split_and_removed_selection() {
             );
         });
 
+        // Removing the selected conversation clears it and schedules a replacement
+        // via `ctx.spawn` (see `defer_replacement_conversation`). `ctx.spawn` runs
+        // its future on the background executor and delivers the result back to the
+        // main thread, so the replacement is applied on a later tick. Subscribe
+        // first so we can await that replacement deterministically via its
+        // `Activated` event, instead of polling a fixed number of times (which
+        // races the background round-trip and made this test flaky).
+        let (replacement_tx, replacement_rx) = futures::channel::oneshot::channel();
+        let replacement_tx = std::cell::RefCell::new(Some(replacement_tx));
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&selection, move |_, event, _| {
+                if matches!(event, ConversationSelectionEvent::Activated { .. }) {
+                    if let Some(tx) = replacement_tx.borrow_mut().take() {
+                        let _ = tx.send(());
+                    }
+                }
+            });
+        });
+
         history.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::RemoveConversation {
                 terminal_surface_id,
@@ -249,14 +269,11 @@ fn tui_selection_reconciles_split_and_removed_selection() {
         selection.read(&app, |selection, ctx| {
             assert_eq!(selection.selected_conversation_id(ctx), None);
         });
-        for _ in 0..100 {
-            if selection.read(&app, |selection, ctx| {
-                selection.selected_conversation_id(ctx).is_some()
-            }) {
-                break;
-            }
-            futures_lite::future::yield_now().await;
-        }
+
+        replacement_rx
+            .await
+            .expect("removing the selected conversation should select a replacement");
+
         selection.read(&app, |selection, ctx| {
             assert!(selection.selected_conversation_id(ctx).is_some());
             assert!(selection.is_conversation_active(ctx));

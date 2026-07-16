@@ -11,6 +11,7 @@ fn start_recording(
         frame_rate: 15,
         limits: None,
         summary: String::new(),
+        playback_speed_multiplier: 0,
         target,
     }
 }

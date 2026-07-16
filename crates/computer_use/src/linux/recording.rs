@@ -352,6 +352,64 @@ async fn wait_for_finalization(
     }
 }
 
+/// Burns the keyboard overlay pills into `input` via a post-stop ffmpeg
+/// re-encode, returning the path to the annotated file (a sibling of `input`).
+/// The original is left untouched; the caller owns cleanup of both. ffmpeg
+/// demuxes the mp4 from disk frame-by-frame, so the whole recording is never
+/// buffered in memory.
+pub async fn burn_in_action_log(
+    input: &Path,
+    entries: &[crate::ActionLogEntry],
+    dimensions: (u32, u32),
+) -> Result<PathBuf, RecordingError> {
+    let ass_path = input.with_extension("ass");
+    std::fs::write(
+        &ass_path,
+        crate::overlay::build_overlay_ass(entries, dimensions),
+    )
+    .map_err(|e| RecordingError::Finalize {
+        reason: format!("failed to write overlay subtitle file: {e}"),
+    })?;
+    let output_path = input.with_extension("overlay.mp4");
+
+    let subtitles_filter = format!("subtitles=filename='{}'", ass_path.display());
+    let status = Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-i")
+        .arg(input)
+        .arg("-vf")
+        .arg(&subtitles_filter)
+        .args(["-c:v", "libx264"])
+        .args(["-preset", "ultrafast"])
+        .args(["-pix_fmt", "yuv420p"])
+        .args(["-movflags", "+faststart"])
+        .arg(&output_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+
+    // The subtitle file is an implementation detail; drop it regardless of outcome.
+    let _ = std::fs::remove_file(&ass_path);
+
+    match status {
+        Ok(status) if status.success() => Ok(output_path),
+        Ok(status) => {
+            let _ = std::fs::remove_file(&output_path);
+            Err(RecordingError::Finalize {
+                reason: format!("ffmpeg overlay burn-in exited with status {status}"),
+            })
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&output_path);
+            Err(RecordingError::Finalize {
+                reason: format!("failed to run ffmpeg for overlay burn-in: {e}"),
+            })
+        }
+    }
+}
+
 /// Queries the X11 root window's dimensions in physical pixels via `$DISPLAY`.
 fn query_display_dimensions() -> Result<(u32, u32), RecordingError> {
     let (conn, screen_index) =

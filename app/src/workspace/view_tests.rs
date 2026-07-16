@@ -190,6 +190,7 @@ pub(crate) fn initialize_app(app: &mut App) {
         warp_server_client::iap::IapManager::new(
             None,
             Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+            None,
             ctx,
         )
     });

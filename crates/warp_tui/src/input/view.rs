@@ -27,6 +27,7 @@ use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputTypeAutoDetectionSource, LLMId,
+    TuiMcpAction,
 };
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::selection::TextUnit;
@@ -35,12 +36,16 @@ use warpui_core::elements::MouseStateHandle;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding};
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
-use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
+use warpui_core::{
+    AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
+    ViewContext,
+};
 
 use super::kill_buffer::KillBuffer;
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
-use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted};
+use crate::inline_menu::{active_inline_menu, TuiInlineMenu, TuiInlineMenuAccepted};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
+use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::tui_builder::TuiUiBuilder;
 
@@ -469,6 +474,8 @@ pub enum TuiInputViewEvent {
     AcceptedConversation(warp::tui_export::AgentConversationEntryId),
     /// The user selected a model menu item.
     AcceptedModel(LLMId),
+    /// The user selected an action from the MCP menu.
+    AcceptedMcp(TuiMcpAction),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -570,6 +577,8 @@ pub struct TuiInputView {
     model: ModelHandle<CodeEditorModel>,
     /// Shared input-mode state driving `!` shell-mode handling.
     input_mode: ModelHandle<BlocklistAIInputModel>,
+    /// Single authoritative menu mode, mirroring the GUI input's suggestions mode.
+    suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     /// Generalized inline menus used to route prioritized menu actions.
     inline_menus: Vec<TuiInlineMenu>,
     /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
@@ -579,6 +588,10 @@ pub struct TuiInputView {
     /// Mouse state for the shell-mode `!` gutter; created once here (not inline
     /// during render) so mouse tracking survives per-frame element rebuilds.
     prefix_mouse_state: MouseStateHandle,
+    /// Whether this view is focused, tracked via `on_focus`/`on_blur` like
+    /// the GUI's `EditorView::focused`. Snapshotted into the editor element
+    /// so it only consumes typed text while the input is focused.
+    focused: bool,
 }
 
 impl Entity for TuiInputView {
@@ -602,6 +615,7 @@ impl TuiInputView {
     pub(crate) fn new(
         model: ModelHandle<CodeEditorModel>,
         input_mode: ModelHandle<BlocklistAIInputModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -613,13 +627,16 @@ impl TuiInputView {
         // The model only emits on real config changes, and rendering branches
         // on the config (shell-mode gutter/border), so every event re-renders.
         ctx.subscribe_to_model(&input_mode, |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&suggestions_mode, |_, _, _, ctx| ctx.notify());
         Self {
             model,
             input_mode,
+            suggestions_mode,
             inline_menus,
             kill_buffer: KillBuffer::default(),
             max_visible_rows: 6,
             prefix_mouse_state: MouseStateHandle::default(),
+            focused: false,
         }
     }
 
@@ -655,8 +672,9 @@ impl TuiInputView {
         let builder = TuiUiBuilder::from_app(ctx);
         let mut styles = TuiEditorStyles::default();
         if let Some(range) = self
-            .active_inline_menu(ctx)
-            .and_then(|inline_menu| inline_menu.input_highlight_range(ctx))
+            .inline_menus
+            .iter()
+            .find_map(|inline_menu| inline_menu.input_highlight_range(ctx))
         {
             styles
                 .text_overrides
@@ -664,14 +682,16 @@ impl TuiInputView {
         }
         let mut element = TuiEditorElement::new(&self.model, ctx)
             .editable()
+            .with_view_focused(self.focused)
             .with_viewport_rows(self.max_visible_rows)
             .with_styles(styles)
             .on_action(|action, event_ctx| {
                 event_ctx.dispatch_typed_action(TuiInputAction::from(action))
             });
         if let Some(hint_text) = self
-            .active_inline_menu(ctx)
-            .and_then(|inline_menu| inline_menu.input_argument_hint_text(ctx))
+            .inline_menus
+            .iter()
+            .find_map(|inline_menu| inline_menu.input_argument_hint_text(ctx))
         {
             element = element.with_trailing_ghost_text(hint_text, builder.dim_text_style());
         }
@@ -745,6 +765,20 @@ impl TuiView for TuiInputView {
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
         input_keymap_context(self.active_inline_menu(ctx).is_some() || self.is_shell_mode(ctx))
     }
+
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() {
+            self.focused = true;
+            ctx.notify();
+        }
+    }
+
+    fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
+        if blur_ctx.is_self_blurred() {
+            self.focused = false;
+            ctx.notify();
+        }
+    }
 }
 
 impl From<TuiEditorAction> for TuiInputAction {
@@ -782,7 +816,14 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::InsertChar(c) => {
                 // A `!` typed at the very start of the input enters shell mode
                 // instead of inserting (matching the GUI's typed-only trigger).
-                if *c == '!' && !self.is_shell_mode(ctx) && self.is_cursor_at_start(ctx) {
+                if *c == '!'
+                    && !self.is_shell_mode(ctx)
+                    && self.is_cursor_at_start(ctx)
+                    && !self
+                        .input_mode
+                        .as_ref(ctx)
+                        .is_terminal_use_active_or_pending()
+                {
                     self.enter_shell_mode(ctx);
                 } else {
                     let s = c.to_string();
@@ -819,7 +860,24 @@ impl TypedActionView for TuiInputView {
                 });
             }
             TuiInputAction::MoveLeft => {
-                self.model.update(ctx, |m, ctx| m.move_left(ctx));
+                // Only open the conversation list from normal agent input; in
+                // `!` shell mode the `!` prefix is not part of `plain_text`, so
+                // an empty shell command would otherwise trip this branch and
+                // open the picker while the input stayed shell-mode.
+                if !self.is_shell_mode(ctx)
+                    && self.plain_text(ctx).is_empty()
+                    && self.is_cursor_at_start(ctx)
+                {
+                    if let Some(menu) = self
+                        .inline_menus
+                        .iter()
+                        .find(|menu| menu.mode() == TuiInputSuggestionsMode::ConversationMenu)
+                    {
+                        menu.open(ctx);
+                    }
+                } else {
+                    self.model.update(ctx, |m, ctx| m.move_left(ctx));
+                }
             }
             TuiInputAction::MoveRight => {
                 self.model.update(ctx, |m, ctx| m.move_right(ctx));
@@ -1130,6 +1188,9 @@ impl TuiInputView {
                         TuiInlineMenuAccepted::Model(id) => {
                             ctx.emit(TuiInputViewEvent::AcceptedModel(id));
                         }
+                        TuiInlineMenuAccepted::Mcp(action) => {
+                            ctx.emit(TuiInputViewEvent::AcceptedMcp(action));
+                        }
                     }
                 }
             }
@@ -1158,10 +1219,11 @@ impl TuiInputView {
     }
 
     fn active_inline_menu(&self, ctx: &AppContext) -> Option<TuiInlineMenu> {
-        self.inline_menus
-            .iter()
-            .find(|menu| menu.is_open(ctx))
-            .cloned()
+        active_inline_menu(
+            &self.inline_menus,
+            self.suggestions_mode.as_ref(ctx).mode(),
+            ctx,
+        )
     }
 
     // ── Kill / yank ───────────────────────────────────────────────────────────

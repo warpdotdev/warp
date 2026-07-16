@@ -197,7 +197,12 @@ pub(crate) async fn watch_block_for_errors(
 }
 
 pub(crate) fn should_suppress_runtime_failure(status: Option<&CLIAgentSessionStatus>) -> bool {
-    matches!(status, Some(CLIAgentSessionStatus::Success))
+    // On CLIAgentSessionStatus::Failed, we directly update the task status,
+    // so we don't need to do runtime pattern matching to find the failure.
+    matches!(
+        status,
+        Some(CLIAgentSessionStatus::Success) | Some(CLIAgentSessionStatus::Failed { .. })
+    )
 }
 
 /// Cap excerpt length so we don't blow up status messages or logs with

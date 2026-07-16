@@ -230,7 +230,7 @@ use warp_errors::{report_error, report_if_error};
 use warp_files::FileModel;
 use warp_logging::LogDestination;
 use warp_managed_secrets::ManagedSecretManager;
-use warp_server_client::iap::{IapManager, IapManagerEvent, IapState};
+use warp_server_client::iap::{IapManager, IapManagerEvent, IapState, ManagedIapMint};
 use warp_server_client::network_logging::NetworkLogModel;
 use warpui::integration::TestDriver;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
@@ -245,6 +245,8 @@ use workspace::sync_inputs::SyncedInputState;
 use self::features::FeatureFlag;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::RecordingController;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::document::ai_document_model::AIDocumentModel;
@@ -289,6 +291,8 @@ use crate::root_view::{
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::iap_identity_minter::ManagedSecretsIapMinter;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 pub use crate::server::telemetry::{
     AgentModeEntrypoint, AgentModeEntrypointSelectionType, TelemetryEvent,
@@ -308,7 +312,7 @@ use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::{AudibleBell, CustomSecretRegexUpdater, History};
 #[cfg(feature = "tui")]
-pub use crate::tui::{TuiLoginModel, TuiLoginPhase};
+pub use crate::tui::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use crate::undo_close::UndoCloseStack;
 use crate::user_config::WarpConfig;
 use crate::util::bindings::is_binding_cross_platform;
@@ -513,8 +517,7 @@ impl LaunchMode {
             LaunchMode::App { .. } => ExecutionMode::App,
             LaunchMode::CommandLine { .. } => ExecutionMode::Sdk,
             LaunchMode::Test { .. } => ExecutionMode::App,
-            // The TUI front-end is an app-style client, not the SDK.
-            LaunchMode::Tui { .. } => ExecutionMode::App,
+            LaunchMode::Tui { .. } => ExecutionMode::Tui,
             // RemoteServerProxy is a thin byte bridge; Sdk is the closest match.
             LaunchMode::RemoteServerProxy => ExecutionMode::Sdk,
             // RemoteServerDaemon gets its own mode for distinct Sentry tagging.
@@ -545,6 +548,15 @@ impl LaunchMode {
             LaunchMode::Tui { .. } => true,
             LaunchMode::App { .. } | LaunchMode::Test { .. } => false,
         }
+    }
+
+    /// Whether this launch mode should start the local loopback HTTP server
+    /// (`crates/http_server`), which serves app-installation detection and profiling on a
+    /// fixed port. Only non-headless GUI instances start it, since co-located headless
+    /// processes (daemon, CLI, proxy, TUI) would otherwise contend for the fixed port.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    fn should_start_local_http_server(&self) -> bool {
+        !self.is_headless()
     }
 
     /// Returns `true` if this process can build and sync codebase indices.
@@ -1100,10 +1112,27 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let pty_spawner =
         terminal::local_tty::spawner::PtySpawner::new().context("Failed to create pty spawner")?;
 
-    // The TUI front-end skips the GUI lifecycle callbacks (which reach for
-    // singletons/windows it never creates), so it uses empty callbacks.
+    // The TUI front-end skips the GUI lifecycle callbacks, which reach for
+    // windows and GUI-only state, but still flushes telemetry and reporting on
+    // termination.
     let callbacks = if matches!(launch_mode, LaunchMode::Tui { .. }) {
-        warpui::platform::AppCallbacks::default()
+        let mut tracing_initialization = tracing_initialization.take();
+        warpui::platform::AppCallbacks {
+            on_will_terminate: Some(Box::new(move |ctx| {
+                TelemetryCollector::handle(ctx).update(ctx, |telemetry_collector, ctx| {
+                    telemetry_collector.flush_telemetry_events_for_shutdown(ctx);
+                });
+
+                profiling::teardown();
+                if let Some(initialization) = tracing_initialization.as_mut() {
+                    initialization.shutdown();
+                }
+
+                #[cfg(feature = "crash_reporting")]
+                crash_reporting::uninit_sentry();
+            })),
+            ..Default::default()
+        }
     } else {
         app_callbacks(
             launch_mode.is_integration_test(),
@@ -1374,13 +1403,21 @@ pub(crate) fn initialize_app(
     });
 
     let server_api = server_api_provider.as_ref(ctx).get();
+    // Parse the ambient-agent task id once. A set-but-unparseable OZ_RUN_ID is
+    // treated as absent everywhere: it identifies no task and must not enable the
+    // runner-context IAP WIF mint below.
     #[cfg(not(target_family = "wasm"))]
-    if let Ok(run_id) = std::env::var(warp_cli::OZ_RUN_ID_ENV) {
-        match run_id.parse() {
-            Ok(task_id) => server_api.set_ambient_agent_task_id(Some(task_id)),
-            Err(err) => log::warn!("Ignoring invalid {}: {err}", warp_cli::OZ_RUN_ID_ENV),
-        }
-    }
+    let ambient_agent_task_id: Option<AmbientAgentTaskId> = std::env::var(warp_cli::OZ_RUN_ID_ENV)
+        .ok()
+        .and_then(|run_id| match run_id.parse() {
+            Ok(task_id) => Some(task_id),
+            Err(err) => {
+                log::warn!("Ignoring invalid {}: {err}", warp_cli::OZ_RUN_ID_ENV);
+                None
+            }
+        });
+    #[cfg(not(target_family = "wasm"))]
+    server_api.set_ambient_agent_task_id(ambient_agent_task_id);
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
     #[cfg(not(target_family = "wasm"))]
     // Refresh starts only after the authenticated server client exists; tracing initialization
@@ -2164,7 +2201,19 @@ pub(crate) fn initialize_app(
         ctx.add_singleton_model(system::SystemInfo::new);
     }
 
-    // `IapManager` drives gcloud-based IAP token refresh for staging builds.
+    // In a sandboxed Oz runner, mint IAP tokens by self-minting via Workload
+    // Identity Federation (impersonating the IAP access service account). Gated
+    // on a valid ambient-agent task id so local staging clients — and any runner
+    // with a stray or malformed OZ_RUN_ID — keep using the gcloud path.
+    #[cfg(not(target_family = "wasm"))]
+    let managed_iap_mint = ambient_agent_task_id.is_some().then(|| {
+        let client = server_api_provider.as_ref(ctx).get_managed_secrets_client();
+        ManagedIapMint::new(Arc::new(ManagedSecretsIapMinter::new(client)))
+    });
+    #[cfg(target_family = "wasm")]
+    let managed_iap_mint: Option<ManagedIapMint> = None;
+
+    // `IapManager` drives IAP token refresh for staging builds.
     // Register it after `LocalShellState`: the Manager needs to know where the gcloud
     // cli lives & thus needs PATH config set by ~/.zshrc et al.
     //
@@ -2186,7 +2235,7 @@ pub(crate) fn initialize_app(
 
             path_future
         });
-        IapManager::new(iap_state, path_resolver, ctx)
+        IapManager::new(iap_state, path_resolver, managed_iap_mint, ctx)
     });
     // Subscribe to IAP manager events to show toasts when refresh fails.
     ctx.subscribe_to_model(&IapManager::handle(ctx), |_, e, ctx| {
@@ -2351,15 +2400,16 @@ pub(crate) fn initialize_app(
         aliases.connect(ctx);
     });
 
-    // When running natively, add the http server singleton to the application.
     #[cfg(not(target_family = "wasm"))]
-    ctx.add_singleton_model(move |ctx| {
-        let routers = vec![
-            app_installation_detection::make_router(),
-            profiling::make_router(),
-        ];
-        http_server::HttpServer::new(routers, ctx)
-    });
+    if launch_mode.should_start_local_http_server() {
+        ctx.add_singleton_model(move |ctx| {
+            let routers = vec![
+                app_installation_detection::make_router(),
+                profiling::make_router(),
+            ];
+            http_server::HttpServer::new(routers, ctx)
+        });
+    }
     #[cfg(feature = "local_fs")]
     if matches!(
         launch_mode,

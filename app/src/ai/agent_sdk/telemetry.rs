@@ -149,6 +149,14 @@ pub(super) enum CliTelemetryEvent {
     HarnessSupportFinishTask { success: bool },
     /// Executing `warp harness-support report-shutdown`
     HarnessSupportReportShutdown,
+    /// Executing `warp runner list`
+    RunnerList,
+    /// Executing `warp runner create`
+    RunnerCreate,
+    /// Executing `warp runner update`
+    RunnerUpdate,
+    /// Executing `warp runner delete`
+    RunnerDelete,
 }
 
 impl TelemetryEvent for CliTelemetryEvent {
@@ -243,6 +251,10 @@ impl TelemetryEvent for CliTelemetryEvent {
                 Some(json!({ "success": success }))
             }
             CliTelemetryEvent::HarnessSupportReportShutdown => None,
+            CliTelemetryEvent::RunnerList => None,
+            CliTelemetryEvent::RunnerCreate => None,
+            CliTelemetryEvent::RunnerUpdate => None,
+            CliTelemetryEvent::RunnerDelete => None,
         }
     }
 
@@ -365,6 +377,10 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::HarnessSupportReportShutdown => {
                 "CLI.Execute.HarnessSupport.ReportShutdown"
             }
+            CliTelemetryEventDiscriminants::RunnerList => "CLI.Execute.Runner.List",
+            CliTelemetryEventDiscriminants::RunnerCreate => "CLI.Execute.Runner.Create",
+            CliTelemetryEventDiscriminants::RunnerUpdate => "CLI.Execute.Runner.Update",
+            CliTelemetryEventDiscriminants::RunnerDelete => "CLI.Execute.Runner.Delete",
         }
     }
 
@@ -525,6 +541,10 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::HarnessSupportReportShutdown => {
                 "Reported agent shutdown via harness-support from the Warp CLI"
             }
+            CliTelemetryEventDiscriminants::RunnerList => "Listed runners from the Warp CLI",
+            CliTelemetryEventDiscriminants::RunnerCreate => "Created a runner from the Warp CLI",
+            CliTelemetryEventDiscriminants::RunnerUpdate => "Updated a runner from the Warp CLI",
+            CliTelemetryEventDiscriminants::RunnerDelete => "Deleted a runner from the Warp CLI",
         }
     }
 
@@ -542,6 +562,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             Self::ApiKeyList | Self::ApiKeyCreate | Self::ApiKeyExpire => {
                 EnablementState::Flag(FeatureFlag::APIKeyManagement)
+            }
+            Self::RunnerList | Self::RunnerCreate | Self::RunnerUpdate | Self::RunnerDelete => {
+                EnablementState::Flag(FeatureFlag::CloudAgentRunnerCLICommands)
             }
             Self::RunMessageWatch
             | Self::RunMessageSend

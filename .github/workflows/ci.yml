@@ -207,7 +207,7 @@ jobs:
 
       - name: Install cargo nextest
         if: ${{ matrix.is_self_hosted == false }}
-        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2.81.10
+        uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
         with:
           tool: nextest
 
@@ -483,7 +483,7 @@ jobs:
           echo "::notice title=Remote Server Tests - Default Bash Version::$DEFAULT_BASH_VERSION"
 
       - name: Install cargo nextest
-        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2.81.10
+        uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
         with:
           tool: nextest
 
@@ -623,6 +623,9 @@ jobs:
             # feature-gated logic for the WIP completions-on-js implementation.
             cargo clippy --locked -p warp_completer --all-targets --tests -- -D warnings
           fi
+          # Workspace feature unification enables `warp/tui` through the `warp_tui` package.
+          # Also lint the default GUI configuration used by `cargo run` and `./script/run`.
+          cargo clippy --locked -p warp --all-targets --tests -- -D warnings
         env:
           # Attach the GitHub auth token so that requests to the GitHub API
           # don't get rate limited during compilation (e.g.: retrieving

@@ -1,5 +1,5 @@
 use ai::skills::{SkillProvider, SkillReference, SkillScope};
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::Fill;
@@ -15,18 +15,17 @@ use warpui::{
     AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _,
 };
 
-use crate::ai::skills::SkillManager;
 use crate::appearance::Appearance;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::search::{SearchItem, SyncDataSource};
-use crate::terminal::cli_agent_sessions::{CLIAgentInputState, CLIAgentSessionsModel};
 use crate::terminal::input::inline_menu::{
     default_navigation_message_items, styles as inline_styles, InlineMenuAction,
     InlineMenuMessageArgs, InlineMenuType,
 };
 use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::input::skills::{query_selectable_skills, SelectableSkill};
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 
@@ -119,15 +118,6 @@ impl SkillSelectorDataSource {
         self.ambient_agent_view_model.is_some()
     }
 
-    /// Returns the supported skill providers for the active CLI agent, or `None` if
-    /// CLI agent input is not open.
-    fn active_cli_agent_providers(&self, app: &AppContext) -> Option<&'static [SkillProvider]> {
-        CLIAgentSessionsModel::as_ref(app)
-            .session(self.terminal_view_id)
-            .filter(|s| matches!(s.input_state, CLIAgentInputState::Open { .. }))
-            .map(|s| s.agent.supported_skill_providers())
-    }
-
     pub fn set_include_bundled(&mut self, include_bundled: bool) {
         self.include_bundled = include_bundled;
     }
@@ -158,76 +148,17 @@ impl SyncDataSource for SkillSelectorDataSource {
         }
 
         let cwd = self.get_current_working_directory(app);
-        let cli_agent_providers = self.active_cli_agent_providers(app);
-        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
-
-        // Filter out bundled skills when in open mode, since they cannot be opened.
-        // Bundled skills are identified by scope rather than reference: local
-        // catalog entries are `BundledSkillId`-referenced, but remote catalog
-        // entries are path-referenced, and both must be excluded here.
-        // When CLI agent input is open, filter to skills that exist in a supported
-        // provider folder. We check all paths for the skill name (not just the
-        // deduplicated provider) because deduplication may pick a higher-priority
-        // provider even when the skill also exists in the CLI agent's folder.
-        let skill_manager = SkillManager::as_ref(app);
-        let skills: Vec<_> = skills
-            .into_iter()
-            .filter(|skill| {
-                if let Some(providers) = &cli_agent_providers {
-                    skill_manager.skill_exists_for_any_provider(skill, providers)
-                } else {
-                    self.include_bundled || skill.scope != SkillScope::Bundled
-                }
-            })
-            .map(|mut skill| {
-                // When a CLI agent is active, re-map the provider to the best
-                // supported one so the icon reflects the agent's native provider
-                // rather than the global dedup winner.
-                if let Some(providers) = &cli_agent_providers {
-                    skill.provider = skill_manager.best_supported_provider(&skill, providers);
-                }
-                skill
-            })
-            .collect();
-
-        let query_text = query.text.trim();
-        if query_text.is_empty() {
-            return Ok(skills
-                .into_iter()
-                .map(|skill| {
-                    QueryResult::from(SkillSearchItem::new(
-                        skill.name,
-                        skill.reference,
-                        skill.description,
-                        skill.scope,
-                        skill.provider,
-                        skill.icon_override,
-                    ))
-                })
-                .collect());
-        }
-        Ok(skills
-            .into_iter()
-            .filter_map(|skill| {
-                let match_result = match_indices_case_insensitive(skill.name.as_str(), query_text)?;
-                // Avoid spamming results with extremely weak matches.
-                if query_text.len() > 1 && match_result.score < 10 {
-                    return None;
-                }
-                Some(QueryResult::from(
-                    SkillSearchItem::new(
-                        skill.name,
-                        skill.reference,
-                        skill.description,
-                        skill.scope,
-                        skill.provider,
-                        skill.icon_override,
-                    )
-                    .with_name_match_result(Some(match_result.clone()))
-                    .with_score(OrderedFloat(match_result.score as f64)),
-                ))
-            })
-            .collect())
+        Ok(query_selectable_skills(
+            cwd.as_ref(),
+            self.terminal_view_id,
+            self.include_bundled,
+            &query.text,
+            app,
+        )
+        .into_iter()
+        .map(SkillSearchItem::from)
+        .map(QueryResult::from)
+        .collect())
     }
 }
 
@@ -248,34 +179,17 @@ struct SkillSearchItem {
 }
 
 impl SkillSearchItem {
-    fn new(
-        skill_name: String,
-        skill_reference: SkillReference,
-        skill_description: String,
-        scope: SkillScope,
-        provider: SkillProvider,
-        icon_override: Option<Icon>,
-    ) -> Self {
+    fn from(skill: SelectableSkill) -> Self {
         Self {
-            skill_name,
-            skill_reference,
-            skill_description,
-            scope,
-            provider,
-            icon_override,
-            name_match_result: None,
-            score: OrderedFloat(f64::MIN),
+            skill_name: skill.name,
+            skill_reference: skill.reference,
+            skill_description: skill.description,
+            scope: skill.scope,
+            provider: skill.provider,
+            icon_override: skill.icon_override,
+            name_match_result: skill.name_match_result,
+            score: skill.score,
         }
-    }
-
-    fn with_name_match_result(mut self, result: Option<FuzzyMatchResult>) -> Self {
-        self.name_match_result = result;
-        self
-    }
-
-    fn with_score(mut self, score: OrderedFloat<f64>) -> Self {
-        self.score = score;
-        self
     }
 }
 

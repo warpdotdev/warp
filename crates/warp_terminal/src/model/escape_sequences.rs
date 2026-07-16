@@ -4,6 +4,7 @@ use lazy_static::lazy_static;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::OperatingSystem;
 
+use super::indexing::Point;
 use super::mouse::{MouseAction, MouseButton, MouseState};
 use super::TermMode;
 
@@ -251,6 +252,67 @@ impl<T: ModeProvider> ToEscapeSequence<T> for KeystrokeWithDetails<'_> {
     }
 }
 
+impl KeystrokeWithDetails<'_> {
+    /// Full keystroke → PTY bytes for a frontend that receives a single key
+    /// event per press — e.g. the headless TUI, whose crossterm input has no
+    /// separate typed-characters event and doesn't pre-encode `Ctrl+<letter>`.
+    /// (The GUI needs no equivalent: the OS hands it printable text as a
+    /// separate typed-characters event and `Ctrl+<letter>` already encoded as
+    /// its control byte.)
+    ///
+    /// Layers the frontend-agnostic fallbacks on top of
+    /// [`to_escape_sequence`](ToEscapeSequence::to_escape_sequence), in order:
+    /// 1. the shared encoder — kitty protocol, application-cursor mode,
+    ///    alt/meta ESC-prefixing, function/cursor keys, backspace, and the
+    ///    `Ctrl+<number>`/`Ctrl+space` C0 set;
+    /// 2. `Ctrl+<letter>` → its C0 byte (`Ctrl+A`..`Ctrl+Z` → `0x01`..`0x1A`),
+    ///    which the encoder leaves alone without the kitty protocol;
+    /// 3. printable text → its UTF-8 bytes (from `chars`);
+    /// 4. named control keys that carry no `chars` (enter/escape/tab/backspace)
+    ///    → their C0 bytes, so e.g. Escape can leave an editor's insert mode.
+    ///
+    /// Returns `None` when the key produces nothing to send.
+    pub fn to_pty_bytes<T: ModeProvider>(&self, mode_provider: &T) -> Option<Vec<u8>> {
+        if let Some(sequence) = self.to_escape_sequence(mode_provider) {
+            return Some(sequence);
+        }
+        if let Some(control_byte) = ctrl_letter_to_c0(self.keystroke) {
+            return Some(control_byte);
+        }
+        if let Some(chars) = self.chars.filter(|chars| !chars.is_empty()) {
+            return Some(chars.as_bytes().to_vec());
+        }
+        named_control_key_to_c0(&self.keystroke.key)
+    }
+}
+
+/// The C0 control byte for a `Ctrl+<letter>` combo (`Ctrl+A`..`Ctrl+Z` →
+/// `0x01`..`0x1A`). Returns `None` when Ctrl isn't held or the key isn't a
+/// single ASCII letter.
+fn ctrl_letter_to_c0(keystroke: &Keystroke) -> Option<Vec<u8>> {
+    if !keystroke.ctrl {
+        return None;
+    }
+    match keystroke.key.as_bytes() {
+        // `& 0x1f` folds a/A..z/Z onto 0x01..0x1A (Ctrl+A = 0x01, Ctrl+Z = 0x1A).
+        [byte] if byte.is_ascii_alphabetic() => Some(vec![byte.to_ascii_uppercase() & 0x1f]),
+        _ => None,
+    }
+}
+
+/// C0 bytes for named control keys that carry no `chars` and that the
+/// escape-sequence encoder leaves unmapped without the kitty protocol. The key
+/// strings match the crossterm→key-event conversion (tab is `"\t"`).
+fn named_control_key_to_c0(key: &str) -> Option<Vec<u8>> {
+    match key {
+        "enter" => Some(vec![C0::CR]),
+        "escape" => Some(vec![C0::ESC]),
+        "\t" => Some(vec![C0::HT]),
+        "backspace" => Some(vec![C0::DEL]),
+        _ => None,
+    }
+}
+
 impl<T: ModeProvider> ToEscapeSequence<T> for MouseState {
     fn to_escape_sequence(&self, _mode_provider: &T) -> Option<Vec<u8>> {
         let action = match self.action() {
@@ -288,6 +350,37 @@ impl<T: ModeProvider> ToEscapeSequence<T> for MouseState {
         .repeat(repeats);
         Some(msg.into_bytes())
     }
+}
+
+/// Encodes alt-screen wheel movement as mouse reports or SS3 arrow keys.
+pub fn alt_screen_scroll_to_pty_bytes<T: ModeProvider>(
+    lines_to_scroll: i32,
+    point: Point,
+    report_mouse: bool,
+    mode_provider: &T,
+) -> Option<Vec<u8>> {
+    if lines_to_scroll == 0 {
+        return None;
+    }
+    if report_mouse {
+        return MouseState::new(
+            MouseButton::Wheel,
+            MouseAction::Scrolled {
+                delta: lines_to_scroll,
+            },
+            Default::default(),
+        )
+        .set_point(point)
+        .to_escape_sequence(mode_provider);
+    }
+
+    let arrow = if lines_to_scroll > 0 {
+        EscCodes::ARROW_UP
+    } else {
+        EscCodes::ARROW_DOWN
+    };
+    let sequence = EscCodes::build_escape_sequence_with_c1(C1::SS3, &[arrow]);
+    Some(sequence.repeat(lines_to_scroll.unsigned_abs() as usize))
 }
 
 pub trait ToModifierEscapeByte {

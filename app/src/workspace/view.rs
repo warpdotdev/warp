@@ -15813,7 +15813,7 @@ impl Workspace {
 
         // Mark handoff from any orchestrated source so the server can inject
         // the universal first-turn orchestration handoff message.
-        let orchestration_handoff = (source_conversation.has_parent_agent()
+        let orchestration_handoff = (source_conversation.is_child_agent_conversation()
             || !history_model
                 .as_ref(ctx)
                 .child_conversation_ids_of(&source_conversation.id())

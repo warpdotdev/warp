@@ -136,9 +136,11 @@ pub enum TuiSlashCommand {
     Plan,
     Conversations,
     Model,
+    Skills,
     CreateNewProject,
     ExportToClipboard,
     ExportToFile,
+    Mcp,
 }
 
 impl TuiSlashCommand {
@@ -151,9 +153,11 @@ impl TuiSlashCommand {
             name if name == commands::PLAN.name => Some(Self::Plan),
             name if name == commands::CONVERSATIONS.name => Some(Self::Conversations),
             name if name == commands::MODEL.name => Some(Self::Model),
+            name if name == commands::INVOKE_SKILL.name => Some(Self::Skills),
             name if name == commands::CREATE_NEW_PROJECT.name => Some(Self::CreateNewProject),
             name if name == commands::EXPORT_TO_CLIPBOARD.name => Some(Self::ExportToClipboard),
             name if name == commands::EXPORT_TO_FILE.name => Some(Self::ExportToFile),
+            name if name == commands::MCP.name => Some(Self::Mcp),
             _ => None,
         }
     }
@@ -855,7 +859,10 @@ impl Input {
                     entrypoint: CodeReviewPaneEntrypoint::SlashCommand,
                 });
             }
-            open_mcp_servers if command.name == commands::OPEN_MCP_SERVERS.name => {
+            open_mcp_servers
+                if command.name == commands::OPEN_MCP_SERVERS.name
+                    || command.name == commands::MCP.name =>
+            {
                 ctx.dispatch_typed_action(&TerminalAction::OpenViewMCPPane);
             }
             open_settings_file if command.name == commands::OPEN_SETTINGS_FILE.name => {

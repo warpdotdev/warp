@@ -697,15 +697,6 @@ pub enum FeatureFlag {
     /// flows while the default behavior temporarily keeps them disabled.
     LocalClaudeCodexChildHarnesses,
 
-    /// Gates client-side support for the `orchestrate` tool, which batches
-    /// multiple child agents into a single tool call with an inline
-    /// confirmation card. When enabled, the client advertises
-    /// `RequestSettings.SupportsOrchestrate = true` and the server's
-    /// orchestrate tool replaces `start_agent` / `start_agent_v2` for
-    /// orchestration-capable conversations. Layered on top of
-    /// `OrchestrationV2`; has no effect when v2 is off.
-    RunAgentsTool,
-
     /// On `wait_for_events`, confirms parent status against the server and
     /// registers an orchestrator for the owner-side ancestor stream so it
     /// receives events for children created out-of-band (Oz CLI / web API).
@@ -885,7 +876,9 @@ pub enum FeatureFlag {
 
     /// Gates NLD input classification matching the buffer against agent
     /// prompt history (in addition to shell command history). Still in
-    /// development, so enabled only for dev/dogfood builds.
+    /// development; currently disabled on all channels as a mitigation for
+    /// misclassification bug reports (see PR #12586). Re-enable via
+    /// `DOGFOOD_FLAGS` once the underlying issues are resolved.
     NldPromptHistoryMatch,
 
     /// Gates the custom model router feature, which allows users to define
@@ -907,6 +900,15 @@ pub enum FeatureFlag {
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
     McpJsonTreeView,
+
+    /// Renders supported solid box-drawing characters (`U+2500..=U+257F`)
+    /// procedurally as cell-filling rectangles instead of from the font,
+    /// eliminating seams between adjacent box-drawing cells in the terminal.
+    BoxDrawingGlyphs,
+
+    /// Enables the `oz runner` CRUD commands for managing cloud agent runners
+    /// via the CLI.
+    CloudAgentRunnerCLICommands,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -973,7 +975,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
-    FeatureFlag::NldPromptHistoryMatch,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::BackgroundComputerUse,
@@ -982,11 +983,14 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
+    FeatureFlag::GeminiEnterprise,
+    FeatureFlag::BoxDrawingGlyphs,
+    FeatureFlag::CloudAgentRunnerCLICommands,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::AsyncFind, FeatureFlag::PinnedTabs];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely
@@ -1093,10 +1097,6 @@ impl FeatureFlag {
             ),
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
-            ),
-            PinnedTabs => Some("Enables pinning individual tabs and tab groups to the front of the tab bar."),
-            AsyncFind => Some(
-                "Runs terminal find on a background thread to keep the UI responsive while searching large outputs.",
             ),
             _ => None,
         }

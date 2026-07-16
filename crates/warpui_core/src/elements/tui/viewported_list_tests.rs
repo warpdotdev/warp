@@ -8,10 +8,10 @@ use super::{
     TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
 };
 use crate::elements::tui::{
-    Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPoint,
-    TuiScreenPosition, TuiScrollable, TuiScrollableElement, TuiSelectable, TuiSelectionHandle,
-    TuiSize, TuiText,
+    Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiContainer, TuiElement, TuiEvent,
+    TuiEventContext, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect,
+    TuiScreenPoint, TuiScreenPosition, TuiScrollable, TuiScrollableElement, TuiSelectable,
+    TuiSelectionHandle, TuiSelectionSpan, TuiSize, TuiText,
 };
 use crate::event::ModifiersState;
 use crate::presenter::tui::TuiPresenter;
@@ -29,6 +29,12 @@ struct FakeContent {
     items: Rc<RefCell<Vec<FakeItem>>>,
     requests: Rc<RefCell<Vec<TuiViewportWindow>>>,
     widths: Rc<RefCell<Vec<u16>>>,
+    /// When set, `selection_logical_text` returns this for any non-empty
+    /// selection, standing in for content with a clean logical form. Left
+    /// `None` by `new`, so the default content falls back to per-row grid text.
+    logical_text: Rc<RefCell<Option<String>>>,
+    /// Selection spans passed to `selection_logical_text`, for assertions.
+    logical_requests: Rc<RefCell<Vec<TuiSelectionSpan>>>,
 }
 
 impl FakeContent {
@@ -37,7 +43,16 @@ impl FakeContent {
             items: Rc::new(RefCell::new(items)),
             requests: Rc::new(RefCell::new(Vec::new())),
             widths: Rc::new(RefCell::new(Vec::new())),
+            logical_text: Rc::new(RefCell::new(None)),
+            logical_requests: Rc::new(RefCell::new(Vec::new())),
         }
+    }
+
+    /// Makes this content yield `text` as the logical text for any non-empty
+    /// selection (the logical-sourcing path), instead of the per-row fallback.
+    fn with_logical_text(self, text: impl Into<String>) -> Self {
+        *self.logical_text.borrow_mut() = Some(text.into());
+        self
     }
 
     /// Builds deterministic viewport content without requiring layout state.
@@ -86,6 +101,16 @@ impl TuiViewportedElement for FakeContent {
     ) -> Option<TuiViewportContent> {
         Some(self.content(window, available_width))
     }
+
+    fn selection_logical_text(
+        &self,
+        selection: TuiSelectionSpan,
+        _available_width: u16,
+        _app: &AppContext,
+    ) -> Option<String> {
+        self.logical_requests.borrow_mut().push(selection);
+        self.logical_text.borrow().clone()
+    }
 }
 struct LayoutCountingElement {
     layout_count: Rc<Cell<usize>>,
@@ -123,6 +148,37 @@ impl TuiElement for LayoutCountingElement {
 
 struct LayoutCountingContent {
     layout_count: Rc<Cell<usize>>,
+}
+struct OpaqueContent;
+
+impl TuiViewportedElement for OpaqueContent {
+    fn visible_items(
+        &self,
+        window: TuiViewportWindow,
+        _available_width: u16,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiViewportContent {
+        let viewport_bottom = window
+            .scroll_top
+            .saturating_add(usize::from(window.viewport_height));
+        let items = [0usize, 3]
+            .into_iter()
+            .filter(|origin_y| {
+                origin_y.saturating_add(3) > window.scroll_top && *origin_y < viewport_bottom
+            })
+            .map(|origin_y| TuiVisibleViewportItem {
+                origin_y,
+                element: TuiContainer::new(TuiText::new("opaque").finish())
+                    .with_border()
+                    .finish(),
+            })
+            .collect();
+        TuiViewportContent {
+            content_height: 6,
+            items,
+        }
+    }
 }
 
 impl TuiViewportedElement for LayoutCountingContent {
@@ -480,6 +536,21 @@ fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
 }
 
 #[test]
+fn scrolling_up_works_over_opaque_content_in_a_clipped_layer() {
+    App::test((), |app| async move {
+        let state = TuiViewportedListState::new_at_end();
+        let viewport = TuiViewportedList::new(state.clone(), OpaqueContent);
+        let mut scrollable = TuiScrollable::new(viewport.finish_scrollable());
+        let size = TuiSize::new(10, 3);
+
+        render_viewport(&app, &mut scrollable, size);
+        assert!(state.is_at_end());
+
+        assert!(wheel(&app, &mut scrollable, size, 1.0));
+        assert_eq!(state.position(), TuiViewportPosition::RowsFromTop(1));
+    });
+}
+#[test]
 fn scrolling_down_pins_to_bottom_without_overscrolling() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
@@ -572,6 +643,67 @@ fn selectable_viewport_extends_into_post_scroll_rows() {
         mouse(&app, &mut element, size, left_up(2, 2));
 
         assert_eq!(copies.borrow().as_slice(), ["1:0\n1:1\n1:2"]);
+    });
+}
+
+/// Copy prefers the content's logical text: a selection across multiple
+/// rendered rows copies the single logical line, with no newline inserted at a
+/// soft-wrap boundary and no rendered wrap indentation. Guards the TUI copy bug
+/// where multi-row selections pasted with spurious newlines.
+#[test]
+fn selectable_viewport_copy_prefers_logical_text() {
+    App::test((), |app| async move {
+        // The item renders across three grid rows, but its logical form is a
+        // single line — copy must yield that line, not the per-row scrape.
+        let content =
+            FakeContent::new(vec![fake_item(1, 3)]).with_logical_text("the quick brown fox jumps");
+        let logical_requests = content.logical_requests.clone();
+        let state = TuiViewportedListState::new_at_end();
+        let viewport = viewport_with_state(state, content);
+        let copies = Rc::new(RefCell::new(Vec::new()));
+        let copies_for_callback = copies.clone();
+        let mut element = TuiSelectable::new(TuiSelectionHandle::default(), viewport)
+            .on_copy(move |text, _, _| copies_for_callback.borrow_mut().push(text));
+        let size = TuiSize::new(8, 3);
+
+        render_viewport(&app, &mut element, size);
+        mouse(&app, &mut element, size, left_down(0, 0, 1, false));
+        mouse(&app, &mut element, size, left_drag(2, 2));
+        render_viewport(&app, &mut element, size);
+        mouse(&app, &mut element, size, left_up(2, 2));
+
+        assert_eq!(copies.borrow().as_slice(), ["the quick brown fox jumps"]);
+        // The wrapper consulted the logical-text contract with the resolved span.
+        assert!(!logical_requests.borrow().is_empty());
+    });
+}
+
+/// When the content has no logical form (returns `None`), copy falls back to
+/// per-row grid text. Guards the per-row fallback path for content like
+/// diagrams that cannot yield logical text.
+#[test]
+fn selectable_viewport_copy_falls_back_to_grid_rows() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 3)]);
+        let logical_requests = content.logical_requests.clone();
+        let state = TuiViewportedListState::new_at_end();
+        let viewport = viewport_with_state(state, content);
+        let copies = Rc::new(RefCell::new(Vec::new()));
+        let copies_for_callback = copies.clone();
+        let mut element = TuiSelectable::new(TuiSelectionHandle::default(), viewport)
+            .on_copy(move |text, _, _| copies_for_callback.borrow_mut().push(text));
+        let size = TuiSize::new(8, 3);
+
+        render_viewport(&app, &mut element, size);
+        mouse(&app, &mut element, size, left_down(0, 0, 1, false));
+        mouse(&app, &mut element, size, left_drag(2, 1));
+        render_viewport(&app, &mut element, size);
+        mouse(&app, &mut element, size, left_up(2, 1));
+
+        // No logical text available, so the per-row grid scrape is used.
+        assert_eq!(copies.borrow().as_slice(), ["1:0\n1:1"]);
+        // The contract was still consulted before falling back.
+        assert!(!logical_requests.borrow().is_empty());
     });
 }
 
