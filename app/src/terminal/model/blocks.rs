@@ -2865,6 +2865,33 @@ impl BlockList {
         self.active_block_mut().disable_reset_grid_checks();
     }
 
+    /// Bulk-inserts fully serialized blocks into the block list without firing
+    /// [`Event::BlockMetadataReceived`] for each intermediate block. A single event is fired after
+    /// all blocks have been inserted.
+    pub fn bulk_insert_restored_blocks(&mut self, blocks: &[&SerializedBlock]) {
+        if blocks.is_empty() {
+            return;
+        }
+
+        let initial_received_precmd = self.active_block().has_received_precmd();
+
+        // Share one Processor across all blocks — more efficient than creating a new one per block
+        // as `insert_restored_block` does.
+        let mut processor = Processor::new();
+
+        for block in blocks {
+            self.restore_block(block, BootstrapStage::RestoreBlocks, &mut processor);
+        }
+
+        // Create a single final placeholder, matching the initialize() pattern.
+        // Only fire BlockMetadataReceived if the original active block had received precmd.
+        let precmd_payload = initial_received_precmd
+            .then(|| self.last_populated_precmd_payload.clone())
+            .flatten();
+        self.create_new_block(BlockId::new(), self.bootstrap_stage, precmd_payload, None);
+        self.active_block_mut().disable_reset_grid_checks();
+    }
+
     /// Splice a background block into the blocklist. This is called once the
     /// block has meaningful output.
     pub(super) fn insert_background_block(&mut self, block: Block) {
