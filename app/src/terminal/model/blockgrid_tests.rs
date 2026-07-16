@@ -276,3 +276,46 @@ pub fn test_cursor_display_point_not_clipped_when_trimming_disabled() {
         Some(CursorDisplayPoint::HiddenCache(Point::new(0, 1)))
     );
 }
+
+#[test]
+pub fn test_kitty_animation_parsing_and_handling() {
+    use crate::terminal::model::kitty::{parse_kitty_chunk, PendingKittyMessage, KittyMessage};
+
+    // Test a=f (AnimationFrame) parsing
+    // Sequence: "a=f,i=2,f=24,s=30,v=30,z=500"
+    let control_bytes = b"a=f,i=2,f=24,s=30,v=30,z=500;cGF5bG9hZA==".to_vec(); // payload is "payload" in base64
+    let chunk = parse_kitty_chunk(control_bytes);
+    let pending = PendingKittyMessage {
+        control_data: chunk.control_data,
+        payload: vec![chunk.payload],
+    };
+    let message = KittyMessage::try_from(pending).expect("message should decode");
+    let action = KittyAction::try_from(message).expect("action should parse");
+
+    if let KittyAction::AnimationFrame(frame_action) = action {
+        assert_eq!(frame_action.image_id, 2);
+        assert_eq!(frame_action.frame_gap_ms, 500);
+        assert_eq!(frame_action.image.data, b"payload");
+    } else {
+        panic!("expected AnimationFrame action");
+    }
+
+    // Test a=a (AnimationControl) parsing
+    // Sequence: "a=a,i=2,s=3"
+    let control_bytes = b"a=a,i=2,s=3;".to_vec();
+    let chunk = parse_kitty_chunk(control_bytes);
+    let pending = PendingKittyMessage {
+        control_data: chunk.control_data,
+        payload: vec![chunk.payload],
+    };
+    let message = KittyMessage::try_from(pending).expect("message should decode");
+    let action = KittyAction::try_from(message).expect("action should parse");
+
+    if let KittyAction::AnimationControl(control_action) = action {
+        assert_eq!(control_action.image_id, 2);
+        assert_eq!(control_action.command, 3);
+    } else {
+        panic!("expected AnimationControl action");
+    }
+}
+
