@@ -255,11 +255,12 @@ impl EnvVarCollectionBlock {
     }
 
     fn render_header(&self, app: &AppContext) -> Box<dyn Element> {
-        const COMMAND_WAITING_FOR_USER_MESSAGE: &str =
-            "OK if I run this command and read the output?";
-
         let title: Cow<'static, str> = if self.state == EnvVarCollectionState::WaitingForUser {
-            COMMAND_WAITING_FOR_USER_MESSAGE.into()
+            crate::menu_label(
+                "requested_command.command_waiting_message",
+                "OK if I run this command and read the output?",
+            )
+            .into()
         } else {
             self.command.clone().into()
         };
