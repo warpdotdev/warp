@@ -290,9 +290,7 @@ impl TerminalView {
             ClipConfig::start()
         };
 
-        let should_render_ambient_agent_indicator =
-            self.ambient_agent_task_id_for_details_panel(app).is_some()
-                || self.model.lock().is_shared_ambient_agent_session();
+        let should_render_ambient_agent_indicator = self.is_cloud_agent_session(app);
         let theme = appearance.theme();
         let render_agent_circle = |variant| {
             render_icon_with_status(
@@ -906,6 +904,19 @@ impl TerminalView {
                 .ambient_agent_view_model
                 .as_ref()
                 .is_some_and(|model| model.as_ref(ctx).is_ambient_agent())
+    }
+
+    /// Whether this pane should be treated as a cloud/ambient conversation for display
+    /// purposes (e.g. the cloud agent icon in the pane header and vertical tab). This is the
+    /// single source of truth for that check; surfaces should call it rather than re-deriving
+    /// the condition, so they can't drift apart.
+    ///
+    /// It keys off cloud-execution semantics only: a live ambient agent view, a shared
+    /// *ambient* session, or viewing an ambient conversation. It deliberately does NOT treat a
+    /// manually shared *local* (`User`) session as cloud even though it now carries an
+    /// orchestrator task id on its `source_task_id` sidecar (see QUALITY-726).
+    pub fn is_cloud_agent_session(&self, ctx: &AppContext) -> bool {
+        self.is_ambient_agent_session(ctx) || self.model.lock().is_cloud_or_ambient_conversation()
     }
 
     fn selected_conversation_for_user_facing_chrome<'a>(

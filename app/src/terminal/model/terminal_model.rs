@@ -1421,6 +1421,23 @@ impl TerminalModel {
             .and_then(|s| s.parse().ok())
     }
 
+    /// Model-only portion of the "is this a cloud/ambient conversation?" check used for
+    /// display purposes (e.g. the cloud agent icon). Callers holding a [`TerminalView`] should
+    /// use [`TerminalView::is_cloud_agent_session`], which also accounts for the ambient agent
+    /// view model.
+    ///
+    /// This intentionally keys off cloud-execution semantics — a shared *ambient* session or
+    /// viewing an ambient conversation — NOT the mere presence of an orchestrator task id. A
+    /// manually shared *local* (`User`) session carries a `source_task_id` sidecar but is not a
+    /// cloud conversation, so it must fall through here (see QUALITY-726).
+    pub fn is_cloud_or_ambient_conversation(&self) -> bool {
+        self.is_shared_ambient_agent_session()
+            || matches!(
+                self.conversation_transcript_viewer_status,
+                Some(ConversationTranscriptViewerStatus::ViewingAmbientConversation(_))
+            )
+    }
+
     /// Loads the provided scrollback into the model.
     // TODO: we should be doing this in the constructor of the
     // terminal model for the viewers so that we're guaranteed that
