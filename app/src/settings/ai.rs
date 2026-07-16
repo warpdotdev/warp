@@ -294,81 +294,81 @@ impl VoiceInputToggleKey {
     settings_value::SettingsValue,
 )]
 #[schemars(
-    description = "Preferred spoken language for voice input transcription.",
+    description = "Preferred spoken language for voice input transcription",
     rename_all = "snake_case"
 )]
 pub enum VoiceInputLanguage {
     /// Let the transcription provider auto-detect the spoken language (default).
     #[default]
-    #[schemars(description = "Auto-detect spoken language.")]
+    #[schemars(description = "Auto-detect spoken language")]
     Auto,
-    #[schemars(description = "English.")]
+    #[schemars(description = "English")]
     English,
-    #[schemars(description = "Spanish.")]
+    #[schemars(description = "Spanish")]
     Spanish,
-    #[schemars(description = "French.")]
+    #[schemars(description = "French")]
     French,
-    #[schemars(description = "German.")]
+    #[schemars(description = "German")]
     German,
-    #[schemars(description = "Portuguese.")]
+    #[schemars(description = "Portuguese")]
     Portuguese,
-    #[schemars(description = "Italian.")]
+    #[schemars(description = "Italian")]
     Italian,
-    #[schemars(description = "Dutch.")]
+    #[schemars(description = "Dutch")]
     Dutch,
-    #[schemars(description = "Polish.")]
+    #[schemars(description = "Polish")]
     Polish,
-    #[schemars(description = "Russian.")]
+    #[schemars(description = "Russian")]
     Russian,
-    #[schemars(description = "Ukrainian.")]
+    #[schemars(description = "Ukrainian")]
     Ukrainian,
-    #[schemars(description = "Japanese.")]
+    #[schemars(description = "Japanese")]
     Japanese,
-    #[schemars(description = "Korean.")]
+    #[schemars(description = "Korean")]
     Korean,
-    #[schemars(description = "Chinese (Simplified/Mandarin).")]
+    #[schemars(description = "Chinese (Simplified/Mandarin)")]
     Chinese,
-    #[schemars(description = "Hindi.")]
+    #[schemars(description = "Hindi")]
     Hindi,
-    #[schemars(description = "Arabic.")]
+    #[schemars(description = "Arabic")]
     Arabic,
-    #[schemars(description = "Turkish.")]
+    #[schemars(description = "Turkish")]
     Turkish,
-    #[schemars(description = "Swedish.")]
+    #[schemars(description = "Swedish")]
     Swedish,
-    #[schemars(description = "Norwegian.")]
+    #[schemars(description = "Norwegian")]
     Norwegian,
-    #[schemars(description = "Danish.")]
+    #[schemars(description = "Danish")]
     Danish,
-    #[schemars(description = "Finnish.")]
+    #[schemars(description = "Finnish")]
     Finnish,
-    #[schemars(description = "Estonian.")]
+    #[schemars(description = "Estonian")]
     Estonian,
-    #[schemars(description = "Latvian.")]
+    #[schemars(description = "Latvian")]
     Latvian,
-    #[schemars(description = "Lithuanian.")]
+    #[schemars(description = "Lithuanian")]
     Lithuanian,
-    #[schemars(description = "Czech.")]
+    #[schemars(description = "Czech")]
     Czech,
-    #[schemars(description = "Slovak.")]
+    #[schemars(description = "Slovak")]
     Slovak,
-    #[schemars(description = "Hungarian.")]
+    #[schemars(description = "Hungarian")]
     Hungarian,
-    #[schemars(description = "Romanian.")]
+    #[schemars(description = "Romanian")]
     Romanian,
-    #[schemars(description = "Greek.")]
+    #[schemars(description = "Greek")]
     Greek,
-    #[schemars(description = "Hebrew.")]
+    #[schemars(description = "Hebrew")]
     Hebrew,
-    #[schemars(description = "Thai.")]
+    #[schemars(description = "Thai")]
     Thai,
-    #[schemars(description = "Vietnamese.")]
+    #[schemars(description = "Vietnamese")]
     Vietnamese,
-    #[schemars(description = "Indonesian.")]
+    #[schemars(description = "Indonesian")]
     Indonesian,
-    #[schemars(description = "Malay.")]
+    #[schemars(description = "Malay")]
     Malay,
-    #[schemars(description = "Catalan.")]
+    #[schemars(description = "Catalan")]
     Catalan,
 }
 
