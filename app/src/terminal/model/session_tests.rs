@@ -144,10 +144,6 @@ fn powershell_read_command_embeds_escaped_path_without_args() {
         OsString::from(format!("[System.IO.File]::ReadAllText('{raw}')"))
     );
 
-    // The broken form that passed the path as a trailing `$args[0]` argument
-    // (which `powershell -Command` never populates) must not reappear.
-    assert!(!command.to_string_lossy().contains("$args"));
-
     // A single quote in the path is doubled so it can't terminate the literal.
     let command = powershell_read_all_text_command(OsStr::new(r"C:\o'brien\history.txt"));
     assert_eq!(
