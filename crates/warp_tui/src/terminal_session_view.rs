@@ -12,8 +12,6 @@ use instant::Instant;
 use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
-#[cfg(test)]
-use warp::tui_export::StartAgentExecutor;
 use warp::tui_export::{
     block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
     export_conversation_markdown, prepare_conversation_block_restoration,
@@ -414,13 +412,6 @@ impl TuiTerminalSessionView {
         });
     }
 
-    #[cfg(test)]
-    pub(crate) fn start_agent_executor_for_test(
-        &self,
-        ctx: &AppContext,
-    ) -> ModelHandle<StartAgentExecutor> {
-        self.ai_action_model.as_ref(ctx).start_agent_executor(ctx)
-    }
     fn detach_cli_subagent_view(
         &mut self,
         block_id: &BlockId,

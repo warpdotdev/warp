@@ -1,6 +1,6 @@
 use warp::tui_export::{
     register_tui_session_view_test_singletons, AIConversationId, BlocklistAIHistoryModel,
-    StartAgentExecutionMode, StartAgentExecutor, StartAgentOutcome,
+    StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
@@ -43,20 +43,46 @@ fn orchestration_fixture(app: &mut App) -> OrchestrationFixture {
     }
 }
 
-/// Registers a session (with a live active conversation) and returns its id
-/// plus its surface's `StartAgentExecutor`.
+/// Registers a session with a live active conversation.
 fn add_dispatching_session(
     app: &mut App,
     fixture: &OrchestrationFixture,
     focus: bool,
-) -> (TuiSessionId, ModelHandle<StartAgentExecutor>) {
+) -> TuiSessionId {
     let (session, manager) = add_test_terminal_session(app, fixture.window_id);
     let session_id = app.update_model(&fixture.sessions, |sessions, ctx| {
-        sessions.add_session(session.clone(), manager, focus, ctx)
+        sessions.add_session(session, manager, focus, ctx)
     });
     add_active_test_conversation(app, session_id.surface_id());
-    let executor = app.read(|ctx| session.as_ref(ctx).start_agent_executor_for_test(ctx));
-    (session_id, executor)
+    session_id
+}
+
+/// Creates a standalone executor and relays its frontend materialization
+/// events into the coordinator.
+fn add_relayed_executor(
+    app: &mut App,
+    parent_session_id: TuiSessionId,
+) -> ModelHandle<StartAgentExecutor> {
+    let executor = app.add_model(StartAgentExecutor::new);
+    app.update(|ctx| {
+        let orchestration = TuiOrchestrationModel::handle(ctx);
+        ctx.subscribe_to_model(&executor, move |_, event, ctx| {
+            orchestration.update(ctx, |orchestration, ctx| match event {
+                StartAgentExecutorEvent::CreateAgent(request) => {
+                    orchestration.dispatch_create_agent(
+                        parent_session_id,
+                        (**request).clone(),
+                        None,
+                        ctx,
+                    );
+                }
+                StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } => {
+                    orchestration.cleanup_failed_child(conversation_id, ctx);
+                }
+            });
+        });
+    });
+    executor
 }
 
 /// Dispatches a StartAgent request through the session's executor and
@@ -64,7 +90,6 @@ fn add_dispatching_session(
 /// unsupported modes synchronously within the same effect flush).
 fn dispatch_and_recv(
     app: &mut App,
-    fixture: &OrchestrationFixture,
     session_id: TuiSessionId,
     executor: &ModelHandle<StartAgentExecutor>,
     execution_mode: StartAgentExecutionMode,
@@ -75,7 +100,6 @@ fn dispatch_and_recv(
             .expect("fixture registered an active conversation")
             .id()
     });
-    let _ = fixture;
     let receiver = app.update_model(executor, |executor, ctx| {
         executor.dispatch(
             "researcher".to_string(),
@@ -130,11 +154,11 @@ fn assert_failed_launch_cleaned_up(
 fn local_harness_children_fail_cleanly() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture(&mut app);
-        let (session_id, executor) = add_dispatching_session(&mut app, &fixture, true);
+        let session_id = add_dispatching_session(&mut app, &fixture, true);
+        let executor = add_relayed_executor(&mut app, session_id);
 
         let (parent_conversation_id, outcome) = dispatch_and_recv(
             &mut app,
-            &fixture,
             session_id,
             &executor,
             StartAgentExecutionMode::Local {
@@ -151,11 +175,11 @@ fn local_harness_children_fail_cleanly() {
 fn remote_children_fail_cleanly() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture(&mut app);
-        let (session_id, executor) = add_dispatching_session(&mut app, &fixture, true);
+        let session_id = add_dispatching_session(&mut app, &fixture, true);
+        let executor = add_relayed_executor(&mut app, session_id);
 
         let (parent_conversation_id, outcome) = dispatch_and_recv(
             &mut app,
-            &fixture,
             session_id,
             &executor,
             StartAgentExecutionMode::Remote {
@@ -175,26 +199,22 @@ fn remote_children_fail_cleanly() {
 }
 
 #[test]
-fn sessions_registered_after_init_are_wired_for_orchestration() {
+fn failed_launch_cleanup_preserves_other_sessions() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture(&mut app);
-        // First session exists before the dispatching one, mirroring a child
-        // session dispatching grandchildren later in an app's lifetime.
         let _ = add_dispatching_session(&mut app, &fixture, true);
-        let (late_session_id, late_executor) = add_dispatching_session(&mut app, &fixture, false);
+        let background_session_id = add_dispatching_session(&mut app, &fixture, false);
+        let executor = add_relayed_executor(&mut app, background_session_id);
 
         let (parent_conversation_id, outcome) = dispatch_and_recv(
             &mut app,
-            &fixture,
-            late_session_id,
-            &late_executor,
+            background_session_id,
+            &executor,
             StartAgentExecutionMode::Local {
                 harness_type: Some("codex".to_string()),
                 model_id: None,
             },
         );
-        // A resolved outcome proves the late session's executor is wired to
-        // the orchestration model (an unwired executor would never resolve).
         assert_error_containing(outcome, "aren't supported in the Warp TUI yet");
         assert_failed_launch_cleaned_up(&app, &fixture, parent_conversation_id, 2);
     });

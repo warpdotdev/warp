@@ -92,10 +92,10 @@ types remain behind the shared launch API.
 - Removing completed child sessions; successful children remain retained like GUI hidden panes.
 - Rich message bodies and per-event lifecycle status rendering.
 ## Testing and validation
-- `crates/warp_tui/src/orchestration_model_tests.rs (121-199)` verifies that local-harness and
+- `crates/warp_tui/src/orchestration_model_tests.rs (154-221)` verifies that local-harness and
   remote requests resolve with explicit failures while leaving no child topology, extra session,
-  or event-consumer state. It also proves that sessions added after coordinator initialization are
-  wired for orchestration.
+  or event-consumer state. It also verifies that failed-launch cleanup preserves unrelated
+  retained sessions.
 - `crates/warp_tui/src/agent_block_tests.rs (290-362)` renders orchestration messages and lifecycle
   counts while asserting that `WaitForEvents` contributes no tool row.
 - `app/src/ai/llms_tests.rs (936-959)` verifies that an explicit surface override precedes the TUI
