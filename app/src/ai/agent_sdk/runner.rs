@@ -349,7 +349,7 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
         .or_else(|| existing.description.clone());
 
     Ok(RunnerInput {
-        name: existing.name.clone(),
+        name: resolve_updated_name(args.id.is_some(), args.name.as_deref(), &existing.name),
         description,
         setup_commands,
         instance_shape,
@@ -361,6 +361,16 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
         mac,
         linux,
     })
+}
+
+/// Determine the runner's name for an update. A UID identifies the runner
+/// directly, so a `--name` given alongside it is a rename. Without a UID,
+/// `--name` is the lookup selector, so the name is left unchanged.
+fn resolve_updated_name(has_uid: bool, new_name: Option<&str>, existing_name: &str) -> String {
+    match (has_uid, new_name) {
+        (true, Some(name)) => name.to_string(),
+        _ => existing_name.to_string(),
+    }
 }
 
 /// Merge instance-shape overrides with the existing shape (`(vcpus, memory_gb)`),

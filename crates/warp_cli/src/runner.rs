@@ -139,13 +139,17 @@ pub struct CreateRunnerArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-#[command(group(ArgGroup::new("runner_identifier").required(true).multiple(false).args(["id", "name"])))]
+// At least one of UID or --name is required. They are NOT mutually exclusive:
+// when a UID is given, --name sets the runner's new name (rename); when no UID
+// is given, --name is required and identifies the runner to update.
+#[command(group(ArgGroup::new("runner_identifier").required(true).multiple(true).args(["id", "name"])))]
 pub struct UpdateRunnerArgs {
     /// UID of the runner to update.
     #[arg(value_name = "UID")]
     pub id: Option<String>,
 
-    /// Name of the runner to update. Used to resolve the runner when no UID is given.
+    /// New name for the runner when a UID is given (renames it). When no UID is
+    /// given, this is required and used to locate the runner to update.
     #[arg(long = "name", short = 'n')]
     pub name: Option<String>,
 
