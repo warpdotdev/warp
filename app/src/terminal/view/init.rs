@@ -335,7 +335,7 @@ pub fn init(app: &mut AppContext) {
             "Reload Shell",
             TerminalAction::ReloadShell,
         )
-        .with_mac_key_binding("cmd-shift-K")
+        .with_mac_key_binding("alt-shift-K")
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
         EditableBinding::new(
             ACCEPT_PROMPT_SUGGESTION_KEYBINDING,

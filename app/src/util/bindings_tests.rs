@@ -141,7 +141,7 @@ fn test_toggle_maximize_pane_binding_is_editable() {
 }
 
 #[test]
-fn test_reload_shell_binding_is_shift_command_k_on_mac_only() {
+fn test_reload_shell_binding_is_option_shift_k_on_mac_only() {
     App::test((), |mut app| async move {
         app.update(terminal::init);
 
@@ -152,7 +152,7 @@ fn test_reload_shell_binding_is_shift_command_k_on_mac_only() {
                 .and_then(|binding| trigger_to_keystroke(binding.trigger));
 
             if OperatingSystem::get().is_mac() {
-                assert_eq!(reload_shell, Keystroke::parse("cmd-shift-K").ok());
+                assert_eq!(reload_shell, Keystroke::parse("alt-shift-K").ok());
             } else {
                 assert_eq!(reload_shell, None);
             }
