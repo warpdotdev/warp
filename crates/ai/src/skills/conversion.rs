@@ -185,6 +185,8 @@ impl From<SkillProvider> for api::skill_descriptor::Provider {
             SkillProvider::Agents => api::skill_descriptor::provider::Type::Agents(()),
             SkillProvider::Claude => api::skill_descriptor::provider::Type::Claude(()),
             SkillProvider::Codex | SkillProvider::Omp => {
+                // The pinned API has no Omp variant; omp consumes Codex-format skills, so
+                // wire identity is intentionally lossy until the proto adds one.
                 api::skill_descriptor::provider::Type::Codex(())
             }
             SkillProvider::Cursor => api::skill_descriptor::provider::Type::Cursor(()),
