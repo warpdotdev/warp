@@ -26,17 +26,17 @@ The orchestration designs establish the component states; the component itself r
 1. A caller can provide:
    - An optional main tab.
    - An ordered list of secondary tabs.
-   - A stable key and label for every tab.
-   - An optional leading glyph and glyph style for every tab.
+   - A stable string key and label for every tab.
+   - An optional caller-rendered leading element for every tab.
    - The selected tab key, if any.
    - Whether the bar is focused.
    - Whether an off-page selected secondary tab should be revealed.
-   - Focused, unfocused, selected, background, divider, and overflow styles.
+   - Focused, unfocused, selected, background, leading-label, and chrome styles.
    - An optional maximum label width in terminal display cells.
    - The current secondary-page anchor.
 2. The component renders exactly one terminal row. It never wraps tabs onto another row.
 3. The main tab, when present, is fixed at the leading edge and does not participate in secondary-tab paging.
-4. The caller controls any label or divider surrounding the tabs; the component does not hard-code product copy.
+4. The caller controls any product label surrounding the tabs. The component uses one consistent divider and previous/next arrows across callers.
 5. An empty secondary list is valid. The component renders the supplied main tab and surrounding chrome without overflow controls.
 
 ### Ownership
@@ -92,3 +92,5 @@ The orchestration designs establish the component states; the component itself r
 37. Resolved navigation returns only the target key; the caller decides what selecting that key means.
 38. Hit targets include only the painted tab or overflow-control footprint, not unused trailing row space.
 39. Pointer press/release outside a target does not invoke its callback.
+40. Hovering a tab bolds its label without changing its selection, page, or focus.
+41. Hovering a previous or next overflow control bolds the arrow without changing its behavior.

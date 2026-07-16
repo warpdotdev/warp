@@ -47,6 +47,7 @@ mod selectable;
 mod shimmering_text;
 mod tab_bar;
 mod text;
+mod text_helpers;
 mod viewported_list;
 
 pub use animated::TuiAnimated;
@@ -78,9 +79,10 @@ pub use selectable::{
 pub use shimmering_text::TuiShimmeringText;
 pub use tab_bar::{
     TuiTab, TuiTabBar, TuiTabBarConfig, TuiTabBarEvent, TuiTabBarNavigationDirection,
-    TuiTabBarStyles, TuiTabBarText,
+    TuiTabBarStyles,
 };
 pub use text::TuiText;
+pub use text_helpers::{text_width, truncate_with_ellipsis};
 pub use viewported_list::{
     TuiViewportContent, TuiViewportPosition, TuiViewportVerticalAlignment, TuiViewportWindow,
     TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
