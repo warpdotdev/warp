@@ -49,6 +49,12 @@ fn assert_copy_link_menu_visibility(
 ) {
     terminal.read(app, |view, ctx| {
         let model = view.model.lock();
+        assert_eq!(
+            view.copyable_shared_session_id(model.shared_session_status(), ctx)
+                .is_some(),
+            is_visible,
+            "unexpected copyable shared-session ID availability"
+        );
         let items = view.session_sharing_context_menu_items(&model, false, ctx);
         assert_eq!(
             items.iter().any(|item| {
@@ -107,6 +113,13 @@ fn test_copy_link_menus_require_active_or_ended_session_id() {
                 .set_shared_session_status(SharedSessionStatus::FinishedViewer);
         });
         assert_copy_link_menu_visibility(&terminal, &app, true);
+
+        terminal.update(&mut app, |view, _ctx| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::SharePending);
+        });
+        assert_copy_link_menu_visibility(&terminal, &app, false);
     })
 }
 
