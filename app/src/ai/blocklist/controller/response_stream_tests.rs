@@ -1,10 +1,14 @@
 use std::time::{Duration, SystemTime};
+use uuid::Uuid;
 
 use ::ai::api_keys::CodexTokens;
 use warp_multi_agent_api::request::settings::api_keys::CodexOauthCredentials;
 use warp_multi_agent_api::request::settings::ApiKeys;
 
-use super::{recovery_action, replace_codex_oauth_credentials, RecoveryAction};
+use super::{
+    complete_codex_refresh, recovery_action, should_refresh_codex_request, CodexRefreshAction,
+    CodexRefreshCompletion, RecoveryAction,
+};
 
 // Argument order: has_received_client_actions, is_recoverable, has_retry_budget,
 // can_attempt_resume_on_error, is_online.
@@ -90,6 +94,14 @@ fn non_recoverable_post_action_failure_is_terminal() {
 }
 
 #[test]
+fn codex_refresh_requires_selected_subscription_credentials() {
+    assert!(should_refresh_codex_request(true, true, true));
+    assert!(!should_refresh_codex_request(false, true, true));
+    assert!(!should_refresh_codex_request(true, false, true));
+    assert!(!should_refresh_codex_request(true, true, false));
+}
+
+#[test]
 fn codex_refresh_replaces_only_nested_credentials() {
     let mut keys = ApiKeys {
         openai: "ordinary-openai-key".into(),
@@ -108,7 +120,17 @@ fn codex_refresh_replaces_only_nested_credentials() {
         connected_at: Some(SystemTime::now()),
     };
 
-    assert!(replace_codex_oauth_credentials(&mut keys, &tokens));
+    let request_id = Uuid::new_v4();
+    assert_eq!(
+        complete_codex_refresh(
+            Some(request_id),
+            request_id,
+            CodexRefreshCompletion::Refreshed,
+            Some(&mut keys),
+            Some(&tokens),
+        ),
+        CodexRefreshAction::Send
+    );
     assert_eq!(keys.openai, "ordinary-openai-key");
     assert_eq!(
         keys.codex_oauth_credentials,
@@ -117,4 +139,109 @@ fn codex_refresh_replaces_only_nested_credentials() {
             chatgpt_account_id: "fresh-account".into(),
         })
     );
+}
+
+#[test]
+fn blank_refreshed_codex_access_token_does_not_replace_credentials() {
+    let original = CodexOauthCredentials {
+        access_token: "expired-access".into(),
+        chatgpt_account_id: "old-account".into(),
+    };
+    let mut keys = ApiKeys {
+        openai: "ordinary-openai-key".into(),
+        codex_oauth_credentials: Some(original.clone()),
+        ..Default::default()
+    };
+    let tokens = CodexTokens {
+        access_token: "  ".into(),
+        chatgpt_account_id: "fresh-account".into(),
+        ..Default::default()
+    };
+
+    let request_id = Uuid::new_v4();
+    assert_eq!(
+        complete_codex_refresh(
+            Some(request_id),
+            request_id,
+            CodexRefreshCompletion::Refreshed,
+            Some(&mut keys),
+            Some(&tokens),
+        ),
+        CodexRefreshAction::Fail
+    );
+    assert_eq!(keys.codex_oauth_credentials, Some(original));
+    assert_eq!(keys.openai, "ordinary-openai-key");
+}
+
+#[test]
+fn blank_refreshed_codex_account_id_does_not_replace_credentials() {
+    let original = CodexOauthCredentials {
+        access_token: "expired-access".into(),
+        chatgpt_account_id: "old-account".into(),
+    };
+    let mut keys = ApiKeys {
+        codex_oauth_credentials: Some(original.clone()),
+        ..Default::default()
+    };
+    let tokens = CodexTokens {
+        access_token: "fresh-access".into(),
+        chatgpt_account_id: "\t".into(),
+        ..Default::default()
+    };
+
+    let request_id = Uuid::new_v4();
+    assert_eq!(
+        complete_codex_refresh(
+            Some(request_id),
+            request_id,
+            CodexRefreshCompletion::Refreshed,
+            Some(&mut keys),
+            Some(&tokens),
+        ),
+        CodexRefreshAction::Fail
+    );
+    assert_eq!(keys.codex_oauth_credentials, Some(original));
+}
+
+#[test]
+fn failed_and_timed_out_codex_refreshes_are_terminal() {
+    let request_id = Uuid::new_v4();
+    for completion in [
+        CodexRefreshCompletion::Failed,
+        CodexRefreshCompletion::TimedOut,
+    ] {
+        assert_eq!(
+            complete_codex_refresh(Some(request_id), request_id, completion, None, None),
+            CodexRefreshAction::Fail
+        );
+    }
+}
+
+#[test]
+fn superseded_codex_refresh_is_dropped_without_replacing_credentials() {
+    let original = CodexOauthCredentials {
+        access_token: "expired-access".into(),
+        chatgpt_account_id: "old-account".into(),
+    };
+    let mut keys = ApiKeys {
+        codex_oauth_credentials: Some(original.clone()),
+        ..Default::default()
+    };
+    let tokens = CodexTokens {
+        access_token: "fresh-access".into(),
+        chatgpt_account_id: "fresh-account".into(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        complete_codex_refresh(
+            Some(Uuid::new_v4()),
+            Uuid::new_v4(),
+            CodexRefreshCompletion::Refreshed,
+            Some(&mut keys),
+            Some(&tokens),
+        ),
+        CodexRefreshAction::Drop
+    );
+    assert_eq!(keys.codex_oauth_credentials, Some(original));
 }

@@ -366,6 +366,19 @@ impl ErrorExt for AIApiError {
 }
 register_error!(AIApiError);
 
+#[cfg(test)]
+mod ai_api_error_tests {
+    use super::{AIApiError, ErrorExt};
+
+    #[test]
+    fn codex_subscription_refresh_failure_is_non_recoverable_and_non_actionable() {
+        let error = AIApiError::CodexSubscriptionTokenRefreshFailed;
+
+        assert!(!error.is_recoverable());
+        assert!(!ErrorExt::is_actionable(&error));
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum TranscribeError {
     #[error("Request failed due to lack of Voice quota.")]

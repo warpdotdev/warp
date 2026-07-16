@@ -33,6 +33,15 @@ const GROK_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::f
 const CODEX_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[cfg(not(target_family = "wasm"))]
+fn should_refresh_codex_request(
+    is_openai_request: bool,
+    has_codex_subscription: bool,
+    has_selected_codex_credentials: bool,
+) -> bool {
+    is_openai_request && has_codex_subscription && has_selected_codex_credentials
+}
+
+#[cfg(not(target_family = "wasm"))]
 fn replace_codex_oauth_credentials(
     keys: &mut warp_multi_agent_api::request::settings::ApiKeys,
     tokens: &::ai::api_keys::CodexTokens,
@@ -50,6 +59,47 @@ fn replace_codex_oauth_credentials(
         },
     );
     true
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexRefreshCompletion {
+    Refreshed,
+    Failed,
+    TimedOut,
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexRefreshAction {
+    Send,
+    Fail,
+    Drop,
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn complete_codex_refresh(
+    current_request_id: Option<Uuid>,
+    request_id: Uuid,
+    completion: CodexRefreshCompletion,
+    keys: Option<&mut warp_multi_agent_api::request::settings::ApiKeys>,
+    tokens: Option<&::ai::api_keys::CodexTokens>,
+) -> CodexRefreshAction {
+    if current_request_id != Some(request_id) {
+        return CodexRefreshAction::Drop;
+    }
+    match completion {
+        CodexRefreshCompletion::Refreshed
+            if keys
+                .zip(tokens)
+                .is_some_and(|(keys, tokens)| replace_codex_oauth_credentials(keys, tokens)) =>
+        {
+            CodexRefreshAction::Send
+        }
+        CodexRefreshCompletion::Refreshed
+        | CodexRefreshCompletion::Failed
+        | CodexRefreshCompletion::TimedOut => CodexRefreshAction::Fail,
+    }
 }
 
 /// What to do about a failed or truncated MAA response attempt.
@@ -360,8 +410,11 @@ impl ResponseStream {
                 .as_ref()
                 .and_then(|keys| keys.codex_oauth_credentials.as_ref())
                 .is_some();
-            let uses_codex_subscription =
-                is_openai_request && has_codex_subscription && has_selected_codex_credentials;
+            let uses_codex_subscription = should_refresh_codex_request(
+                is_openai_request,
+                has_codex_subscription,
+                has_selected_codex_credentials,
+            );
             if uses_codex_subscription {
                 let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
                 let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -371,31 +424,33 @@ impl ResponseStream {
                     let _ = ctx.spawn(
                         async move { refresh_rx.with_timeout(CODEX_REFRESH_REQUEST_TIMEOUT).await },
                         move |me, result, ctx| {
-                            // Cancelled or superseded while refreshing — drop this attempt.
-                            if me.current_request_id != Some(request_id) {
-                                return;
-                            }
-                            if matches!(result, Ok(Ok(CodexRefreshOutcome::Refreshed))) {
-                                let credentials_replaced = me
-                                    .params
-                                    .api_keys
-                                    .as_mut()
-                                    .zip(ApiKeyManager::as_ref(ctx).codex_tokens())
-                                    .is_some_and(|(keys, tokens)| {
-                                        replace_codex_oauth_credentials(keys, tokens)
-                                    });
-                                if !credentials_replaced {
-                                    me.surface_codex_refresh_failure(request_id, ctx);
-                                    return;
+                            let completion = match result {
+                                Ok(Ok(CodexRefreshOutcome::Refreshed)) => {
+                                    CodexRefreshCompletion::Refreshed
                                 }
-                                Self::spawn_generate(
+                                Ok(Ok(CodexRefreshOutcome::Failed)) | Ok(Err(_)) => {
+                                    CodexRefreshCompletion::Failed
+                                }
+                                Err(_) => CodexRefreshCompletion::TimedOut,
+                            };
+                            let action = complete_codex_refresh(
+                                me.current_request_id,
+                                request_id,
+                                completion,
+                                me.params.api_keys.as_mut(),
+                                ApiKeyManager::as_ref(ctx).codex_tokens(),
+                            );
+                            match action {
+                                CodexRefreshAction::Send => Self::spawn_generate(
                                     request_id,
                                     me.params.clone(),
                                     cancellation_rx,
                                     ctx,
-                                );
-                            } else {
-                                me.surface_codex_refresh_failure(request_id, ctx);
+                                ),
+                                CodexRefreshAction::Fail => {
+                                    me.surface_codex_refresh_failure(request_id, ctx);
+                                }
+                                CodexRefreshAction::Drop => {}
                             }
                         },
                     );
