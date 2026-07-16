@@ -6,6 +6,7 @@ use instant::Instant;
 use markdown_parser::FormattedTextFragment;
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
+use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
@@ -49,6 +50,7 @@ use crate::ai::blocklist::{
 };
 use crate::ai::llms::LLMPreferences;
 use crate::ai::AgentTip;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{InputModeSettings, InputSettings};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
@@ -750,6 +752,7 @@ impl BlocklistAIStatusBar {
                     },
                     ctx
                 );
+                send_agent_tip_shown_analytics_event(tip.description.clone(), ctx);
             }
         } else {
             self.current_tip = None;
@@ -1149,6 +1152,36 @@ fn resolve_fallback_warping_message<V: View>(
         Some(name) => format!("Warping with {name}."),
         None => "Warping with another model.".to_owned(),
     })
+}
+
+fn should_send_agent_tip_shown_analytics_event() -> bool {
+    if !FeatureFlag::AgentModeAnalytics.is_enabled() || ChannelState::is_release_bundle() {
+        return false;
+    }
+
+    if matches!(
+        ChannelState::channel(),
+        Channel::Dev | Channel::Local | Channel::Integration
+    ) {
+        return true;
+    }
+
+    ChannelState::server_root_url().contains("staging")
+}
+
+fn send_agent_tip_shown_analytics_event(tip: String, app: &AppContext) {
+    if !should_send_agent_tip_shown_analytics_event() {
+        return;
+    }
+
+    let server_api = ServerApiProvider::handle(app).as_ref(app).get();
+    app.background_executor()
+        .spawn(async move {
+            if let Err(error) = server_api.send_agent_tip_shown_analytics_event(tip).await {
+                log::warn!("Error occurred with sending AgentTipShown analytics event: {error}");
+            }
+        })
+        .detach();
 }
 
 impl View for BlocklistAIStatusBar {
