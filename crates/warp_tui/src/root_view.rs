@@ -67,6 +67,7 @@ impl RootTuiView {
     pub(crate) fn create_terminal_session(
         &mut self,
         surface_init: TerminalSurfaceInit,
+        keyboard_enhancement_supported: bool,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<TuiTerminalSessionView> {
         if let RootTuiState::Terminal(terminal_session) = &self.state {
@@ -74,7 +75,12 @@ impl RootTuiView {
         }
         let exit_summary = self.exit_summary.clone();
         let terminal_session = ctx.add_typed_action_tui_view(|ctx| {
-            TuiTerminalSessionView::new(surface_init, exit_summary, ctx)
+            TuiTerminalSessionView::new(
+                surface_init,
+                exit_summary,
+                keyboard_enhancement_supported,
+                ctx,
+            )
         });
         self.state = RootTuiState::Terminal(terminal_session.clone());
         terminal_session

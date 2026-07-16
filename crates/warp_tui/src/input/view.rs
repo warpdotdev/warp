@@ -47,7 +47,9 @@ use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::inline_menu::{active_inline_menu, TuiInlineMenu, TuiInlineMenuAccepted};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
-use crate::keybindings::{PLAN_TOGGLE_AVAILABLE_FLAG, TUI_BINDING_GROUP};
+use crate::keybindings::{
+    KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, TUI_BINDING_GROUP,
+};
 use crate::tui_builder::TuiUiBuilder;
 
 /// Keymap-context flag set while the input has contextual Escape behavior.
@@ -252,7 +254,10 @@ pub fn init(app: &mut AppContext) {
             "Move cursor up",
             TuiInputAction::MoveUp,
         )
-        .with_context_predicate(id!("TuiInputView") & !id!(PLAN_TOGGLE_AVAILABLE_FLAG))
+        .with_context_predicate(
+            id!("TuiInputView")
+                & (!id!(PLAN_TOGGLE_AVAILABLE_FLAG) | id!(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)),
+        )
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-p"),
         EditableBinding::new(
@@ -595,6 +600,7 @@ pub struct TuiInputView {
     /// so it only consumes typed text while the input is focused.
     focused: bool,
     plan_toggle_available: Option<PlanToggleAvailable>,
+    keyboard_enhancement_supported: bool,
 }
 
 impl Entity for TuiInputView {
@@ -641,6 +647,7 @@ impl TuiInputView {
             prefix_mouse_state: MouseStateHandle::default(),
             focused: false,
             plan_toggle_available: None,
+            keyboard_enhancement_supported: false,
         }
     }
 
@@ -649,6 +656,13 @@ impl TuiInputView {
         plan_toggle_available: impl Fn(&AppContext) -> bool + 'static,
     ) -> Self {
         self.plan_toggle_available = Some(Rc::new(plan_toggle_available));
+        self
+    }
+    pub(crate) fn with_keyboard_enhancement_supported(
+        mut self,
+        keyboard_enhancement_supported: bool,
+    ) -> Self {
+        self.keyboard_enhancement_supported = keyboard_enhancement_supported;
         self
     }
 
@@ -784,6 +798,7 @@ impl TuiView for TuiInputView {
         input_keymap_context(
             self.active_inline_menu(ctx).is_some() || self.is_shell_mode(ctx),
             self.plan_toggle_available(ctx),
+            self.keyboard_enhancement_supported,
         )
     }
 
@@ -821,6 +836,7 @@ impl From<TuiEditorAction> for TuiInputAction {
 fn input_keymap_context(
     input_handles_escape: bool,
     plan_toggle_available: bool,
+    keyboard_enhancement_supported: bool,
 ) -> keymap::Context {
     let mut context = keymap::Context::default();
     context.set.insert(TuiInputView::ui_name());
@@ -829,6 +845,9 @@ fn input_keymap_context(
     }
     if plan_toggle_available {
         context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
+    }
+    if keyboard_enhancement_supported {
+        context.set.insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
     }
     context
 }

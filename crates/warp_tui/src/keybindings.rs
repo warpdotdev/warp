@@ -31,23 +31,20 @@ use crate::transcript_view::TuiTranscriptView;
 /// a `tui:` name prefix) as proof of TUI ownership.
 pub(crate) const TUI_BINDING_GROUP: &str = "tui";
 pub(crate) const PLAN_TOGGLE_AVAILABLE_FLAG: &str = "TuiPlanToggleAvailable";
+pub(crate) const KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG: &str = "TuiKeyboardEnhancementAvailable";
 pub(crate) const PLAN_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_plan";
 pub(crate) const CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME: &str =
     "tui:session:toggle_plan_when_available";
-
-pub(crate) fn contextual_plan_toggle_hint(ctx: &AppContext) -> Option<String> {
+pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
     let mut context = Context::default();
-    context.set.insert(TuiInputView::ui_name());
-    context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
+    context.set.insert(TuiTerminalSessionView::ui_name());
     ctx.editable_bindings()
-        .find(|binding| {
-            binding.name == CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME && binding.in_context(&context)
-        })
+        .find(|binding| binding.name == PLAN_TOGGLE_BINDING_NAME && binding.in_context(&context))
         .and_then(|binding| match binding.trigger {
             Trigger::Keystrokes(keystrokes) if !keystrokes.is_empty() => Some(
                 keystrokes
                     .iter()
-                    .map(|keystroke| keystroke.displayed())
+                    .map(|keystroke| keystroke.displayed_expanded())
                     .collect::<Vec<_>>()
                     .join(" "),
             ),

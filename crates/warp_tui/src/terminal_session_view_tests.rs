@@ -15,7 +15,8 @@ use super::{
     TuiTerminalSessionEvent,
 };
 use crate::keybindings::{
-    CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
+    CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
+    PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -149,8 +150,13 @@ fn plan_toggle_uses_contextual_ctrl_p_and_ctrl_shift_p() {
             input_without_plan.set.insert("TuiInputView");
             let mut input_with_plan = input_without_plan.clone();
             input_with_plan.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
+            let mut enhanced_input_with_plan = input_with_plan.clone();
+            enhanced_input_with_plan
+                .set
+                .insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
             assert!(!fallback.in_context(&input_without_plan));
             assert!(fallback.in_context(&input_with_plan));
+            assert!(!fallback.in_context(&enhanced_input_with_plan));
 
             let ctrl_p_move_up = ctx
                 .editable_bindings()
@@ -158,6 +164,7 @@ fn plan_toggle_uses_contextual_ctrl_p_and_ctrl_shift_p() {
                 .expect("Ctrl+P move-up fallback");
             assert!(ctrl_p_move_up.in_context(&input_without_plan));
             assert!(!ctrl_p_move_up.in_context(&input_with_plan));
+            assert!(ctrl_p_move_up.in_context(&enhanced_input_with_plan));
         });
     });
 }

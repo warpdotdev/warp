@@ -62,8 +62,8 @@ use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
 use crate::keybindings::{
-    CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
-    TUI_BINDING_GROUP,
+    CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
+    PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME, TUI_BINDING_GROUP,
 };
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
@@ -257,6 +257,7 @@ pub(crate) struct TuiTerminalSessionView {
     exit_confirmation: ExitConfirmation,
     /// Credits⇄cost display state for the footer's clickable usage entry.
     usage_toggle: UsageToggle,
+    keyboard_enhancement_supported: bool,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
@@ -317,7 +318,8 @@ pub(crate) fn init(app: &mut AppContext) {
         )
         .with_context_predicate(
             (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
-                & id!(PLAN_TOGGLE_AVAILABLE_FLAG),
+                & id!(PLAN_TOGGLE_AVAILABLE_FLAG)
+                & !id!(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG),
         )
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-p"),
@@ -543,6 +545,7 @@ impl TuiTerminalSessionView {
     pub(crate) fn new(
         surface_init: TerminalSurfaceInit,
         exit_summary: TuiExitSummaryHandle,
+        keyboard_enhancement_supported: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let TerminalSurfaceInit {
@@ -772,6 +775,7 @@ impl TuiTerminalSessionView {
                     .as_ref(ctx)
                     .has_toggleable_plan(ctx)
             })
+            .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
         });
 
         ctx.subscribe_to_view(&transcript, |view, _, event, ctx| match event {
@@ -1014,6 +1018,7 @@ impl TuiTerminalSessionView {
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
             usage_toggle: UsageToggle::default(),
+            keyboard_enhancement_supported,
             ai_context_model: context_model,
             ai_input_model,
             terminal_model: model,
@@ -2175,6 +2180,9 @@ impl TuiView for TuiTerminalSessionView {
         }
         if self.transcript.as_ref(ctx).has_toggleable_plan(ctx) {
             context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
+        }
+        if self.keyboard_enhancement_supported {
+            context.set.insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
         }
         context
     }

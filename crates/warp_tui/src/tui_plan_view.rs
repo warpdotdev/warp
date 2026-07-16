@@ -18,7 +18,7 @@ use warpui_core::{
 };
 
 use crate::agent_block_sections::tool_call_glyph_style;
-use crate::keybindings::contextual_plan_toggle_hint;
+use crate::keybindings::plan_toggle_hint;
 use crate::tool_call_labels::{tool_call_display_state, tool_call_glyph, ToolCallDisplayState};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
@@ -333,7 +333,7 @@ impl TuiView for TuiPlanView {
             return collapsible;
         }
         let mut content = TuiFlex::column().child(collapsible);
-        if let Some(binding) = contextual_plan_toggle_hint(app) {
+        if let Some(binding) = plan_toggle_hint(app) {
             content = content.child(
                 TuiText::new(format!("{binding} to collapse plan"))
                     .with_style(builder.muted_text_style())

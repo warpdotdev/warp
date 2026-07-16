@@ -15,7 +15,6 @@ use warp::tui_export::{
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, TypedActionView};
 use warpui_core::elements::tui::{Color, Modifier, TuiBufferExt, TuiRect};
-use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView, ViewHandle};
 
@@ -50,13 +49,10 @@ fn streamed_create_renders_cached_markdown_and_code_children() {
                 .iter()
                 .any(|line| line.trim() == "Build a fast timer."));
             assert!(lines.iter().all(|line| !line.contains("**")));
-            let plan_toggle_hint = format!(
-                "{} to collapse plan",
-                Keystroke::parse("ctrl-p").unwrap().displayed()
-            );
+            let plan_toggle_hint = "Ctrl + Shift + P to collapse plan";
             assert_eq!(
                 lines.last().map(|line| line.trim_end()),
-                Some(plan_toggle_hint.as_str())
+                Some(plan_toggle_hint)
             );
             assert!(lines
                 .iter()

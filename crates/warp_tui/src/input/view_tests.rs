@@ -48,19 +48,25 @@ const W: u16 = 80;
 
 #[test]
 fn input_escape_context_is_present_only_while_escape_is_handled() {
-    let closed = input_keymap_context(false, false);
+    let closed = input_keymap_context(false, false, false);
     assert!(closed.set.contains("TuiInputView"));
     assert!(!closed.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
     assert!(!closed
         .set
         .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG));
+    assert!(!closed
+        .set
+        .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG));
 
-    let open = input_keymap_context(true, true);
+    let open = input_keymap_context(true, true, true);
     assert!(open.set.contains("TuiInputView"));
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
     assert!(open
         .set
         .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG));
+    assert!(open
+        .set
+        .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG));
 }
 #[test]
 fn input_plan_toggle_context_follows_live_availability() {
@@ -1548,13 +1554,13 @@ fn keymap_context_flags_shell_mode() {
             let view = build_view(ctx);
             assert_eq!(
                 view.as_ref(ctx).keymap_context(ctx),
-                input_keymap_context(false, false)
+                input_keymap_context(false, false, false)
             );
 
             type_str(&view, ctx, "!");
             assert_eq!(
                 view.as_ref(ctx).keymap_context(ctx),
-                input_keymap_context(true, false)
+                input_keymap_context(true, false, false)
             );
         });
     });
