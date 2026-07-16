@@ -129,9 +129,7 @@ impl Iterator for RowIterator<'_> {
             }
 
             // If the grapheme takes up two cells, mark the following cell as
-            // a spacer. The spacer carries the same hyperlink id as the wide
-            // glyph so both halves stay hoverable after rematerialization,
-            // matching how the live input path stamps both cells.
+            // a spacer.
             if cell_width == 2 {
                 row[idx].flags.insert(Flags::WIDE_CHAR);
                 row[idx + 1].flags.insert(Flags::WIDE_CHAR_SPACER);

@@ -117,10 +117,6 @@ struct CellExtra {
     /// base character and zerowidth characters).
     cell_with_zero_width: Option<String>,
     end_of_prompt: Option<EndOfPromptMarker>,
-    /// OSC 8 hyperlink id. Resolves to a `Hyperlink { id, uri }` via the
-    /// owning grid's `HyperlinkRegistry`. Defaults to `None` (cell is not
-    /// part of a hyperlink span). `#[serde(default)]` so older payloads
-    /// without this field deserialize cleanly into `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hyperlink_id: Option<super::HyperlinkId>,
 }
@@ -289,8 +285,6 @@ impl Cell {
         self.extra.as_ref()?.hyperlink_id
     }
 
-    /// Set or clear the OSC 8 hyperlink id on this cell. Allocates `extra`
-    /// only when setting a non-`None` id; clearing an unset cell is free.
     #[inline]
     pub fn set_hyperlink_id(&mut self, id: Option<super::HyperlinkId>) {
         if id.is_some() {

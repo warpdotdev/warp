@@ -7,7 +7,7 @@ use warpui::elements::{
 };
 use warpui::{AppContext, Element, EventContext};
 
-use super::{TerminalAction, TerminalView};
+use super::{GridHighlightedLink, TerminalAction, TerminalView};
 use crate::appearance::Appearance;
 use crate::terminal::links::directly_open_link_keybinding_string;
 use crate::terminal::model::{ObfuscateSecrets, Secret};
@@ -19,7 +19,6 @@ use crate::util::tooltips::{TooltipLink, TooltipRedaction};
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use crate::terminal::view::RichContentLink;
-        use super::GridHighlightedLink;
     }
 }
 
