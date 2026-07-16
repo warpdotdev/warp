@@ -2,6 +2,8 @@ mod key_events;
 
 #[cfg(test)]
 mod drag_drop_tests;
+#[cfg(test)]
+mod ime_position_tests;
 
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
@@ -41,7 +43,7 @@ use crate::rendering::wgpu::renderer;
 use crate::windowing::winit::app::RequestPermissionsCallback;
 use crate::windowing::winit::window::MIN_WINDOW_SIZE;
 use crate::Event::{ClearMarkedText, SetMarkedText, TypedCharacters};
-use crate::{AppContext, WindowId};
+use crate::{AppContext, CursorInfo, WindowId};
 
 /// This is the time duration beyond which clicks get treated as separate single clicks instead of
 /// double-click, triple-click, etc.
@@ -483,6 +485,64 @@ fn convert_touch_cancelled(
     None
 }
 
+/// Geometry of the IME candidate window in logical pixels relative to the window.
+///
+/// The size is always computed (from the active cursor's font size) even though X11 currently
+/// ignores it, so platforms that do support candidate-window sizing can use it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ImeCandidateGeometry {
+    position: LogicalPosition<f32>,
+    size: LogicalSize<f32>,
+}
+
+impl ImeCandidateGeometry {
+    /// Places the candidate window just below the cursor baseline.
+    fn from_cursor(cursor: &CursorInfo) -> Self {
+        Self {
+            position: LogicalPosition::new(
+                cursor.position.origin_x(),
+                cursor.position.origin_y() + (1.2 * cursor.font_size),
+            ),
+            // Currently the size argument is not supported on X11. We calculate it here anyway.
+            size: LogicalSize::new(cursor.font_size, cursor.font_size),
+        }
+    }
+
+    /// Returns a copy nudged one logical pixel downward, used to bust winit's position cache.
+    fn nudged(self) -> Self {
+        Self {
+            position: LogicalPosition::new(self.position.x, self.position.y + 1.),
+            size: self.size,
+        }
+    }
+}
+
+/// Tracks the last IME candidate-window position requested from winit so we can refresh it
+/// (working around winit's position caching) on window move, resize, scale-factor change, and
+/// cursor movement.
+#[derive(Debug, Default)]
+struct ImeCandidatePositionTracker {
+    /// The candidate position last requested from winit.
+    last_position: Option<LogicalPosition<f32>>,
+}
+
+impl ImeCandidatePositionTracker {
+    /// Returns the sequence of geometry updates required to move the candidate window to
+    /// `geometry`.
+    ///
+    /// If the desired position matches the last one set, a one-pixel nudge is emitted first so
+    /// winit does not drop the update due to caching. Otherwise a single update is enough.
+    fn updates_for(&mut self, geometry: ImeCandidateGeometry) -> Vec<ImeCandidateGeometry> {
+        let mut updates = Vec::with_capacity(2);
+        if self.last_position == Some(geometry.position) {
+            updates.push(geometry.nudged());
+        }
+        updates.push(geometry);
+        self.last_position = Some(geometry.position);
+        updates
+    }
+}
+
 /// A structure to manage state
 /// [`winit::event_loop::EventLoop`] and generate the appropriate callbacks into
 /// the UI framework.
@@ -494,6 +554,10 @@ pub(super) struct EventLoop {
     state: State,
     proxy: EventLoopProxy<CustomEvent>,
     ime_enabled: bool,
+    /// Tracks the last IME candidate-window position requested from winit so we can refresh it
+    /// (working around winit's position caching) on window move, resize, scale-factor change, and
+    /// cursor movement.
+    ime_candidate_position: ImeCandidatePositionTracker,
     /// Whether to downrank non-NVIDIA vulkan adapters. This is set to true when we detect a DRI3
     /// error that occurs when trying to present against a non-NVIDIA Vulkan adapter when the
     /// PRIME Profile is set to "Performance" mode.  It's not fully clear why this error occurs. Our
@@ -523,6 +587,7 @@ impl EventLoop {
             state: Default::default(),
             proxy,
             ime_enabled: false,
+            ime_candidate_position: ImeCandidatePositionTracker::default(),
             downrank_non_nvidia_vulkan_adapters: false,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
@@ -880,42 +945,47 @@ impl EventLoop {
                     },
             } => {
                 // The following correction is only needed on Windows.
-                if !cfg!(windows) {
-                    return;
-                }
-                let Some(window_state) = self.state.windows.get(&window_id) else {
-                    return;
-                };
-                let Some(window) = self
-                    .ui_app
-                    .read(|ctx| ctx.windows().platform_window(window_state.window_id))
-                else {
-                    return;
-                };
+                if cfg!(windows) {
+                    let Some(window_state) = self.state.windows.get(&window_id) else {
+                        return;
+                    };
+                    let Some(window) = self
+                        .ui_app
+                        .read(|ctx| ctx.windows().platform_window(window_state.window_id))
+                    else {
+                        return;
+                    };
 
-                // There is a winit bug such that events which cause a window to switch displays to
-                // one with a different scale factor resize the Warp window to an absurdly small
-                // size, <157, 25> on my system when I repro it. Events include unplugging a
-                // display, changing a display from extended to mirrored, and the like. We work
-                // around that by listening for [`WindowEvent::ScaleFactorChanged`] and changing
-                // the size back up to the minimum dimensions.
-                let size = window.as_ctx().size();
-                let mut size = LogicalSize::new(size.x() as f64, size.y() as f64);
-                let mut request_new_size = false;
-                if size.width < MIN_WINDOW_SIZE.width {
-                    size.width = MIN_WINDOW_SIZE.width;
-                    request_new_size = true;
-                }
-                if size.height < MIN_WINDOW_SIZE.height {
-                    size.height = MIN_WINDOW_SIZE.height;
-                    request_new_size = true;
-                }
-                if request_new_size {
-                    if let Err(err) =
-                        inner_size_writer.request_inner_size(size.to_physical(scale_factor))
-                    {
-                        log::warn!("unable to correct window size: {err:#}");
+                    // There is a winit bug such that events which cause a window to switch displays to
+                    // one with a different scale factor resize the Warp window to an absurdly small
+                    // size, <157, 25> on my system when I repro it. Events include unplugging a
+                    // display, changing a display from extended to mirrored, and the like. We work
+                    // around that by listening for [`WindowEvent::ScaleFactorChanged`] and changing
+                    // the size back up to the minimum dimensions.
+                    let size = window.as_ctx().size();
+                    let mut size = LogicalSize::new(size.x() as f64, size.y() as f64);
+                    let mut request_new_size = false;
+                    if size.width < MIN_WINDOW_SIZE.width {
+                        size.width = MIN_WINDOW_SIZE.width;
+                        request_new_size = true;
                     }
+                    if size.height < MIN_WINDOW_SIZE.height {
+                        size.height = MIN_WINDOW_SIZE.height;
+                        request_new_size = true;
+                    }
+                    if request_new_size {
+                        if let Err(err) =
+                            inner_size_writer.request_inner_size(size.to_physical(scale_factor))
+                        {
+                            log::warn!("unable to correct window size: {err:#}");
+                        }
+                    }
+                }
+
+                // Scale-factor changes move the candidate window in screen space even when the
+                // cursor's logical position is unchanged, so refresh it when IME is active.
+                if self.ime_enabled {
+                    self.update_ime_position();
                 }
             }
             Event::WindowEvent { window_id, event } => self.handle_window_event(window_id, event),
@@ -1049,6 +1119,7 @@ impl EventLoop {
             return;
         };
 
+        let mut should_refresh_ime = false;
         match event {
             ConvertedEvent::Event(event) => {
                 self.handle_converted_warpui_event(window_id, event);
@@ -1058,6 +1129,8 @@ impl EventLoop {
                 window.handle_resize();
                 self.callbacks.for_window(window).window_resized(window);
                 self.callbacks.window_resized();
+                // Window size changes can leave winit's cached IME position stale.
+                should_refresh_ime = true;
             }
             ConvertedEvent::ModifierKeyChanged { key_code, state } => {
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
@@ -1103,6 +1176,9 @@ impl EventLoop {
                     .for_window(window)
                     .window_moved(RectF::new(vec2f(position.x, position.y), size));
                 self.callbacks.window_moved();
+                // Window moves leave the candidate window at the previous screen position unless
+                // we re-submit the (unchanged) logical cursor position to winit.
+                should_refresh_ime = true;
             }
             ConvertedEvent::MoveWindowBy {
                 current_touch,
@@ -1118,6 +1194,10 @@ impl EventLoop {
                     winit_window.set_outer_position(PhysicalPosition::new(target_x, target_y));
                 }
             }
+        }
+
+        if should_refresh_ime && self.ime_enabled {
+            self.update_ime_position();
         }
     }
 
@@ -1793,20 +1873,10 @@ impl EventLoop {
         let active_cursor_position = window_callbacks.get_active_cursor_position();
         if let Some(active_cursor_position) = active_cursor_position {
             let winit_window = downcast_window(window.as_ref());
-            let position = LogicalPosition::new(
-                active_cursor_position.position.origin_x(),
-                active_cursor_position.position.origin_y()
-                    + (1.2 * active_cursor_position.font_size),
-            );
-            // Currently the size argument is not supported on X11. We calculate it here anyway.
-            let size = LogicalSize::new(
-                active_cursor_position.font_size,
-                active_cursor_position.font_size,
-            );
-            // TODO(abhishek): We make sure that the position is different than last time to prevent winit from
-            // caching the old position and not properly updating on `WindowMoved` or `WindowResized` events.
-            winit_window.set_ime_position(LogicalPosition::new(position.x, position.y + 1.), size);
-            winit_window.set_ime_position(position, size);
+            let geometry = ImeCandidateGeometry::from_cursor(&active_cursor_position);
+            for update in self.ime_candidate_position.updates_for(geometry) {
+                winit_window.set_ime_position(update.position, update.size);
+            }
         }
     }
 
