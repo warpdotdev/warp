@@ -540,9 +540,6 @@ pub enum FeatureFlag {
 
     AgentView,
 
-    /// Enables block context functionality in Agent View.
-    AgentViewBlockContext,
-
     /// Enables the inline history menu for quickly accessing previous commands and conversations.
     InlineHistoryMenu,
 

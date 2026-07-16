@@ -31,7 +31,6 @@ pub(super) struct Props<'a> {
     pub(super) attached_blocks_chip_mouse_state: &'a MouseStateHandle,
     pub(super) overflow_menu_mouse_state: &'a MouseStateHandle,
     pub(super) rewind_button: &'a ViewHandle<ActionButton>,
-    pub(super) num_attached_context_blocks: usize,
     pub(super) has_attached_context_selected_text: bool,
     pub(super) directory_context: &'a DirectoryContext,
     pub(super) is_selected_text_attached_as_context: bool,
@@ -74,24 +73,10 @@ pub(super) fn render(props: Props, app: &AppContext) -> Option<Box<dyn Element>>
         }
     }
 
-    // When AgentViewBlockContext is enabled, blocks are auto-attached so we don't
-    // show the attached context chip for blocks.
-    let show_attached_blocks_chip =
-        props.num_attached_context_blocks > 0 && !FeatureFlag::AgentViewBlockContext.is_enabled();
-
-    if show_attached_blocks_chip || props.has_attached_context_selected_text {
-        let chip_display_text = match (
-            props.has_attached_context_selected_text,
-            props.num_attached_context_blocks,
-        ) {
-            (true, _) => "selected text".to_owned(),
-            (false, 1) => "1 block".to_owned(),
-            (false, n) => format!("{n} blocks"),
-        };
-
+    if props.has_attached_context_selected_text {
         left_row.add_child(render_attached_context_chip(
             props.attached_blocks_chip_mouse_state.clone(),
-            chip_display_text,
+            "selected text".to_owned(),
             *props.view_id,
             *props.exchange_id,
             *props.conversation_id,
