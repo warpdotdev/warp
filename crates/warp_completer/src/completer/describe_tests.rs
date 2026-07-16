@@ -531,3 +531,22 @@ fn test_describe_case_insensitive_option() {
         None
     );
 }
+
+/// Regression test for #9820: the flag part of an attached-value token must not be
+/// described as a short-hand flag bundle. `-DWITH_TESTS` ends in `S` (a known cmake short
+/// flag) and `-DS` is composed entirely of known cmake short flags — both previously
+/// exact-matched an option and got its description/coloring, while other `-D...` values
+/// didn't, making the highlighting look random.
+#[test]
+pub fn test_describe_attached_value_flag_not_treated_as_bundle() {
+    // Command classification checks feature flags; mark them initialized so the
+    // debug-mode assertion in `FeatureFlag::is_enabled` doesn't fire.
+    warp_core::features::mark_initialized();
+    let ctx = FakeCompletionContext::new(CommandRegistry::default());
+
+    let line = "cmake -DWITH_TESTS=OFF";
+    assert_eq!(describe_at_cursor(line, ByteOffset::from(8), &ctx), None);
+
+    let line = "cmake -DS=OFF";
+    assert_eq!(describe_at_cursor(line, ByteOffset::from(8), &ctx), None);
+}
