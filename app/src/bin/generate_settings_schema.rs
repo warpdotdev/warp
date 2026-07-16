@@ -11,6 +11,7 @@ use std::io::Write;
 use schemars::SchemaGenerator;
 use serde_json::{Map, Value};
 use settings::schema::SettingSchemaEntry;
+use settings::{SettingSurfaces, SettingsMode};
 use warp_core::features::{DEBUG_FLAGS, DOGFOOD_FLAGS, FeatureFlag, PREVIEW_FLAGS, RELEASE_FLAGS};
 
 /// Ensures all `inventory::submit!` registrations from the app crate's
@@ -139,6 +140,13 @@ fn ensure_hierarchy<'a>(
     current
 }
 
+fn setting_surface_names(surfaces: SettingSurfaces) -> Vec<Value> {
+    [(SettingsMode::Gui, "gui"), (SettingsMode::Tui, "tui")]
+        .into_iter()
+        .filter(|(mode, _)| surfaces.includes(*mode))
+        .map(|(_, name)| Value::String(name.to_owned()))
+        .collect()
+}
 fn main() {
     ensure_settings_linked();
 
@@ -187,6 +195,13 @@ fn main() {
         let type_schema = (entry.schema_fn)(&mut generator);
 
         let mut schema_value: Value = type_schema.to_value();
+        schema_value
+            .as_object_mut()
+            .expect("setting schema should be an object")
+            .insert(
+                "x-warp-surfaces".to_string(),
+                Value::Array(setting_surface_names((entry.surfaces_fn)())),
+            );
 
         // Compute default value — prefer file default over serde default
         let default_json = (entry.file_default_value_fn)();
@@ -263,3 +278,7 @@ fn main() {
         println!("{output}");
     }
 }
+
+#[cfg(test)]
+#[path = "generate_settings_schema_tests.rs"]
+mod tests;

@@ -7,6 +7,7 @@ use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
 use tempfile::TempDir;
 use warp_core::channel::ChannelState;
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::features::FeatureFlag;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -679,7 +680,7 @@ fn test_build_bundled_skill_context() {
     let skill_dir = resources_dir.join("bundled/skills/test-skill");
     let context = build_bundled_skill_context(resources_dir, &skill_dir);
 
-    assert_eq!(context.len(), 9);
+    assert_eq!(context.len(), 13);
     assert!(context.contains_key("warp_server_url"));
     assert!(context.contains_key("warp_cli_binary_name"));
     assert!(context.contains_key("warpctrl_binary_name"));
@@ -687,6 +688,34 @@ fn test_build_bundled_skill_context() {
     assert!(context.contains_key("warp_url_scheme"));
     assert!(context.contains_key("settings_file_path"));
     assert!(context.contains_key("keybindings_file_path"));
+    assert_eq!(
+        context.get("gui_settings_file_path").unwrap(),
+        &warp_core::paths::gui_config_local_dir()
+            .map(|path| path.join("settings.toml"))
+            .unwrap_or_default()
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        context.get("tui_settings_file_path").unwrap(),
+        &warp_core::paths::tui_config_local_dir()
+            .join("settings.toml")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        context.get("gui_mcp_config_file_path").unwrap(),
+        &warp_core::paths::gui_mcp_config_file_path()
+            .unwrap_or_default()
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        context.get("tui_mcp_config_file_path").unwrap(),
+        &warp_core::paths::tui_mcp_config_file_path()
+            .display()
+            .to_string()
+    );
     assert_eq!(
         context.get("settings_schema_path").unwrap(),
         &resources_dir
@@ -1069,6 +1098,54 @@ fn feature_gated_bundled_skill_is_listed_only_when_enabled() {
     });
 }
 
+#[test]
+fn tui_only_bundled_skill_is_listed_and_resolved_only_in_tui() {
+    for (execution_mode, expected_active) in
+        [(ExecutionMode::App, false), (ExecutionMode::Tui, true)]
+    {
+        App::test((), |mut app| async move {
+            app.add_singleton_model(|ctx| AppExecutionMode::new(execution_mode, false, ctx));
+            app.add_singleton_model(DirectoryWatcher::new);
+            app.add_singleton_model(AISettings::new_with_defaults);
+            app.add_singleton_model(|_| DetectedRepositories::default());
+            app.add_singleton_model(RepoMetadataModel::new);
+            app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+            app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+            let handle = app.add_singleton_model(SkillManager::new);
+            let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
+            let reference = SkillReference::BundledSkillId("tui-migrate-setup".to_owned());
+
+            handle.update(&mut app, |manager, _| {
+                manager.add_bundled_skill_for_testing(
+                    "tui-migrate-setup",
+                    bundled_test_skill("tui-migrate-setup", "Migrate GUI setup"),
+                    BundledSkillActivation::TuiOnly,
+                );
+            });
+
+            let listed = handle.read(&app, |manager, ctx| {
+                manager
+                    .get_skills_for_working_directory(None, ctx)
+                    .iter()
+                    .any(|skill| skill.name == "tui-migrate-setup")
+            });
+            let resolved = handle.read(&app, |manager, ctx| {
+                manager.active_skill_by_reference(&reference, ctx).is_some()
+            });
+
+            assert_eq!(listed, expected_active);
+            assert_eq!(resolved, expected_active);
+        });
+    }
+}
+
+#[test]
+fn tui_migration_skill_has_tui_only_activation() {
+    assert!(matches!(
+        activation_for_bundled_skill("tui-migrate-setup", Path::new("/resources")),
+        BundledSkillActivation::TuiOnly
+    ));
+}
 #[test]
 fn warp_control_bundled_skill_activations_track_warp_control_feature() {
     App::test((), |app| async move {
