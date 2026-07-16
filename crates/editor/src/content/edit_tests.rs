@@ -940,6 +940,60 @@ fn test_measure_table_cells_embedded_br_unchanged() {
     })
 }
 
+/// A `<br>` that falls between two styled runs (e.g. `**bold**<br>**plain**`) parses to a
+/// standalone `\n` fragment sitting in a non-final run position. `layout_run` strips that run's
+/// trailing `\n` and reports the break, but the following run reports no break — so tracking only
+/// the final run's flag would drop the interior newline and collapse the two lines into one. The
+/// break must be reinserted per-run, at the run boundary.
+#[test]
+fn test_measure_table_cells_style_boundary_br_keeps_newline() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            // Body cell 0: bold "bold", a <br> break, bold "plain". The <br> becomes a standalone
+            // `\n` fragment between the two bold runs — a non-final run that ends in the break.
+            let cells = measured_cell_texts(&text_layout, "a\tb\n**bold**<br>**plain**\ttwo\n");
+
+            assert_eq!(
+                cells[1][0], "bold\nplain",
+                "a <br> at a style-run boundary must keep its newline between the runs"
+            );
+        });
+    })
+}
+
+/// A cell with breaks in both an interior style-boundary position and a trailing position must
+/// preserve every newline, proving the per-run reinsertion handles multiple breaks rather than
+/// only the last one.
+#[test]
+fn test_measure_table_cells_style_boundary_and_trailing_br() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            // Body cell 0: an interior style-boundary break (between the two bold runs) plus a
+            // trailing break at the end of the cell.
+            let cells = measured_cell_texts(&text_layout, "a\tb\n**bold**<br>**plain**<br>\ttwo\n");
+
+            assert_eq!(
+                cells[1][0], "bold\nplain\n",
+                "breaks at a style boundary and at the trailing position must both be preserved"
+            );
+        });
+    })
+}
+
 #[test]
 fn test_layout_table_block_clamps_cell_width_to_max() {
     App::test((), |app| async move {
