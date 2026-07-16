@@ -89,12 +89,13 @@ use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::local_tty::TerminalManager;
-use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
+use crate::terminal::model::terminal_model::{BlockIndex, ConversationTranscriptViewerStatus};
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::{
     IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
     SharedSessionSource, SharedSessionStatus,
 };
+use crate::terminal::view::Event as TerminalViewEvent;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseStack;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -2655,6 +2656,37 @@ fn test_start_shared_session_from_modal() {
                 .header()
                 .as_ref(ctx)
                 .has_shareable_object(ctx));
+        });
+    });
+}
+
+#[test]
+fn share_block_modal_is_not_opened_for_stale_terminal_event() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        let terminal_view = pane_group.update(&mut app, |panes, ctx| {
+            let terminal_pane_id = panes
+                .terminal_session_by_pane_index(0)
+                .unwrap()
+                .terminal_pane_id();
+            let pane_id = terminal_pane_id.into();
+            let terminal_view = panes
+                .terminal_view_from_pane_id(terminal_pane_id, ctx)
+                .unwrap();
+            let notebook_pane = NotebookPane::new(new_notebook(ctx), ctx);
+            panes.pane_contents.insert(pane_id, Box::new(notebook_pane));
+            terminal_view
+        });
+
+        terminal_view.update(&mut app, |_, ctx| {
+            ctx.emit(TerminalViewEvent::ShareModalOpened(BlockIndex::zero()));
+        });
+        futures_lite::future::yield_now().await;
+
+        pane_group.read(&app, |panes, _| {
+            assert!(panes.terminal_with_open_share_block_modal.is_none());
         });
     });
 }
