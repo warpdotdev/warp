@@ -358,6 +358,35 @@ fn test_table_markdown_export_escapes_pipe_characters() {
 }
 
 #[test]
+fn test_table_markdown_export_preserves_br_line_breaks() {
+    App::test((), |mut app| async move {
+        // A cell whose text contains a `<br>` hard break is stored internally as an
+        // embedded newline. The GFM export must emit it back as literal `<br>` so the
+        // newline does not split the pipe-table row into a spurious extra row.
+        let markdown = format!(
+            "```{}\nheader 1\theader 2\nline one<br>line two\tvalue 2\n```\n",
+            TABLE_BLOCK_MARKDOWN_LANG
+        );
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert_eq!(
+            exported_markdown,
+            "| header 1 | header 2 |\n| --- | --- |\n| line one<br>line two | value 2 |\n"
+        );
+        assert!(
+            !exported_markdown.contains("line one\nline two"),
+            "in-cell hard break must not emit a raw newline that splits the table row: {exported_markdown:?}"
+        );
+    });
+}
+
+#[test]
 fn test_url_link_display_text_round_trip_is_stable() {
     App::test((), |mut app| async move {
         let original =

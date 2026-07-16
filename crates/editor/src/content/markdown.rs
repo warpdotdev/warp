@@ -1249,10 +1249,20 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
     let mut previous_styles = TextStylesWithMetadata::default();
     for fragment in inline {
         let next_styles = TextStylesWithMetadata::from(fragment.styles.clone());
+        // An authored hard break (raw HTML `<br>`) is stored as an embedded newline. Emit it as
+        // literal `<br>` so it survives the GFM pipe-table serialization without splitting the
+        // cell into a spurious extra row. Inline code cannot contain a newline from the `.md`
+        // inline parser, so it is left untouched. Mirrors the guard in
+        // `markdown_parser::inline_to_markdown`.
+        let fragment_text = if !next_styles.is_inline_code() && fragment.text.contains('\n') {
+            fragment.text.replace('\n', "<br>")
+        } else {
+            fragment.text.clone()
+        };
         let content = BufferMarkdownParser::append_formatting(
             &previous_styles,
             &next_styles,
-            fragment.text.as_str(),
+            fragment_text.as_str(),
             &mut markdown,
         );
         previous_styles = next_styles;
