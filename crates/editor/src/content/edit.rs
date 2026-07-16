@@ -294,8 +294,16 @@ fn measure_table_cells(
                 .collect();
             let mut line = LayOutArgs::new();
             line.highlighted_urls = highlight_urls(&runs);
+            let mut trailing_line_break = false;
             for run in &runs {
-                line.layout_run(layout, run, &paragraph_style);
+                // `layout_run` strips a trailing `\n` (from a raw HTML `<br>`) out of
+                // `line.text`; an interior `\n` is left in place. Track a break on the final
+                // run so a cell that ends in `<br>` keeps its trailing empty line (matching
+                // GitHub), rather than silently collapsing to a single line.
+                trailing_line_break = line.layout_run(layout, run, &paragraph_style);
+            }
+            if trailing_line_break {
+                line.text.push('\n');
             }
             let text_layout = InlineTextLayoutInput {
                 text: line.text,
