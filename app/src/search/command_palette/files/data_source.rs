@@ -61,16 +61,6 @@ impl FileDataSource {
             },
         }
     }
-
-    /// Create a current-folder data source from an explicit set of contents.
-    /// Test-only seam so query behavior can be exercised without a live
-    /// working directory or repo-metadata index.
-    #[cfg(test)]
-    pub fn new_current_folder_with_contents(cached_contents: Vec<FileSearchResult>) -> Self {
-        Self {
-            mode: FileDataSourceMode::CurrentFolder { cached_contents },
-        }
-    }
 }
 
 impl AsyncDataSource for FileDataSource {
@@ -155,9 +145,6 @@ impl FileDataSource {
 
             for chunk in contents.chunks(50) {
                 for item in chunk {
-                    // Never show directories in the files palette. The palette
-                    // only opens files, so directories are excluded in both the
-                    // zero-state and fuzzy-search paths for a consistent listing.
                     if item.is_directory {
                         continue;
                     }
@@ -272,9 +259,6 @@ impl FileDataSource {
             // allow the main thread to abort the search if needed.
             for chunk in contents.chunks(CHUNK_SIZE) {
                 for item in chunk {
-                    // Never show directories in the files palette. The palette
-                    // only opens files, so directories are excluded in both the
-                    // zero-state and fuzzy-search paths for a consistent listing.
                     if item.is_directory {
                         continue;
                     }

@@ -41,13 +41,11 @@ fn any_file_result(results: &[QueryResult<CommandPaletteItemAction>]) -> bool {
         .iter()
         .any(|r| matches!(r.accept_result(), CommandPaletteItemAction::OpenFile { .. }))
 }
-
-/// Regression test: the files palette must never surface directories, in
-/// either the zero-state (empty query) listing or the fuzzy-search (non-empty
-/// query) results. Previously the two paths were inconsistent — the zero-state
-/// listing showed directories while the fuzzy path dropped them — which is the
-/// inconsistency reported by users. The palette only opens files, so both
-/// states should consistently exclude directories.
+fn current_folder_source(cached_contents: Vec<FileSearchResult>) -> FileDataSource {
+    FileDataSource {
+        mode: FileDataSourceMode::CurrentFolder { cached_contents },
+    }
+}
 #[test]
 fn test_files_palette_excludes_directories() {
     App::test((), |app| async move {
@@ -60,7 +58,7 @@ fn test_files_palette_excludes_directories() {
 
         // Fuzzy-search (non-empty query) must exclude the matching directory
         // while still returning the matching file.
-        let fuzzy_source = FileDataSource::new_current_folder_with_contents(contents.clone());
+        let fuzzy_source = current_folder_source(contents.clone());
         let fuzzy_results = app
             .read(|ctx| {
                 fuzzy_source.run_query(
@@ -84,7 +82,7 @@ fn test_files_palette_excludes_directories() {
         );
 
         // Zero-state (empty query) must also exclude the directory.
-        let zero_source = FileDataSource::new_current_folder_with_contents(contents);
+        let zero_source = current_folder_source(contents);
         let zero_results = app
             .read(|ctx| {
                 zero_source.run_query(
