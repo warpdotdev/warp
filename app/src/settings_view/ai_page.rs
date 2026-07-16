@@ -2700,8 +2700,7 @@ impl AISettingsPageView {
             cancel_handle.cancel();
         }
         self.codex_oauth_connecting = false;
-        self.codex_oauth_attempt_generation =
-            self.codex_oauth_attempt_generation.wrapping_add(1);
+        self.codex_oauth_attempt_generation = self.codex_oauth_attempt_generation.wrapping_add(1);
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -4705,7 +4704,6 @@ fn codex_oauth_attempt_is_current(
 ) -> bool {
     connecting && current_generation == completed_generation
 }
-
 
 #[cfg(not(target_family = "wasm"))]
 impl Drop for AISettingsPageView {

@@ -206,12 +206,8 @@ fn replacement_token_waiters_are_dispatched_after_stale_flight_finishes() {
                 "current-refresh",
                 vec![current_sender],
             ));
-            finish_codex_refresh(
-                manager,
-                "stale-refresh",
-                CodexRefreshOutcome::Failed,
-            )
-            .expect("current-token waiters must be dispatched to a new flight")
+            finish_codex_refresh(manager, "stale-refresh", CodexRefreshOutcome::Failed)
+                .expect("current-token waiters must be dispatched to a new flight")
         });
 
         assert_eq!(stale_receiver.await.unwrap(), CodexRefreshOutcome::Failed);
@@ -233,14 +229,12 @@ fn replacement_token_waiters_are_dispatched_after_stale_flight_finishes() {
                     .map(|flight| flight.refresh_token.as_str()),
                 Some("current-refresh")
             );
-            assert!(
-                finish_codex_refresh(
-                    manager,
-                    "current-refresh",
-                    CodexRefreshOutcome::Refreshed,
-                )
-                .is_none()
-            );
+            assert!(finish_codex_refresh(
+                manager,
+                "current-refresh",
+                CodexRefreshOutcome::Refreshed,
+            )
+            .is_none());
         });
         assert_eq!(
             current_receiver.await.unwrap(),

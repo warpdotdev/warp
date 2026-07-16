@@ -234,8 +234,7 @@ fn token_and_revoke_errors_expose_only_parsed_oauth_fields() {
     assert!(!token_error.contains(token_body));
     token_server.join().unwrap();
 
-    let revoke_body =
-        r#"{"error":"invalid_token","error_description":"already revoked","debug":"never-log-this-secret"}"#;
+    let revoke_body = r#"{"error":"invalid_token","error_description":"already revoked","debug":"never-log-this-secret"}"#;
     let (revoke_url, _revoke_request_rx, revoke_server) =
         spawn_http_server("401 Unauthorized", revoke_body);
     let revoke_error = warpui_core::r#async::block_on(revoke_token_at(

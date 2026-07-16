@@ -589,8 +589,7 @@ fn api_keys_for_request_includes_codex_credentials_when_enabled() {
 #[test]
 fn pasted_openai_key_takes_precedence_over_codex_credentials() {
     let _feature = FeatureFlag::CodexSubscription.override_enabled(true);
-    let mut manager =
-        make_manager_with_codex(Some(codex_tokens("codex-access", Some(3600))));
+    let mut manager = make_manager_with_codex(Some(codex_tokens("codex-access", Some(3600))));
     manager.keys.openai = Some("sk-pasted".into());
 
     let keys = manager.api_keys_for_request(true, false, None).unwrap();
@@ -598,13 +597,11 @@ fn pasted_openai_key_takes_precedence_over_codex_credentials() {
     assert!(keys.codex_oauth_credentials.is_none());
 
     manager.keys.openai = Some("   ".into());
-    assert!(
-        manager
-            .api_keys_for_request(true, false, None)
-            .unwrap()
-            .codex_oauth_credentials
-            .is_some()
-    );
+    assert!(manager
+        .api_keys_for_request(true, false, None)
+        .unwrap()
+        .codex_oauth_credentials
+        .is_some());
 }
 
 #[test]

@@ -7,10 +7,8 @@
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context as _};
@@ -255,13 +253,12 @@ fn wait_for_callback(
                 std::thread::sleep(POLL_INTERVAL);
             }
             Err(error) => {
-                return Err(
-                    anyhow::Error::new(error).context("Codex OAuth callback accept failed")
-                );
+                return Err(anyhow::Error::new(error).context("Codex OAuth callback accept failed"));
             }
         }
     }
 }
+#[cfg(test)]
 fn handle_callback_connection(
     stream: TcpStream,
     expected_state: &str,
@@ -298,13 +295,10 @@ fn handle_callback_connection_with_cancel(
                     bail!("the Codex OAuth callback request was too large");
                 }
             }
-            Err(error)
-                if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             Err(error) => {
-                return Err(
-                    anyhow::Error::new(error)
-                        .context("failed to read the Codex OAuth callback request"),
-                );
+                return Err(anyhow::Error::new(error)
+                    .context("failed to read the Codex OAuth callback request"));
             }
         }
     }
