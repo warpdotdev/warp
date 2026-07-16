@@ -51,7 +51,6 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
-use crate::agent_block::TuiBlockingChild;
 use crate::alt_screen_view::AltScreenElement;
 use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::clipboard::copy_to_clipboard;
@@ -68,6 +67,7 @@ use crate::keybindings::{
 };
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
+use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::resume::TuiExitSummaryHandle;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
@@ -1056,7 +1056,7 @@ impl TuiTerminalSessionView {
     }
 
     /// The active front-of-queue blocking interaction, if any.
-    fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
+    fn active_blocking_child(&self, ctx: &AppContext) -> Option<ViewHandle<TuiOrchestrationBlock>> {
         self.transcript.as_ref(ctx).active_blocking_child(ctx)
     }
 
@@ -1067,14 +1067,14 @@ impl TuiTerminalSessionView {
     /// draft/cursor/selection are untouched.
     fn sync_blocker_focus(&mut self, ctx: &mut ViewContext<Self>) {
         let blocker = self.active_blocking_child(ctx);
-        let blocker_view_id = blocker.as_ref().map(|child| child.view.id());
+        let blocker_view_id = blocker.as_ref().map(ViewHandle::id);
         if blocker_view_id != self.active_blocker_view_id {
             // A foreground process owns the rendered pane and keyboard. Track
             // blocker changes while it is active, but defer focus handoff
             // until the process releases input.
             if !self.process_owns_input() {
                 match &blocker {
-                    Some(child) => ctx.focus(&child.view),
+                    Some(child) => ctx.focus(child),
                     None => ctx.focus(&self.input_view),
                 }
             }

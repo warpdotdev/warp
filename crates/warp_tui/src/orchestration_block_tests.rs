@@ -493,13 +493,13 @@ fn accepting_dispatches_once_and_releases_focus() {
     App::test((), |mut app| async move {
         let request = request("oz", RunAgentsExecutionMode::Local);
         let (block, controller) = test_block(&mut app, &request);
-        assert!(app.read(|ctx| block.as_ref(ctx).is_active_blocker(ctx)));
+        assert!(app.read(|ctx| block.as_ref(ctx).is_awaiting_confirmation(ctx)));
 
         act(&mut app, &block, TuiOrchestrationBlockAction::Accept);
         act(&mut app, &block, TuiOrchestrationBlockAction::Accept);
         act(&mut app, &block, TuiOrchestrationBlockAction::Reject);
 
         assert_eq!(controller.executed_requests.borrow().as_slice(), &[request]);
-        assert!(app.read(|ctx| !block.as_ref(ctx).is_active_blocker(ctx)));
+        assert!(app.read(|ctx| !block.as_ref(ctx).is_awaiting_confirmation(ctx)));
     });
 }

@@ -9,7 +9,6 @@
 
 mod agent_block;
 mod agent_block_sections;
-mod agent_identity;
 mod alt_screen_view;
 mod autoupdate;
 mod clipboard;
@@ -33,6 +32,7 @@ mod keybindings;
 mod mcp_menu;
 mod model_menu;
 mod option_selector;
+mod orchestrated_agent_identity_styling;
 mod orchestration_block;
 mod resume;
 mod skills_menu;

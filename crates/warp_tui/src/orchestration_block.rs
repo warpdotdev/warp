@@ -10,6 +10,7 @@
 //! [`crate::agent_block::TuiAIBlock`] maps to action cancellation. Terminal,
 //! spawning, streaming, and restored states reuse the existing fallback
 //! tool-call presentation and its `tool_call_labels` copy.
+
 use std::rc::Rc;
 
 use warp::tui_export::{
@@ -36,9 +37,9 @@ use configuration::{
     build_request, ConfigPage, ModelOrchestrationBlockController, OrchestrationBlockController,
 };
 
-use crate::agent_identity::AgentIdentity;
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::option_selector::{OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent};
+use crate::orchestrated_agent_identity_styling::AgentIdentity;
 use crate::tui_builder::TuiUiBuilder;
 
 const ORCHESTRATION_BLOCK_TITLE: &str = "Can I start additional agents for this task?";
@@ -183,6 +184,8 @@ impl TuiOrchestrationBlock {
     ) -> Self {
         let action_id = action.id.clone();
         let action_id_for_executor = action_id.clone();
+        // Spawning events replace the confirmation UI with launch progress
+        // and release its input-blocking focus while agents start.
         ctx.subscribe_to_model(&run_agents_executor, move |me, _, event, ctx| match event {
             RunAgentsExecutorEvent::SpawningStarted {
                 action_id,
@@ -205,6 +208,8 @@ impl TuiOrchestrationBlock {
         });
 
         let action_id_for_actions = action_id.clone();
+        // Action lifecycle events enable the card once streaming finishes and
+        // release its focus when this RunAgents action reaches a terminal state.
         ctx.subscribe_to_model(&action_model, move |me, _, event, ctx| match event {
             BlocklistAIActionEvent::FinishedAction { action_id, .. }
                 if action_id == &action_id_for_actions =>
@@ -226,8 +231,8 @@ impl TuiOrchestrationBlock {
             _ => {}
         });
 
-        // Live catalog changes revalidate the edit state and refresh the
-        // active page.
+        // Harness and auth-secret catalog changes can invalidate selections,
+        // so revalidate the edit state and rebuild the active page.
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| match event {
@@ -246,6 +251,9 @@ impl TuiOrchestrationBlock {
                 | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
+
+        // Model catalog updates can invalidate the selected model, so
+        // revalidate the edit state and rebuild the active model page.
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
             if let LLMPreferencesEvent::UpdatedAvailableLLMs = event {
                 me.orchestration_edit_state
@@ -255,6 +263,9 @@ impl TuiOrchestrationBlock {
                 ctx.notify();
             }
         });
+
+        // Connected worker changes alter the remote host choices shown on
+        // the active page.
         ctx.subscribe_to_model(
             &warp::tui_export::ConnectedSelfHostedWorkersModel::handle(ctx),
             |me, _, event, ctx| {
@@ -411,13 +422,12 @@ impl TuiOrchestrationBlock {
         ctx.notify();
     }
 
-    /// Whether this card is the active blocking interaction: interactive in
-    /// Acceptance/Configuring while the action awaits confirmation, and
-    /// false once accepted, rejected, spawning, finished, or restored.
-    pub(super) fn is_active_blocker(&self, ctx: &AppContext) -> bool {
+    /// Whether this card still awaits a user decision.
+    pub(super) fn is_awaiting_confirmation(&self, ctx: &AppContext) -> bool {
         if self.decided || self.spawning.is_some() || self.is_restored {
             return false;
         }
+
         matches!(
             self.controller.action_status(&self.action_id, ctx),
             Some(AIActionStatus::Blocked)
@@ -519,70 +529,28 @@ impl TuiOrchestrationBlock {
         });
     }
 
-    /// Applies a confirmed selection to the edit state and
-    /// advances to the next applicable page.
-    fn handle_page_confirmed(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
-        let CardMode::Configuring { page } = self.mode else {
-            return;
-        };
-        self.controller.apply_page_selection(
-            page,
-            id,
-            &mut self.orchestration_edit_state,
-            self.fallback_base_model_id.clone(),
-            ctx,
-        );
-        self.finish_page_confirmation(page, ctx);
-    }
-
-    /// Completes a page confirmation using an arrow's requested direction,
-    /// or the normal Enter behavior when no arrow direction is pending.
+    /// Navigates after confirmation using an arrow's requested direction, or
+    /// advances normally for Enter.
     fn finish_page_confirmation(&mut self, page: ConfigPage, ctx: &mut ViewContext<Self>) {
-        match self.pending_page_navigation.take() {
-            Some(navigation) => self.navigate_after_confirmation(page, navigation, ctx),
-            None => self.advance_after(page, ctx),
-        }
-    }
-
-    /// Advances past `page` in the (freshly recomputed) sequence, returning
-    /// to the acceptance card after the final page.
-    fn advance_after(&mut self, page: ConfigPage, ctx: &mut ViewContext<Self>) {
-        let sequence =
-            Self::page_sequence(&self.orchestration_edit_state.orchestration_config_state);
-        let next = sequence
-            .iter()
-            .position(|p| *p == page)
-            .and_then(|index| sequence.get(index + 1))
-            .copied();
-        match next {
-            Some(next) => self.open_page(next, ctx),
-            None => self.return_to_acceptance(ctx),
-        }
-    }
-
-    /// Moves after committing `page`, recomputing the dynamic sequence so
-    /// choices such as Local navigate within the newly applicable pages.
-    fn navigate_after_confirmation(
-        &mut self,
-        page: ConfigPage,
-        navigation: PageConfirmationNavigation,
-        ctx: &mut ViewContext<Self>,
-    ) {
         let sequence =
             Self::page_sequence(&self.orchestration_edit_state.orchestration_config_state);
         let Some(index) = sequence.iter().position(|candidate| *candidate == page) else {
             self.return_to_acceptance(ctx);
             return;
         };
+        let navigation = self.pending_page_navigation.take();
         let target = match navigation {
-            PageConfirmationNavigation::Previous => index
+            Some(PageConfirmationNavigation::Previous) => index
                 .checked_sub(1)
                 .and_then(|index| sequence.get(index))
                 .copied(),
-            PageConfirmationNavigation::Next => sequence.get(index + 1).copied(),
+            Some(PageConfirmationNavigation::Next) | None => sequence.get(index + 1).copied(),
+        };
+        match target {
+            Some(target) => self.open_page(target, ctx),
+            None if navigation.is_some() => self.open_page(page, ctx),
+            None => self.return_to_acceptance(ctx),
         }
-        .unwrap_or(page);
-        self.open_page(target, ctx);
     }
 
     /// Moves to the next page without applying the current selection.
@@ -613,8 +581,17 @@ impl TuiOrchestrationBlock {
     ) {
         match event {
             TuiOptionSelectorEvent::Confirmed { id } => {
-                let id = id.clone();
-                self.handle_page_confirmed(&id, ctx);
+                let CardMode::Configuring { page } = self.mode else {
+                    return;
+                };
+                self.controller.apply_page_selection(
+                    page,
+                    id,
+                    &mut self.orchestration_edit_state,
+                    self.fallback_base_model_id.clone(),
+                    ctx,
+                );
+                self.finish_page_confirmation(page, ctx);
             }
             TuiOptionSelectorEvent::CustomTextSubmitted { value } => {
                 if let CardMode::Configuring {
@@ -656,7 +633,7 @@ impl TuiOrchestrationBlock {
     /// accept renders the reason inline and stays active, a valid one
     /// dispatches the edited request through `execute_run_agents`.
     fn handle_accept(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.decided || self.spawning.is_some() || !self.is_active_blocker(ctx) {
+        if self.decided || self.spawning.is_some() || !self.is_awaiting_confirmation(ctx) {
             return;
         }
         let request = self.to_request();
@@ -681,7 +658,7 @@ impl TuiOrchestrationBlock {
     /// Reject: resolves the request as rejected exactly once,
     /// from the acceptance card or any configuration page.
     fn handle_reject(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.decided || self.spawning.is_some() || !self.is_active_blocker(ctx) {
+        if self.decided || self.spawning.is_some() || !self.is_awaiting_confirmation(ctx) {
             return;
         }
         self.decided = true;
@@ -693,7 +670,7 @@ impl TuiOrchestrationBlock {
 
     /// Opens configuration on the first page.
     fn handle_configure(&mut self, ctx: &mut ViewContext<Self>) {
-        if !self.is_active_blocker(ctx) {
+        if !self.is_awaiting_confirmation(ctx) {
             return;
         }
         let first = Self::page_sequence(&self.orchestration_edit_state.orchestration_config_state)

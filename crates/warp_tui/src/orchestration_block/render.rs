@@ -15,7 +15,7 @@ use warpui_core::AppContext;
 
 use super::{CardMode, TuiOrchestrationBlock, ORCHESTRATION_BLOCK_TITLE};
 use crate::agent_block_sections::render_fallback_tool_call_section;
-use crate::agent_identity::{assign_agent_identity_indices, AgentIdentity};
+use crate::orchestrated_agent_identity_styling::{assign_agent_identity_indices, AgentIdentity};
 use crate::tui_builder::TuiUiBuilder;
 
 impl TuiOrchestrationBlock {

@@ -17,7 +17,7 @@ use warpui_core::elements::tui::{
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
 use warpui_core::AppContext;
 
-use crate::agent_identity::{agent_identity_palette, AgentIdentity};
+use crate::orchestrated_agent_identity_styling::{agent_identity_palette, AgentIdentity};
 use crate::terminal_background::probed_colors;
 
 /// Theme-derived styles and components for the TUI, mirroring the GUI's
@@ -256,7 +256,8 @@ impl TuiUiBuilder {
     }
 
     /// The deterministic agent identity palette for this theme, resolved
-    /// against the probed terminal background. See [`crate::agent_identity`].
+    /// against the probed terminal background. See
+    /// [`crate::orchestrated_agent_identity_styling`].
     pub(crate) fn agent_identity_palette(&self) -> Vec<AgentIdentity> {
         agent_identity_palette(
             self.warp_theme.terminal_colors(),

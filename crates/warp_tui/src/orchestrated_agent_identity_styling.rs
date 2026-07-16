@@ -1,5 +1,5 @@
-//! Deterministic color-and-glyph agent identities for the TUI orchestration
-//! card: a theme-derived palette of ANSI colors crossed with
+//! Deterministic color-and-glyph identity styling for orchestrated agents in
+//! the TUI card: a theme-derived palette of ANSI colors crossed with
 //! a curated glyph set, plus the stable hash and per-request assignment
 //! policy that keep identities stable across re-renders and edits.
 
@@ -139,5 +139,5 @@ pub(crate) fn assign_agent_identity_indices(
 }
 
 #[cfg(test)]
-#[path = "agent_identity_tests.rs"]
+#[path = "orchestrated_agent_identity_styling_tests.rs"]
 mod tests;

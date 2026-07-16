@@ -187,12 +187,6 @@ impl TuiToolCallView {
     }
 }
 
-/// The front-of-queue blocking interaction owned by an agent block: the
-/// child view rendering the pending action that awaits a decision.
-pub(super) struct TuiBlockingChild {
-    pub(super) view: ViewHandle<TuiOrchestrationBlock>,
-}
-
 /// Events emitted to the transcript that owns this rich-content block.
 pub(super) enum TuiAIBlockEvent {
     /// The block's cached canonical height must be remeasured.
@@ -422,10 +416,13 @@ impl TuiAIBlock {
             ctx.notify();
         }
 
+        // Create or update the interactive orchestration card for each
+        // streamed RunAgents tool call.
         for action in run_agents_actions {
             let AIAgentActionType::RunAgents(request) = &action.action else {
                 continue;
             };
+
             // Existing block: re-sync its edit state from the latest streamed
             // chunk (the request may have grown since the view was created).
             if let Some(TuiToolCallView::OrchestrationBlock(view)) =
@@ -449,6 +446,7 @@ impl TuiAIBlock {
                             .map(|(config, status)| (config.clone(), status))
                     })
             };
+
             let action_id = action.id.clone();
             let request = request.clone();
             let card_action_model = action_model.clone();
@@ -467,6 +465,7 @@ impl TuiAIBlock {
                     ctx,
                 )
             });
+
             let action_id_for_events = action_id.clone();
             ctx.subscribe_to_view(&view, move |me, _, event, ctx| match event {
                 TuiOrchestrationBlockEvent::RejectRequested => {
@@ -500,10 +499,13 @@ impl TuiAIBlock {
 
     /// The front-of-queue blocking interaction owned by this block, if any:
     /// the conversation's front pending action when it is `Blocked`, rendered
-    /// by one of this block's child views, and that view reports
-    /// `is_active_blocker`. Deriving from the action queue (not transcript order)
+    /// by one of this block's child views, and that view is still awaiting
+    /// confirmation. Deriving from the action queue (not transcript order)
     /// keeps semantics identical to the GUI's `focus_subview_if_necessary`.
-    pub(super) fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
+    pub(super) fn active_blocking_child(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TuiOrchestrationBlock>> {
         let action_model = self.action_model.as_ref(ctx);
         let pending = action_model.get_pending_action(ctx)?;
         let action_id = pending.id.clone();
@@ -519,8 +521,8 @@ impl TuiAIBlock {
         match self.action_views.get(&action_id)? {
             TuiToolCallView::OrchestrationBlock(view) => view
                 .as_ref(ctx)
-                .is_active_blocker(ctx)
-                .then(|| TuiBlockingChild { view: view.clone() }),
+                .is_awaiting_confirmation(ctx)
+                .then(|| view.clone()),
             // These tool views render inline and never replace the input.
             TuiToolCallView::FileEdits(_)
             | TuiToolCallView::Plan(_)
