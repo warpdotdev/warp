@@ -179,7 +179,7 @@ pub enum ButtonSize {
     UDIButton,
     /// Sizing for prompt chips in the UDI.
     UDIPromptChip,
-    /// Sizing for buttons in the AgentView input, e.g. when `FeatureFlag::AgentView` is enabled.
+    /// Sizing for buttons in the AgentView input.
     AgentInputButton,
 }
 

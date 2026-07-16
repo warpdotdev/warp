@@ -379,9 +379,7 @@ impl Input {
                     self.close_slash_commands_menu(ctx);
                 }
 
-                if detected_command.command.auto_enter_ai_mode
-                    || !FeatureFlag::AgentView.is_enabled()
-                {
+                if detected_command.command.auto_enter_ai_mode {
                     self.enter_ai_mode(Some(InputTypeAutoDetectionSource::SlashCommand), ctx);
                 }
 
@@ -437,8 +435,7 @@ impl Input {
                     log::warn!("Tried to execute workflow for id {id:?} but it does not exist");
                     return;
                 };
-                let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
-                    && self.agent_view_controller.as_ref(ctx).is_fullscreen();
+                let is_in_agent_view = self.agent_view_controller.as_ref(ctx).is_fullscreen();
                 record_saved_prompt_accepted(is_in_agent_view, ctx);
 
                 self.show_workflows_info_box_on_workflow_selection(
@@ -605,10 +602,8 @@ impl Input {
                     }
                     ctx.dispatch_typed_action_deferred(InputAction::OpenInlineHistoryMenu);
                     return true;
-                } else if FeatureFlag::AgentView.is_enabled() {
-                    self.open_conversation_menu(ctx);
                 } else {
-                    ctx.dispatch_typed_action(&TerminalAction::OpenConversationsPalette);
+                    self.open_conversation_menu(ctx);
                 }
             }
             rename_tab if command.name == commands::RENAME_TAB.name => {
@@ -977,11 +972,7 @@ impl Input {
                     self.apply_v2_slash_section_filter(CloudModeV2Section::Prompts, ctx);
                     return true;
                 }
-                if FeatureFlag::AgentView.is_enabled() {
-                    self.open_prompts_menu(ctx);
-                } else {
-                    return false;
-                }
+                self.open_prompts_menu(ctx);
             }
             rewind if command.name == commands::REWIND.name => {
                 self.open_rewind_menu(ctx);
@@ -1308,10 +1299,7 @@ impl Input {
 
         // If the command must be executed in AI mode, and we're not already in an agent view,
         // enter the agent view.
-        if FeatureFlag::AgentView.is_enabled()
-            && command.auto_enter_ai_mode
-            && !self.agent_view_controller.as_ref(ctx).is_active()
-        {
+        if command.auto_enter_ai_mode && !self.agent_view_controller.as_ref(ctx).is_active() {
             self.agent_view_controller.update(ctx, |controller, ctx| {
                 let _ = controller.try_enter_agent_view(
                     None,
@@ -1323,8 +1311,7 @@ impl Input {
             });
         }
 
-        let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(ctx).is_active();
+        let is_in_agent_view = self.agent_view_controller.as_ref(ctx).is_active();
         record_static_slash_command_accepted(command.name, is_in_agent_view, ctx);
         true
     }

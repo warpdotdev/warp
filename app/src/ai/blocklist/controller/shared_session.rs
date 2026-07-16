@@ -15,7 +15,7 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 use super::response_stream::ResponseStreamId;
 use super::{BlocklistAIController, RequestInput, SessionContext};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
+use crate::ai::agent::{AIAgentActionId, AIAgentAttachment};
 use crate::ai::attachment_utils::{
     build_file_attachment_map, download_file, sanitize_filename, DownloadedAttachment,
 };
@@ -834,17 +834,15 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(conversation_id) = conversation_id {
-            if FeatureFlag::AgentView.is_enabled() {
-                // Enter agent view for this conversation so the sharer's UI state is correct
-                // and updates are sent to the viewer.
-                self.context_model.update(ctx, |context_model, ctx| {
-                    context_model.set_pending_query_state_for_existing_conversation(
-                        conversation_id,
-                        AgentViewEntryOrigin::SharedSessionSelection,
-                        ctx,
-                    );
-                });
-            }
+            // Enter agent view for this conversation so the sharer's UI state is correct
+            // and updates are sent to the viewer.
+            self.context_model.update(ctx, |context_model, ctx| {
+                context_model.set_pending_query_state_for_existing_conversation(
+                    conversation_id,
+                    AgentViewEntryOrigin::SharedSessionSelection,
+                    ctx,
+                );
+            });
             self.send_user_query_in_conversation_with_attachments(
                 prompt,
                 conversation_id,
@@ -853,50 +851,39 @@ impl BlocklistAIController {
                 ctx,
             );
         } else {
-            if FeatureFlag::AgentView.is_enabled() {
-                // If we're already in an empty agent view conversation, reuse it
-                // (so that any command blocks remain visible). Otherwise create a new one for the given prompt.
-                let history = BlocklistAIHistoryModel::handle(ctx);
-                let origin = AgentViewEntryOrigin::SharedSessionSelection;
+            // If we're already in an empty agent view conversation, reuse it
+            // (so that any command blocks remain visible). Otherwise create a new one for the given prompt.
+            let history = BlocklistAIHistoryModel::handle(ctx);
+            let origin = AgentViewEntryOrigin::SharedSessionSelection;
 
-                let Some(conversation_id) = self
-                    .context_model
-                    .as_ref(ctx)
-                    .selected_conversation_id(ctx)
-                    .filter(|conversation_id| {
-                        history
-                            .as_ref(ctx)
-                            .conversation(conversation_id)
-                            .is_some_and(|conversation| {
-                                conversation.exchange_count() == 0
-                                    && conversation.server_conversation_token().is_none()
-                            })
-                    })
-                    .or_else(|| {
-                        self.context_model.update(ctx, |context_model, ctx| {
-                            context_model.try_start_new_conversation(origin, ctx).ok()
+            let Some(conversation_id) = self
+                .context_model
+                .as_ref(ctx)
+                .selected_conversation_id(ctx)
+                .filter(|conversation_id| {
+                    history
+                        .as_ref(ctx)
+                        .conversation(conversation_id)
+                        .is_some_and(|conversation| {
+                            conversation.exchange_count() == 0
+                                && conversation.server_conversation_token().is_none()
                         })
+                })
+                .or_else(|| {
+                    self.context_model.update(ctx, |context_model, ctx| {
+                        context_model.try_start_new_conversation(origin, ctx).ok()
                     })
-                else {
-                    report_error!("Failed to get conversation id for shared session prompt");
-                    return;
-                };
-
-                self.send_user_query_in_conversation_with_attachments(
-                    prompt,
-                    conversation_id,
-                    Some(participant_id),
-                    file_attachments,
-                    ctx,
-                );
+                })
+            else {
+                report_error!("Failed to get conversation id for shared session prompt");
                 return;
-            }
+            };
 
-            self.send_user_query_in_new_conversation(
+            self.send_user_query_in_conversation_with_attachments(
                 prompt,
-                None,
-                EntrypointType::SharedSession,
+                conversation_id,
                 Some(participant_id),
+                file_attachments,
                 ctx,
             );
         }

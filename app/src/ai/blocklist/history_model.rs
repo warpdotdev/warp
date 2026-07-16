@@ -2364,18 +2364,6 @@ impl BlocklistAIHistoryModel {
         Some(active_conversation_id)
     }
 
-    /// Returns the last conversation ID created for a terminal surface, if one exists.
-    #[cfg_attr(target_family = "wasm", allow(unused))]
-    pub(crate) fn last_conversation_id(
-        &self,
-        terminal_surface_id: EntityId,
-    ) -> Option<AIConversationId> {
-        self.live_conversation_ids_for_terminal_surface
-            .get(&terminal_surface_id)?
-            .last()
-            .copied()
-    }
-
     /// Set the hidden status of the exchange with the given ID.
     pub fn set_exchange_hidden_status(
         &mut self,

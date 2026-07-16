@@ -104,8 +104,7 @@ impl AgentInputFooter {
     /// This is basically cargo-culted from the equivalent logic in `PromptDisplay`, pared down to
     /// only the chip types that we care about in the AgentView input.
     ///
-    /// The whole context chip/UDI chip/prompt layer is in need of a big refactor; once the
-    /// `FeatureFlag::AgentView` is retired we'll have an opportunity to do a refactor with a smaller
+    /// The whole context chip/UDI chip/prompt layer is in need of a big refactor with a smaller
     /// surface area, presumably because we'll be able to first delete a lot of the affected logic
     /// which the UDI and legacy inputs depend on.
     pub(super) fn update_display_chips(

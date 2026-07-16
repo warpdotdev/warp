@@ -965,8 +965,6 @@ fn active_session_state(
 
 #[test]
 fn restore_conversation_in_active_pane_enters_existing_live_conversation_without_loading() {
-    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 

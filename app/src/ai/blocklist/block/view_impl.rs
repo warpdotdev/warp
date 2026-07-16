@@ -43,10 +43,9 @@ use warp_core::ui::color::contrast::{
 use warp_core::ui::color::Rgb;
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::{
-    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Expanded, Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
-    SelectableArea, Text,
+    Align, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded,
+    Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition, SelectableArea, Text,
 };
 use warpui::fonts::Properties;
 use warpui::platform::Cursor;
@@ -71,7 +70,7 @@ use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::ai::blocklist::model::AIBlockModelHelper;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::CloudModel;
-use crate::settings::{AISettings, InputModeSettings, InputSettings};
+use crate::settings::{AISettings, InputModeSettings};
 use crate::settings_view::SettingsSection;
 use crate::terminal::block_list_element::BlockListMenuSource;
 use crate::terminal::grid_renderer::URL_COLOR;
@@ -948,15 +947,9 @@ impl View for AIBlock {
                     rewind_button: &self.rewind_button,
                     num_attached_context_blocks: self.num_attached_context_blocks,
                     has_attached_context_selected_text: self.has_attached_context_selected_text,
-                    directory_context: &self.directory_context,
                     view_id: &self.view_id,
                     exchange_id: &self.client_ids.client_exchange_id,
                     conversation_id: &self.client_ids.conversation_id,
-                    is_selected_text_attached_as_context: self
-                        .context_model
-                        .as_ref(app)
-                        .pending_context_selected_text()
-                        .is_some(),
                     is_restored: self.is_restored(),
                 },
                 app,
@@ -1127,7 +1120,6 @@ impl View for AIBlock {
                 disable_rule_suggestions_button: &self.disable_rule_suggestions_button,
                 has_accepted_edits,
                 current_todo_list: self.current_todo_list(app),
-                finish_reason: self.finish_reason.as_ref(),
                 is_usage_footer_expanded: self.is_usage_footer_expanded,
                 shared_session_status: &shared_session_status,
                 terminal_view_id: self.terminal_view_id,
@@ -1154,25 +1146,8 @@ impl View for AIBlock {
             app,
         ));
 
-        let should_use_transparent_overlay = InputSettings::as_ref(app)
-            .is_universal_developer_input_enabled(app)
-            || FeatureFlag::AgentView.is_enabled();
-
-        let theme = Appearance::as_ref(app).theme();
-        // Even though forked blocks are technically "restored", this is an implementation detail
-        // and should not be exposed to the user. Only truly restored blocks (i.e. blocks from a closed pane or session)
-        // should have the restored theme applied.
-        let background_color = if self.model.is_restored()
-            && !self.model.is_forked()
-            && !FeatureFlag::AgentView.is_enabled()
-        {
-            theme.restored_ai_blocks_overlay()
-        } else if should_use_transparent_overlay {
-            // Use a fully transparent background for universal developer input
-            Fill::Solid(ColorU::transparent_black())
-        } else {
-            theme.ai_blocks_overlay()
-        };
+        // AI blocks always render with a fully transparent background.
+        let background_color = Fill::Solid(ColorU::transparent_black());
 
         let mut content = Container::new(contents.finish()).with_background(background_color);
 
@@ -1189,11 +1164,6 @@ impl View for AIBlock {
                 .input_mode
                 .value()
                 .is_inverted_blocklist();
-        let should_render_separator =
-            !FeatureFlag::AgentView.is_enabled() && contains_user_query_and_is_not_pin_to_top;
-        if should_render_separator {
-            content = content.with_border(Border::top(1.).with_border_fill(theme.outline()));
-        }
 
         // Although `inputs_to_render` returns a vector, each AIBlock should only have one input.
         // We're assuming that the first element of the vector corresponds to the correct input.

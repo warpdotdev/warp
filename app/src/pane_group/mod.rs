@@ -7896,7 +7896,7 @@ impl PaneGroup {
 
     /// Add and focus a cloud mode pane.
     pub fn add_ambient_agent_pane(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::AgentView.is_enabled() || !FeatureFlag::CloudMode.is_enabled() {
+        if !FeatureFlag::CloudMode.is_enabled() {
             return;
         }
 

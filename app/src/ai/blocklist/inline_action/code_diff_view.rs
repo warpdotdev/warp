@@ -16,7 +16,6 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng as _};
-use warp_core::features::FeatureFlag;
 use warp_core::platform::SessionPlatform;
 use warp_core::settings::ToggleableSetting;
 use warp_core::ui::appearance::Appearance;
@@ -3051,7 +3050,7 @@ impl BackingView for CodeDiffView {
 }
 
 fn accept_keystroke_source(is_passive: bool) -> KeystrokeSource {
-    if FeatureFlag::AgentView.is_enabled() && is_passive {
+    if is_passive {
         KeystrokeSource::Binding(ACCEPT_PROMPT_SUGGESTION_KEYBINDING)
     } else {
         KeystrokeSource::Fixed(keystroke_for_mode(ACCEPT_KEY, is_passive))

@@ -1,4 +1,4 @@
-//! Inline history menu for up-arrow history when `FeatureFlag::AgentView` is enabled.
+//! Inline history menu for up-arrow history.
 //!
 //! Shows both live conversations for the terminal view and command history in the terminal
 //! view, and prompts and command history in the agent view.

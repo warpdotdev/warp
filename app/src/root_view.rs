@@ -1967,7 +1967,7 @@ impl RootView {
                 models,
                 default_model_id,
                 workspace_enforces_autonomy,
-                FeatureFlag::AgentView.is_enabled(),
+                true,
                 auth_state,
                 ctx,
             )

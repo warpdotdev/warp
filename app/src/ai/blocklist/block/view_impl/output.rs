@@ -59,11 +59,10 @@ use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
-    AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome,
-    CreateDocumentsResult, EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult,
-    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult,
-    StartRecordingResult, StopRecordingResult, SubagentCall, SubagentType,
+    AIAgentActionType, AIAgentCitation, AIAgentOutputMessage, AIAgentOutputMessageType,
+    AIAgentText, AIAgentTextSection, CreateDocumentsResult, EditDocumentsResult, MessageId,
+    ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult, SearchCodebaseFailureReason,
+    SearchCodebaseResult, StartRecordingResult, StopRecordingResult, SubagentCall, SubagentType,
     SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -76,7 +75,7 @@ use crate::ai::blocklist::block::view_impl::common::{
 };
 use crate::ai::blocklist::block::{
     AIBlock, AIBlockAction, AIBlockStateHandles, ActionButtons, AutonomySettingSpeedbump,
-    CollapsibleElementState, CollapsibleExpansionState, EmbeddedCodeEditorView, FinishReason,
+    CollapsibleElementState, CollapsibleExpansionState, EmbeddedCodeEditorView,
     ImportedCommentGroup, RequestedEdit, TextLocation, TodoListElementState,
 };
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
@@ -176,7 +175,6 @@ pub(crate) struct Props<'a> {
     pub(super) disable_rule_suggestions_button: &'a ViewHandle<ActionButton>,
     pub(super) current_todo_list: Option<&'a AIAgentTodoList>,
     pub(super) has_accepted_edits: bool,
-    pub(super) finish_reason: Option<&'a FinishReason>,
     pub(super) is_usage_footer_expanded: bool,
     pub(super) shared_session_status: &'a SharedSessionStatus,
     pub(super) terminal_view_id: EntityId,
@@ -1303,60 +1301,9 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
     output_items.finish()
 }
 
-fn should_render_stopped_output(props: Props, app: &AppContext) -> bool {
-    if FeatureFlag::AgentView.is_enabled() {
-        return false;
-    }
-
-    let request_type = props.model.request_type(app);
-    if request_type.is_passive_code_diff() {
-        return false;
-    }
-
-    let status = props.model.status(app);
-    let cancellation_reason = status.cancellation_reason().cloned();
-    // Reasons that keep the conversation alive (follow-ups, CLI-subagent takeover)
-    // or finalize it as a success (optimistic command completion, revert) must not
-    // render a stopped banner.
-    if cancellation_reason.is_some_and(|reason| {
-        matches!(
-            reason.conversation_outcome(),
-            CancellationOutcome::KeepInProgress | CancellationOutcome::Succeeded
-        )
-    }) {
-        return false;
-    }
-
-    let has_expanded_requested_command = props
-        .requested_commands
-        .values()
-        .any(|requested_command| requested_command.view.as_ref(app).is_header_expanded());
-    // Expanded requested commands would appear after the stopped task UI, which we don't want.
-    if has_expanded_requested_command {
-        return false;
-    }
-
-    let is_current_exchange_empty = status
-        .output_to_render()
-        .is_none_or(|output| output.get().messages.is_empty());
-
-    let is_resumed_conversation = props
-        .model
-        .inputs_to_render(app)
-        .iter()
-        .last()
-        .is_some_and(|input| matches!(input, AIAgentInput::ResumeConversation { .. }));
-
-    // When the user resumes a conversation, and cancels before any follow-up output,
-    // we should avoid showing a stopped banner. Otherwise the user can stack
-    // stopped banners by toggling stop and resume.
-    if is_current_exchange_empty && is_resumed_conversation {
-        return false;
-    }
-
-    props.finish_reason.is_some_and(|finish_reason| {
-        *finish_reason == FinishReason::CancelledDuringRequestedCommandExecution
-    }) || cancellation_reason.is_some()
+fn should_render_stopped_output(_props: Props, _app: &AppContext) -> bool {
+    // The stopped-output banner is a pre-AgentView affordance and is no longer rendered.
+    false
 }
 
 // Helper function to style a requested action with standard styling when streaming and action blocked on user
@@ -3537,30 +3484,6 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
                 .with_margin_right(2.)
                 .finish(),
         );
-    }
-
-    if !props.shared_session_status.is_finished_viewer() && !FeatureFlag::AgentView.is_enabled() {
-        let ui_builder = appearance.ui_builder().clone();
-        let continue_button = icon_button(
-            appearance,
-            Icon::CornerRight,
-            false,
-            props.state_handles.continue_conversation_handle.clone(),
-        )
-        .with_tooltip(move || {
-            ui_builder
-                .tool_tip("Continue conversation".to_string())
-                .build()
-                .finish()
-        })
-        .with_style(style_override)
-        .with_hovered_styles(style_override_with_background)
-        .with_active_styles(style_override_with_background)
-        .build()
-        .on_click(|ctx, _, _| ctx.dispatch_typed_action(AIBlockAction::ContinueConversation))
-        .finish();
-
-        flex.add_child(continue_button);
     }
 
     #[cfg(not(target_family = "wasm"))]

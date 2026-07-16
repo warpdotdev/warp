@@ -27,7 +27,6 @@ use session_sharing_protocol::viewer::{
     DownstreamMessage, InitPayload, RoleUpdatedReason, SessionEndedReason, UpstreamMessage,
     ViewerRemovedReason,
 };
-use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_server_client::iap::IapManager;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
@@ -395,7 +394,7 @@ impl Network {
                         latest_block_id: None,
                         telemetry_context: Some(TelemetryContext(telemetry_context().as_value())),
                         feature_support: FeatureSupport {
-                            supports_agent_view: FeatureFlag::AgentView.is_enabled(),
+                            supports_agent_view: true,
                             supports_full_role: true,
                             supports_full_role_for_real: true,
                         },
@@ -478,7 +477,7 @@ impl Network {
                         latest_block_id: Some(latest_block_id.into()),
                         telemetry_context: Some(TelemetryContext(telemetry_context().as_value())),
                         feature_support: FeatureSupport {
-                            supports_agent_view: FeatureFlag::AgentView.is_enabled(),
+                            supports_agent_view: true,
                             supports_full_role: true,
                             supports_full_role_for_real: true,
                         },

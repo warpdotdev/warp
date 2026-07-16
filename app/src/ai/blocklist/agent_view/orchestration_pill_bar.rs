@@ -58,7 +58,6 @@ use crate::ai::blocklist::telemetry::{
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::harness_display;
-use crate::features::FeatureFlag;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::pane::view::PaneHeaderAction;
 use crate::terminal::view::TerminalAction;
@@ -2223,12 +2222,6 @@ pub fn render_orchestration_breadcrumbs(
     horizontal_scroll_state: ClippedScrollStateHandle,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
-    // Mirror the gating used by `maybe_add_parent_navigation_card` in
-    // `pane_impl.rs` so the breadcrumb path can't accidentally render in a
-    // non-AgentView build / state.
-    if !FeatureFlag::AgentView.is_enabled() {
-        return None;
-    }
     if !agent_view_controller.is_fullscreen() {
         return None;
     }

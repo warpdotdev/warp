@@ -2006,7 +2006,6 @@ fn select_conversation(
 #[test]
 fn prompt_submission_auto_queues_during_agent_requested_lrc() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -2037,7 +2036,6 @@ fn prompt_submission_auto_queues_during_agent_requested_lrc() {
 #[test]
 fn lrc_queued_prompts_wait_while_subagent_is_active() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -2108,7 +2106,6 @@ fn lrc_queued_prompts_wait_while_subagent_is_active() {
 #[test]
 fn prompt_submission_during_lrc_with_non_lrc_queue_head_uses_generic_origin() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -2162,7 +2159,6 @@ fn prompt_submission_during_lrc_with_non_lrc_queue_head_uses_generic_origin() {
 #[test]
 fn prompt_submission_during_lrc_with_lrc_queue_head_uses_lrc_origin() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -2216,7 +2212,6 @@ fn prompt_submission_during_lrc_with_lrc_queue_head_uses_lrc_origin() {
 #[test]
 fn prompt_submission_does_not_auto_queue_for_user_tagged_lrc() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -2240,7 +2235,6 @@ fn prompt_submission_does_not_auto_queue_for_user_tagged_lrc() {
 #[test]
 fn prompt_submission_is_not_queued_during_lrc_when_set_to_send_immediately() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -2271,7 +2265,6 @@ fn prompt_submission_is_not_queued_during_lrc_when_set_to_send_immediately() {
 #[test]
 fn prompt_submission_during_lrc_with_queue_default_uses_generic_origin() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -2303,7 +2296,6 @@ fn prompt_submission_during_lrc_with_queue_default_uses_generic_origin() {
 #[test]
 fn lrc_queued_prompts_fire_from_queue_head_when_command_finishes() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -2357,7 +2349,6 @@ fn lrc_queued_prompts_fire_from_queue_head_when_command_finishes() {
 #[test]
 fn ghost_text_shows_queue_hint_during_agent_requested_lrc() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -2382,7 +2373,6 @@ fn shell_submission_queues_as_command_row_when_gated_under_v2() {
     // command row (not executed and not interrupting the queue), carries no attachments, and
     // clears the editor.
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_slash_command = FeatureFlag::QueueSlashCommand.override_enabled(true);
         let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
         initialize_app(&mut app);
@@ -2424,7 +2414,6 @@ fn shell_submission_is_not_queued_when_v2_disabled() {
     // With QueuedPromptsV2 off, a shell submission is never captured as a command row even when
     // every other queue condition is met; it falls through to normal execution.
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_slash_command = FeatureFlag::QueueSlashCommand.override_enabled(true);
         let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(false);
         initialize_app(&mut app);
@@ -2458,7 +2447,6 @@ fn shell_submission_is_not_queued_when_v2_disabled() {
 #[test]
 fn slash_fork_bypasses_prompt_queue_while_in_progress() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -2493,7 +2481,6 @@ fn slash_fork_bypasses_prompt_queue_while_in_progress() {
 #[test]
 fn slash_compact_still_queues_while_in_progress() {
     App::test((), |mut app| async move {
-        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -4191,7 +4178,6 @@ fn test_shell_lock_respected_when_slash_command_typed() {
 #[test]
 fn test_new_conversation_keybinding_requires_double_press_in_non_empty_agent_view() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         initialize_app(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
@@ -4277,7 +4263,6 @@ fn test_new_conversation_keybinding_requires_double_press_in_non_empty_agent_vie
 #[test]
 fn question_mark_does_not_toggle_shortcuts_while_editing_queued_prompt() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         initialize_app(&mut app);
 
@@ -4376,7 +4361,6 @@ fn question_mark_does_not_toggle_shortcuts_while_editing_queued_prompt() {
 #[test]
 fn test_new_conversation_keybinding_does_not_require_confirmation_in_empty_agent_view() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         initialize_app(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
@@ -4426,7 +4410,6 @@ fn test_new_conversation_keybinding_does_not_require_confirmation_in_empty_agent
 #[test]
 fn test_new_conversation_input_trigger_remains_single_step_in_non_empty_agent_view() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         initialize_app(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
@@ -7232,83 +7215,6 @@ fn test_input_mode_setting_methods() {
     });
 }
 
-fn run_input_mode_prefix_test(udi_enabled: bool, input_type: InputType) {
-    let input_prefix = match input_type {
-        InputType::Shell => super::TERMINAL_INPUT_PREFIX,
-        InputType::AI => super::AI_INPUT_PREFIX,
-    };
-
-    App::test((), |mut app| async move {
-        let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
-
-        initialize_app(&mut app);
-
-        // Ensure the AI autodetection is enabled.
-        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
-            let _ = ai_settings
-                .ai_autodetection_enabled_internal
-                .set_value(true, ctx);
-            // Make sure the autodetection is actually enabled, in practice.
-            assert!(ai_settings.is_ai_autodetection_enabled(ctx));
-        });
-        // Set the input box type based on the test configuration.
-        InputSettings::handle(&app).update(&mut app, |input_settings, ctx| {
-            let input_box_type = if udi_enabled {
-                InputBoxType::Universal
-            } else {
-                InputBoxType::Classic
-            };
-            let _ = input_settings.input_box_type.set_value(input_box_type, ctx);
-        });
-
-        let terminal = add_window_with_bootstrapped_terminal(
-            &mut app, None, /* history_file_commands */
-            None,
-        )
-        .await;
-        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
-
-        for c in format!("{input_prefix}some text").chars() {
-            input.update(&mut app, |input, ctx| {
-                input.user_insert(&c.to_string(), ctx);
-            });
-        }
-
-        input.read(&app, |input, ctx| {
-            // The input prefix should be stripped.
-            assert_eq!(input.buffer_text(ctx), "some text");
-
-            app.read_model(input.ai_input_model(), |input_model, _| {
-                assert_eq!(input_model.input_type(), input_type);
-
-                // Prefixes represent an explicit mode selection, so they lock the input type in
-                // both classic input and UDI.
-                assert!(input_model.is_input_type_locked());
-
-                // We should treat this as the mode having been set while the buffer was empty.
-                assert!(input_model.was_lock_set_with_empty_buffer());
-            })
-        });
-    });
-}
-
-macro_rules! input_mode_prefix_tests {
-    ($($name:ident: ($udi_enabled:literal, $input_mode:expr),)*) => {
-        $(
-            #[test]
-            fn $name() {
-                run_input_mode_prefix_test($udi_enabled, $input_mode);
-            }
-        )*
-    };
-}
-
-input_mode_prefix_tests! {
-    test_ai_input_prefix_with_udi: (true, InputType::AI),
-    test_ai_input_prefix_with_no_udi: (false, InputType::AI),
-    test_shell_input_prefix_with_udi: (true, InputType::Shell),
-    test_shell_input_prefix_with_no_udi: (false, InputType::Shell),
-}
 fn enter_fullscreen_agent_view_for_test(terminal: &ViewHandle<TerminalView>, app: &mut App) {
     terminal.update(app, |view, ctx| {
         view.agent_view_controller().update(ctx, |controller, ctx| {
@@ -7328,7 +7234,6 @@ fn enter_fullscreen_agent_view_for_test(terminal: &ViewHandle<TerminalView>, app
 #[test]
 fn test_cloud_handoff_prefix_remains_text_when_handoff_flag_disabled() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(false);
 
@@ -7352,7 +7257,6 @@ fn test_cloud_handoff_prefix_remains_text_when_handoff_flag_disabled() {
 #[test]
 fn test_cloud_handoff_prefix_activates_when_handoff_flags_enabled() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
@@ -7386,7 +7290,6 @@ fn test_cloud_handoff_prefix_activates_when_handoff_flags_enabled() {
 #[test]
 fn test_cloud_handoff_prefix_normal_deletion_does_not_exit() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
@@ -7438,7 +7341,6 @@ fn test_cloud_handoff_prefix_normal_deletion_does_not_exit() {
 #[test]
 fn test_cloud_handoff_prefix_exits_on_backspace_at_beginning_of_buffer() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
@@ -7483,7 +7385,6 @@ fn test_cloud_handoff_prefix_exits_on_backspace_at_beginning_of_buffer() {
 #[test]
 fn test_cloud_handoff_prefix_keeps_shell_prefix_as_query_text() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
@@ -7519,7 +7420,6 @@ fn test_cloud_handoff_prefix_keeps_shell_prefix_as_query_text() {
 #[test]
 fn test_cloud_handoff_prefix_escape_exits_mode_preserving_prompt_text() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
@@ -7560,7 +7460,6 @@ fn test_cloud_handoff_prefix_escape_exits_mode_preserving_prompt_text() {
 #[test]
 fn test_cloud_handoff_prefix_remains_text_in_powershell_with_nld_enabled() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
@@ -7592,7 +7491,6 @@ fn test_cloud_handoff_prefix_remains_text_in_powershell_with_nld_enabled() {
 #[test]
 fn test_cloud_handoff_prefix_activates_in_powershell_when_nld_disabled() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
@@ -7623,7 +7521,6 @@ fn test_cloud_handoff_prefix_activates_in_powershell_when_nld_disabled() {
 #[test]
 fn test_cloud_handoff_prefix_vim_escape_exits_insert_before_handoff_mode() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
@@ -7684,7 +7581,6 @@ fn test_cloud_handoff_prefix_vim_escape_exits_insert_before_handoff_mode() {
 #[test]
 fn test_cloud_handoff_prefix_ignores_terminal_input_mode_toggle() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _oz_handoff_flag = FeatureFlag::OzHandoff.override_enabled(true);
         let _handoff_local_cloud_flag = FeatureFlag::HandoffLocalCloud.override_enabled(true);
 
@@ -7722,7 +7618,6 @@ fn test_cloud_handoff_prefix_ignores_terminal_input_mode_toggle() {
 fn test_terminal_prefix_sets_shell_prefix_decision_source() {
     App::test((), |mut app| async move {
         let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
 
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
@@ -8240,7 +8135,6 @@ fn test_remove_ignored_suggestion_on_ai_query_execution() {
 fn test_agent_view_terminal_only_initial_input_config_unlocked_when_autodetection_enabled() {
     App::test((), |mut app| async move {
         let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
 
         initialize_app(&mut app);
 
@@ -8276,7 +8170,6 @@ fn test_terminal_only_ai_enter_enters_agent_view_and_clears_buffer() {
 
     App::test((), |mut app| async move {
         let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
 
         initialize_app(&mut app);
 
@@ -8334,7 +8227,6 @@ fn test_terminal_only_escape_locks_shell_mode() {
 
     App::test((), |mut app| async move {
         let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
 
         initialize_app(&mut app);
 
@@ -8969,7 +8861,6 @@ fn ctrl_enter_with_selection_preserves_selection_in_submit_when_setting_is_true(
 #[test]
 fn editor_keymap_context_excludes_ctrl_enter_enters_agent_view_when_rich_input_is_open() {
     App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         initialize_app(&mut app);

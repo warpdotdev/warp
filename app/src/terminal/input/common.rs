@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
-use pathfinder_geometry::vector::vec2f;
-use vim::vim::{VimMode, VimState};
 use warp_completer::completer::Description;
 use warp_core::features::FeatureFlag;
 use warpui::elements::{
     AnchorPair, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DispatchEventResult, Element, EventHandler, Flex, OffsetPositioning, OffsetType, ParentAnchor,
     ParentElement, ParentOffsetBounds, PositionedElementOffsetBounds, PositioningAxis, Radius,
-    Shrinkable, Stack, Text, XAxisAnchor,
+    Shrinkable, Stack, XAxisAnchor,
 };
 use warpui::fonts::Weight;
 use warpui::presenter::ChildView;
@@ -23,7 +21,6 @@ use crate::terminal::buy_credits_banner::BuyCreditsBanner;
 use crate::terminal::input::{Input, InputAction, InputSuggestionsMode, MenuPositioning};
 use crate::terminal::model::TerminalModel;
 use crate::terminal::view::{TerminalAction, PADDING_LEFT};
-use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Whether the terminal input message bar should be shown.
@@ -34,83 +31,10 @@ pub(super) fn should_show_terminal_input_message_bar(
     model: &TerminalModel,
     app: &AppContext,
 ) -> bool {
-    FeatureFlag::AgentView.is_enabled()
-        && !FeatureFlag::AgentViewPromptChip.is_enabled()
+    !FeatureFlag::AgentViewPromptChip.is_enabled()
         && InputSettings::as_ref(app).is_terminal_input_message_bar_enabled()
         && AISettings::as_ref(app).is_any_ai_enabled(app)
         && !model.is_shared_ambient_agent_session()
-}
-
-/// Renders vim status bar
-/// Used by: agent.rs, terminal.rs, universal.rs, legacy.rs
-pub(super) fn render_vim_status(vim_state: &VimState, appearance: &Appearance) -> Container {
-    let theme = appearance.theme();
-    let ansi_colors = theme.terminal_colors().bright;
-    let icon = match vim_state.mode {
-        VimMode::Normal => Icon::VimNormalMode.to_warpui_icon(ansi_colors.green.into()),
-        VimMode::Insert => {
-            use crate::themes::theme::Blend;
-            Icon::VimInsertMode.to_warpui_icon(
-                theme
-                    .background()
-                    .blend(&theme.foreground().with_opacity(50)),
-            )
-        }
-        VimMode::Visual(_) => Icon::VimVisualMode.to_warpui_icon(ansi_colors.blue.into()),
-        VimMode::Replace => Icon::VimReplaceMode.to_warpui_icon(ansi_colors.red.into()),
-    };
-    Container::new(
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_children([
-                Container::new(
-                    Text::new_inline(
-                        vim_state.showcmd.to_owned(),
-                        appearance.monospace_font_family(),
-                        12.,
-                    )
-                    .with_color(appearance.theme().nonactive_ui_text_color().into())
-                    .finish(),
-                )
-                .with_margin_right(8.)
-                .with_margin_bottom(2.)
-                .finish(),
-                ConstrainedBox::new(icon.finish())
-                    .with_width(12.)
-                    .with_height(12.)
-                    .finish(),
-            ])
-            .finish(),
-    )
-    .with_margin_right(8.)
-    .with_margin_bottom(4.)
-}
-
-/// Renders the vim status indicator in the bottom right corner of the given stack.
-pub(super) fn add_vim_status_to_stack(
-    stack: &mut Stack,
-    vim_state: &VimState,
-    appearance: &Appearance,
-    use_adjusted_padding: bool,
-) {
-    let terminal_padding = if use_adjusted_padding {
-        *PADDING_LEFT / 1.5
-    } else {
-        0.
-    };
-    let status_bar = render_vim_status(vim_state, appearance)
-        .with_padding_bottom(4.)
-        .with_uniform_margin(terminal_padding)
-        .finish();
-    stack.add_positioned_child(
-        status_bar,
-        OffsetPositioning::offset_from_parent(
-            vec2f(0.0, 0.0),
-            ParentOffsetBounds::Unbounded,
-            ParentAnchor::BottomRight,
-            ChildAnchor::BottomRight,
-        ),
-    )
 }
 
 /// Wraps the given column, assumed to represent the full input content, with appropriate

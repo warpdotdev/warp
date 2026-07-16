@@ -26,8 +26,7 @@ use crate::terminal::model::TerminalModel;
 use crate::terminal::view::init::SELECT_PREVIOUS_BLOCK_ACTION_NAME;
 use crate::util::bindings::keybinding_name_to_keystroke;
 
-/// Renders contextual hint text at the bottom of the terminal input when `FeatureFlag::AgentView`
-/// is enabled.
+/// Renders contextual hint text at the bottom of the terminal input.
 pub struct TerminalInputMessageBar {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,

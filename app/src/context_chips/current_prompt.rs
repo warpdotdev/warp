@@ -27,9 +27,8 @@ use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel}
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 use crate::context_chips::display_chip::GitLineChanges;
 use crate::editor::EditorView;
-use crate::features::FeatureFlag;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::settings::{InputSettings, WarpPromptSeparator};
+use crate::settings::WarpPromptSeparator;
 use crate::terminal::event::{BlockType, UserBlockCompleted};
 use crate::terminal::model::block::{Block, BlockMetadata};
 use crate::terminal::model::session::{ExecuteCommandOptions, Session, Sessions, SessionsEvent};
@@ -249,14 +248,8 @@ impl CurrentPrompt {
         let weak_editor_handle = editor.downgrade();
         ctx.subscribe_to_view(&editor, move |me, _, _, ctx| {
             // CurrentPrompt exists and this fn is called even if we're not using warp prompt.
-            // We don't need to do anything if we're honoring PS1 unless universal developer input
-            // or AgentView is enabled (agent view needs chips regardless of PS1 setting).
-            if *SessionSettings::as_ref(ctx).honor_ps1
-                && !InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx)
-                && !FeatureFlag::AgentView.is_enabled()
-            {
-                return;
-            }
+            // Agent view needs chips regardless of the PS1 setting, so we always keep the chip
+            // state up to date here.
             let Some(editor) = weak_editor_handle.upgrade(ctx) else {
                 return;
             };
@@ -912,7 +905,7 @@ impl CurrentPrompt {
         // For periodically-updated chips, we have to check if context chips were disabled while
         // waiting on the timer. This protects against race conditions between aborting the
         // previous refresh handle and starting the next one.
-        if !self.active(ctx) {
+        if !self.active() {
             return;
         }
 
@@ -950,7 +943,7 @@ impl CurrentPrompt {
     }
 
     fn run_chips(&mut self, chips: Vec<ContextChipKind>, ctx: &mut ModelContext<Self>) {
-        if !self.active(ctx) {
+        if !self.active() {
             log::debug!("Context chips are not in use, won't run");
             return;
         }
@@ -1056,24 +1049,22 @@ impl CurrentPrompt {
     fn chips_to_run(&self, ctx: &AppContext) -> Vec<ContextChipKind> {
         let mut chips = self.configured_chips(ctx);
 
-        if FeatureFlag::AgentView.is_enabled() {
-            let footer_chips = SessionSettings::as_ref(ctx)
-                .agent_footer_chip_selection
-                .all_chips();
-            for chip_kind in footer_chips {
-                if !chips.contains(&chip_kind) {
-                    chips.push(chip_kind);
-                }
+        let footer_chips = SessionSettings::as_ref(ctx)
+            .agent_footer_chip_selection
+            .all_chips();
+        for chip_kind in footer_chips {
+            if !chips.contains(&chip_kind) {
+                chips.push(chip_kind);
             }
+        }
 
-            // Also include chips configured for the CLI agent footer.
-            let cli_footer_chips = SessionSettings::as_ref(ctx)
-                .cli_agent_footer_chip_selection
-                .all_chips();
-            for chip_kind in cli_footer_chips {
-                if !chips.contains(&chip_kind) {
-                    chips.push(chip_kind);
-                }
+        // Also include chips configured for the CLI agent footer.
+        let cli_footer_chips = SessionSettings::as_ref(ctx)
+            .cli_agent_footer_chip_selection
+            .all_chips();
+        for chip_kind in cli_footer_chips {
+            if !chips.contains(&chip_kind) {
+                chips.push(chip_kind);
             }
         }
 
@@ -1130,7 +1121,7 @@ impl CurrentPrompt {
         ctx: &mut ModelContext<Self>,
     ) {
         if let SessionSettingsChangedEvent::HonorPS1 { .. } = event {
-            if self.active(ctx) {
+            if self.active() {
                 // If switching from PS1 to context chips, we'll need to restart the chip-updating
                 // loops. Any previous async updates will have been cancelled.
                 log::debug!("Re-enabling context chips");
@@ -1555,14 +1546,11 @@ impl CurrentPrompt {
     }
 
     /// Whether or not context chips are active. If this is false, we can skip running them.
-    fn active(&self, ctx: &AppContext) -> bool {
-        // Context chips are active when:
-        // 1. PS1 is not honored (normal case), OR
-        // 2. Universal developer input is enabled (overrides PS1 behavior), OR
-        // 3. AgentView feature is enabled (agent view needs chips regardless of PS1)
-        !*SessionSettings::as_ref(ctx).honor_ps1
-            || InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx)
-            || FeatureFlag::AgentView.is_enabled()
+    ///
+    /// Context chips are always active because agent view needs chips regardless of the PS1
+    /// or universal developer input settings.
+    fn active(&self) -> bool {
+        true
     }
 }
 

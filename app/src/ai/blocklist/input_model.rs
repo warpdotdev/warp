@@ -160,7 +160,7 @@ impl InputConfig {
         app: &AppContext,
     ) -> Self {
         Self {
-            is_locked: if !FeatureFlag::AgentView.is_enabled() || is_in_fullscreen_agent_view {
+            is_locked: if is_in_fullscreen_agent_view {
                 !AISettings::as_ref(app).is_ai_autodetection_enabled(app)
             } else {
                 !AISettings::as_ref(app).is_nld_in_terminal_enabled(app)
@@ -403,7 +403,7 @@ impl BlocklistAIInputModel {
     ) {
         // When agent view is active, the input should behave like Universal mode
         // even if Classic mode is selected (e.g. when PS1 is enabled).
-        if FeatureFlag::AgentView.is_enabled() && self.is_conversation_active(ctx) {
+        if self.is_conversation_active(ctx) {
             return;
         }
 

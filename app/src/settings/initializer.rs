@@ -86,7 +86,7 @@ impl SettingsInitializer {
             }
         }
 
-        // Migrate NLD settings when AgentView is enabled.
+        // Migrate NLD settings.
         //
         // Explicitly set `nld_in_terminal_enabled_internal` for all users if
         // it has not previously been set.
@@ -100,23 +100,21 @@ impl SettingsInitializer {
         // containing this logic.
         //
         // TODO(zachbai): Remove this approximately 6 weeks from 2/5/26.
-        if FeatureFlag::AgentView.is_enabled() {
-            AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-                if ai_settings
-                    .nld_in_terminal_enabled_internal
-                    .is_value_explicitly_set()
-                {
-                    return;
-                }
+        AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
+            if ai_settings
+                .nld_in_terminal_enabled_internal
+                .is_value_explicitly_set()
+            {
+                return;
+            }
 
-                let is_existing_user = auth_state.is_onboarded() == Some(true);
-                let was_global_autodetection_enabled_for_existing_user =
-                    *ai_settings.ai_autodetection_enabled_internal && is_existing_user;
-                report_if_error!(ai_settings
-                    .nld_in_terminal_enabled_internal
-                    .set_value(was_global_autodetection_enabled_for_existing_user, ctx));
-            });
-        }
+            let is_existing_user = auth_state.is_onboarded() == Some(true);
+            let was_global_autodetection_enabled_for_existing_user =
+                *ai_settings.ai_autodetection_enabled_internal && is_existing_user;
+            report_if_error!(ai_settings
+                .nld_in_terminal_enabled_internal
+                .set_value(was_global_autodetection_enabled_for_existing_user, ctx));
+        });
 
         // Migrate the old `KeepThinkingExpanded` bool setting to the new
         // `ThinkingDisplayMode` enum setting.

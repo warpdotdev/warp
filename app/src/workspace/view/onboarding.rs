@@ -51,20 +51,13 @@ impl From<SelectedSettings> for OnboardingTutorial {
             } => match project_settings {
                 ProjectOnboardingSettings::Project {
                     selected_local_folder,
-                    initialize_projects_automatically,
+                    ..
                 } => {
                     let path = PathBuf::from(selected_local_folder);
-                    // When AgentView is enabled, /init comes at the end of the tutorial.
-                    if !FeatureFlag::AgentView.is_enabled() && initialize_projects_automatically {
-                        OnboardingTutorial::InitProject {
-                            path,
-                            intention: OnboardingIntention::AgentDrivenDevelopment,
-                        }
-                    } else {
-                        OnboardingTutorial::Project {
-                            path,
-                            intention: OnboardingIntention::AgentDrivenDevelopment,
-                        }
+                    // /init comes at the end of the tutorial, so we don't run it up-front here.
+                    OnboardingTutorial::Project {
+                        path,
+                        intention: OnboardingIntention::AgentDrivenDevelopment,
                     }
                 }
                 ProjectOnboardingSettings::NoProject => OnboardingTutorial::NoProject {
@@ -201,13 +194,9 @@ impl Workspace {
         intention: OnboardingIntention,
         ctx: &mut ViewContext<Self>,
     ) {
-        let version = OnboardingVersion::Agent(if FeatureFlag::AgentView.is_enabled() {
-            AgentOnboardingVersion::AgentModality {
-                has_project,
-                intention,
-            }
-        } else {
-            AgentOnboardingVersion::UniversalInput { has_project }
+        let version = OnboardingVersion::Agent(AgentOnboardingVersion::AgentModality {
+            has_project,
+            intention,
         });
         self.dispatch_onboarding(TerminalAction::OnboardingFlow(version), ctx);
     }

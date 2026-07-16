@@ -61,7 +61,7 @@ use super::view::{
 use super::warpify::render::{draw_flag_pole, render_subshell_flag};
 use super::{heights_approx_eq, TerminalModel, HEIGHT_FUDGE_FACTOR_LINES};
 use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
-use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
+use crate::ai_assistant::ASK_AI_ASSISTANT_TEXT;
 use crate::appearance::Appearance;
 use crate::drive::settings::WarpDriveSettings;
 use crate::features::FeatureFlag;
@@ -1135,17 +1135,11 @@ impl BlockListElement {
 
         if AISettings::as_ref(app).is_any_ai_enabled(app) {
             let icon = Container::new(
-                ConstrainedBox::new(if FeatureFlag::AgentView.is_enabled() {
+                ConstrainedBox::new(
                     UIIcon::Icon::Paperclip
                         .to_warpui_icon(icon_color.into())
-                        .finish()
-                } else if FeatureFlag::AgentMode.is_enabled() {
-                    UIIcon::Icon::Stars
-                        .to_warpui_icon(icon_color.into())
-                        .finish()
-                } else {
-                    Icon::new(AI_ASSISTANT_SVG_PATH, icon_color).finish()
-                })
+                        .finish(),
+                )
                 .with_height(16.)
                 .with_width(16.)
                 .finish(),
@@ -2363,14 +2357,12 @@ impl BlockListElement {
         warp_theme: &WarpTheme,
         block_borders_enabled: bool,
         snackbar_header: &Option<SnackbarHeader>,
-        ai_render_context: &BlocklistAIRenderContext,
+        _ai_render_context: &BlocklistAIRenderContext,
         transcript_scope: &TranscriptScope,
         ctx: &mut PaintContext,
     ) {
         let block_height = block.height(transcript_scope).as_f64() as f32 * cell_size.y();
-        if block.is_restored()
-            && (!FeatureFlag::AgentView.is_enabled() || !transcript_scope.is_conversation())
-        {
+        if block.is_restored() && !transcript_scope.is_conversation() {
             ctx.scene
                 .draw_rect_with_hit_recording(RectF::new(
                     grid_origin,
@@ -2379,15 +2371,7 @@ impl BlockListElement {
                 .with_background(warp_theme.restored_blocks_overlay());
         }
 
-        let mut did_render_ai_stripe = false;
-        if !FeatureFlag::AgentView.is_enabled() {
-            if let Some(ai_context_stripe_color) =
-                ai_render_context.context_color_for_block(block, warp_theme)
-            {
-                draw_flag_pole(grid_origin, block_height, ai_context_stripe_color, ctx);
-                did_render_ai_stripe = true;
-            }
-        }
+        let did_render_ai_stripe = false;
 
         if block.has_failed() {
             ctx.scene
@@ -4310,25 +4294,8 @@ impl Element for BlockListElement {
                 VisibleItem::RichContent {
                     view_id, height_px, ..
                 } => {
-                    let block_origin = grid_origin;
                     if let Some(rich_content) = self.rich_content_elements.get_mut(view_id) {
                         rich_content.paint(grid_origin, ctx, app);
-                    }
-
-                    if !FeatureFlag::AgentView.is_enabled() {
-                        let ai_render_context = self.ai_render_context.borrow();
-                        if let Some(ai_context_color) = self
-                            .rich_content_metadata
-                            .get(view_id)
-                            .and_then(|metadata| {
-                                ai_render_context
-                                    .context_color_for_rich_content(metadata, &self.warp_theme)
-                            })
-                        {
-                            ctx.scene.start_layer(ClipBounds::ActiveLayer);
-                            draw_flag_pole(block_origin, *height_px, ai_context_color, ctx);
-                            ctx.scene.stop_layer();
-                        }
                     }
 
                     // Don't draw a border below session headers (i.e. above the next block).

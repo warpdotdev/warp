@@ -73,10 +73,6 @@ const CORNER_RADIUS: f32 = 4.0;
 const BORDER_WIDTH: f32 = 1.0;
 /// Inner rounded corners are 1px smaller than the outer border radius
 const INNER_CORNER_RADIUS: f32 = CORNER_RADIUS - BORDER_WIDTH;
-const BASE_FONT_SIZE: f32 = 10.0;
-const HORIZONTAL_PADDING_SCALE: f32 = 0.35;
-const VERTICAL_PADDING: f32 = 2.5;
-const MIN_HORIZONTAL_PADDING: f32 = 3.5;
 const ICON_SPACING: f32 = 8.0;
 const MAX_PROFILE_NAME_WIDTH_SCALE_FACTOR: f32 = 10.0;
 
@@ -89,11 +85,7 @@ const MODEL_REQUIRES_EDIT_ACCESS_TOOLTIP: &str = "Request edit access to change 
 const HARNESS_DEFAULT_MODEL_LABEL: &str = "default";
 
 pub fn calculate_scaled_font_size(appearance: &warp_core::ui::appearance::Appearance) -> f32 {
-    if FeatureFlag::AgentView.is_enabled() {
-        udi_font_size(appearance)
-    } else {
-        BASE_FONT_SIZE * appearance.monospace_ui_scalar()
-    }
+    udi_font_size(appearance)
 }
 
 /// Calculate the maximum width for profile name text (we will clip to this width)
@@ -1426,17 +1418,11 @@ impl ProfileModelSelector {
         has_reasoning_variants(llm, &all_refs)
     }
 
-    fn get_padding_values(&self, scaled_font_size: f32) -> (f32, f32) {
-        if FeatureFlag::AgentView.is_enabled() {
-            (
-                spacing::UDI_CHIP_VERTICAL_PADDING,
-                spacing::UDI_CHIP_HORIZONTAL_PADDING,
-            )
-        } else {
-            let horizontal_padding =
-                (scaled_font_size * HORIZONTAL_PADDING_SCALE).max(MIN_HORIZONTAL_PADDING);
-            (VERTICAL_PADDING, horizontal_padding)
-        }
+    fn get_padding_values(&self) -> (f32, f32) {
+        (
+            spacing::UDI_CHIP_VERTICAL_PADDING,
+            spacing::UDI_CHIP_HORIZONTAL_PADDING,
+        )
     }
 
     fn get_menu_positioning(&self, app: &AppContext, is_profile: bool) -> OffsetPositioning {
@@ -1520,9 +1506,9 @@ impl ProfileModelSelector {
     }
 
     fn should_render_model_sidecar_left(&self, position_id: &str, app: &AppContext) -> bool {
-        // When AgentView is enabled, the model picker is right-aligned, so we default to
-        // showing the sidecar on the left side to avoid overlap.
-        let default_to_left = FeatureFlag::AgentView.is_enabled();
+        // The model picker is right-aligned, so we default to showing the sidecar on the
+        // left side to avoid overlap.
+        let default_to_left = true;
 
         let window_id = self.model_dropdown.window_id(app);
         let Some(window) = app.windows().platform_window(window_id) else {
@@ -1573,12 +1559,8 @@ impl ProfileModelSelector {
 
         let scaled_font_size = calculate_scaled_font_size(appearance);
         // Use the same icon size as the compact UDI button to ensure consistent height
-        let icon_size = if FeatureFlag::AgentView.is_enabled() {
-            udi_icon_size(appearance, app)
-        } else {
-            appearance.monospace_font_size() - 1.0
-        };
-        let (vertical_padding, horizontal_padding) = self.get_padding_values(scaled_font_size);
+        let icon_size = udi_icon_size(appearance, app);
+        let (vertical_padding, horizontal_padding) = self.get_padding_values();
 
         let profile_icon = Icon::Psychology
             .to_warpui_icon(Fill::Solid(text_color))
@@ -1699,12 +1681,8 @@ impl ProfileModelSelector {
         };
 
         let scaled_font_size = calculate_scaled_font_size(appearance);
-        let icon_size = if FeatureFlag::AgentView.is_enabled() {
-            udi_icon_size(appearance, app)
-        } else {
-            appearance.monospace_font_size() - 1.0
-        };
-        let (vertical_padding, horizontal_padding) = self.get_padding_values(scaled_font_size);
+        let icon_size = udi_icon_size(appearance, app);
+        let (vertical_padding, horizontal_padding) = self.get_padding_values();
 
         let model_text = Text::new_inline(
             model_display_name,

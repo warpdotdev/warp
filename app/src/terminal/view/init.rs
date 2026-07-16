@@ -337,16 +337,8 @@ pub fn init(app: &mut AppContext) {
                 interaction_source: InteractionSource::Keybinding,
             }),
         )
-        .with_mac_key_binding(if FeatureFlag::AgentView.is_enabled() {
-            "ctrl-enter"
-        } else {
-            "cmd-enter"
-        })
-        .with_linux_or_windows_key_binding(if FeatureFlag::AgentView.is_enabled() {
-            "alt-shift-enter"
-        } else {
-            "ctrl-shift-enter"
-        })
+        .with_mac_key_binding("ctrl-enter")
+        .with_linux_or_windows_key_binding("alt-shift-enter")
         .with_context_predicate(
             id!("Terminal") & !id!("IMEOpen") & id!(flags::HAS_PENDING_PROMPT_SUGGESTION),
         ),
@@ -1084,8 +1076,7 @@ pub fn init(app: &mut AppContext) {
             id!("Terminal") & id!(flags::IS_ANY_AI_ENABLED),
         )
         .with_enabled(|| {
-            FeatureFlag::AgentView.is_enabled()
-                && FeatureFlag::CloudMode.is_enabled()
+            FeatureFlag::CloudMode.is_enabled()
                 && FeatureFlag::CloudModeFromLocalSession.is_enabled()
         })
         .with_group(bindings::BindingGroup::WarpAi.as_str())]);
@@ -1164,8 +1155,7 @@ fn register_input_mode_bindings(app: &mut AppContext) {
                 ),
             },
             agent_conversation_predicate.clone() & !command_predicate.clone(),
-        )
-        .with_enabled(|| FeatureFlag::AgentView.is_enabled()),
+        ),
         FixedBinding::new_per_platform(
             PerPlatformKeystroke {
                 mac: "cmd-enter",
@@ -1173,8 +1163,7 @@ fn register_input_mode_bindings(app: &mut AppContext) {
             },
             TerminalAction::SetInputModeAgent,
             agent_conversation_predicate & agent_mode_predicate.clone() & command_predicate,
-        )
-        .with_enabled(|| FeatureFlag::AgentView.is_enabled()),
+        ),
     ]);
 
     app.register_editable_bindings([

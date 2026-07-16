@@ -5326,7 +5326,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::AgentViewExited
             | Self::InlineConversationMenuOpened
             | Self::InlineConversationMenuItemSelected
-            | Self::AgentShortcutsViewToggled => EnablementState::Flag(FeatureFlag::AgentView),
+            | Self::AgentShortcutsViewToggled => EnablementState::Always,
             Self::CreateProjectPromptSubmitted => EnablementState::Flag(FeatureFlag::GetStartedTab),
             Self::CreateProjectPromptSubmittedContent => {
                 EnablementState::Flag(FeatureFlag::GetStartedTab)

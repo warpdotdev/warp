@@ -437,9 +437,6 @@ pub(super) struct AIBlockStateHandles {
     /// Mouse state handle for interacting with the attached blocks.
     attached_blocks_chip_state_handle: MouseStateHandle,
 
-    /// Mouse state handle for the continue conversation button
-    continue_conversation_handle: MouseStateHandle,
-
     /// Mouse state handle for the resume conversation button
     resume_conversation_handle: MouseStateHandle,
 
@@ -1064,8 +1061,6 @@ pub struct AIBlock {
 
     /// Controller for reading/modifying `AgentView` state for this terminal pane (e.g. if there is
     /// an active agent view or not, which affects whether or not this block should be hidden).
-    ///
-    /// Only used when `FeatureFlag::AgentView` is enabled.
     agent_view_controller: ModelHandle<AgentViewController>,
     ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
 
@@ -1360,9 +1355,7 @@ impl AIBlock {
             }
         });
 
-        if FeatureFlag::AgentView.is_enabled() {
-            ctx.subscribe_to_model(&agent_view_controller, |_, _, _, ctx| ctx.notify());
-        }
+        ctx.subscribe_to_model(&agent_view_controller, |_, _, _, ctx| ctx.notify());
 
         // Handoff prep emits ambient-agent events before submit, while still composing.
         // Only the run lifecycle events can change `is_cloud_agent_pre_first_exchange`
@@ -2952,9 +2945,6 @@ impl AIBlock {
         if is_for_hidden_exchange {
             return true;
         }
-        if !FeatureFlag::AgentView.is_enabled() {
-            return false;
-        }
 
         if let Some(active_conversation_id) = self
             .agent_view_controller
@@ -3290,15 +3280,6 @@ impl AIBlock {
                     // when agent view is enabled, you have to enter the agent view for the code diff
                     // conversation to follow-up in the first place, and hitting 'view details'
                     // shouldn't auto-enter the agent view.
-                    if !FeatureFlag::AgentView.is_enabled() {
-                        me.context_model.update(ctx, |context_model, ctx| {
-                            context_model.set_pending_query_state_for_existing_conversation(
-                                me.client_ids.conversation_id,
-                                AgentViewEntryOrigin::ViewPassiveCodeDiffDetails,
-                                ctx,
-                            );
-                        });
-                    }
                     ctx.emit(AIBlockEvent::FocusTerminal);
                     ctx.notify();
                 }
@@ -4181,17 +4162,16 @@ impl AIBlock {
             return false;
         };
 
-        if FeatureFlag::AgentView.is_enabled()
-            && self
-                .agent_view_controller
-                .update(ctx, |controller, ctx| {
-                    controller.try_enter_agent_view(
-                        Some(self.client_ids.conversation_id),
-                        AgentViewEntryOrigin::AcceptedUnitTestSuggestion,
-                        ctx,
-                    )
-                })
-                .is_err()
+        if self
+            .agent_view_controller
+            .update(ctx, |controller, ctx| {
+                controller.try_enter_agent_view(
+                    Some(self.client_ids.conversation_id),
+                    AgentViewEntryOrigin::AcceptedUnitTestSuggestion,
+                    ctx,
+                )
+            })
+            .is_err()
         {
             return false;
         }
@@ -6334,7 +6314,7 @@ impl TypedActionView for AIBlock {
                 }
 
                 let is_read_only = self.terminal_model.lock().is_read_only();
-                if FeatureFlag::AgentView.is_enabled() && !is_read_only {
+                if !is_read_only {
                     ctx.emit(AIBlockEvent::InsertForkSlashCommand);
                 } else {
                     ctx.dispatch_global_action(

@@ -8,16 +8,14 @@ use warpui::elements::{
 use warpui::{AppContext, SingletonEntity};
 
 use super::{should_render_prompt_using_editor_decorator_elements, Input, SubshellRenderState};
-use crate::ai::blocklist::InputType;
 use crate::appearance::Appearance;
-use crate::context_chips::spacing;
 use crate::features::FeatureFlag;
 use crate::settings::{AppEditorSettings, InputModeSettings};
 use crate::terminal::block_list_settings::BlockListSettings;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::input::common::{
-    add_command_xray_overlay, add_input_suggestions_overlays, add_vim_status_to_stack,
-    add_voltron_overlay, add_workflow_info_overlay, should_show_terminal_input_message_bar,
+    add_command_xray_overlay, add_input_suggestions_overlays, add_voltron_overlay,
+    add_workflow_info_overlay, should_show_terminal_input_message_bar,
     wrap_input_with_terminal_padding_and_focus_handler,
 };
 use crate::terminal::input::{get_input_box_top_border_width, InputDropTargetData};
@@ -26,9 +24,7 @@ use crate::terminal::view::TerminalAction;
 use crate::terminal::warpify::render::{render_subshell_flag, render_subshell_flag_pole};
 
 impl Input {
-    /// Renders the classic input. This is used when the user has 'Honor PS1' enabled in settings,
-    /// OR if `FeatureFlag::AgentView` is disabled and the user has 'Classic' input type selected
-    /// in settings.
+    /// Renders the classic input. This is used when the user has 'Honor PS1' enabled in settings.
     pub(super) fn render_classic_input(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
@@ -112,21 +108,6 @@ impl Input {
 
         column.add_children([prompt_top_padding_row.finish(), prompt_row.finish()]);
 
-        let ai_input_model = self.ai_input_model.as_ref(app);
-
-        if FeatureFlag::ImageAsContext.is_enabled()
-            && matches!(ai_input_model.input_type(), InputType::AI)
-            && !FeatureFlag::AgentView.is_enabled()
-        {
-            if let Some(images) = self.render_attachment_chips(appearance) {
-                column.add_child(
-                    Container::new(images)
-                        .with_padding_bottom(spacing::CLASSIC_PROMPT_ATTACH_IMAGES_BOTTOM_PADDING)
-                        .finish(),
-                );
-            }
-        }
-
         column.add_child(self.render_input_box(show_vim_status, appearance, app));
 
         if should_show_terminal_input_message_bar(&model, app) {
@@ -189,17 +170,6 @@ impl Input {
             );
         }
 
-        if !FeatureFlag::AgentView.is_enabled() {
-            if let Some(vim_state) = vim_state.as_ref() {
-                if show_vim_status {
-                    add_vim_status_to_stack(
-                        &mut stack, vim_state, appearance,
-                        false, // legacy doesn't use adjusted padding for vim status
-                    );
-                }
-            }
-        }
-
         stack.add_child(wrap_input_with_terminal_padding_and_focus_handler(
             self.is_active_session(app),
             column.finish(),
@@ -239,10 +209,9 @@ impl Input {
 
         let input_mode = *InputModeSettings::as_ref(app).input_mode.value();
 
-        // When AgentView is enabled, match terminal-mode input behavior and only render the
-        // divider adjacent to the status/message line when block dividers are enabled.
-        let show_block_dividers = *BlockListSettings::as_ref(app).show_block_dividers.value();
-        let should_render_divider = !FeatureFlag::AgentView.is_enabled() || show_block_dividers;
+        // Match terminal-mode input behavior and only render the divider adjacent to the
+        // status/message line when block dividers are enabled.
+        let should_render_divider = *BlockListSettings::as_ref(app).show_block_dividers.value();
 
         let border = match input_mode {
             InputMode::PinnedToBottom => Border::top(if should_render_divider {

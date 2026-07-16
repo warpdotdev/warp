@@ -12,7 +12,7 @@ use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon as CoreIcon;
 use warp_multi_agent_api as api;
 use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
-use warpui::elements::{Border, Container, Empty, Flex, MouseStateHandle, ParentElement, Text};
+use warpui::elements::{Container, Empty, Flex, MouseStateHandle, ParentElement, Text};
 use warpui::keymap::Keystroke;
 use warpui::presenter::ChildView;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
@@ -43,7 +43,7 @@ use crate::ai::blocklist::summarization_cancel_dialog::{
     self, SummarizationCancelDialog, SummarizationCancelDialogEvent,
 };
 use crate::ai::blocklist::{
-    ai_brand_color, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextEvent,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextEvent,
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent, BlocklistAIInputEvent,
     BlocklistAIInputModel, QueuedQueryEvent, QueuedQueryModel, ResponseStreamId,
 };
@@ -62,7 +62,6 @@ use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::view::ambient_agent::{
     is_cloud_agent_pre_first_exchange, AmbientAgentViewModel, AmbientAgentViewModelEvent,
 };
-use crate::terminal::warpify::render::LEFT_STRIPE_WIDTH;
 use crate::terminal::{
     TerminalModel, CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
     TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
@@ -91,7 +90,6 @@ pub struct BlocklistAIStatusBar {
     action_model: ModelHandle<BlocklistAIActionModel>,
     controller: ModelHandle<BlocklistAIController>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
-    context_model: ModelHandle<BlocklistAIContextModel>,
     input_model: ModelHandle<BlocklistAIInputModel>,
     agent_view_controller: ModelHandle<AgentViewController>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
@@ -352,7 +350,6 @@ impl BlocklistAIStatusBar {
             active_exchange_model: None,
             shimmering_text_handle: ShimmeringTextStateHandle::new(),
             action_model,
-            context_model,
             input_model,
             terminal_model,
             controller,
@@ -1259,64 +1256,11 @@ impl View for BlocklistAIStatusBar {
                 return Empty::new().finish();
             };
 
-        let appearance = Appearance::as_ref(app);
-        let theme = appearance.theme();
-        let background = if InputSettings::as_ref(app).is_universal_developer_input_enabled(app)
-            || FeatureFlag::AgentView.is_enabled()
-        {
-            // Use a fully transparent background for universal developer input (or unconditionally, if the new
-            // modality is enabled)
-            Fill::Solid(ColorU::transparent_black())
-        } else {
-            theme.ai_blocks_overlay()
-        };
-
-        let mut container = Container::new(status_element).with_background(background);
-
-        let is_passive_code_diff = self
-            .active_exchange_model
-            .as_ref()
-            .is_some_and(|model| model.request_type(app).is_passive_code_diff());
-        let is_active_exchange_in_selected_conversation = self
-            .active_exchange_model
-            .as_ref()
-            .and_then(|model| model.conversation_id(app))
-            .is_some_and(|id| {
-                self.context_model.as_ref(app).selected_conversation_id(app) == Some(id)
-            });
-
-        if !FeatureFlag::AgentView.is_enabled()
-            && self.input_model.as_ref(app).is_ai_input_enabled()
-            && !is_passive_code_diff
-            && is_active_exchange_in_selected_conversation
-            && !self.terminal_model.lock().is_alt_screen_active()
-        {
-            container = container
-                .with_border(
-                    Border::left(LEFT_STRIPE_WIDTH)
-                        .with_border_color(ai_brand_color(appearance.theme())),
-                )
-                // Offset the horizontal layout shift caused by the border.
-                .with_padding_left(-LEFT_STRIPE_WIDTH);
-        }
-
-        let is_input_pinned_to_top = InputModeSettings::as_ref(app).is_pinned_to_top();
-        let is_udi_enabled = InputSettings::as_ref(app).is_universal_developer_input_enabled(app);
-        if !FeatureFlag::AgentView.is_enabled() && is_udi_enabled {
-            if is_input_pinned_to_top {
-                // Use 2px padding on the top, so combined with the 6px padding on the universal
-                // input it's an equal 8px on both sides.
-                container = container.with_padding_top(2.).with_padding_bottom(8.);
-            } else {
-                // Use 2px padding on the bottom, so combined with the 6px padding on the universal
-                // input it's an equal 8px on both sides.
-                container = container.with_padding_top(8.).with_padding_bottom(2.);
-            }
-        } else {
-            container = container.with_vertical_padding(8.);
-        }
-
-        container.finish()
+        // Always render the status bar with a fully transparent background and vertical padding.
+        Container::new(status_element)
+            .with_background(Fill::Solid(ColorU::transparent_black()))
+            .with_vertical_padding(8.)
+            .finish()
     }
 }
 
