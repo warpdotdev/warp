@@ -336,6 +336,11 @@ where
 {
     let mut since_sequence = config.since_sequence;
     let mut failures = 0usize;
+    // Consecutive authentication failures (HTTP 401/403), tracked separately from
+    // `failures` so the auth give-up threshold only counts an uninterrupted run
+    // of auth failures. Any non-auth failure or success resets it, so a mix like
+    // 500, 500, 401 does not trip a "3 consecutive auth failures" policy.
+    let mut consecutive_auth_failures = 0usize;
     let mut has_connected_once = false;
     // Start of the current run of consecutive failures. Reset to `None` after any
     // successful open/event so the `max_retry_duration` window only measures
@@ -352,10 +357,14 @@ where
             Ok(stream) => stream,
             Err(err) => {
                 failures += 1;
+                if is_auth_error(&err) {
+                    consecutive_auth_failures += 1;
+                } else {
+                    consecutive_auth_failures = 0;
+                }
                 if let Some(reason) = agent_event_give_up_reason(
                     &config,
-                    failures,
-                    is_auth_error(&err),
+                    consecutive_auth_failures,
                     &mut retry_window_started_at,
                 ) {
                     return Err(err.context(format!(
@@ -420,6 +429,7 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Ok(AgentEventSourceItem::Open))) => {
                     failures = 0;
+                    consecutive_auth_failures = 0;
                     retry_window_started_at = None;
                     has_connected_once = true;
                     notify_driver_state(consumer, AgentEventDriverState::Connected).await;
@@ -430,6 +440,7 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Ok(AgentEventSourceItem::Event(event)))) => {
                     failures = 0;
+                    consecutive_auth_failures = 0;
                     retry_window_started_at = None;
                     if event.sequence <= since_sequence {
                         continue;
@@ -451,10 +462,14 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Err(err))) => {
                     failures += 1;
+                    if is_auth_error(&err) {
+                        consecutive_auth_failures += 1;
+                    } else {
+                        consecutive_auth_failures = 0;
+                    }
                     if let Some(reason) = agent_event_give_up_reason(
                         &config,
-                        failures,
-                        is_auth_error(&err),
+                        consecutive_auth_failures,
                         &mut retry_window_started_at,
                     ) {
                         return Err(err.context(format!(
@@ -493,12 +508,12 @@ where
                 NextDriverItem::StreamItem(None) => {
                     failures += 1;
                     // A clean server-side close carries no HTTP status, so it is
-                    // never treated as an auth failure; only the time-based
-                    // backstop can trigger a give-up here.
+                    // never treated as an auth failure; reset the auth streak and
+                    // let only the time-based backstop trigger a give-up here.
+                    consecutive_auth_failures = 0;
                     if let Some(reason) = agent_event_give_up_reason(
                         &config,
-                        failures,
-                        false,
+                        consecutive_auth_failures,
                         &mut retry_window_started_at,
                     ) {
                         return Err(anyhow!(
@@ -536,22 +551,23 @@ enum NextDriverItem {
 /// Decide whether a bounded driver should stop retrying after a failure.
 ///
 /// Returns `Some(reason)` (a short human-readable explanation for logs) when the
-/// driver should give up, or `None` to keep retrying. `retry_window_started_at`
-/// is seeded on the first call of a failure run so the `max_retry_duration`
-/// window measures sustained failure; callers reset it to `None` on success.
+/// driver should give up, or `None` to keep retrying. `consecutive_auth_failures`
+/// is the length of the current uninterrupted run of HTTP 401/403 failures (the
+/// caller resets it on any non-auth failure or success), and
+/// `retry_window_started_at` is seeded on the first call of a failure run so the
+/// `max_retry_duration` window measures sustained failure.
 fn agent_event_give_up_reason(
     config: &AgentEventDriverConfig,
-    failures: usize,
-    is_auth_failure: bool,
+    consecutive_auth_failures: usize,
     retry_window_started_at: &mut Option<Instant>,
 ) -> Option<String> {
     let now = Instant::now();
     let window_start = *retry_window_started_at.get_or_insert(now);
 
     if let Some(threshold) = config.auth_error_give_up_failures {
-        if is_auth_failure && failures >= threshold {
+        if consecutive_auth_failures >= threshold {
             return Some(format!(
-                "stopping after {failures} consecutive authentication failures"
+                "stopping after {consecutive_auth_failures} consecutive authentication failures"
             ));
         }
     }
