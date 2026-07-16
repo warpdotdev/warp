@@ -53,27 +53,8 @@ fn codex_runtime_error_patterns_returns_slice() {
 }
 
 #[test]
-fn gemini_runtime_error_patterns_is_empty_by_default() {
-    use super::gemini::GeminiHarness;
-    use super::ThirdPartyHarness;
-    assert!(GeminiHarness.runtime_error_patterns().is_empty());
-}
-
-#[test]
-fn auth_check_command_for_gemini_is_none() {
-    assert!(auth_check_command_for(Harness::Gemini).is_none());
-}
-
-#[test]
 fn auth_check_command_for_oz_is_none() {
     assert!(auth_check_command_for(Harness::Oz).is_none());
-}
-
-#[test]
-fn auth_check_command_for_unsupported_is_none() {
-    // OpenCode is mapped to HarnessKind::Unsupported and therefore has no
-    // auth check command of its own.
-    assert!(auth_check_command_for(Harness::OpenCode).is_none());
 }
 
 #[test]

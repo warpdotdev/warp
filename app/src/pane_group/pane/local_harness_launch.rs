@@ -13,7 +13,7 @@ use crate::ai::agent_sdk::driver::harness::{
     HarnessKind,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
-use crate::ai::agent_sdk::{task_env_vars, validate_cli_installed};
+use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::task::{
     normalize_orchestrator_agent_name, HarnessConfig, HarnessModelConfig,
 };
@@ -126,10 +126,6 @@ pub(super) fn build_local_claude_child_command(prompt: &str) -> String {
     format!("claude --session-id {session_id} --dangerously-skip-permissions {quoted_prompt}")
 }
 
-pub(super) fn build_local_opencode_child_command(prompt: &str) -> String {
-    let quoted_prompt = shell_quote(prompt);
-    format!("opencode --prompt {quoted_prompt}")
-}
 pub(super) fn build_local_codex_child_command(prompt: &str) -> String {
     let quoted_prompt = shell_quote(prompt);
     format!("codex --dangerously-bypass-approvals-and-sandbox {quoted_prompt}")
@@ -144,13 +140,11 @@ pub(super) fn local_child_task_config(
         .and_then(normalize_orchestrator_agent_name);
     match harness {
         Harness::Oz | Harness::Unknown => None,
-        Harness::Claude | Harness::OpenCode | Harness::Gemini | Harness::Codex => {
-            Some(AgentConfigSnapshot {
-                name: agent_name,
-                harness: Some(HarnessConfig::from_harness_type(harness)),
-                ..Default::default()
-            })
-        }
+        Harness::Claude | Harness::Codex => Some(AgentConfigSnapshot {
+            name: agent_name,
+            harness: Some(HarnessConfig::from_harness_type(harness)),
+            ..Default::default()
+        }),
     }
 }
 
@@ -232,12 +226,6 @@ pub(super) async fn prepare_local_harness_child_launch(
             // rewrite ~/.codex/config.toml for the whole machine.
             build_local_codex_child_command(&prompt)
         }
-        Harness::OpenCode => {
-            validate_cli_installed("opencode", Some("https://opencode.ai/docs"))
-                .map_err(|error: AgentDriverError| error.to_string())?;
-            build_local_opencode_child_command(&prompt)
-        }
-        Harness::Gemini => unreachable!("normalize_local_child_harness filters out Gemini"),
     };
 
     let task_id = ai_client

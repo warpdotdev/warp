@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use anyhow::Context;
-pub(crate) use driver::harness::{task_env_vars, validate_cli_installed, ClaudeHarness};
+pub(crate) use driver::harness::{task_env_vars, ClaudeHarness};
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
 use telemetry::CliTelemetryEvent;
@@ -270,12 +270,6 @@ fn run_agent(
             if args.harness != Harness::Oz && !FeatureFlag::AgentHarness.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--harness' found"));
             }
-            if args.harness == Harness::OpenCode {
-                return Err(anyhow::anyhow!(
-                    "The opencode harness is only supported for local child agent launches."
-                ));
-            }
-
             let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
 
             // Start the agent driver runner, which will handle the rest of the setup steps
@@ -744,18 +738,6 @@ impl AgentDriverRunner {
                 refresh_future
                     .await
                     .map_err(AgentDriverError::AwsBedrockCredentialsFailed)?;
-            }
-
-            match &task.harness {
-                HarnessKind::Unsupported(harness) => {
-                    return Err(AgentDriverError::HarnessSetupFailed {
-                        harness: harness.to_string(),
-                        reason: format!(
-                            "The {harness} harness is only supported for local child agent launches."
-                        ),
-                    });
-                }
-                HarnessKind::Oz | HarnessKind::ThirdParty(_) => {}
             }
 
             // Validate that the third-party harness is installed and authed.
@@ -1403,12 +1385,6 @@ impl AgentDriverRunner {
                         .map(|payload| driver::ResumeOptions::ThirdParty(Box::new(payload))),
                 )
             }
-            HarnessKind::Unsupported(harness) => Err(AgentDriverError::HarnessSetupFailed {
-                harness: harness.to_string(),
-                reason: format!(
-                    "The {harness} harness is only supported for local child agent launches."
-                ),
-            }),
         }
     }
 
@@ -1656,8 +1632,6 @@ fn resolve_orchestration_harness_label() -> &'static str {
     match Harness::parse_orchestration_harness(&raw) {
         Some(Harness::Oz) => "oz",
         Some(Harness::Claude) => "claude",
-        Some(Harness::OpenCode) => "opencode",
-        Some(Harness::Gemini) => "gemini",
         Some(Harness::Codex) => "codex",
         Some(Harness::Unknown) | None => "unknown",
     }

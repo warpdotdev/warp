@@ -40,14 +40,12 @@ pub(crate) mod claude_code;
 pub(crate) mod claude_transcript;
 mod codex;
 pub(crate) mod codex_transcript;
-mod gemini;
 mod json_utils;
 mod telemetry;
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
 use codex_transcript::CodexResumeInfo;
-use gemini::GeminiHarness;
 pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
 
 /// Harness-agnostic payload describing how to resume an existing conversation.
@@ -218,11 +216,8 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
 /// Harness type for driver dispatch.
 pub(crate) enum HarnessKind {
     Oz,
-    /// Third-party CLI-backed harness (e.g. Claude, Gemini).
+    /// Third-party CLI-backed harness (e.g. Claude).
     ThirdParty(Box<dyn ThirdPartyHarness>),
-    /// Harnesses that exist in the shared CLI enum but are not supported by the
-    /// standalone agent driver.
-    Unsupported(Harness),
 }
 
 impl HarnessKind {
@@ -231,7 +226,6 @@ impl HarnessKind {
         match self {
             HarnessKind::Oz => Harness::Oz,
             HarnessKind::ThirdParty(h) => h.harness(),
-            HarnessKind::Unsupported(harness) => *harness,
         }
     }
 }
@@ -252,8 +246,6 @@ pub(crate) fn harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverE
         Harness::Oz => Ok(HarnessKind::Oz),
         Harness::Claude => Ok(HarnessKind::ThirdParty(Box::new(ClaudeHarness))),
         Harness::Codex => Ok(HarnessKind::ThirdParty(Box::new(CodexHarness))),
-        Harness::OpenCode => Ok(HarnessKind::Unsupported(Harness::OpenCode)),
-        Harness::Gemini => Ok(HarnessKind::ThirdParty(Box::new(GeminiHarness))),
         Harness::Unknown => Err(AgentDriverError::InvalidRuntimeState),
     }
 }
@@ -447,7 +439,7 @@ pub(crate) fn harness_model_env_vars(
         Harness::Claude => {
             env_vars.insert(OsString::from("ANTHROPIC_MODEL"), OsString::from(model_id));
         }
-        Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Codex | Harness::Unknown => {}
+        Harness::Oz | Harness::Codex | Harness::Unknown => {}
     }
 
     env_vars

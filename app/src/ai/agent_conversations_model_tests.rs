@@ -2223,13 +2223,13 @@ fn test_harness_filter_matches_only_selected_harness() {
         let mut model = create_test_model();
 
         let task_claude = task_with_harness(5100, "user-a", Some(Some(Harness::Claude)));
-        let task_gemini = task_with_harness(5101, "user-a", Some(Some(Harness::Gemini)));
+        let task_codex = task_with_harness(5101, "user-a", Some(Some(Harness::Codex)));
         let task_oz_default = task_with_harness(5102, "user-a", Some(None));
         let task_no_snapshot = task_with_harness(5103, "user-a", None);
 
         for task in [
             &task_claude,
-            &task_gemini,
+            &task_codex,
             &task_oz_default,
             &task_no_snapshot,
         ] {
@@ -2268,8 +2268,8 @@ fn test_harness_filter_matches_only_selected_harness() {
             let claude_items = items_for(HarnessFilter::Specific(Harness::Claude));
             assert_eq!(claude_items, vec![format!("task:{}", task_claude.task_id)]);
 
-            let gemini_items = items_for(HarnessFilter::Specific(Harness::Gemini));
-            assert_eq!(gemini_items, vec![format!("task:{}", task_gemini.task_id)]);
+            let codex_items = items_for(HarnessFilter::Specific(Harness::Codex));
+            assert_eq!(codex_items, vec![format!("task:{}", task_codex.task_id)]);
 
             let oz_items = items_for(HarnessFilter::Specific(Harness::Oz));
             assert_eq!(

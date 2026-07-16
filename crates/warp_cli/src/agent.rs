@@ -126,13 +126,7 @@ impl HiddenComputerUseArgs {
         }
     }
 }
-const HARNESS_VALUE_VARIANTS: [Harness; 5] = [
-    Harness::Oz,
-    Harness::Claude,
-    Harness::OpenCode,
-    Harness::Gemini,
-    Harness::Codex,
-];
+const HARNESS_VALUE_VARIANTS: [Harness; 3] = [Harness::Oz, Harness::Claude, Harness::Codex];
 
 /// The execution harness for an agent run.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
@@ -143,10 +137,6 @@ pub enum Harness {
     Oz,
     /// Delegate to the `claude` CLI.
     Claude,
-    /// Delegate to the `opencode` CLI.
-    OpenCode,
-    /// Delegate to the `gemini` CLI.
-    Gemini,
     /// Delegate to the `codex` CLI.
     Codex,
     /// A harness produced by a newer client/server that this client doesn't
@@ -170,10 +160,6 @@ impl ValueEnum for Harness {
             Harness::Claude => PossibleValue::new("claude")
                 .alias("claude-code")
                 .help("Delegate to the `claude` CLI"),
-            Harness::OpenCode => PossibleValue::new("opencode")
-                .alias("open-code")
-                .help("Delegate to the `opencode` CLI"),
-            Harness::Gemini => PossibleValue::new("gemini").help("Delegate to the `gemini` CLI"),
             Harness::Codex => PossibleValue::new("codex").help("Delegate to the `codex` CLI"),
             Harness::Unknown => return None,
         };
@@ -192,16 +178,14 @@ impl Harness {
 
     pub fn parse_local_child_harness(value: &str) -> Option<Self> {
         match Self::parse_orchestration_harness(value) {
-            Some(harness @ (Self::Claude | Self::OpenCode | Self::Codex)) => Some(harness),
-            Some(Self::Oz) | Some(Self::Gemini) | Some(Self::Unknown) | None => None,
+            Some(harness @ (Self::Claude | Self::Codex)) => Some(harness),
+            Some(Self::Oz) | Some(Self::Unknown) | None => None,
         }
     }
 
     /// Whether this harness is surfaced to users in CLI `--help` for cloud runs
     /// (`oz agent run-cloud --harness`). Only the harnesses that are generally
-    /// available for cloud runs are shown; gemini and opencode aren't available
-    /// yet, so they're hidden from help. Update this when a harness becomes GA
-    /// for cloud.
+    /// available for cloud runs are shown.
     ///
     /// This is the single source of truth for the `ValueEnum` help text; the
     /// per-variant `#[value(hide = ...)]` attributes are no longer used. It does
@@ -210,7 +194,7 @@ impl Harness {
     pub fn should_display_in_help_text(self) -> bool {
         match self {
             Self::Oz | Self::Claude | Self::Codex => true,
-            Self::OpenCode | Self::Gemini | Self::Unknown => false,
+            Self::Unknown => false,
         }
     }
 
@@ -218,8 +202,6 @@ impl Harness {
         match self {
             Self::Oz => "Oz",
             Self::Claude => "Claude Code",
-            Self::OpenCode => "OpenCode",
-            Self::Gemini => "Gemini CLI",
             Self::Codex => "Codex",
             Self::Unknown => "Unknown",
         }
@@ -236,10 +218,10 @@ impl Harness {
         match name {
             "oz" => Some(Harness::Oz),
             "claude" => Some(Harness::Claude),
-            "opencode" => Some(Harness::OpenCode),
-            "gemini" => Some(Harness::Gemini),
             "codex" => Some(Harness::Codex),
             "unknown" => Some(Harness::Unknown),
+            // Legacy harness names map to Unknown for backward compatibility.
+            "opencode" | "gemini" => Some(Harness::Unknown),
             _ => None,
         }
     }
@@ -253,8 +235,6 @@ impl Harness {
         match self {
             Harness::Oz => "oz",
             Harness::Claude => "claude",
-            Harness::OpenCode => "opencode",
-            Harness::Gemini => "gemini",
             Harness::Codex => "codex",
             Harness::Unknown => "unknown",
         }

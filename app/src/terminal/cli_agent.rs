@@ -199,8 +199,6 @@ impl CLIAgent {
         match harness {
             Harness::Oz => None,
             Harness::Claude => Some(CLIAgent::Claude),
-            Harness::Gemini => Some(CLIAgent::Gemini),
-            Harness::OpenCode => Some(CLIAgent::OpenCode),
             Harness::Codex => Some(CLIAgent::Codex),
             Harness::Unknown => Some(CLIAgent::Unknown),
         }

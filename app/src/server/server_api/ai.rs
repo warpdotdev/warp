@@ -3247,16 +3247,8 @@ fn convert_harness(harness: warp_graphql::ai::AgentHarness) -> AIAgentHarness {
     match harness {
         warp_graphql::ai::AgentHarness::Oz => AIAgentHarness::Oz,
         warp_graphql::ai::AgentHarness::ClaudeCode => AIAgentHarness::ClaudeCode,
-        warp_graphql::ai::AgentHarness::Gemini => AIAgentHarness::Gemini,
         warp_graphql::ai::AgentHarness::Codex => AIAgentHarness::Codex,
-        warp_graphql::ai::AgentHarness::Other(value) => {
-            report_error!(
-                "Invalid AgentHarness; update client GraphQL types",
-                extra: { "harness" => %value },
-                warp_errors::ReportErrorLogMode::OncePerRun
-            );
-            AIAgentHarness::Unknown
-        }
+        warp_graphql::ai::AgentHarness::Other(_) => AIAgentHarness::Unknown,
     }
 }
 

@@ -4456,7 +4456,6 @@ impl TryFrom<String> for AIConversationId {
 pub enum AIAgentHarness {
     Oz,
     ClaudeCode,
-    Gemini,
     Codex,
     Unknown,
 }

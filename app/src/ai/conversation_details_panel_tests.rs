@@ -265,7 +265,6 @@ fn test_from_conversation_metadata_passes_harness_through() {
         None,
         Some(Harness::Oz),
         Some(Harness::Claude),
-        Some(Harness::Gemini),
         Some(Harness::Unknown),
     ] {
         let data = ConversationDetailsData::from_conversation_metadata(
@@ -311,12 +310,7 @@ fn test_from_task_resolves_harness() {
             assert_eq!(data.harness, Some(Harness::Oz));
 
             // Snapshot with explicit harness_type.
-            for harness in [
-                Harness::Oz,
-                Harness::Claude,
-                Harness::Gemini,
-                Harness::Unknown,
-            ] {
+            for harness in [Harness::Oz, Harness::Claude, Harness::Unknown] {
                 let mut task = base_task.clone();
                 task.agent_config_snapshot = Some(AgentConfigSnapshot {
                     harness: Some(HarnessConfig::from_harness_type(harness)),

@@ -407,9 +407,8 @@ fn harness_to_graphql_harness(harness: Harness) -> Option<warp_graphql::ai::Agen
     match harness {
         Harness::Oz => Some(warp_graphql::ai::AgentHarness::Oz),
         Harness::Claude => Some(warp_graphql::ai::AgentHarness::ClaudeCode),
-        Harness::Gemini => Some(warp_graphql::ai::AgentHarness::Gemini),
         Harness::Codex => Some(warp_graphql::ai::AgentHarness::Codex),
-        Harness::OpenCode | Harness::Unknown => None,
+        Harness::Unknown => None,
     }
 }
 

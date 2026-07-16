@@ -7,9 +7,8 @@ use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 
 use super::{
-    build_local_claude_child_command, build_local_codex_child_command,
-    build_local_opencode_child_command, local_child_task_config, local_claude_child_prompt,
-    normalize_local_child_harness, prepare_local_harness_child_launch,
+    build_local_claude_child_command, build_local_codex_child_command, local_child_task_config,
+    local_claude_child_prompt, normalize_local_child_harness, prepare_local_harness_child_launch,
     validate_local_harness_shell,
 };
 use crate::ai::agent_sdk::driver::OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV;
@@ -96,18 +95,6 @@ fn normalize_local_child_harness_accepts_supported_aliases() {
         normalize_local_child_harness("claude_code"),
         Some(Harness::Claude)
     );
-    assert_eq!(
-        normalize_local_child_harness("opencode"),
-        Some(Harness::OpenCode)
-    );
-    assert_eq!(
-        normalize_local_child_harness("open-code"),
-        Some(Harness::OpenCode)
-    );
-    assert_eq!(
-        normalize_local_child_harness("open_code"),
-        Some(Harness::OpenCode)
-    );
     assert_eq!(normalize_local_child_harness("codex"), Some(Harness::Codex));
 }
 
@@ -115,6 +102,7 @@ fn normalize_local_child_harness_accepts_supported_aliases() {
 fn normalize_local_child_harness_rejects_unsupported_values() {
     assert_eq!(normalize_local_child_harness("oz"), None);
     assert_eq!(normalize_local_child_harness("gemini"), None);
+    assert_eq!(normalize_local_child_harness("opencode"), None);
     assert_eq!(normalize_local_child_harness(""), None);
 }
 
@@ -152,14 +140,6 @@ fn build_local_claude_child_command_quotes_the_prompt() {
 }
 
 #[test]
-fn build_local_opencode_child_command_quotes_the_prompt() {
-    assert_eq!(
-        build_local_opencode_child_command("hello world"),
-        "opencode --prompt 'hello world'"
-    );
-}
-
-#[test]
 fn build_local_codex_child_command_quotes_the_prompt() {
     assert_eq!(
         build_local_codex_child_command("hello world"),
@@ -169,7 +149,7 @@ fn build_local_codex_child_command_quotes_the_prompt() {
 
 #[test]
 fn local_child_task_config_records_supported_third_party_harnesses() {
-    for harness in [Harness::Claude, Harness::OpenCode, Harness::Codex] {
+    for harness in [Harness::Claude, Harness::Codex] {
         assert_eq!(
             local_child_task_config(harness, None),
             Some(crate::ai::ambient_agents::task::AgentConfigSnapshot {
@@ -182,7 +162,7 @@ fn local_child_task_config_records_supported_third_party_harnesses() {
 
 #[test]
 fn local_child_task_config_stamps_orchestrator_name() {
-    for harness in [Harness::Claude, Harness::OpenCode, Harness::Codex] {
+    for harness in [Harness::Claude, Harness::Codex] {
         assert_eq!(
             local_child_task_config(harness, Some("frontend-tests".to_string())),
             Some(crate::ai::ambient_agents::task::AgentConfigSnapshot {

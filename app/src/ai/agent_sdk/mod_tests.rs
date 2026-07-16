@@ -100,23 +100,6 @@ fn run_message_send_telemetry_supports_claude_code_alias() {
 
 #[test]
 #[serial_test::serial]
-fn run_message_send_telemetry_supports_opencode_harness() {
-    std::env::set_var("OZ_HARNESS", "opencode");
-    let event = command_to_telemetry_event(&CliCommand::Run(TaskCommand::Message(
-        MessageCommand::Send(MessageSendArgs {
-            to: vec!["run-456".to_string()],
-            subject: "subject".to_string(),
-            body: "body".to_string(),
-            sender_run_id: "run-123".to_string(),
-        }),
-    )));
-    std::env::remove_var("OZ_HARNESS");
-
-    assert_eq!(event.payload(), Some(json!({ "harness": "opencode" })));
-}
-
-#[test]
-#[serial_test::serial]
 fn run_message_send_telemetry_defaults_to_unknown_harness() {
     std::env::remove_var("OZ_HARNESS");
     let event = command_to_telemetry_event(&CliCommand::Run(TaskCommand::Message(
@@ -153,13 +136,13 @@ fn reconcile_task_harness_allows_matching_explicit_harness() {
 
 #[test]
 fn reconcile_task_harness_rejects_explicit_mismatch() {
-    let mut selected_harness = Harness::Gemini;
+    let mut selected_harness = Harness::Codex;
     let err = reconcile_task_harness(TASK_ID, &mut selected_harness, Harness::Claude)
         .expect_err("mismatched harness should fail");
 
-    assert_eq!(selected_harness, Harness::Gemini);
+    assert_eq!(selected_harness, Harness::Codex);
     assert!(err.to_string().contains("Task"));
-    assert!(err.to_string().contains("--harness gemini"));
+    assert!(err.to_string().contains("--harness codex"));
     assert!(err.to_string().contains("claude"));
 }
 

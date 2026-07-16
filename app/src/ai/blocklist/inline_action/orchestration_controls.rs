@@ -344,29 +344,20 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
         let harnesses = availability.available_harnesses();
 
         let resolve_entry_harness = |harness: Harness, display_name: &str| match harness {
-            Harness::Unknown => [
-                Harness::Oz,
-                Harness::Claude,
-                Harness::OpenCode,
-                Harness::Gemini,
-                Harness::Codex,
-            ]
-            .into_iter()
-            .find(|candidate| harness_display::display_name(*candidate) == display_name)
-            .unwrap_or(Harness::Unknown),
+            Harness::Unknown => [Harness::Oz, Harness::Claude, Harness::Codex]
+                .into_iter()
+                .find(|candidate| harness_display::display_name(*candidate) == display_name)
+                .unwrap_or(Harness::Unknown),
             harness => harness,
         };
 
         // Sort selectable harnesses before disabled ones, preserving
         // relative order within each group.
-        // Filter out Gemini — it is not yet supported as a multi-agent
-        // harness and causes an infinite "Spawning agents" hang.
         let mut sorted: Vec<_> = harnesses
             .iter()
             .filter(|entry| {
                 let harness = resolve_entry_harness(entry.harness, &entry.display_name);
-                harness != Harness::Gemini
-                    && (!is_local || local_harness_is_product_enabled(harness))
+                !is_local || local_harness_is_product_enabled(harness)
             })
             .collect();
         sorted.sort_by_key(|entry| {

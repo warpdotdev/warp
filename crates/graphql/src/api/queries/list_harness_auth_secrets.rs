@@ -11,7 +11,6 @@ use crate::schema;
 pub enum AgentHarnessInput {
     Oz,
     ClaudeCode,
-    Gemini,
     Codex,
 }
 
@@ -20,7 +19,6 @@ impl From<crate::ai::AgentHarness> for Option<AgentHarnessInput> {
         match h {
             crate::ai::AgentHarness::Oz => Some(AgentHarnessInput::Oz),
             crate::ai::AgentHarness::ClaudeCode => Some(AgentHarnessInput::ClaudeCode),
-            crate::ai::AgentHarness::Gemini => Some(AgentHarnessInput::Gemini),
             crate::ai::AgentHarness::Codex => Some(AgentHarnessInput::Codex),
             crate::ai::AgentHarness::Other(_) => None,
         }

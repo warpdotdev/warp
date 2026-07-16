@@ -436,16 +436,6 @@ impl StartAgentExecutor {
                 let harness_type = Harness::parse_orchestration_harness(&harness_type)
                     .map(|harness| harness.to_string())
                     .unwrap_or(harness_type);
-                if Harness::parse_orchestration_harness(&harness_type) == Some(Harness::OpenCode) {
-                    return ActionExecution::Sync(AIAgentActionResultType::StartAgent(
-                        StartAgentResult::Error {
-                            error: "Remote child agents do not support the opencode harness yet."
-                                .to_string(),
-                            version,
-                        },
-                    ));
-                }
-
                 // An empty environment_id is allowed and means the child will be spawned with an
                 // empty environment (no preconfigured repositories, secrets, or integrations).
                 // Callers are discouraged from relying on this, but we intentionally do not reject

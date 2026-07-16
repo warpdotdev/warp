@@ -2072,19 +2072,15 @@ fn harness_parse_orchestration_harness_accepts_aliases() {
         Harness::parse_orchestration_harness("claude-code"),
         Some(Harness::Claude)
     );
-    assert_eq!(
-        Harness::parse_orchestration_harness("open_code"),
-        Some(Harness::OpenCode)
-    );
+    // opencode and gemini are no longer supported harnesses; they parse as Unknown.
+    assert_eq!(Harness::parse_orchestration_harness("open_code"), None);
 }
 
 #[test]
-fn harness_parse_local_child_harness_rejects_oz() {
+fn harness_parse_local_child_harness_rejects_oz_and_removed_harnesses() {
     assert_eq!(Harness::parse_local_child_harness("oz"), None);
-    assert_eq!(
-        Harness::parse_local_child_harness("opencode"),
-        Some(Harness::OpenCode)
-    );
+    assert_eq!(Harness::parse_local_child_harness("opencode"), None);
+    assert_eq!(Harness::parse_local_child_harness("gemini"), None);
 }
 
 #[test]

@@ -617,17 +617,6 @@ fn task_env_vars_propagate_message_listener_state_root_with_legacy_alias() {
 }
 
 #[test]
-fn task_env_vars_can_use_opencode_harness() {
-    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440004".parse().unwrap();
-    let env_vars = task_env_vars(Some(&task_id), Some("parent-run-456"), Harness::OpenCode);
-
-    assert_eq!(
-        env_vars.get(&OsString::from(OZ_HARNESS_ENV)),
-        Some(&OsString::from("opencode"))
-    );
-}
-
-#[test]
 fn json_format_output_includes_filename_for_file_artifact_created_event() {
     let output = AIAgentOutput {
         messages: vec![AIAgentOutputMessage::artifact_created(

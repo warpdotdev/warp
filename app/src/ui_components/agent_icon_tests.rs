@@ -336,12 +336,8 @@ fn cli_agent_from_harness_maps_known_harnesses() {
         Some(CLIAgent::Claude)
     );
     assert_eq!(
-        CLIAgent::from_harness(Harness::Gemini),
-        Some(CLIAgent::Gemini)
-    );
-    assert_eq!(
-        CLIAgent::from_harness(Harness::OpenCode),
-        Some(CLIAgent::OpenCode)
+        CLIAgent::from_harness(Harness::Codex),
+        Some(CLIAgent::Codex)
     );
 }
 

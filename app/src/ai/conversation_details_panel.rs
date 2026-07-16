@@ -798,7 +798,7 @@ impl ConversationDetailsPanel {
                             .find_conversation_id_by_server_token(&server_token)
                             .map(DetailsPanelLocalContinuationInfo::Conversation)
                     }
-                    Some(Harness::Gemini | Harness::OpenCode | Harness::Unknown) => None,
+                    Some(Harness::Unknown) => None,
                 }
             }
         }
