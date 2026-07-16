@@ -41,7 +41,7 @@ use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiText,
+    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, FixedBinding};
@@ -141,6 +141,26 @@ const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
     (!input.trim().is_empty()).then_some(input)
 }
+
+fn render_left_footer_hint(
+    hint: Option<(&str, TuiStyle)>,
+    show_conversations_hint: bool,
+    builder: &TuiUiBuilder,
+) -> Option<Box<dyn TuiElement>> {
+    match hint {
+        Some((text, style)) => Some(TuiText::new(text).with_style(style).truncate().finish()),
+        None if show_conversations_hint => Some(
+            TuiText::from_spans([
+                ("←".to_owned(), builder.accent_text_style()),
+                (" for conversations".to_owned(), builder.muted_text_style()),
+            ])
+            .truncate()
+            .finish(),
+        ),
+        None => None,
+    }
+}
+
 /// Entry point that requested conversation restoration.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum TuiConversationRestoreOrigin {
@@ -662,22 +682,25 @@ impl TuiTerminalSessionView {
             let TuiMcpMenuEvent::Updated = event;
             ctx.notify();
         });
-        // Typing after a ctrl-c press disarms the pending exit confirmation.
-        // The ctrl-c buffer clear leaves the buffer empty, so the window it
-        // arms survives its own clear.
-        let editor_for_exit_disarm = input_editor_model.clone();
+        // The footer's conversations callout depends on whether the input is
+        // empty, so content changes must invalidate this parent view as well as
+        // the input child. Typing after ctrl-c also disarms the pending exit
+        // confirmation; the ctrl-c buffer clear leaves the buffer empty, so the
+        // window it arms survives its own clear.
+        let editor_for_footer = input_editor_model.clone();
         ctx.subscribe_to_model(&input_editor_model, move |view, _, event, ctx| {
             if !matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 return;
             }
-            let is_empty = editor_for_exit_disarm
+            let is_empty = editor_for_footer
                 .as_ref(ctx)
                 .content()
                 .as_ref(ctx)
                 .is_empty();
-            if !is_empty && view.exit_confirmation.disarm() {
-                ctx.notify();
+            if !is_empty {
+                view.exit_confirmation.disarm();
             }
+            ctx.notify();
         });
 
         let editor_for_selection = input_editor_model.clone();
@@ -1373,9 +1396,11 @@ impl TuiTerminalSessionView {
 
     /// Builds the status footer under the input box. The left slot shows one
     /// hint at a time — the ctrl-c exit confirmation while armed, else a
-    /// transient notice, else the shell-mode callout; the active model and
-    /// working directory are pushed to the right edge behind a flex spacer.
-    /// Every child truncates to a single row, so the row lays out one row tall.
+    /// transient notice, else the shell-mode callout, else the conversations
+    /// callout while the input is empty and no inline menu is visible; the
+    /// active model and working directory are pushed to the right edge behind a
+    /// flex spacer. Every child truncates to a single row, so the row lays out
+    /// one row tall.
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
         let builder = TuiUiBuilder::from_app(ctx);
         let muted = builder.muted_text_style();
@@ -1383,7 +1408,7 @@ impl TuiTerminalSessionView {
         // Left slot, highest priority first: while armed, the ctrl-c hint
         // replaces the other hints in place.
         let hint = if self.exit_confirmation.is_armed() {
-            Some((CTRL_C_EXIT_HINT.to_owned(), muted))
+            Some((CTRL_C_EXIT_HINT, muted))
         } else if matches!(
             &self.conversation_restore_state,
             ConversationRestoreState::Loading {
@@ -1391,24 +1416,23 @@ impl TuiTerminalSessionView {
                 ..
             }
         ) {
-            Some((LOADING_CONVERSATION_HINT.to_owned(), muted))
+            Some((LOADING_CONVERSATION_HINT, muted))
         } else if let Some((transient, tone)) = self.transient_hint.current() {
             let style = match tone {
                 TransientHintTone::Muted => muted,
                 TransientHintTone::Success => builder.success_glyph_style(),
             };
-            Some((transient.to_owned(), style))
+            Some((transient, style))
         } else if self.is_shell_mode(ctx) {
-            Some((
-                SHELL_MODE_HINT.to_owned(),
-                builder.shell_mode_accent_style(),
-            ))
+            Some((SHELL_MODE_HINT, builder.shell_mode_accent_style()))
         } else {
             None
         };
 
-        if let Some((text, style)) = hint {
-            left = left.child(TuiText::new(text).with_style(style).truncate().finish());
+        let show_conversations_hint = self.input_view.as_ref(ctx).is_empty(ctx)
+            && !self.suggestions_mode.as_ref(ctx).mode().is_visible();
+        if let Some(hint) = render_left_footer_hint(hint, show_conversations_hint, &builder) {
+            left = left.child(hint);
         }
         let mut footer = TuiFlex::row().flex_child(left.finish());
         let model_name = LLMPreferences::as_ref(ctx)
