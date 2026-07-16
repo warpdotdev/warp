@@ -22,7 +22,6 @@
 //! See `specs/tui-input-view/TECH.md` for the full keybinding table.
 
 use std::ops::Range;
-use std::rc::Rc;
 
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
@@ -39,7 +38,7 @@ use warpui_core::keymap::{self, EditableBinding};
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{
     AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
-    ViewContext,
+    ViewContext, ViewHandle,
 };
 
 use super::kill_buffer::KillBuffer;
@@ -50,6 +49,7 @@ use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestions
 use crate::keybindings::{
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, TUI_BINDING_GROUP,
 };
+use crate::transcript_view::TuiTranscriptView;
 use crate::tui_builder::TuiUiBuilder;
 
 /// Keymap-context flag set while the input has contextual Escape behavior.
@@ -59,7 +59,6 @@ use crate::tui_builder::TuiUiBuilder;
 /// order. Inline menus take priority; later input modes should be handled only
 /// after the menu branch.
 const INPUT_HANDLES_ESCAPE_FLAG: &str = "TuiInputHandlesEscape";
-type PlanToggleAvailable = Rc<dyn Fn(&AppContext) -> bool>;
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -599,7 +598,9 @@ pub struct TuiInputView {
     /// the GUI's `EditorView::focused`. Snapshotted into the editor element
     /// so it only consumes typed text while the input is focused.
     focused: bool,
-    plan_toggle_available: Option<PlanToggleAvailable>,
+    /// Source of truth for whether a rendered plan can be toggled. Production
+    /// construction always provides this; isolated input tests omit it.
+    transcript: Option<ViewHandle<TuiTranscriptView>>,
     keyboard_enhancement_supported: bool,
 }
 
@@ -626,6 +627,36 @@ impl TuiInputView {
         input_mode: ModelHandle<BlocklistAIInputModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
+        transcript: ViewHandle<TuiTranscriptView>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        Self::new_internal(
+            model,
+            input_mode,
+            suggestions_mode,
+            inline_menus,
+            Some(transcript),
+            ctx,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        model: ModelHandle<CodeEditorModel>,
+        input_mode: ModelHandle<BlocklistAIInputModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
+        inline_menus: Vec<TuiInlineMenu>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        Self::new_internal(model, input_mode, suggestions_mode, inline_menus, None, ctx)
+    }
+
+    fn new_internal(
+        model: ModelHandle<CodeEditorModel>,
+        input_mode: ModelHandle<BlocklistAIInputModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
+        inline_menus: Vec<TuiInlineMenu>,
+        transcript: Option<ViewHandle<TuiTranscriptView>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
@@ -646,18 +677,11 @@ impl TuiInputView {
             max_visible_rows: 6,
             prefix_mouse_state: MouseStateHandle::default(),
             focused: false,
-            plan_toggle_available: None,
+            transcript,
             keyboard_enhancement_supported: false,
         }
     }
 
-    pub(crate) fn with_plan_toggle_available(
-        mut self,
-        plan_toggle_available: impl Fn(&AppContext) -> bool + 'static,
-    ) -> Self {
-        self.plan_toggle_available = Some(Rc::new(plan_toggle_available));
-        self
-    }
     pub(crate) fn with_keyboard_enhancement_supported(
         mut self,
         keyboard_enhancement_supported: bool,
@@ -667,9 +691,9 @@ impl TuiInputView {
     }
 
     fn plan_toggle_available(&self, ctx: &AppContext) -> bool {
-        self.plan_toggle_available
+        self.transcript
             .as_ref()
-            .is_some_and(|plan_toggle_available| plan_toggle_available(ctx))
+            .is_some_and(|transcript| transcript.as_ref(ctx).has_toggleable_plan(ctx))
     }
 
     /// Whether the input is in `!` shell mode (locked shell input).

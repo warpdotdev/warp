@@ -761,20 +761,16 @@ impl TuiTerminalSessionView {
         ];
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
-        let transcript_for_plan_toggle = transcript.clone();
+        let transcript_for_input = transcript.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
             TuiInputView::new(
                 input_editor_model,
                 input_mode_for_input_view,
                 suggestions_mode_for_input,
                 inline_menus_for_input,
+                transcript_for_input,
                 ctx,
             )
-            .with_plan_toggle_available(move |ctx| {
-                transcript_for_plan_toggle
-                    .as_ref(ctx)
-                    .has_toggleable_plan(ctx)
-            })
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
         });
 
