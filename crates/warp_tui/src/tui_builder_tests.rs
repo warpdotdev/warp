@@ -43,6 +43,7 @@ fn text_styles_follow_light_theme_foreground() {
         builder.slash_command_text_style().fg,
         Some(slash_command_color)
     );
+    assert_eq!(builder.link_text_style().fg, Some(slash_command_color));
     assert_eq!(
         builder.slash_command_selection_background(),
         selection_background

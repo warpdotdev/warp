@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use chrono::Local;
 pub(crate) use execute::{
     apply_edits, coerce_integer_args, FileReadResult, MalformedFinalLineProxyEvent,
@@ -58,7 +59,6 @@ use crate::ai::agent::{
     CancellationOutcome, CancellationReason, CreateDocumentsResult, EditDocumentsResult,
     RequestCommandOutputResult,
 };
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;

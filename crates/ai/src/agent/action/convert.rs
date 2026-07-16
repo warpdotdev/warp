@@ -7,15 +7,16 @@ use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
 use crate::agent::action::{
-    AIAgentActionType, AIAgentPtyWriteMode, CommentSide, FileEdit, InsertReviewComment,
-    InsertedCommentLine, InsertedCommentLocation, ReadFilesRequest, SearchCodebaseRequest,
+    AIAgentActionType, AIAgentPtyWriteMode, CommentSide, CreateDocumentsRequest, DocumentDiff,
+    DocumentToCreate, EditDocumentsRequest, FileEdit, InsertReviewComment, InsertedCommentLine,
+    InsertedCommentLocation, ReadDocumentsRequest, ReadFilesRequest, SearchCodebaseRequest,
     ShellCommandDelay, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
 use crate::agent::action_result::{AnyFileContent, FileContext};
 use crate::agent::convert::ToolToAIAgentActionError;
 use crate::agent::FileLocations;
 use crate::diff_validation::{ParsedDiff, V4AHunk};
-use crate::document::AIDocumentId;
+use crate::document::{AIDocumentId, DEFAULT_PLANNING_DOCUMENT_TITLE};
 
 impl From<api::message::tool_call::RunShellCommand> for AIAgentActionType {
     fn from(value: api::message::tool_call::RunShellCommand) -> Self {
@@ -333,7 +334,6 @@ impl From<warp_multi_agent_api::AnyFileContent> for FileContext {
 
 impl From<api::message::tool_call::ReadDocuments> for AIAgentActionType {
     fn from(value: api::message::tool_call::ReadDocuments) -> Self {
-        use crate::agent::action::ReadDocumentsRequest;
         AIAgentActionType::ReadDocuments(ReadDocumentsRequest {
             document_ids: value
                 .documents
@@ -346,7 +346,6 @@ impl From<api::message::tool_call::ReadDocuments> for AIAgentActionType {
 
 impl From<api::message::tool_call::EditDocuments> for AIAgentActionType {
     fn from(value: api::message::tool_call::EditDocuments) -> Self {
-        use crate::agent::action::{DocumentDiff, EditDocumentsRequest};
         AIAgentActionType::EditDocuments(EditDocumentsRequest {
             diffs: value
                 .diffs
@@ -367,7 +366,6 @@ impl From<api::message::tool_call::EditDocuments> for AIAgentActionType {
 
 impl From<api::message::tool_call::CreateDocuments> for AIAgentActionType {
     fn from(value: api::message::tool_call::CreateDocuments) -> Self {
-        use crate::agent::action::{CreateDocumentsRequest, DocumentToCreate};
         AIAgentActionType::CreateDocuments(CreateDocumentsRequest {
             documents: value
                 .new_documents
@@ -375,9 +373,7 @@ impl From<api::message::tool_call::CreateDocuments> for AIAgentActionType {
                 .map(|doc| DocumentToCreate {
                     content: doc.content,
                     title: if doc.title.is_empty() {
-                        // DO NOT SUBMIT
-                        // crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE.to_string()
-                        "".to_string()
+                        DEFAULT_PLANNING_DOCUMENT_TITLE.to_owned()
                     } else {
                         doc.title
                     },

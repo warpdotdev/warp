@@ -3,6 +3,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::agent::action::{
+    CreateDocumentsRequest, DocumentDiff, DocumentToCreate, EditDocumentsRequest,
+};
+use ai::document::AIDocumentId;
 use markdown_parser::parse_markdown;
 use parking_lot::FairMutex;
 use warp::tui_export::{
@@ -36,6 +40,7 @@ use crate::agent_block_sections::{
     completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
 };
 use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
+use crate::tui_plan_view::TuiPlanViewAction;
 use crate::tui_shell_command_view::TuiShellCommandViewAction;
 
 #[test]
@@ -83,6 +88,27 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
             // terminal's own background.
             assert_eq!(frame.buffer[(0, 3)].bg, Color::Reset);
             assert_eq!(frame.buffer[(19, 3)].bg, Color::Reset);
+        });
+    });
+}
+
+#[test]
+fn agent_block_uses_fallback_row_for_edit_without_rich_body() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let edit = test_edit_documents_action("edit-1");
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", edit)]),
+            },
+        );
+
+        app.read(|ctx| {
+            let rendered = render_block_lines(block.as_ref(ctx), 60, ctx);
+            assert_eq!(rendered.len(), 1);
+            assert!(rendered[0].contains("Update"));
         });
     });
 }
@@ -432,6 +458,101 @@ fn shell_command_disclosure_invalidates_agent_block_layout() {
     });
 }
 
+#[test]
+fn agent_block_registers_create_and_edit_plan_children() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let create = test_create_documents_action(
+            "create-1",
+            vec![DocumentToCreate {
+                title: "Plan".to_owned(),
+                content: "# Overview\n\nRich body".to_owned(),
+            }],
+        );
+        let edit = test_edit_documents_action("edit-1");
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    action_message("message-1", create.clone()),
+                    action_message("message-2", edit.clone()),
+                ]),
+            },
+        );
+
+        app.read(|ctx| {
+            let block = block.as_ref(ctx);
+            let Some(TuiToolCallView::Plan(create_view)) = block.action_views.get(&create.id)
+            else {
+                panic!("create action has a plan child");
+            };
+            let Some(TuiToolCallView::Plan(edit_view)) = block.action_views.get(&edit.id) else {
+                panic!("edit action has a plan child");
+            };
+            assert!(create_view.as_ref(ctx).renders_rich_body());
+            assert!(!edit_view.as_ref(ctx).renders_rich_body());
+            assert_eq!(block.child_view_ids(ctx).len(), 2);
+            let rendered = render_tui_view_lines(create_view.as_ref(ctx), 60, 20, ctx);
+            assert!(rendered.iter().any(|line| line.trim() == "Overview"));
+            assert!(rendered.iter().any(|line| line.trim() == "Rich body"));
+        });
+    });
+}
+
+#[test]
+fn plan_collapse_invalidates_agent_block_layout() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action = test_create_documents_action(
+            "create-1",
+            vec![DocumentToCreate {
+                title: "Plan".to_owned(),
+                content: "body".to_owned(),
+            }],
+        );
+        let action_id = action.id.clone();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", action)]),
+            },
+        );
+        let layout_invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = layout_invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::LayoutInvalidated => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        let plan_view = app.read(|ctx| {
+            let Some(TuiToolCallView::Plan(view)) = block.as_ref(ctx).action_views.get(&action_id)
+            else {
+                panic!("create action has a plan child");
+            };
+            view.clone()
+        });
+        app.update(|ctx| {
+            ctx.dispatch_typed_action_for_view(
+                plan_view.window_id(ctx),
+                plan_view.id(),
+                &TuiPlanViewAction::SetCollapsed(true),
+            );
+        });
+
+        assert_eq!(layout_invalidations.get(), 1);
+        app.read(|ctx| {
+            assert_eq!(
+                render_tui_view_lines(plan_view.as_ref(ctx), 40, 5, ctx),
+                vec!["○ Create plan ▸"]
+            );
+        });
+    });
+}
 #[test]
 fn agent_block_ignores_unsupported_message_variants() {
     App::test((), |mut app| async move {
@@ -1453,6 +1574,30 @@ fn test_command_action(id: &str, command: &str) -> AIAgentAction {
     }
 }
 
+fn test_create_documents_action(id: &str, documents: Vec<DocumentToCreate>) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::CreateDocuments(CreateDocumentsRequest { documents }),
+        requires_result: true,
+    }
+}
+
+fn test_edit_documents_action(id: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::EditDocuments(EditDocumentsRequest {
+            diffs: vec![DocumentDiff {
+                document_id: AIDocumentId::new(),
+                search: "old".to_owned(),
+                replace: "new".to_owned(),
+            }],
+        }),
+        requires_result: true,
+    }
+}
+
 /// Builds a `Finished` status carrying `result` for `action`.
 fn finished_status(action: &AIAgentAction, result: AIAgentActionResultType) -> AIActionStatus {
     AIActionStatus::Finished(Arc::new(AIAgentActionResult {
@@ -1566,6 +1711,23 @@ fn render_block_lines(block: &TuiAIBlock, width: u16, app: &AppContext) -> Vec<S
         app,
     );
     frame
+        .buffer
+        .to_lines()
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+fn render_tui_view_lines(
+    view: &impl TuiView,
+    width: u16,
+    height: u16,
+    app: &AppContext,
+) -> Vec<String> {
+    let mut presenter = TuiPresenter::new();
+    presenter
+        .present_element(view.render(app), TuiRect::new(0, 0, width, height), app)
         .buffer
         .to_lines()
         .into_iter()
