@@ -489,9 +489,9 @@ fn agent_block_preserves_and_renders_code_sections_in_order() {
                     rich_text("visible"),
                 ]
             );
-            assert!(block.code_views.contains_key(&code_key));
+            assert!(block.code_block_views.contains_key(&code_key));
             assert_eq!(block.child_view_ids(app_ctx).len(), 1);
-            let code_view = block.code_views[&code_key].as_ref(app_ctx);
+            let code_view = block.code_block_views[&code_key].as_ref(app_ctx);
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 code_view.render(app_ctx),
@@ -572,7 +572,7 @@ fn agent_block_preserves_table_image_and_mermaid_source_order() {
                     rich_text("after"),
                 ]
             );
-            assert!(block.code_views.contains_key(&mermaid_key));
+            assert!(block.code_block_views.contains_key(&mermaid_key));
 
             let rendered = render_block_lines(block, 40, app_ctx);
             let joined = rendered.join("\n");
@@ -605,7 +605,7 @@ fn code_children_reconcile_across_streamed_section_boundaries() {
             message_id: MessageId::new("stream-1".to_owned()),
             section_index: 0,
         };
-        let original_id = app.read(|ctx| block.as_ref(ctx).code_views[&old_key].id());
+        let original_id = app.read(|ctx| block.as_ref(ctx).code_block_views[&old_key].id());
         let invalidations = Rc::new(Cell::new(0));
         let invalidations_for_subscription = invalidations.clone();
         app.update(|ctx| {
@@ -628,10 +628,13 @@ fn code_children_reconcile_across_streamed_section_boundaries() {
                     }],
                 )]),
             });
-            block.sync_code_views(ctx);
+            block.sync_code_block_views(ctx);
         });
         app.read(|ctx| {
-            assert_eq!(block.as_ref(ctx).code_views[&old_key].id(), original_id);
+            assert_eq!(
+                block.as_ref(ctx).code_block_views[&old_key].id(),
+                original_id
+            );
         });
         assert!(invalidations.get() > 0);
 
@@ -656,13 +659,13 @@ fn code_children_reconcile_across_streamed_section_boundaries() {
                     ],
                 )]),
             });
-            block.sync_code_views(ctx);
+            block.sync_code_block_views(ctx);
         });
         app.read(|ctx| {
             let block = block.as_ref(ctx);
-            assert!(!block.code_views.contains_key(&old_key));
-            assert!(block.code_views.contains_key(&new_key));
-            assert_ne!(block.code_views[&new_key].id(), original_id);
+            assert!(!block.code_block_views.contains_key(&old_key));
+            assert!(block.code_block_views.contains_key(&new_key));
+            assert_ne!(block.code_block_views[&new_key].id(), original_id);
         });
 
         block.update(&mut app, |block, ctx| {
@@ -670,9 +673,9 @@ fn code_children_reconcile_across_streamed_section_boundaries() {
                 inputs: Vec::new(),
                 status: complete_output_messages(vec![plain_text_message("stream-1", "finished")]),
             });
-            block.sync_code_views(ctx);
+            block.sync_code_block_views(ctx);
         });
-        app.read(|ctx| assert!(block.as_ref(ctx).code_views.is_empty()));
+        app.read(|ctx| assert!(block.as_ref(ctx).code_block_views.is_empty()));
     });
 }
 #[test]

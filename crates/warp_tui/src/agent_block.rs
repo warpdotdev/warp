@@ -221,7 +221,7 @@ pub(super) struct TuiAIBlock {
     /// get entries here.
     action_views: HashMap<AIAgentActionId, TuiToolCallView>,
     /// Persistent editor-backed children for code and Mermaid sections.
-    code_views: HashMap<TuiCodeBlockKey, ViewHandle<TuiCodeBlockView>>,
+    code_block_views: HashMap<TuiCodeBlockKey, ViewHandle<TuiCodeBlockView>>,
     /// Whether the exchange's output contains any todo-operation message,
     /// maintained by [`Self::sync_action_views`]. Lets the transcript scope
     /// conversation-wide todo/status invalidations to the blocks whose
@@ -254,12 +254,12 @@ impl TuiAIBlock {
             collapsible_states: Default::default(),
             action_ids: HashSet::new(),
             action_views: HashMap::new(),
-            code_views: HashMap::new(),
+            code_block_views: HashMap::new(),
             renders_todos: false,
             last_measured_width: Cell::new(None),
         };
         block.sync_action_views(&action_model, ctx);
-        block.sync_code_views(ctx);
+        block.sync_code_block_views(ctx);
 
         ctx.subscribe_to_model(
             &action_model,
@@ -293,7 +293,7 @@ impl TuiAIBlock {
         block.block_model.on_updated_output(
             Box::new(move |me, ctx| {
                 me.sync_action_views(&action_model, ctx);
-                me.sync_code_views(ctx);
+                me.sync_code_block_views(ctx);
                 // The presenter caches this block's rendered element; new
                 // output must invalidate both the view and its canonical
                 // block-list height or scrolling keeps a stale extent after
@@ -381,7 +381,7 @@ impl TuiAIBlock {
     /// Keys remain stable while a message's section position survives; a
     /// streaming boundary change naturally drops stale children and creates
     /// the newly semantic section.
-    fn sync_code_views(&mut self, ctx: &mut ViewContext<Self>) {
+    fn sync_code_block_views(&mut self, ctx: &mut ViewContext<Self>) {
         let mut descriptors = Vec::new();
         if let Some(output) = self.block_model.status(ctx).output_to_render() {
             for message in &output.get().messages {
@@ -444,10 +444,11 @@ impl TuiAIBlock {
             .iter()
             .map(|(key, _)| key.clone())
             .collect::<HashSet<_>>();
-        self.code_views.retain(|key, _| active_keys.contains(key));
+        self.code_block_views
+            .retain(|key, _| active_keys.contains(key));
 
         for (key, payload) in descriptors {
-            if let Some(view) = self.code_views.get(&key) {
+            if let Some(view) = self.code_block_views.get(&key) {
                 view.update(ctx, |view, ctx| {
                     view.sync(payload, ctx);
                 });
@@ -459,7 +460,7 @@ impl TuiAIBlock {
                     me.invalidate_layout(ctx)
                 }
             });
-            self.code_views.insert(key, view);
+            self.code_block_views.insert(key, view);
             ctx.notify();
         }
     }
@@ -903,7 +904,7 @@ impl TuiAIBlock {
                 TuiText::new(text.clone()).with_style(palette.body).finish()
             }
             TuiRichTextSection::Code(key) => self
-                .code_views
+                .code_block_views
                 .get(key)
                 .map(|view| TuiChildView::new(view).finish())
                 .unwrap_or_else(|| {
@@ -1108,7 +1109,7 @@ impl TuiView for TuiAIBlock {
         self.action_views
             .values()
             .map(|view| view.view_id())
-            .chain(self.code_views.values().map(|view| view.id()))
+            .chain(self.code_block_views.values().map(|view| view.id()))
             .collect()
     }
 

@@ -512,10 +512,11 @@ fn dragging_inside_markdown_highlights_transcript_text() {
             )
         });
         let agent_block_id = transcript.update(&mut app, |view, ctx| {
-            append_test_agent_block(
+            append_test_agent_block_with_inputs(
                 view,
                 AIConversationId::new(),
                 AIAgentExchangeId::new(),
+                vec![query_input("hello agent")],
                 markdown_output_status(
                     "# Overview\n\nDrag selectable text.\n\n```rust\nfn main() {}\n```",
                 ),
@@ -537,79 +538,115 @@ fn dragging_inside_markdown_highlights_transcript_text() {
             rendered_views
         });
         let mut element = app.read(|ctx| transcript.as_ref(ctx).render(ctx));
-        let area = TuiRect::new(0, 0, 40, 8);
-        let (initial, scene) =
-            render_retained_element(&app, element.as_mut(), &mut rendered_views, area);
-        let lines = initial.to_lines();
-        let row = lines
-            .iter()
-            .position(|line| line.contains("Drag selectable text."))
-            .expect("rendered transcript should contain Markdown body");
-        let selectable_start_byte = lines[row]
-            .find("selectable")
-            .expect("rendered Markdown should contain selection target");
-        let selectable_start = lines[row][..selectable_start_byte].chars().count() as u16;
-        let selectable_end = selectable_start + "selectable".chars().count() as u16 - 1;
-
-        assert!(dispatch_retained_event(
+        let area = TuiRect::new(0, 0, 40, 14);
+        assert_drag_highlights_text(
             &app,
-            transcript.id(),
+            &transcript,
             element.as_mut(),
             &mut rendered_views,
-            scene,
-            &TuiEvent::LeftMouseDown {
-                position: (selectable_start, row as u16).into(),
-                modifiers: ModifiersState::default(),
-                click_count: 1,
-                is_first_mouse: false,
-            },
-        ));
-        let (_, scene) = render_retained_element(&app, element.as_mut(), &mut rendered_views, area);
-        assert!(dispatch_retained_event(
+            area,
+            "selectable",
+            "Markdown",
+        );
+
+        assert_drag_highlights_text(
             &app,
-            transcript.id(),
+            &transcript,
             element.as_mut(),
             &mut rendered_views,
-            scene,
-            &TuiEvent::LeftMouseDragged {
-                position: (selectable_end, row as u16).into(),
-                modifiers: ModifiersState::default(),
-            },
-        ));
-
-        let (selected, scene) =
-            render_retained_element(&app, element.as_mut(), &mut rendered_views, area);
-        for column in selectable_start..=selectable_end {
-            assert!(
-                selected[(column, row as u16)]
-                    .modifier
-                    .contains(Modifier::REVERSED),
-                "selected Markdown cell at column {column} should be reversed"
-            );
-        }
-
-        assert!(dispatch_retained_event(
+            area,
+            "hello agent",
+            "background-painted input",
+        );
+        assert_drag_highlights_text(
             &app,
-            transcript.id(),
+            &transcript,
             element.as_mut(),
             &mut rendered_views,
-            scene,
-            &TuiEvent::LeftMouseUp {
-                position: (selectable_end, row as u16).into(),
-                modifiers: ModifiersState::default(),
-            },
-        ));
-        let (settled, _) =
-            render_retained_element(&app, element.as_mut(), &mut rendered_views, area);
-        for column in selectable_start..=selectable_end {
-            assert!(
-                settled[(column, row as u16)]
-                    .modifier
-                    .contains(Modifier::REVERSED),
-                "Markdown selection should persist after mouse-up"
-            );
-        }
+            area,
+            "main",
+            "bordered Markdown code",
+        );
     });
+}
+
+fn assert_drag_highlights_text(
+    app: &App,
+    transcript: &warpui::ViewHandle<TuiTranscriptView>,
+    element: &mut dyn TuiElement,
+    rendered_views: &mut EntityIdMap<Box<dyn TuiElement>>,
+    area: TuiRect,
+    target: &str,
+    description: &str,
+) {
+    let (initial, scene) = render_retained_element(app, element, rendered_views, area);
+    let lines = initial.to_lines();
+    let row = lines
+        .iter()
+        .position(|line| line.contains(target))
+        .unwrap_or_else(|| panic!("rendered transcript should contain {description}: {target}"));
+    let start_byte = lines[row]
+        .find(target)
+        .expect("located row should contain selection target");
+    let start = lines[row][..start_byte].chars().count() as u16;
+    let end = start + target.chars().count() as u16 - 1;
+
+    assert!(dispatch_retained_event(
+        app,
+        transcript.id(),
+        element,
+        rendered_views,
+        scene,
+        &TuiEvent::LeftMouseDown {
+            position: (start, row as u16).into(),
+            modifiers: ModifiersState::default(),
+            click_count: 1,
+            is_first_mouse: false,
+        },
+    ));
+    let (_, scene) = render_retained_element(app, element, rendered_views, area);
+    assert!(dispatch_retained_event(
+        app,
+        transcript.id(),
+        element,
+        rendered_views,
+        scene,
+        &TuiEvent::LeftMouseDragged {
+            position: (end, row as u16).into(),
+            modifiers: ModifiersState::default(),
+        },
+    ));
+
+    let (selected, scene) = render_retained_element(app, element, rendered_views, area);
+    for column in start..=end {
+        assert!(
+            selected[(column, row as u16)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "selected {description} cell at column {column} should be reversed"
+        );
+    }
+
+    assert!(dispatch_retained_event(
+        app,
+        transcript.id(),
+        element,
+        rendered_views,
+        scene,
+        &TuiEvent::LeftMouseUp {
+            position: (end, row as u16).into(),
+            modifiers: ModifiersState::default(),
+        },
+    ));
+    let (settled, _) = render_retained_element(app, element, rendered_views, area);
+    for column in start..=end {
+        assert!(
+            settled[(column, row as u16)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "{description} selection should persist after mouse-up"
+        );
+    }
 }
 /// Registers an agent block over a fake model with `inputs` on the transcript
 /// and appends its canonical rich-content item, returning the block's view id.
@@ -798,6 +835,17 @@ fn append_test_agent_block(
     status: AIBlockOutputStatus,
     ctx: &mut ViewContext<TuiTranscriptView>,
 ) -> EntityId {
+    append_test_agent_block_with_inputs(view, conversation_id, exchange_id, Vec::new(), status, ctx)
+}
+
+fn append_test_agent_block_with_inputs(
+    view: &mut TuiTranscriptView,
+    conversation_id: AIConversationId,
+    exchange_id: AIAgentExchangeId,
+    inputs: Vec<AIAgentInput>,
+    status: AIBlockOutputStatus,
+    ctx: &mut ViewContext<TuiTranscriptView>,
+) -> EntityId {
     let action_model = view.action_model.clone();
     let model_events = view.model_events.clone();
     let terminal_model = view.model.clone();
@@ -805,10 +853,7 @@ fn append_test_agent_block(
         TuiAIBlock::new(
             conversation_id,
             exchange_id,
-            Rc::new(FakeAgentBlockModel {
-                inputs: Vec::new(),
-                status,
-            }),
+            Rc::new(FakeAgentBlockModel { inputs, status }),
             action_model,
             &model_events,
             terminal_model,
