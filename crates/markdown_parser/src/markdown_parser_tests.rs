@@ -3086,3 +3086,45 @@ fn test_br_in_table_cell_round_trips_as_literal_br() {
         "in-cell break must not add a pipe-table row, got {plain:?}"
     );
 }
+
+// Regression guards for `<br>` combined with inline style delimiters. A `<br>` inside a
+// styled run keeps the surrounding style on both sides of the embedded newline; fragments with
+// identical styles coalesce, so the break lives inside a single styled fragment.
+
+#[test]
+fn test_br_inside_bold_keeps_bold_across_break() {
+    let fragments = parse_single_line_fragments("**a<br>b**");
+    let joined: String = fragments.iter().map(|f| f.text.as_str()).collect();
+    assert_eq!(joined, "a\nb", "expected a single break, got {fragments:?}");
+    assert!(
+        fragments
+            .iter()
+            .all(|f| f.styles.weight == Some(CustomWeight::Bold)),
+        "both sides of the break should stay bold, got {fragments:?}"
+    );
+}
+
+#[test]
+fn test_br_inside_underline_keeps_underline_across_break() {
+    let fragments = parse_single_line_fragments("<u>a<br>b</u>");
+    let joined: String = fragments.iter().map(|f| f.text.as_str()).collect();
+    assert_eq!(joined, "a\nb", "expected a single break, got {fragments:?}");
+    assert!(
+        fragments.iter().all(|f| f.styles.underline),
+        "both sides of the break should stay underlined, got {fragments:?}"
+    );
+}
+
+#[test]
+fn test_br_inside_link_keeps_hyperlink_across_break() {
+    let fragments = parse_single_line_fragments("[a<br>b](https://x.com)");
+    let joined: String = fragments.iter().map(|f| f.text.as_str()).collect();
+    assert_eq!(joined, "a\nb", "expected a single break, got {fragments:?}");
+    assert!(
+        fragments.iter().all(|f| matches!(
+            &f.styles.hyperlink,
+            Some(Hyperlink::Url(url)) if url == "https://x.com"
+        )),
+        "both sides of the break should keep the hyperlink, got {fragments:?}"
+    );
+}
