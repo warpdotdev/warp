@@ -1035,6 +1035,14 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
             }
+            InlineToken::LineBreak => {
+                // Emit the break as a newline fragment. Both the paragraph and table-cell
+                // render paths turn an embedded newline into a real visual break. The
+                // fragment may later coalesce into adjacent plain text (the newline is
+                // preserved, so rendering is unaffected); serialization paths translate any
+                // embedded newline back to `<br>`. See `HARD_LINE_BREAK`.
+                state.push_closed_node(FormattedTextFragment::plain_text(HARD_LINE_BREAK));
+            }
         }
     }
 
@@ -1549,6 +1557,7 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             parse_inline_token_autolink,
             parse_inline_token_underline_start,
             parse_inline_token_underline_end,
+            parse_inline_token_br,
             whitespace,
             text,
             // This _must_ be the last parser in the chain. It unconditionally consumes a single
@@ -1654,6 +1663,33 @@ fn parse_inline_token_underline_end<'a, E: ContextError<&'a str> + ParseError<&'
     )(input)
 }
 
+/// Parse a raw HTML `<br>` line break.
+///
+/// Accepts the case-insensitive forms `<br>`, `<br/>`, and `<br />` (any run of ASCII
+/// whitespace is allowed before an optional self-closing `/`). Attributes are intentionally
+/// *not* accepted: a tag such as `<br class="x">` falls through to literal text rather than
+/// being silently reinterpreted, keeping malformed/unsupported input deterministic. A stray
+/// `<br` with no closing `>` also fails here and is emitted as literal text by the fallback
+/// `text`/`unmatched_char` parsers, matching the `<u>`/`</u>` precedent.
+fn parse_inline_token_br<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "line_break",
+        value(
+            InlineToken::LineBreak,
+            tuple((
+                tag("<"),
+                tag_no_case("br"),
+                space0,
+                // Optional self-closing slash: `<br/>` or `<br />`.
+                map(take_while_m_n(0, 1, |c| c == '/'), |_| ()),
+                tag(">"),
+            )),
+        ),
+    )(input)
+}
+
 /// Helper to parse a run of delimiters.
 fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     kind: DelimiterKind,
@@ -1700,7 +1736,19 @@ enum InlineToken<'a> {
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
     UnderlineEnd,
+    /// A raw HTML `<br>` line break (including the `<br/>`, `<br />`, and uppercase
+    /// variants). Rendered as a forced line break within the current paragraph or table
+    /// cell. See [`HARD_LINE_BREAK`].
+    LineBreak,
 }
+
+/// The text a hard line break (raw HTML `<br>`) is represented as within a
+/// [`FormattedTextFragment`]. Both the paragraph and table-cell render paths already turn an
+/// embedded newline into a real visual break, so the break is stored as a plain-text `"\n"`
+/// fragment. Serialization paths that flatten fragments into newline/tab/pipe-delimited
+/// formats (e.g. [`inline_to_markdown`], [`FormattedTable::to_plain_text`]) must translate
+/// this sentinel back to `<br>` so it does not corrupt row/column structure.
+pub(crate) const HARD_LINE_BREAK: &str = "\n";
 
 /// An entry in the [delimiter stack](https://spec.commonmark.org/0.30/#delimiter-stack)
 #[derive(Debug, Clone)]

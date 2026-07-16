@@ -2912,3 +2912,177 @@ fn test_parse_table_with_strikethrough() {
         panic!("Expected table");
     }
 }
+
+// --- Raw HTML `<br>` line breaks (GH13732) ---------------------------------
+//
+// A `<br>` is parsed into a bare `"\n"` fragment; both the paragraph and table-cell render
+// paths turn an embedded newline into a real visual break. These tests assert the parse-level
+// shape, the malformed-input fallbacks, and that serialization round-trips the break as
+// literal `<br>` rather than corrupting the delimited table formats.
+
+/// Collect the fragments of the single paragraph line produced by `source`.
+fn parse_single_line_fragments(source: &str) -> Vec<FormattedTextFragment> {
+    let result = test_parse_markdown(source);
+    assert_eq!(result.len(), 1, "expected a single line, got {result:?}");
+    match result.into_iter().next().unwrap() {
+        FormattedTextLine::Line(fragments) => fragments,
+        other => panic!("expected a paragraph Line, got {other:?}"),
+    }
+}
+
+/// The joined text of the single paragraph line produced by `source`. A `<br>` renders as
+/// an embedded `"\n"`; fragments with identical styles coalesce, so the break lives inside a
+/// merged fragment rather than as a standalone one — the render path breaks on the newline
+/// either way.
+fn parse_single_line_text(source: &str) -> String {
+    parse_single_line_fragments(source)
+        .iter()
+        .map(|f| f.text.as_str())
+        .collect()
+}
+
+#[test]
+fn test_br_standalone_becomes_line_break() {
+    assert_eq!(
+        parse_single_line_text("First half<br>second half"),
+        "First half\nsecond half"
+    );
+}
+
+#[test]
+fn test_br_self_closing_variants() {
+    // `<br>`, `<br/>`, and `<br />` are all recognized identically.
+    for source in ["a<br>b", "a<br/>b", "a<br />b", "a<br  />b"] {
+        assert_eq!(
+            parse_single_line_text(source),
+            "a\nb",
+            "failed for {source:?}"
+        );
+    }
+}
+
+#[test]
+fn test_br_case_insensitive() {
+    for source in ["a<BR>b", "a<Br>b", "a<bR/>b", "a<BR />b"] {
+        assert_eq!(
+            parse_single_line_text(source),
+            "a\nb",
+            "failed for {source:?}"
+        );
+    }
+}
+
+#[test]
+fn test_br_consecutive_produce_two_breaks() {
+    // `<br><br>` is two forced breaks (one visually blank line), not a paragraph boundary.
+    assert_eq!(parse_single_line_text("a<br><br>b"), "a\n\nb");
+}
+
+#[test]
+fn test_br_malformed_stays_literal() {
+    // Each of these fails the `<br>` shape and must survive as literal text, not a break.
+    // - `<br` : no closing `>`
+    // - `< br>` : whitespace before the tag name
+    // - `</br>` : end tag, not a void element
+    // - `<br class="x">` : attributes are intentionally rejected (deterministic fallback)
+    // - `<brr>` : not the `br` tag name
+    for source in [
+        "a<br b",
+        "a< br>b",
+        "a</br>b",
+        "a<br class=\"x\">b",
+        "a<brr>b",
+    ] {
+        let fragments = parse_single_line_fragments(source);
+        let joined: String = fragments.iter().map(|f| f.text.as_str()).collect();
+        assert!(
+            !joined.contains('\n'),
+            "expected no line break for malformed {source:?}, got {fragments:?}"
+        );
+        // The literal tag text survives.
+        let literal = source.trim_start_matches('a').trim_end_matches('b');
+        assert!(
+            joined.contains(literal),
+            "expected literal {literal:?} to survive for {source:?}, got {joined:?}"
+        );
+    }
+}
+
+#[test]
+fn test_br_inside_code_span_is_literal() {
+    // Code spans are consumed atomically before the `<br>` parser sees their contents.
+    let fragments = parse_single_line_fragments("before `no <br> here` after");
+    let joined: String = fragments.iter().map(|f| f.text.as_str()).collect();
+    assert!(
+        !joined.contains('\n'),
+        "expected no break inside a code span, got {fragments:?}"
+    );
+    assert!(
+        joined.contains("<br>"),
+        "expected literal <br> preserved inside code span, got {joined:?}"
+    );
+}
+
+#[test]
+fn test_kbd_tag_still_literal_control() {
+    // Control: an unrelated raw tag is NOT special-cased and stays literal text.
+    let fragments = parse_single_line_fragments("Press <kbd>K</kbd> now");
+    let joined: String = fragments.iter().map(|f| f.text.as_str()).collect();
+    assert!(!joined.contains('\n'), "kbd must not produce a break");
+    assert!(
+        joined.contains("<kbd>") && joined.contains("</kbd>"),
+        "expected literal <kbd> tags preserved, got {joined:?}"
+    );
+}
+
+#[test]
+fn test_br_inside_gfm_table_cell_becomes_line_break() {
+    let source = "| Feature | Notes |\n| --- | --- |\n| Export | Supports CSV.<br>Also JSON. |\n";
+    let result = test_parse_markdown_with_gfm_tables(source);
+    assert_eq!(result.len(), 1);
+
+    let FormattedTextLine::Table(table) = &result[0] else {
+        panic!("expected a table, got {result:?}");
+    };
+    let cell_text: String = table.rows[0][1].iter().map(|f| f.text.as_str()).collect();
+    assert_eq!(
+        cell_text, "Supports CSV.\nAlso JSON.",
+        "expected the cell to contain an embedded newline break, got {:?}",
+        table.rows[0][1]
+    );
+}
+
+#[test]
+fn test_br_in_table_cell_round_trips_as_literal_br() {
+    // A break inside a cell must serialize back to `<br>` in both the internal tab/newline
+    // format and the GFM pipe-table format, never as a raw `\n` that would split the row.
+    let source = "| A | B |\n| --- | --- |\n| one<br>two | plain |\n";
+    let result = test_parse_markdown_with_gfm_tables(source);
+    let FormattedTextLine::Table(table) = &result[0] else {
+        panic!("expected a table, got {result:?}");
+    };
+
+    let internal = table.to_internal_format();
+    // Exactly two lines (header + one data row), no spurious row from the in-cell break.
+    assert_eq!(
+        internal.lines().count(),
+        2,
+        "in-cell break must not add a table row, got {internal:?}"
+    );
+    assert!(
+        internal.contains("one<br>two"),
+        "expected <br> in internal format, got {internal:?}"
+    );
+
+    let plain = table.to_plain_text();
+    assert!(
+        plain.contains("| one<br>two |"),
+        "expected <br> in GFM plain text, got {plain:?}"
+    );
+    // Header + separator + one data row.
+    assert_eq!(
+        plain.lines().count(),
+        3,
+        "in-cell break must not add a pipe-table row, got {plain:?}"
+    );
+}
