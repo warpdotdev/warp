@@ -1578,6 +1578,14 @@ impl TerminalView {
         send_telemetry_from_ctx!(TelemetryEvent::CopiedSharedSessionLink { source }, ctx);
     }
 
+    pub(in crate::terminal::view) fn has_copyable_shared_session_link(
+        &self,
+        ctx: &AppContext,
+    ) -> bool {
+        let manager = Manager::as_ref(ctx);
+        manager.session_id(&self.id()).is_some() || manager.ended_session_id(&self.id()).is_some()
+    }
+
     pub fn open_shared_session_qr_code(&mut self, ctx: &mut ViewContext<Self>) {
         self.pane_configuration.update(ctx, |pane_config, ctx| {
             pane_config.open_sharing_qr_code(SharingDialogSource::StartedSessionShare, ctx);
@@ -1907,6 +1915,7 @@ impl TerminalView {
         &self,
         model: &TerminalModel,
         is_share_session_disabled: bool,
+        ctx: &AppContext,
     ) -> Vec<MenuItem<TerminalAction>> {
         let mut items = Vec::new();
 
@@ -1929,7 +1938,7 @@ impl TerminalView {
             );
         }
 
-        if model.shared_session_status().is_sharer_or_viewer() {
+        if self.has_copyable_shared_session_link(ctx) {
             items.push(
                 MenuItemFields::new("Copy session sharing link")
                     .with_on_select_action(TerminalAction::CopySharedSessionLink {
