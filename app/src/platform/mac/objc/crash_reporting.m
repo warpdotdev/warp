@@ -3,13 +3,15 @@
 #import <Sentry/Sentry-Swift.h>
 #import <Sentry/Sentry.h>
 
-void startSentry(id sentryUrl, id environment, id version, bool isDogfood) {
+void startSentry(id sentryUrl, id environment, id version, bool isDogfood,
+                 double shutdownTimeInterval) {
     [SentrySDK startWithConfigureOptions:^(SentryOptions *options) {
       options.dsn = sentryUrl;
       options.debug = NO;
       options.environment = environment;
       options.releaseName = version;
       options.enableAppHangTracking = isDogfood;
+      options.shutdownTimeInterval = shutdownTimeInterval;
     }];
 }
 

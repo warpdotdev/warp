@@ -10,6 +10,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::DerefMut;
 use std::sync::Arc;
+use std::time::Duration;
 
 use lazy_static::lazy_static;
 use parking_lot::{Mutex, RwLock};
@@ -30,6 +31,9 @@ use crate::auth::{AuthStateProvider, UserUid};
 use crate::channel::ChannelState;
 use crate::features::FeatureFlag;
 use crate::settings::{PrivacySettings, PrivacySettingsChangedEvent};
+
+const SENTRY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+const SENTRY_HTTP_TIMEOUT: Duration = Duration::from_secs(1);
 
 lazy_static! {
     /// The RAII guard returned by the call to initialize the Rust Sentry client must be kept in
@@ -406,8 +410,41 @@ fn sentry_client_options() -> sentry::ClientOptions {
         environment: Some(get_environment()),
         auto_session_tracking: true,
         session_mode: SessionMode::Application,
+        shutdown_timeout: SENTRY_SHUTDOWN_TIMEOUT,
+        transport: Some(Arc::new(bounded_sentry_http_transport)),
         ..Default::default()
     }
+}
+
+fn bounded_sentry_http_transport(options: &sentry::ClientOptions) -> Arc<dyn sentry::Transport> {
+    let mut client = reqwest::Client::builder()
+        .connect_timeout(SENTRY_HTTP_TIMEOUT)
+        .timeout(SENTRY_HTTP_TIMEOUT);
+
+    if options.accept_invalid_certs {
+        client = client.danger_accept_invalid_certs(true);
+    }
+    if let Some(proxy) = options
+        .http_proxy
+        .as_ref()
+        .and_then(|url| reqwest::Proxy::http::<&str>(url.as_ref()).ok())
+    {
+        client = client.proxy(proxy);
+    }
+    if let Some(proxy) = options
+        .https_proxy
+        .as_ref()
+        .and_then(|url| reqwest::Proxy::https::<&str>(url.as_ref()).ok())
+    {
+        client = client.proxy(proxy);
+    }
+
+    let client = client
+        .build()
+        .expect("Failed to build the Sentry HTTP client");
+    Arc::new(sentry::transports::ReqwestHttpTransport::with_client(
+        options, client,
+    ))
 }
 
 /// Returns whether the Rust Sentry client is currently initialized.
@@ -615,3 +652,7 @@ impl ToSentryTags for &AntivirusInfo {
         )]
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
