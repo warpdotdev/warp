@@ -2241,9 +2241,13 @@ impl TuiView for TuiTerminalSessionView {
         }
         if let Some(menu) = inline_menu {
             content = content.child(
-                TuiConstrainedBox::new(menu)
-                    .with_max_rows(MAX_INLINE_MENU_ROWS)
-                    .finish(),
+                TuiContainer::new(
+                    TuiConstrainedBox::new(menu)
+                        .with_max_rows(MAX_INLINE_MENU_ROWS)
+                        .finish(),
+                )
+                .with_padding_bottom(1)
+                .finish(),
             );
         }
         if !inline_process_owns_input {
