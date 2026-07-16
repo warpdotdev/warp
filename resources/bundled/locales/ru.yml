@@ -2534,6 +2534,10 @@ ru:
     signup:
       description: "Зарегистрируйтесь бесплатно, чтобы увеличить лимит хранилища и открыть больше возможностей."
       button: "Зарегистрироваться"
+    space:
+      personal: "Личное"
+      team: "Команда"
+      shared: "Поделились со мной"
   # ── Requested Command Block ──
   requested_command:
     reject_label: "Отклонить"

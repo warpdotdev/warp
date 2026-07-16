@@ -2533,6 +2533,10 @@ en:
     signup:
       description: "Sign up for free to increase your storage limit and unlock more features."
       button: "Sign up"
+    space:
+      personal: "Personal"
+      team: "Team"
+      shared: "Shared with me"
   # ── Requested Command Block ──
   requested_command:
     reject_label: "Reject"
