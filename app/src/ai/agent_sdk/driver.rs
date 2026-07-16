@@ -2853,7 +2853,8 @@ impl AgentDriver {
                         ) {
                             log::info!(
                                 "Ignoring runtime failure for {harness_name}: \
-                                 session already marked Success (pattern={}, excerpt={})",
+                                 session already marked Success or Failed via plugin \
+                                 (pattern={}, excerpt={})",
                                 error.pattern,
                                 error.excerpt,
                             );
@@ -3435,7 +3436,9 @@ impl AgentDriver {
 
                     // Drive idle-on-complete timer for the harness exit signal.
                     match status {
-                        CLIAgentSessionStatus::Success | CLIAgentSessionStatus::Blocked { .. } => {
+                        CLIAgentSessionStatus::Success
+                        | CLIAgentSessionStatus::Failed { .. }
+                        | CLIAgentSessionStatus::Blocked { .. } => {
                             if let Some(idle_timeout) = me.idle_on_complete {
                                 log::info!(
                                     "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?}",

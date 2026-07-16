@@ -26,6 +26,7 @@ use crate::agent_block_sections::{
     render_fallback_tool_call_section, tool_call_glyph_style, tool_call_label_style,
 };
 use crate::terminal_block::TerminalBlockElement;
+use crate::terminal_use::user_controls_running_command;
 use crate::tool_call_labels::{
     tool_call_display_state, tool_call_glyph, tool_call_label, CommandBlockState,
     ResolvedCommandBlock,
@@ -210,6 +211,14 @@ impl TuiShellCommandView {
             },
         })
     }
+
+    fn user_controls_command(&self) -> bool {
+        self.terminal_model
+            .lock()
+            .block_list()
+            .block_for_ai_action_id(&self.action.id)
+            .is_some_and(user_controls_running_command)
+    }
 }
 
 impl Entity for TuiShellCommandView {
@@ -254,7 +263,7 @@ impl TuiView for TuiShellCommandView {
         if self.header_mouse_state.lock().unwrap().is_hovered() {
             label_style = label_style.add_modifier(Modifier::BOLD);
         }
-        let collapsed = self.state.is_collapsed();
+        let collapsed = self.state.is_collapsed() && !self.user_controls_command();
         let label = tool_call_label(&self.action, status.as_ref(), false, Some(&block.details));
         let header_spans = vec![
             (format!("{} ", tool_call_glyph(display_state)), glyph_style),
@@ -289,6 +298,9 @@ impl TypedActionView for TuiShellCommandView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             TuiShellCommandViewAction::ToggleExpanded => {
+                if self.user_controls_command() {
+                    return;
+                }
                 self.state.toggle();
                 ctx.emit(TuiShellCommandViewEvent::LayoutChanged);
                 ctx.notify();

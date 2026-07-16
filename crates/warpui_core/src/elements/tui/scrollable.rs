@@ -75,6 +75,10 @@ impl TuiElement for TuiScrollable {
         self.child.layout(constraint, ctx, app)
     }
 
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        self.child.after_layout(ctx, app);
+    }
+
     fn render(
         &mut self,
         origin: TuiScreenPosition,

@@ -359,6 +359,12 @@ impl TuiElement for TuiFlex {
         size
     }
 
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        for child in &mut self.children {
+            child.element.after_layout(ctx, app);
+        }
+    }
+
     fn render(
         &mut self,
         origin: TuiScreenPosition,

@@ -96,6 +96,10 @@ impl TuiElement for TuiChildView {
         size
     }
 
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        ctx.use_view(self.view_id, |child, ctx| child.after_layout(ctx, app));
+    }
+
     fn render(
         &mut self,
         origin: TuiScreenPosition,

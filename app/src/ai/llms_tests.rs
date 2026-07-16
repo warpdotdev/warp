@@ -139,6 +139,44 @@ fn llm_info_round_trip_serializes_and_deserializes() {
     assert_eq!(info, round_tripped);
 }
 
+#[test]
+fn host_icon_visibility_requires_enabled_credentials_and_model_host() {
+    let mut info = server_llm("gemini-test", None);
+    info.host_configs.insert(
+        LLMModelHost::GeminiEnterprise,
+        RoutingHostConfig {
+            enabled: true,
+            model_routing_host: LLMModelHost::GeminiEnterprise,
+        },
+    );
+
+    assert!(should_show_host_icon_for_model(
+        &info,
+        &LLMModelHost::GeminiEnterprise,
+        true,
+    ));
+    assert!(!should_show_host_icon_for_model(
+        &info,
+        &LLMModelHost::GeminiEnterprise,
+        false,
+    ));
+    assert!(!should_show_host_icon_for_model(
+        &info,
+        &LLMModelHost::AwsBedrock,
+        true,
+    ));
+
+    info.host_configs
+        .get_mut(&LLMModelHost::GeminiEnterprise)
+        .expect("Gemini Enterprise host should exist")
+        .enabled = false;
+    assert!(!should_show_host_icon_for_model(
+        &info,
+        &LLMModelHost::GeminiEnterprise,
+        true,
+    ));
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(

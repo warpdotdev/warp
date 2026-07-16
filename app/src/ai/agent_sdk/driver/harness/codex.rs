@@ -87,6 +87,9 @@ impl ThirdPartyHarness for CodexHarness {
             // OAuth refresh failures — all five Codex variants share this
             // substring (see upstream session/token messages).
             "could not be refreshed",
+            // Generically check for invalid request errors.
+            // Keep this last so more specific patterns can be matched first.
+            "\"type\": \"invalid_request_error\"",
         ]
     }
 
