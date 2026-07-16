@@ -3,6 +3,9 @@ mod key_events;
 #[cfg(test)]
 mod drag_drop_tests;
 
+#[cfg(test)]
+mod ime_position_tests;
+
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
@@ -41,7 +44,7 @@ use crate::rendering::wgpu::renderer;
 use crate::windowing::winit::app::RequestPermissionsCallback;
 use crate::windowing::winit::window::MIN_WINDOW_SIZE;
 use crate::Event::{ClearMarkedText, SetMarkedText, TypedCharacters};
-use crate::{AppContext, WindowId};
+use crate::{AppContext, CursorInfo, WindowId};
 
 /// This is the time duration beyond which clicks get treated as separate single clicks instead of
 /// double-click, triple-click, etc.
@@ -483,6 +486,80 @@ fn convert_touch_cancelled(
     None
 }
 
+/// The IME candidate-window geometry (position and size) derived from the
+/// active text cursor.
+///
+/// The `size` is not honored on every platform — notably X11 ignores it — but
+/// we always compute and forward it so platforms that do support it can size
+/// the candidate window correctly.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ImeCandidateGeometry {
+    /// Position of the candidate window, in logical pixels relative to the window.
+    position: LogicalPosition<f32>,
+    /// Size of the candidate window, in logical pixels.
+    size: LogicalSize<f32>,
+}
+
+impl ImeCandidateGeometry {
+    /// Computes the candidate-window geometry for `cursor`, placing the
+    /// candidate window just below the cursor baseline.
+    fn from_cursor(cursor: &CursorInfo) -> Self {
+        Self {
+            position: LogicalPosition::new(
+                cursor.position.origin_x(),
+                cursor.position.origin_y() + (1.2 * cursor.font_size),
+            ),
+            size: LogicalSize::new(cursor.font_size, cursor.font_size),
+        }
+    }
+
+    /// Returns a copy of this geometry nudged one logical pixel downward. Used to
+    /// bust winit's position cache; see [`ImeCandidatePositionTracker`].
+    fn nudged(self) -> Self {
+        Self {
+            position: LogicalPosition::new(self.position.x, self.position.y + 1.),
+            size: self.size,
+        }
+    }
+}
+
+/// Tracks the IME candidate-window position last requested from winit and
+/// produces the sequence of `set_ime_cursor_area` updates needed to move the
+/// candidate window to a new geometry.
+///
+/// winit caches the last candidate position it was handed and skips forwarding
+/// an unchanged position to the platform IME. That cache is keyed on the
+/// *window-relative* logical position, so events that move the candidate window
+/// in screen space without changing its window-relative position — window
+/// moves, resizes, and scale-factor changes — would otherwise be dropped by
+/// winit. To force winit to re-forward the position in that case, we briefly
+/// nudge it by one logical pixel before setting the real value, which busts the
+/// cache.
+#[derive(Debug, Default)]
+struct ImeCandidatePositionTracker {
+    /// The candidate position last requested from winit, if any. This mirrors the
+    /// value winit currently has cached, letting us tell when a nudge is needed.
+    last_position: Option<LogicalPosition<f32>>,
+}
+
+impl ImeCandidatePositionTracker {
+    /// Returns the sequence of updates required to move the candidate window to
+    /// `geometry`, recording the requested position as the most recent one.
+    ///
+    /// If the requested position matches the last one we set, winit would drop
+    /// the update, so a one-pixel nudge is emitted first to bust its cache.
+    /// Otherwise a single update suffices.
+    fn updates_for(&mut self, geometry: ImeCandidateGeometry) -> Vec<ImeCandidateGeometry> {
+        let mut updates = Vec::with_capacity(2);
+        if self.last_position == Some(geometry.position) {
+            updates.push(geometry.nudged());
+        }
+        updates.push(geometry);
+        self.last_position = Some(geometry.position);
+        updates
+    }
+}
+
 /// A structure to manage state
 /// [`winit::event_loop::EventLoop`] and generate the appropriate callbacks into
 /// the UI framework.
@@ -494,6 +571,10 @@ pub(super) struct EventLoop {
     state: State,
     proxy: EventLoopProxy<CustomEvent>,
     ime_enabled: bool,
+    /// Tracks the last IME candidate-window position requested from winit so we
+    /// can refresh it (working around winit's position caching) on window move,
+    /// resize, scale-factor change, and cursor movement.
+    ime_candidate_position: ImeCandidatePositionTracker,
     /// Whether to downrank non-NVIDIA vulkan adapters. This is set to true when we detect a DRI3
     /// error that occurs when trying to present against a non-NVIDIA Vulkan adapter when the
     /// PRIME Profile is set to "Performance" mode.  It's not fully clear why this error occurs. Our
@@ -523,6 +604,7 @@ impl EventLoop {
             state: Default::default(),
             proxy,
             ime_enabled: false,
+            ime_candidate_position: ImeCandidatePositionTracker::default(),
             downrank_non_nvidia_vulkan_adapters: false,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
@@ -741,9 +823,7 @@ impl EventLoop {
                 });
             }
             Event::UserEvent(CustomEvent::ActiveCursorPositionUpdated) => {
-                if self.ime_enabled {
-                    self.update_ime_position();
-                }
+                self.refresh_ime_position();
             }
             Event::UserEvent(CustomEvent::AboutToSleep) => {
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -879,6 +959,12 @@ impl EventLoop {
                         mut inner_size_writer,
                     },
             } => {
+                // A scale-factor change moves the IME candidate window in screen
+                // space even though its window-relative position is unchanged, so
+                // refresh it on all platforms before the Windows-only size
+                // correction below.
+                self.refresh_ime_position();
+
                 // The following correction is only needed on Windows.
                 if !cfg!(windows) {
                     return;
@@ -1049,6 +1135,11 @@ impl EventLoop {
             return;
         };
 
+        // Window moves and resizes shift the IME candidate window in screen
+        // space (its window-relative position is unchanged), so we refresh it
+        // after handling those events. We defer the refresh until after the
+        // `match` so it does not overlap the `window_state` borrow held here.
+        let mut refresh_ime = false;
         match event {
             ConvertedEvent::Event(event) => {
                 self.handle_converted_warpui_event(window_id, event);
@@ -1058,6 +1149,7 @@ impl EventLoop {
                 window.handle_resize();
                 self.callbacks.for_window(window).window_resized(window);
                 self.callbacks.window_resized();
+                refresh_ime = true;
             }
             ConvertedEvent::ModifierKeyChanged { key_code, state } => {
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
@@ -1103,6 +1195,7 @@ impl EventLoop {
                     .for_window(window)
                     .window_moved(RectF::new(vec2f(position.x, position.y), size));
                 self.callbacks.window_moved();
+                refresh_ime = true;
             }
             ConvertedEvent::MoveWindowBy {
                 current_touch,
@@ -1118,6 +1211,10 @@ impl EventLoop {
                     winit_window.set_outer_position(PhysicalPosition::new(target_x, target_y));
                 }
             }
+        }
+
+        if refresh_ime {
+            self.refresh_ime_position();
         }
     }
 
@@ -1778,7 +1875,22 @@ impl EventLoop {
         abort_handle
     }
 
-    fn update_ime_position(&mut self) {
+    /// Refreshes the IME candidate-window position for the active window so it
+    /// tracks the active text cursor.
+    ///
+    /// This is a no-op when IME is disabled or no editable text field is
+    /// focused. It is invoked whenever the candidate window needs to follow the
+    /// cursor: on cursor movement, and on window move, resize, and scale-factor
+    /// changes (which move the candidate window in screen space even when its
+    /// window-relative position is unchanged).
+    ///
+    /// The concrete sequence of `set_ime_cursor_area` calls — including the
+    /// one-pixel nudge that works around winit's position caching — is produced
+    /// by [`ImeCandidatePositionTracker`].
+    fn refresh_ime_position(&mut self) {
+        if !self.ime_enabled {
+            return;
+        }
         let Some(active_window_id) = self.ui_app.read(|ctx| ctx.windows().active_window()) else {
             return;
         };
@@ -1789,24 +1901,22 @@ impl EventLoop {
             return;
         };
 
-        let mut window_callbacks = self.callbacks.for_window(window.as_ref());
-        let active_cursor_position = window_callbacks.get_active_cursor_position();
-        if let Some(active_cursor_position) = active_cursor_position {
-            let winit_window = downcast_window(window.as_ref());
-            let position = LogicalPosition::new(
-                active_cursor_position.position.origin_x(),
-                active_cursor_position.position.origin_y()
-                    + (1.2 * active_cursor_position.font_size),
-            );
-            // Currently the size argument is not supported on X11. We calculate it here anyway.
-            let size = LogicalSize::new(
-                active_cursor_position.font_size,
-                active_cursor_position.font_size,
-            );
-            // TODO(abhishek): We make sure that the position is different than last time to prevent winit from
-            // caching the old position and not properly updating on `WindowMoved` or `WindowResized` events.
-            winit_window.set_ime_position(LogicalPosition::new(position.x, position.y + 1.), size);
-            winit_window.set_ime_position(position, size);
+        // Compute the target geometry while borrowing `self.callbacks`, then drop
+        // that borrow before touching `self.ime_candidate_position` below.
+        let geometry = {
+            let mut window_callbacks = self.callbacks.for_window(window.as_ref());
+            match window_callbacks.get_active_cursor_position() {
+                Some(cursor) => ImeCandidateGeometry::from_cursor(&cursor),
+                None => return,
+            }
+        };
+
+        let updates = self.ime_candidate_position.updates_for(geometry);
+        let winit_window = downcast_window(window.as_ref());
+        for update in updates {
+            // The size argument is currently ignored on X11, but we forward it
+            // anyway for platforms that do support sizing the candidate window.
+            winit_window.set_ime_position(update.position, update.size);
         }
     }
 
