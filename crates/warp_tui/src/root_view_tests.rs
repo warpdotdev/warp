@@ -30,12 +30,19 @@ fn root_projects_only_the_focused_retained_session_view() {
         root.update(&mut app, |_, ctx| {
             ctx.subscribe_to_model(&sessions, |_, _, _, ctx| ctx.notify());
         });
+        app.read(|ctx| {
+            assert!(root.as_ref(ctx).child_view_ids(ctx).is_empty());
+        });
 
         let (first, first_manager) = add_test_terminal_session(&mut app, window_id);
         let first_view_id = first.id();
         let first_id = app.update_model(&sessions, |sessions, ctx| {
             sessions.add_session(first, first_manager, true, ctx)
         });
+        app.read(|ctx| {
+            assert!(root.as_ref(ctx).child_view_ids(ctx).is_empty());
+        });
+        root.update(&mut app, |root, ctx| root.show_terminal(ctx));
         app.read(|ctx| {
             assert_eq!(root.as_ref(ctx).child_view_ids(ctx), vec![first_view_id]);
             assert!(ctx.check_view_or_child_focused(window_id, &first_view_id));

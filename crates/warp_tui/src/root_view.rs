@@ -22,8 +22,16 @@ pub enum RootTuiAction {
     ExitApp,
 }
 
+/// Whether the root is presenting authentication or the live session container.
+enum RootTuiState {
+    Auth,
+    Terminal,
+}
+
 /// The app-level TUI shell, projecting only the focused full session view.
-pub struct RootTuiView;
+pub struct RootTuiView {
+    state: RootTuiState,
+}
 
 /// Registers the root view's keybindings.
 pub fn init(app: &mut AppContext) {
@@ -38,7 +46,15 @@ pub fn init(app: &mut AppContext) {
 impl RootTuiView {
     /// Creates the login-gated root view.
     pub(crate) fn new() -> Self {
-        Self
+        Self {
+            state: RootTuiState::Auth,
+        }
+    }
+
+    /// Transitions from the authentication gate to the live session container.
+    pub(crate) fn show_terminal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.state = RootTuiState::Terminal;
+        ctx.notify();
     }
 
     fn focused_session_view(&self, ctx: &AppContext) -> Option<ViewHandle<TuiTerminalSessionView>> {
@@ -62,15 +78,18 @@ impl TuiView for RootTuiView {
     }
 
     fn child_view_ids(&self, ctx: &AppContext) -> Vec<EntityId> {
-        self.focused_session_view(ctx)
-            .map(|view| vec![view.id()])
-            .unwrap_or_default()
+        match self.state {
+            RootTuiState::Auth => Vec::new(),
+            RootTuiState::Terminal => self
+                .focused_session_view(ctx)
+                .map(|view| vec![view.id()])
+                .unwrap_or_default(),
+        }
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        match self.focused_session_view(ctx) {
-            Some(view) => TuiChildView::new(&view).finish(),
-            None => match TuiLoginModel::as_ref(ctx).phase() {
+        match self.state {
+            RootTuiState::Auth => match TuiLoginModel::as_ref(ctx).phase() {
                 TuiLoginPhase::LoggedIn => terminal_starting(),
                 TuiLoginPhase::AwaitingLogin {
                     verification_uri,
@@ -78,6 +97,10 @@ impl TuiView for RootTuiView {
                 } => login_placeholder(verification_uri.as_deref(), user_code.as_deref()),
                 TuiLoginPhase::Failed { message } => login_failed(message.as_str()),
             },
+            RootTuiState::Terminal => self
+                .focused_session_view(ctx)
+                .map(|view| TuiChildView::new(&view).finish())
+                .unwrap_or_else(terminal_starting),
         }
     }
 

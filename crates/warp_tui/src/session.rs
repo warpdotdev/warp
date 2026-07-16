@@ -130,15 +130,18 @@ fn init(
             });
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
                 // Already authenticated at mount: create the first session now.
-                create_terminal_session_after_login(&sessions, ctx);
+                create_terminal_session_after_login(&sessions, &root, ctx);
             } else {
                 // Otherwise wait for login to complete and create it then.
                 let sessions_for_login = sessions.clone();
+                let root_for_login = root.clone();
                 let login_model = TuiLoginModel::handle(ctx);
                 ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
-                    TuiLoginEvent::LoggedIn => {
-                        create_terminal_session_after_login(&sessions_for_login, ctx)
-                    }
+                    TuiLoginEvent::LoggedIn => create_terminal_session_after_login(
+                        &sessions_for_login,
+                        &root_for_login,
+                        ctx,
+                    ),
                 });
             }
         }
@@ -151,7 +154,11 @@ fn init(
 }
 
 /// Creates the focused bootstrap session after login.
-fn create_terminal_session_after_login(sessions: &ModelHandle<TuiSessions>, ctx: &mut AppContext) {
+fn create_terminal_session_after_login(
+    sessions: &ModelHandle<TuiSessions>,
+    root: &ViewHandle<RootTuiView>,
+    ctx: &mut AppContext,
+) {
     if sessions.read(ctx, |sessions, _| !sessions.is_empty()) {
         return;
     }
@@ -202,6 +209,7 @@ fn create_terminal_session_after_login(sessions: &ModelHandle<TuiSessions>, ctx:
     sessions.update(ctx, |sessions, ctx| {
         sessions.add_session(manager.surface, manager.manager, true, ctx);
     });
+    root.update(ctx, |root, ctx| root.show_terminal(ctx));
 }
 
 #[cfg(test)]
