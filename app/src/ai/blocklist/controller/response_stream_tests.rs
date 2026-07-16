@@ -7,7 +7,7 @@ use warp_multi_agent_api::request::settings::ApiKeys;
 
 use super::{
     complete_codex_refresh, recovery_action, should_refresh_codex_request, CodexRefreshAction,
-    CodexRefreshCompletion, RecoveryAction,
+    RecoveryAction,
 };
 
 // Argument order: has_received_client_actions, is_recoverable, has_retry_budget,
@@ -122,13 +122,7 @@ fn codex_refresh_replaces_only_nested_credentials() {
 
     let request_id = Uuid::new_v4();
     assert_eq!(
-        complete_codex_refresh(
-            Some(request_id),
-            request_id,
-            CodexRefreshCompletion::Refreshed,
-            Some(&mut keys),
-            Some(&tokens),
-        ),
+        complete_codex_refresh(Some(request_id), request_id, Some(&mut keys), Some(&tokens),),
         CodexRefreshAction::Send
     );
     assert_eq!(keys.openai, "ordinary-openai-key");
@@ -160,13 +154,7 @@ fn blank_refreshed_codex_access_token_does_not_replace_credentials() {
 
     let request_id = Uuid::new_v4();
     assert_eq!(
-        complete_codex_refresh(
-            Some(request_id),
-            request_id,
-            CodexRefreshCompletion::Refreshed,
-            Some(&mut keys),
-            Some(&tokens),
-        ),
+        complete_codex_refresh(Some(request_id), request_id, Some(&mut keys), Some(&tokens),),
         CodexRefreshAction::Fail
     );
     assert_eq!(keys.codex_oauth_credentials, Some(original));
@@ -191,30 +179,72 @@ fn blank_refreshed_codex_account_id_does_not_replace_credentials() {
 
     let request_id = Uuid::new_v4();
     assert_eq!(
-        complete_codex_refresh(
-            Some(request_id),
-            request_id,
-            CodexRefreshCompletion::Refreshed,
-            Some(&mut keys),
-            Some(&tokens),
-        ),
+        complete_codex_refresh(Some(request_id), request_id, Some(&mut keys), Some(&tokens),),
         CodexRefreshAction::Fail
     );
     assert_eq!(keys.codex_oauth_credentials, Some(original));
 }
 
 #[test]
-fn failed_and_timed_out_codex_refreshes_are_terminal() {
+fn missing_current_codex_credentials_are_terminal() {
     let request_id = Uuid::new_v4();
-    for completion in [
-        CodexRefreshCompletion::Failed,
-        CodexRefreshCompletion::TimedOut,
-    ] {
-        assert_eq!(
-            complete_codex_refresh(Some(request_id), request_id, completion, None, None),
-            CodexRefreshAction::Fail
-        );
-    }
+    assert_eq!(
+        complete_codex_refresh(Some(request_id), request_id, None, None),
+        CodexRefreshAction::Fail
+    );
+}
+
+#[test]
+fn usable_replacement_credentials_allow_request_to_continue() {
+    let request_id = Uuid::new_v4();
+    let tokens = CodexTokens {
+        access_token: "replacement-access".into(),
+        chatgpt_account_id: "replacement-account".into(),
+        expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
+        ..Default::default()
+    };
+    let mut keys = ApiKeys {
+        codex_oauth_credentials: Some(CodexOauthCredentials {
+            access_token: "expired-access".into(),
+            chatgpt_account_id: "old-account".into(),
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        complete_codex_refresh(Some(request_id), request_id, Some(&mut keys), Some(&tokens),),
+        CodexRefreshAction::Send
+    );
+    assert_eq!(
+        keys.codex_oauth_credentials,
+        Some(CodexOauthCredentials {
+            access_token: "replacement-access".into(),
+            chatgpt_account_id: "replacement-account".into(),
+        })
+    );
+}
+
+#[test]
+fn expired_current_credentials_remain_terminal() {
+    let request_id = Uuid::new_v4();
+    let tokens = CodexTokens {
+        access_token: "expired-access".into(),
+        chatgpt_account_id: "old-account".into(),
+        expires_at: Some(SystemTime::UNIX_EPOCH),
+        ..Default::default()
+    };
+    let mut keys = ApiKeys {
+        codex_oauth_credentials: Some(CodexOauthCredentials {
+            access_token: "expired-access".into(),
+            chatgpt_account_id: "old-account".into(),
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        complete_codex_refresh(Some(request_id), request_id, Some(&mut keys), Some(&tokens),),
+        CodexRefreshAction::Fail
+    );
 }
 
 #[test]
@@ -237,7 +267,6 @@ fn superseded_codex_refresh_is_dropped_without_replacing_credentials() {
         complete_codex_refresh(
             Some(Uuid::new_v4()),
             Uuid::new_v4(),
-            CodexRefreshCompletion::Refreshed,
             Some(&mut keys),
             Some(&tokens),
         ),
