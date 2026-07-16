@@ -2,8 +2,8 @@ pub mod active_session;
 pub mod command_executor;
 
 use std::collections::{HashMap, HashSet};
-#[cfg(windows)]
-use std::ffi::OsStr;
+#[cfg(any(windows, test))]
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
@@ -75,6 +75,60 @@ impl ErrorExt for ReadHistoryContentsError {
     }
 }
 register_error!(ReadHistoryContentsError);
+
+/// Builds the PowerShell `-Command` argument that reads `path` as text.
+///
+/// The file path is embedded directly into the command as a single-quoted
+/// PowerShell string literal. It deliberately does *not* pass the path as a
+/// trailing process argument and reference it via `$args[0]`: `powershell.exe
+/// -Command <string>` does not populate `$args` (only `-File` does), so a
+/// `$args[0]` reference is empty and the trailing path gets appended to the
+/// script text, producing a parser error and a failed history read.
+///
+/// The path is kept as an `OsStr`/`OsString` throughout (never converted to
+/// `str`/`String`), so a non-UTF-8 path is embedded exactly rather than being
+/// corrupted by a lossy conversion. Any single quote in the path is doubled so
+/// it can't terminate the literal.
+#[cfg(any(windows, test))]
+fn powershell_read_all_text_command(path: &OsStr) -> OsString {
+    let mut command = OsString::from("[System.IO.File]::ReadAllText('");
+    command.push(escape_powershell_single_quotes(path));
+    command.push("')");
+    command
+}
+
+/// Doubles every single quote in `path` so it is safe to embed inside a
+/// PowerShell single-quoted string literal, operating on the raw OS encoding so
+/// a non-UTF-8 path is preserved exactly.
+#[cfg(any(windows, test))]
+fn escape_powershell_single_quotes(path: &OsStr) -> OsString {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        const SINGLE_QUOTE: u16 = b'\'' as u16;
+        let mut escaped = Vec::new();
+        for unit in path.encode_wide() {
+            escaped.push(unit);
+            if unit == SINGLE_QUOTE {
+                escaped.push(SINGLE_QUOTE);
+            }
+        }
+        OsString::from_wide(&escaped)
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        const SINGLE_QUOTE: u8 = b'\'';
+        let mut escaped = Vec::with_capacity(path.as_bytes().len());
+        for &byte in path.as_bytes() {
+            escaped.push(byte);
+            if byte == SINGLE_QUOTE {
+                escaped.push(SINGLE_QUOTE);
+            }
+        }
+        OsString::from_vec(escaped)
+    }
+}
 
 // SessionId is defined in warp_core and re-exported here for backward compatibility.
 pub use warp_core::SessionId;
@@ -1467,8 +1521,7 @@ impl Session {
             .arg("-NoProfile")
             .arg("-NoLogo")
             .arg("-Command")
-            .arg("[System.IO.File]::ReadAllText($args[0])")
-            .arg(history_file_path)
+            .arg(powershell_read_all_text_command(history_file_path))
             .output()
             .await;
         match read_result {
