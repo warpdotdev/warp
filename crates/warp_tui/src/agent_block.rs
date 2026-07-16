@@ -12,18 +12,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use itertools::Itertools;
+use markdown_parser::{FormattedTable, FormattedText};
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentOutputMessageType,
-    AIAgentTextSection, AIAgentTodo, AIBlockModel, AIConversationId, BlockId,
+    AIAgentText, AIAgentTextSection, AIAgentTodo, AIBlockModel, AIConversationId, BlockId,
     BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryModel, MessageId, ModelEvent,
     ModelEventDispatcher, SummarizationType, TerminalModel, TodoOperation, TodoStatus,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex,
-    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiRect,
-    TuiScreenPosition, TuiSelectionSpan, TuiSize,
+    Modifier, TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiContainer, TuiElement,
+    TuiFlex, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiRect,
+    TuiScreenPosition, TuiSelectionSpan, TuiSize, TuiText,
 };
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::{
@@ -35,17 +36,42 @@ use super::tui_file_edits_view::{TuiFileEditsView, TuiFileEditsViewEvent};
 use super::tui_shell_command_view::{TuiShellCommandView, TuiShellCommandViewEvent};
 use crate::agent_block_sections::{
     render_completed_todos_section, render_fallback_tool_call_section, render_input_section,
-    render_plain_text_section, render_summarization_section, render_thinking_section,
-    render_todo_list_section,
+    render_summarization_section, render_thinking_section, render_todo_list_section,
 };
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
+use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::TuiCLISubagentView;
+use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
+use crate::tui_markdown::{
+    render_formatted_table, render_formatted_text, TuiMarkdownBlockHooks, TuiMarkdownPalette,
+};
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct TuiCodeBlockKey {
+    message_id: MessageId,
+    section_index: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum TuiRichTextSection {
+    Markdown(Arc<FormattedText>),
+    PlainText(String),
+    Code(TuiCodeBlockKey),
+    Table {
+        structured: Option<FormattedTable>,
+        fallback: String,
+    },
+    Image {
+        alt_text: String,
+        source: String,
+    },
+}
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum TuiAIBlockSection {
     Input(String),
-    PlainText(String),
+    RichText(TuiRichTextSection),
     /// An agent tool call, rendered by a registered rich child view when one
     /// exists and by the fallback status row otherwise.
     ToolCall(Box<AIAgentAction>),
@@ -53,12 +79,12 @@ enum TuiAIBlockSection {
     Thinking {
         message_id: MessageId,
         finished_duration: Option<Duration>,
-        body: String,
+        body: Vec<TuiRichTextSection>,
     },
     Summarization {
         message_id: MessageId,
         finished: bool,
-        body: String,
+        body: Vec<TuiRichTextSection>,
     },
     /// The agent's task list (todo list), rendered as a collapsible block.
     TodoList {
@@ -194,6 +220,8 @@ pub(super) struct TuiAIBlock {
     /// Populated by [`Self::sync_action_views`]; stateless tool calls never
     /// get entries here.
     action_views: HashMap<AIAgentActionId, TuiToolCallView>,
+    /// Persistent editor-backed children for code and Mermaid sections.
+    code_block_views: HashMap<TuiCodeBlockKey, ViewHandle<TuiCodeBlockView>>,
     /// Whether the exchange's output contains any todo-operation message,
     /// maintained by [`Self::sync_action_views`]. Lets the transcript scope
     /// conversation-wide todo/status invalidations to the blocks whose
@@ -226,10 +254,12 @@ impl TuiAIBlock {
             collapsible_states: Default::default(),
             action_ids: HashSet::new(),
             action_views: HashMap::new(),
+            code_block_views: HashMap::new(),
             renders_todos: false,
             last_measured_width: Cell::new(None),
         };
         block.sync_action_views(&action_model, ctx);
+        block.sync_code_block_views(ctx);
 
         ctx.subscribe_to_model(
             &action_model,
@@ -263,10 +293,12 @@ impl TuiAIBlock {
         block.block_model.on_updated_output(
             Box::new(move |me, ctx| {
                 me.sync_action_views(&action_model, ctx);
+                me.sync_code_block_views(ctx);
                 // The presenter caches this block's rendered element; new
-                // output must invalidate the view or the transcript keeps
-                // painting the stale element.
-                ctx.notify();
+                // output must invalidate both the view and its canonical
+                // block-list height or scrolling keeps a stale extent after
+                // the response stops streaming.
+                me.invalidate_layout(ctx);
             }),
             ctx,
         );
@@ -341,6 +373,94 @@ impl TuiAIBlock {
             });
             self.action_views
                 .insert(action_id, TuiToolCallView::ShellCommand(view));
+            ctx.notify();
+        }
+    }
+
+    /// Reconciles persistent code children from the latest rendered output.
+    /// Keys remain stable while a message's section position survives; a
+    /// streaming boundary change naturally drops stale children and creates
+    /// the newly semantic section.
+    fn sync_code_block_views(&mut self, ctx: &mut ViewContext<Self>) {
+        let mut descriptors = Vec::new();
+        if let Some(output) = self.block_model.status(ctx).output_to_render() {
+            for message in &output.get().messages {
+                let text = match &message.message {
+                    AIAgentOutputMessageType::Text(text)
+                    | AIAgentOutputMessageType::Reasoning { text, .. } => Some(text),
+                    AIAgentOutputMessageType::Summarization {
+                        text,
+                        summarization_type: SummarizationType::ConversationSummary,
+                        ..
+                    } => Some(text),
+                    AIAgentOutputMessageType::Action(_)
+                    | AIAgentOutputMessageType::TodoOperation(_)
+                    | AIAgentOutputMessageType::Subagent(_)
+                    | AIAgentOutputMessageType::Summarization { .. }
+                    | AIAgentOutputMessageType::WebSearch(_)
+                    | AIAgentOutputMessageType::WebFetch(_)
+                    | AIAgentOutputMessageType::CommentsAddressed { .. }
+                    | AIAgentOutputMessageType::DebugOutput { .. }
+                    | AIAgentOutputMessageType::ArtifactCreated(_)
+                    | AIAgentOutputMessageType::SkillInvoked(_)
+                    | AIAgentOutputMessageType::MessagesReceivedFromAgents { .. }
+                    | AIAgentOutputMessageType::EventsFromAgents { .. } => None,
+                };
+                let Some(text) = text else {
+                    continue;
+                };
+                for (section_index, section) in text.sections.iter().enumerate() {
+                    let payload = match section {
+                        AIAgentTextSection::Code { code, language, .. } => {
+                            Some(TuiCodeBlockPayload::new(
+                                code.clone(),
+                                language.as_ref().map(|language| language.display_name()),
+                            ))
+                        }
+                        AIAgentTextSection::MermaidDiagram { diagram } => {
+                            Some(TuiCodeBlockPayload::new(
+                                diagram.source.clone(),
+                                Some("mermaid".to_owned()),
+                            ))
+                        }
+                        AIAgentTextSection::PlainText { .. }
+                        | AIAgentTextSection::Table { .. }
+                        | AIAgentTextSection::Image { .. } => None,
+                    };
+                    if let Some(payload) = payload {
+                        descriptors.push((
+                            TuiCodeBlockKey {
+                                message_id: message.id.clone(),
+                                section_index,
+                            },
+                            payload,
+                        ));
+                    }
+                }
+            }
+        }
+
+        let active_keys = descriptors
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<HashSet<_>>();
+        self.code_block_views
+            .retain(|key, _| active_keys.contains(key));
+
+        for (key, payload) in descriptors {
+            if let Some(view) = self.code_block_views.get(&key) {
+                view.update(ctx, |view, ctx| {
+                    view.sync(payload, ctx);
+                });
+                continue;
+            }
+            let view = ctx.add_tui_view(move |ctx| TuiCodeBlockView::new(payload, ctx));
+            ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
+                TuiCodeBlockViewEvent::LayoutChanged | TuiCodeBlockViewEvent::SyntaxUpdated => {
+                    me.invalidate_layout(ctx)
+                }
+            });
+            self.code_block_views.insert(key, view);
             ctx.notify();
         }
     }
@@ -455,7 +575,7 @@ impl TuiAIBlock {
     }
 
     /// Logical (unwrapped) text for a selection over this block's text
-    /// sections — the user's query and the agent's plain-text responses.
+    /// sections — the user's query and the agent's textual responses.
     ///
     /// Copy would otherwise reconstruct the text from the rendered cell grid,
     /// inserting a newline at every soft-wrap boundary, capturing wrap/quote
@@ -559,7 +679,12 @@ impl TuiAIBlock {
     ) -> Option<Box<dyn TuiElement>> {
         Some(match section {
             TuiAIBlockSection::Input(text) => render_input_section(text, app),
-            TuiAIBlockSection::PlainText(text) => render_plain_text_section(text, app),
+            TuiAIBlockSection::RichText(section) => {
+                if matches!(section, TuiRichTextSection::Code(_)) {
+                    return None;
+                }
+                self.render_rich_text_section(section, false, app)
+            }
             TuiAIBlockSection::ToolCall(action) => {
                 if self.action_views.contains_key(&action.id) {
                     return None;
@@ -581,7 +706,7 @@ impl TuiAIBlock {
                 &self.collapsible_states,
                 message_id,
                 *finished_duration,
-                body,
+                self.render_rich_text_sections(body, true, app),
                 app,
             ),
             TuiAIBlockSection::Summarization {
@@ -592,7 +717,7 @@ impl TuiAIBlock {
                 &self.collapsible_states,
                 message_id,
                 *finished,
-                body,
+                self.render_rich_text_sections(body, false, app),
                 app,
             ),
             TuiAIBlockSection::TodoList { message_id, todos } => {
@@ -620,6 +745,33 @@ impl TuiAIBlock {
             }
         })
     }
+    fn rich_text_sections(message_id: &MessageId, text: &AIAgentText) -> Vec<TuiRichTextSection> {
+        text.sections
+            .iter()
+            .enumerate()
+            .filter(|(_, section)| !section.is_empty())
+            .map(|(section_index, section)| match section {
+                AIAgentTextSection::PlainText { text } => text
+                    .formatted_text_arc()
+                    .map(TuiRichTextSection::Markdown)
+                    .unwrap_or_else(|| TuiRichTextSection::PlainText(text.text().to_owned())),
+                AIAgentTextSection::Code { .. } | AIAgentTextSection::MermaidDiagram { .. } => {
+                    TuiRichTextSection::Code(TuiCodeBlockKey {
+                        message_id: message_id.clone(),
+                        section_index,
+                    })
+                }
+                AIAgentTextSection::Table { table } => TuiRichTextSection::Table {
+                    structured: table.structured_table().cloned(),
+                    fallback: table.rendered_lines().join("\n"),
+                },
+                AIAgentTextSection::Image { image } => TuiRichTextSection::Image {
+                    alt_text: image.alt_text.clone(),
+                    source: image.source.clone(),
+                },
+            })
+            .collect()
+    }
 
     /// Extracts this exchange's visible input/output into logical render sections,
     /// preserving message order so reasoning interleaves with plain-text output.
@@ -642,18 +794,9 @@ impl TuiAIBlock {
                 match &message.message {
                     AIAgentOutputMessageType::Text(text) => {
                         sections.extend(
-                            text.sections
-                                .iter()
-                                .filter_map(|section| match section {
-                                    AIAgentTextSection::PlainText { text } => Some(text.text()),
-                                    // The TUI can't render these section kinds yet.
-                                    AIAgentTextSection::Code { .. }
-                                    | AIAgentTextSection::Table { .. }
-                                    | AIAgentTextSection::Image { .. }
-                                    | AIAgentTextSection::MermaidDiagram { .. } => None,
-                                })
-                                .filter(|line| !line.is_empty())
-                                .map(|line| TuiAIBlockSection::PlainText(line.to_owned())),
+                            Self::rich_text_sections(&message.id, text)
+                                .into_iter()
+                                .map(TuiAIBlockSection::RichText),
                         );
                     }
                     AIAgentOutputMessageType::Action(action) => {
@@ -663,18 +806,7 @@ impl TuiAIBlock {
                         text,
                         finished_duration,
                     } => {
-                        let body = text
-                            .sections
-                            .iter()
-                            .filter_map(|section| match section {
-                                AIAgentTextSection::PlainText { text } => Some(text.text()),
-                                // The TUI can't render these section kinds yet.
-                                AIAgentTextSection::Code { .. }
-                                | AIAgentTextSection::Table { .. }
-                                | AIAgentTextSection::Image { .. }
-                                | AIAgentTextSection::MermaidDiagram { .. } => None,
-                            })
-                            .join("\n");
+                        let body = Self::rich_text_sections(&message.id, text);
                         // Some providers intentionally emit duration/signature-only reasoning
                         // records for conversation continuity when no user-visible summary exists;
                         // omit them because they have no content to render.
@@ -692,17 +824,7 @@ impl TuiAIBlock {
                         summarization_type: SummarizationType::ConversationSummary,
                         ..
                     } => {
-                        let body = text
-                            .sections
-                            .iter()
-                            .filter_map(|section| match section {
-                                AIAgentTextSection::PlainText { text } => Some(text.text()),
-                                AIAgentTextSection::Code { .. }
-                                | AIAgentTextSection::Table { .. }
-                                | AIAgentTextSection::Image { .. }
-                                | AIAgentTextSection::MermaidDiagram { .. } => None,
-                            })
-                            .join("\n");
+                        let body = Self::rich_text_sections(&message.id, text);
                         if !body.is_empty() {
                             sections.push(TuiAIBlockSection::Summarization {
                                 message_id: message.id.clone(),
@@ -748,6 +870,86 @@ impl TuiAIBlock {
         sections
     }
 
+    fn markdown_palette(app: &AppContext, muted: bool) -> TuiMarkdownPalette {
+        let builder = TuiUiBuilder::from_app(app);
+        let mut palette = TuiMarkdownPalette::from_builder(&builder);
+        if muted {
+            let style = builder.muted_text_style();
+            palette.body = style;
+            palette.muted = style;
+            palette.heading = style.add_modifier(Modifier::BOLD);
+            palette.marker = style;
+            palette.link = style.add_modifier(Modifier::UNDERLINED);
+            palette.inline_code = style;
+            palette.rule = style;
+            palette.code = style;
+            palette.table_header = style.add_modifier(Modifier::BOLD);
+            palette.fallback = style.add_modifier(Modifier::ITALIC);
+        }
+        palette
+    }
+
+    fn render_rich_text_section(
+        &self,
+        section: &TuiRichTextSection,
+        muted: bool,
+        app: &AppContext,
+    ) -> Box<dyn TuiElement> {
+        let palette = Self::markdown_palette(app, muted);
+        match section {
+            TuiRichTextSection::Markdown(formatted) => {
+                render_formatted_text(formatted, palette, &TuiMarkdownBlockHooks::default())
+            }
+            TuiRichTextSection::PlainText(text) => {
+                TuiText::new(text.clone()).with_style(palette.body).finish()
+            }
+            TuiRichTextSection::Code(key) => self
+                .code_block_views
+                .get(key)
+                .map(|view| TuiChildView::new(view).finish())
+                .unwrap_or_else(|| {
+                    TuiText::new("[Code block unavailable]")
+                        .with_style(palette.fallback)
+                        .finish()
+                }),
+            TuiRichTextSection::Table {
+                structured: Some(table),
+                ..
+            } => render_formatted_table(table, palette),
+            TuiRichTextSection::Table {
+                structured: None,
+                fallback,
+            } => TuiText::new(fallback.clone())
+                .with_style(palette.body)
+                .finish(),
+            TuiRichTextSection::Image { alt_text, source } => {
+                let label = if alt_text.is_empty() {
+                    "Image".to_owned()
+                } else {
+                    format!("Image: {alt_text}")
+                };
+                TuiText::from_spans([
+                    (label, palette.fallback),
+                    (format!(" ({source})"), palette.link),
+                ])
+                .finish()
+            }
+        }
+    }
+
+    fn render_rich_text_sections(
+        &self,
+        sections: &[TuiRichTextSection],
+        muted: bool,
+        app: &AppContext,
+    ) -> Box<dyn TuiElement> {
+        let mut column = TuiFlex::column();
+        for section in sections {
+            column.add_child(self.render_rich_text_section(section, muted, app));
+        }
+        column.finish()
+    }
+
     /// Builds this block's generic TUI element tree.
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let output_streaming = self.block_model.status(app).is_streaming();
@@ -757,7 +959,9 @@ impl TuiAIBlock {
         for (index, section) in sections.iter().enumerate() {
             let element = match section {
                 TuiAIBlockSection::Input(text) => render_input_section(text, app),
-                TuiAIBlockSection::PlainText(text) => render_plain_text_section(text, app),
+                TuiAIBlockSection::RichText(section) => {
+                    self.render_rich_text_section(section, false, app)
+                }
                 // Stateful tool calls render their registered child view; every
                 // other tool call stays a pure render fn.
                 TuiAIBlockSection::ToolCall(action) => match self.action_views.get(&action.id) {
@@ -781,7 +985,7 @@ impl TuiAIBlock {
                     &self.collapsible_states,
                     message_id,
                     *finished_duration,
-                    body,
+                    self.render_rich_text_sections(body, true, app),
                     app,
                 ),
                 TuiAIBlockSection::Summarization {
@@ -792,7 +996,7 @@ impl TuiAIBlock {
                     &self.collapsible_states,
                     message_id,
                     *finished,
-                    body,
+                    self.render_rich_text_sections(body, false, app),
                     app,
                 ),
                 TuiAIBlockSection::TodoList { message_id, todos } => {
@@ -872,7 +1076,16 @@ fn last_row_content_width(element: &mut Box<dyn TuiElement>, width: u16, height:
 /// back to per-row grid text.
 fn section_logical_text(section: &TuiAIBlockSection) -> Option<String> {
     match section {
-        TuiAIBlockSection::Input(text) | TuiAIBlockSection::PlainText(text) => Some(text.clone()),
+        TuiAIBlockSection::Input(text) => Some(text.clone()),
+        TuiAIBlockSection::RichText(TuiRichTextSection::Markdown(formatted)) => {
+            Some(formatted.raw_text().trim_end_matches('\n').to_owned())
+        }
+        TuiAIBlockSection::RichText(TuiRichTextSection::PlainText(text)) => Some(text.clone()),
+        TuiAIBlockSection::RichText(
+            TuiRichTextSection::Code(_)
+            | TuiRichTextSection::Table { .. }
+            | TuiRichTextSection::Image { .. },
+        ) => None,
         TuiAIBlockSection::ToolCall(_)
         | TuiAIBlockSection::Thinking { .. }
         | TuiAIBlockSection::Summarization { .. }
@@ -896,6 +1109,7 @@ impl TuiView for TuiAIBlock {
         self.action_views
             .values()
             .map(|view| view.view_id())
+            .chain(self.code_block_views.values().map(|view| view.id()))
             .collect()
     }
 

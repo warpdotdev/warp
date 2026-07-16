@@ -239,6 +239,7 @@ impl FileMCPWatcher {
         watcher
     }
 
+    #[cfg(feature = "tui")]
     pub fn reload_global_config(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(config) = warp_managed_mcp_config_path() else {
             return;

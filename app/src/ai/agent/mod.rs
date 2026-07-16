@@ -1527,6 +1527,12 @@ impl AgentOutputText {
     pub fn text(&self) -> &str {
         self.markdown_text.as_str()
     }
+    /// Returns the cached parsed Markdown, if parsing succeeded.
+    pub fn formatted_text_arc(&self) -> Option<Arc<FormattedText>> {
+        self.formatted_lines
+            .as_ref()
+            .map(FormattedTextWrapper::formatted_text_arc)
+    }
 
     /// Note that mutating the returned string will not automatically reparse the text and update `formatted_lines`.
     pub fn mut_text(&mut self) -> &mut String {

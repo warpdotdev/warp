@@ -45,7 +45,7 @@ use super::kill_buffer::KillBuffer;
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::inline_menu::{active_inline_menu, TuiInlineMenu, TuiInlineMenuAccepted};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
-use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
+use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::tui_builder::TuiUiBuilder;
 
@@ -860,7 +860,24 @@ impl TypedActionView for TuiInputView {
                 });
             }
             TuiInputAction::MoveLeft => {
-                self.model.update(ctx, |m, ctx| m.move_left(ctx));
+                // Only open the conversation list from normal agent input; in
+                // `!` shell mode the `!` prefix is not part of `plain_text`, so
+                // an empty shell command would otherwise trip this branch and
+                // open the picker while the input stayed shell-mode.
+                if !self.is_shell_mode(ctx)
+                    && self.plain_text(ctx).is_empty()
+                    && self.is_cursor_at_start(ctx)
+                {
+                    if let Some(menu) = self
+                        .inline_menus
+                        .iter()
+                        .find(|menu| menu.mode() == TuiInputSuggestionsMode::ConversationMenu)
+                    {
+                        menu.open(ctx);
+                    }
+                } else {
+                    self.model.update(ctx, |m, ctx| m.move_left(ctx));
+                }
             }
             TuiInputAction::MoveRight => {
                 self.model.update(ctx, |m, ctx| m.move_right(ctx));

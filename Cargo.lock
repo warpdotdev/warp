@@ -15862,6 +15862,7 @@ dependencies = [
  "serde_json",
  "session-sharing-protocol",
  "settings_value",
+ "tempfile",
  "thiserror 2.0.17",
  "url",
  "uuid",

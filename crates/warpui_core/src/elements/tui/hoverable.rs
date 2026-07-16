@@ -88,14 +88,7 @@ impl TuiHoverable {
         else {
             return false;
         };
-        event_ctx
-            .visible_rect(origin, size)
-            .is_some_and(|rect| rect.contains(position))
-            && !event_ctx.is_covered(TuiScreenPoint::new(
-                i32::from(position.x),
-                i32::from(position.y),
-                z_index,
-            ))
+        event_ctx.hit_test_with_z_index(origin, size, z_index, position)
     }
 }
 

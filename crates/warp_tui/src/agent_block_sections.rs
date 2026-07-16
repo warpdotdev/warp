@@ -108,13 +108,6 @@ pub(crate) fn tool_call_label_style(
     }
 }
 
-/// Renders a plain-text response section.
-pub(crate) fn render_plain_text_section(text: &str, app: &AppContext) -> Box<dyn TuiElement> {
-    TuiText::new(text.to_owned())
-        .with_style(TuiUiBuilder::from_app(app).primary_text_style())
-        .finish()
-}
-
 /// Renders the fallback plain-text status row for an agent tool call, used
 /// for every tool call without a richer registered child view (the GUI's
 /// view-based action rendering has no TUI equivalent for these yet): a
@@ -153,10 +146,9 @@ pub(crate) fn render_thinking_section(
     states: &CollapsibleSectionStates,
     message_id: &MessageId,
     finished_duration: Option<Duration>,
-    body: &str,
+    body: Box<dyn TuiElement>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
-    let builder = TuiUiBuilder::from_app(app);
     let header = match finished_duration {
         Some(duration) => menu_label(
             "tui.agent_block.thinking_finished",
@@ -171,7 +163,6 @@ pub(crate) fn render_thinking_section(
         header,
         finished_duration.is_some(),
         body,
-        builder.muted_text_style(),
         app,
     )
 }
@@ -182,7 +173,7 @@ pub(crate) fn render_summarization_section(
     states: &CollapsibleSectionStates,
     message_id: &MessageId,
     finished: bool,
-    body: &str,
+    body: Box<dyn TuiElement>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     render_collapsible_message_section(
@@ -191,7 +182,6 @@ pub(crate) fn render_summarization_section(
         menu_label("tui.agent_block.summarized", "Conversation summarized").to_owned(),
         finished,
         body,
-        TuiUiBuilder::from_app(app).primary_text_style(),
         app,
     )
 }
@@ -201,18 +191,12 @@ fn render_collapsible_message_section(
     message_id: &MessageId,
     header: String,
     finished: bool,
-    body: &str,
-    body_style: TuiStyle,
+    body: Box<dyn TuiElement>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     // Indent the body so every wrapped line aligns beneath the header.
-    let body_element = TuiContainer::new(
-        TuiText::new(body.to_owned())
-            .with_style(body_style)
-            .finish(),
-    )
-    .with_padding_left(4);
+    let body_element = TuiContainer::new(body).with_padding_left(4);
 
     let collapsed = states.is_collapsed(message_id, finished);
     let toggle_message_id = message_id.clone();
