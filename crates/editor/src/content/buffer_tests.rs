@@ -13020,6 +13020,45 @@ fn test_clipboard_table_copy_uses_source_offsets_for_later_formatted_cells() {
 }
 
 #[test]
+fn test_clipboard_table_copy_preserves_br_without_splitting_row() {
+    App::test((), |mut app| async move {
+        // A cell containing an authored hard break (`<br>`) must not split the tab-delimited
+        // clipboard row: the break has to survive as a literal `<br>`, matching the internal
+        // tab/newline format guards, so re-pasting into Warp re-parses the same single row.
+        let table_source = "a<br>b\tc";
+        let markdown = format!("```{TABLE_BLOCK_MARKDOWN_LANG}\n{table_source}\n```\n");
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        buffer.update(&mut app, |buffer, _ctx| {
+            let block_start = buffer.containing_block_start(CharOffset::from(1));
+            let max_offset = buffer.max_charoffset();
+
+            let copied = buffer.clipboard_table_text_in_range(
+                block_start,
+                block_start..max_offset,
+                LineEnding::LF,
+            );
+
+            assert!(
+                !copied.contains("a\nb"),
+                "in-cell break must not emit a raw newline that splits the row, got {copied:?}"
+            );
+            // The single row copies as one line (the trailing `\n` is the row terminator, not a
+            // cell break): the in-cell break survives as a literal `<br>`.
+            assert_eq!(
+                copied, "a<br>b\tc\n",
+                "cell break should survive as a literal <br> in the tab-delimited row"
+            );
+        });
+    });
+}
+
+#[test]
 fn test_multiselect_text_styling() {
     App::test((), |mut app| async move {
         let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
