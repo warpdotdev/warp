@@ -2,7 +2,7 @@ pub mod active_session;
 pub mod command_executor;
 
 use std::collections::{HashMap, HashSet};
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
@@ -89,7 +89,7 @@ register_error!(ReadHistoryContentsError);
 /// `str`/`String`), so a non-UTF-8 path is embedded exactly rather than being
 /// corrupted by a lossy conversion. Any single quote in the path is doubled so
 /// it can't terminate the literal.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn powershell_read_all_text_command(path: &OsStr) -> OsString {
     let mut command = OsString::from("[System.IO.File]::ReadAllText('");
     command.push(escape_powershell_single_quotes(path));
@@ -100,34 +100,18 @@ fn powershell_read_all_text_command(path: &OsStr) -> OsString {
 /// Doubles every single quote in `path` so it is safe to embed inside a
 /// PowerShell single-quoted string literal, operating on the raw OS encoding so
 /// a non-UTF-8 path is preserved exactly.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn escape_powershell_single_quotes(path: &OsStr) -> OsString {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::{OsStrExt, OsStringExt};
-        const SINGLE_QUOTE: u16 = b'\'' as u16;
-        let mut escaped = Vec::new();
-        for unit in path.encode_wide() {
-            escaped.push(unit);
-            if unit == SINGLE_QUOTE {
-                escaped.push(SINGLE_QUOTE);
-            }
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    const SINGLE_QUOTE: u16 = b'\'' as u16;
+    let mut escaped = Vec::new();
+    for unit in path.encode_wide() {
+        escaped.push(unit);
+        if unit == SINGLE_QUOTE {
+            escaped.push(SINGLE_QUOTE);
         }
-        OsString::from_wide(&escaped)
     }
-    #[cfg(not(windows))]
-    {
-        use std::os::unix::ffi::{OsStrExt, OsStringExt};
-        const SINGLE_QUOTE: u8 = b'\'';
-        let mut escaped = Vec::with_capacity(path.as_bytes().len());
-        for &byte in path.as_bytes() {
-            escaped.push(byte);
-            if byte == SINGLE_QUOTE {
-                escaped.push(SINGLE_QUOTE);
-            }
-        }
-        OsString::from_vec(escaped)
-    }
+    OsString::from_wide(&escaped)
 }
 
 // SessionId is defined in warp_core and re-exported here for backward compatibility.

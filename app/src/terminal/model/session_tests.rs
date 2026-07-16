@@ -129,6 +129,7 @@ fn test_malicious_histfile_path_does_not_execute_injected_commands() {
     });
 }
 
+#[cfg(windows)]
 #[test]
 fn powershell_read_command_embeds_escaped_path_without_args() {
     use std::ffi::{OsStr, OsString};
