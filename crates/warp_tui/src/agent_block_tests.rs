@@ -66,7 +66,7 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["", "≫ hello", "", "one", "two", "three"],
+                vec!["", "> hello", "", "one", "two", "three"],
             );
             assert_eq!(
                 frame.buffer[(0, 1)].fg,

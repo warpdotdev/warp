@@ -4,17 +4,19 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType,
-    AIAgentTodo, AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, Appearance,
-    BlockHeightItem, BlocklistAIHistoryEvent, ConversationStatus, ConversationStatusUpdate, LLMId,
-    MessageId, OutputStatusUpdateCallback, RichContentItem, RichContentType, ServerOutputId,
-    Shared, TerminalModel, TodoOperation, UserQueryMode,
+    AIAgentText, AIAgentTextSection, AIAgentTodo, AIBlockModel, AIBlockOutputStatus,
+    AIConversationId, AIRequestType, Appearance, BlockHeightItem, BlocklistAIHistoryEvent,
+    ConversationStatus, ConversationStatusUpdate, LLMId, MessageId, OutputStatusUpdateCallback,
+    RichContentItem, RichContentType, ServerOutputId, Shared, TerminalModel, TodoOperation,
+    UserQueryMode,
 };
 use warpui::event::ModifiersState;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App, EntityId, EntityIdMap, TuiView};
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
+    Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScene, TuiScreenPosition,
+    TuiSize,
 };
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -485,6 +487,130 @@ fn presenter_draw_resolves_agent_blocks_from_cached_elements() {
     });
 }
 
+#[test]
+fn dragging_inside_markdown_highlights_transcript_text() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let model_for_view = terminal_model.clone();
+        let (action_model, model_events) = add_test_action_model_and_events(&mut app);
+        let (_, transcript) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |ctx| {
+                    TuiTranscriptView::new(
+                        EntityId::new(),
+                        model_for_view,
+                        action_model,
+                        &model_events,
+                        ctx,
+                    )
+                },
+            )
+        });
+        let agent_block_id = transcript.update(&mut app, |view, ctx| {
+            append_test_agent_block(
+                view,
+                AIConversationId::new(),
+                AIAgentExchangeId::new(),
+                markdown_output_status(
+                    "# Overview\n\nDrag selectable text.\n\n```rust\nfn main() {}\n```",
+                ),
+                ctx,
+            )
+        });
+        let agent_block = app.read(|ctx| {
+            transcript
+                .as_ref(ctx)
+                .agent_blocks
+                .borrow()
+                .get(&agent_block_id)
+                .expect("agent block should be registered")
+                .clone()
+        });
+        let mut rendered_views = app.read(|ctx| {
+            let mut rendered_views = EntityIdMap::default();
+            rendered_views.insert(agent_block_id, agent_block.as_ref(ctx).render(ctx));
+            rendered_views
+        });
+        let mut element = app.read(|ctx| transcript.as_ref(ctx).render(ctx));
+        let area = TuiRect::new(0, 0, 40, 8);
+        let (initial, scene) =
+            render_retained_element(&app, element.as_mut(), &mut rendered_views, area);
+        let lines = initial.to_lines();
+        let row = lines
+            .iter()
+            .position(|line| line.contains("Drag selectable text."))
+            .expect("rendered transcript should contain Markdown body");
+        let selectable_start_byte = lines[row]
+            .find("selectable")
+            .expect("rendered Markdown should contain selection target");
+        let selectable_start = lines[row][..selectable_start_byte].chars().count() as u16;
+        let selectable_end = selectable_start + "selectable".chars().count() as u16 - 1;
+
+        assert!(dispatch_retained_event(
+            &app,
+            transcript.id(),
+            element.as_mut(),
+            &mut rendered_views,
+            scene,
+            &TuiEvent::LeftMouseDown {
+                position: (selectable_start, row as u16).into(),
+                modifiers: ModifiersState::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+        ));
+        let (_, scene) = render_retained_element(&app, element.as_mut(), &mut rendered_views, area);
+        assert!(dispatch_retained_event(
+            &app,
+            transcript.id(),
+            element.as_mut(),
+            &mut rendered_views,
+            scene,
+            &TuiEvent::LeftMouseDragged {
+                position: (selectable_end, row as u16).into(),
+                modifiers: ModifiersState::default(),
+            },
+        ));
+
+        let (selected, scene) =
+            render_retained_element(&app, element.as_mut(), &mut rendered_views, area);
+        for column in selectable_start..=selectable_end {
+            assert!(
+                selected[(column, row as u16)]
+                    .modifier
+                    .contains(Modifier::REVERSED),
+                "selected Markdown cell at column {column} should be reversed"
+            );
+        }
+
+        assert!(dispatch_retained_event(
+            &app,
+            transcript.id(),
+            element.as_mut(),
+            &mut rendered_views,
+            scene,
+            &TuiEvent::LeftMouseUp {
+                position: (selectable_end, row as u16).into(),
+                modifiers: ModifiersState::default(),
+            },
+        ));
+        let (settled, _) =
+            render_retained_element(&app, element.as_mut(), &mut rendered_views, area);
+        for column in selectable_start..=selectable_end {
+            assert!(
+                settled[(column, row as u16)]
+                    .modifier
+                    .contains(Modifier::REVERSED),
+                "Markdown selection should persist after mouse-up"
+            );
+        }
+    });
+}
 /// Registers an agent block over a fake model with `inputs` on the transcript
 /// and appends its canonical rich-content item, returning the block's view id.
 fn insert_test_agent_block(
@@ -538,6 +664,65 @@ fn query_input(query: &str) -> AIAgentInput {
     }
 }
 
+fn markdown_output_status(markdown: &str) -> AIBlockOutputStatus {
+    AIBlockOutputStatus::Complete {
+        output: Shared::new(AIAgentOutput {
+            messages: vec![AIAgentOutputMessage {
+                id: MessageId::new("markdown-1".to_owned()),
+                message: AIAgentOutputMessageType::Text(AIAgentText {
+                    sections: vec![AIAgentTextSection::PlainText {
+                        text: markdown.to_owned().into(),
+                    }],
+                }),
+                citations: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    }
+}
+
+fn render_retained_element(
+    app: &App,
+    element: &mut dyn TuiElement,
+    rendered_views: &mut EntityIdMap<Box<dyn TuiElement>>,
+    area: TuiRect,
+) -> (TuiBuffer, Rc<TuiScene>) {
+    app.read(|app| {
+        let mut layout_ctx = TuiLayoutContext { rendered_views };
+        element.layout(
+            TuiConstraint::tight(TuiSize::new(area.width, area.height)),
+            &mut layout_ctx,
+            app,
+        );
+        let mut buffer = TuiBuffer::empty(area);
+        let mut paint_ctx = TuiPaintContext::new(rendered_views);
+        {
+            let mut surface = TuiPaintSurface::new(&mut buffer);
+            element.render(
+                TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+                &mut surface,
+                &mut paint_ctx,
+            );
+        }
+        let scene = Rc::new(paint_ctx.scene.clone());
+        (buffer, scene)
+    })
+}
+
+fn dispatch_retained_event(
+    app: &App,
+    origin_view_id: EntityId,
+    element: &mut dyn TuiElement,
+    rendered_views: &mut EntityIdMap<Box<dyn TuiElement>>,
+    scene: Rc<TuiScene>,
+    event: &TuiEvent,
+) -> bool {
+    app.read(|app| {
+        let mut event_ctx = TuiEventContext::new(scene, rendered_views);
+        event_ctx.set_origin_view(Some(origin_view_id));
+        element.dispatch_event(event, &mut event_ctx, app)
+    })
+}
 /// Lays out and renders a retained TUI element.
 fn render_element(app: &App, element: &mut dyn TuiElement, area: TuiRect) -> Vec<String> {
     app.read(|app| {

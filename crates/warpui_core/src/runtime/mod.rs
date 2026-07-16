@@ -31,7 +31,8 @@ use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as CrosstermEvent,
+    Event as CrosstermEvent, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -621,10 +622,27 @@ fn enter_terminal_screen(out: &mut impl Write) -> io::Result<()> {
         EnableMouseCapture,
         EnableBracketedPaste,
         Hide
-    )
+    )?;
+
+    // Opt into the Kitty keyboard protocol so protocol-aware terminals (Ghostty,
+    // kitty, foot, WezTerm) report Shift+Enter distinctly from Enter; without it
+    // both arrive as a bare CR and the input can't tell "submit" from "insert
+    // newline". This only affects the TUI's own host terminal — the GUI never
+    // enters raw mode / the alt screen and never runs this. Best-effort: a no-op
+    // on terminals lacking the protocol, and it errors on the legacy Windows
+    // console (crossterm), so a failed push never aborts terminal setup.
+    let _ = execute!(
+        out,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
+    Ok(())
 }
 
 fn leave_terminal_screen(out: &mut impl Write) -> io::Result<()> {
+    // Best-effort pop, mirroring the best-effort push in `enter_terminal_screen`
+    // (see the note there): ignore the error so restoring the terminal never
+    // fails on a terminal/platform that didn't accept the push.
+    let _ = execute!(out, PopKeyboardEnhancementFlags);
     execute!(
         out,
         Show,
