@@ -916,15 +916,15 @@ impl TerminalView {
     /// - [`Self::is_ambient_agent_session`] reads the pane's [`AmbientAgentViewModel`], which is
     ///   how a cloud/ambient run composed or spawned *in this view* is recognized before it has
     ///   any shared-session source.
-    /// - [`TerminalModel::is_ambient_agent_conversation`] reads model state — a shared *ambient*
+    /// - [`TerminalModel::is_cloud_agent_conversation`] reads model state — a shared *ambient*
     ///   session or viewing an ambient conversation transcript — which the view model doesn't
     ///   carry (e.g. a viewer that joined someone else's ambient session).
     ///
-    /// It deliberately does NOT treat a manually shared *local* (`User`) session as ambient
-    /// even though it now carries an orchestrator task id on its `source_task_id` sidecar (see
-    /// QUALITY-726).
+    /// It deliberately does NOT treat a manually shared *local* (`User`) session as a cloud
+    /// agent session even though it now carries an orchestrator task id on its `source_task_id`
+    /// sidecar (see QUALITY-726).
     pub fn is_cloud_agent_session(&self, ctx: &AppContext) -> bool {
-        self.is_ambient_agent_session(ctx) || self.model.lock().is_ambient_agent_conversation()
+        self.is_ambient_agent_session(ctx) || self.model.lock().is_cloud_agent_conversation()
     }
 
     fn selected_conversation_for_user_facing_chrome<'a>(
