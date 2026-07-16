@@ -19,7 +19,7 @@ the focused view participates in rendering and input routing.
 
 ## Proposed changes
 
-### New: `crates/warp_tui/src/sessions.rs`
+### New: `crates/warp_tui/src/session_registry.rs`
 
 - Add `TuiSessionId(EntityId)`, using the eagerly-created view's entity id as
   both session identity and shared-model `terminal_surface_id`.
@@ -51,10 +51,11 @@ the focused view participates in rendering and input routing.
 - The login bootstrap registers the first session focused.
 
 ### Changed: `crates/warp_tui/src/terminal_session_view.rs`
-
-- Guard constructor focus, blocker-driven focus changes, and exit-summary
-  updates so background views cannot steal focus or replace the focused
-  session's resume token.
+- Keep construction focus-neutral. When `TuiSessions` activates a session, the
+  view focuses its current input owner and refreshes the exit summary.
+- Route later blocker, process, CLI-subagent, and conversation-restoration
+  focus requests through focused-session guards so background views cannot
+  steal focus or replace the focused session's resume token.
 
 ## Non-goals
 

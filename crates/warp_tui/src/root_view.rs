@@ -11,7 +11,7 @@ use warpui_core::{
 };
 
 use crate::keybindings::TUI_BINDING_GROUP;
-use crate::sessions::TuiSessions;
+use crate::session_registry::TuiSessions;
 use crate::terminal_session_view::TuiTerminalSessionView;
 use crate::ui::{login_failed, login_placeholder, terminal_starting};
 

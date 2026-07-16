@@ -1,4 +1,4 @@
-//! [`TuiSessions`]: the TUI's multi-session container.
+//! [`TuiSessions`]: registry and foreground selection for live TUI sessions.
 //!
 //! Every session is a full [`TuiTerminalSessionView`] backed by a retained
 //! terminal manager. The container owns session lifetime and focus; the root
@@ -144,6 +144,12 @@ impl TuiSessions {
             return false;
         }
         self.focused_session_id = Some(id);
+        let view = self
+            .session(id)
+            .expect("focused session was validated above")
+            .view
+            .clone();
+        view.update(ctx, |view, ctx| view.activate(ctx));
         ctx.emit(TuiSessionsEvent::FocusChanged(id));
         ctx.notify();
         true
@@ -176,5 +182,5 @@ impl TuiSessions {
 }
 
 #[cfg(test)]
-#[path = "sessions_tests.rs"]
+#[path = "session_registry_tests.rs"]
 mod tests;

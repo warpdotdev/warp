@@ -43,20 +43,26 @@ fn add_and_focus_drive_events() {
         let events = capture_events(&mut app);
 
         let (first, first_manager) = add_test_terminal_session(&mut app, window_id);
-        let (second, second_manager) = add_test_terminal_session(&mut app, window_id);
         let first_view_id = first.id();
-        let second_view_id = second.id();
 
         let first_id = app.update_model(&sessions, |sessions, ctx| {
             sessions.add_session(first, first_manager, true, ctx)
         });
         assert_eq!(first_id.surface_id(), first_view_id);
+        assert!(app.read(|ctx| { ctx.check_view_or_child_focused(window_id, &first_view_id) }));
         assert_eq!(
             std::mem::take(&mut *events.borrow_mut()),
             vec![
                 TuiSessionsEvent::SessionAdded(first_id),
                 TuiSessionsEvent::FocusChanged(first_id),
             ],
+        );
+        let first_focused_view_id = app.read(|ctx| ctx.focused_view_id(window_id));
+        let (second, second_manager) = add_test_terminal_session(&mut app, window_id);
+        let second_view_id = second.id();
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(window_id)),
+            first_focused_view_id,
         );
 
         let second_id = app.update_model(&sessions, |sessions, ctx| {
@@ -76,6 +82,11 @@ fn add_and_focus_drive_events() {
             assert!(sessions.focus_session(second_id, ctx));
             assert!(!sessions.focus_session(second_id, ctx));
         });
+        assert!(app.read(|ctx| { ctx.check_view_or_child_focused(window_id, &second_view_id) }));
+        assert_ne!(
+            app.read(|ctx| ctx.focused_view_id(window_id)),
+            first_focused_view_id,
+        );
         assert_eq!(
             std::mem::take(&mut *events.borrow_mut()),
             vec![TuiSessionsEvent::FocusChanged(second_id)],
@@ -84,6 +95,11 @@ fn add_and_focus_drive_events() {
         app.update_model(&sessions, |sessions, ctx| {
             assert!(sessions.focus_session(first_id, ctx));
         });
+        assert!(app.read(|ctx| { ctx.check_view_or_child_focused(window_id, &first_view_id) }));
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(window_id)),
+            first_focused_view_id,
+        );
         assert_eq!(
             std::mem::take(&mut *events.borrow_mut()),
             vec![TuiSessionsEvent::FocusChanged(first_id)],

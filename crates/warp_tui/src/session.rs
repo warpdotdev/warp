@@ -25,7 +25,7 @@ use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
 
 use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
-use crate::sessions::TuiSessions;
+use crate::session_registry::TuiSessions;
 use crate::telemetry::TuiStartupTelemetryEvent;
 use crate::terminal_background::probe_and_select_theme;
 use crate::terminal_session_view::{

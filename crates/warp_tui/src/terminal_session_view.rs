@@ -69,7 +69,7 @@ use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::resume::TuiExitSummaryHandle;
-use crate::sessions::TuiSessions;
+use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::terminal_content_element::TuiTerminalContentElement;
@@ -346,19 +346,28 @@ impl TuiTerminalSessionView {
     }
 
     fn update_process_input_focus(&mut self, ctx: &mut ViewContext<Self>) {
-        if !self.is_focused_session(ctx) {
-            return;
-        }
+        self.focus_current_owner_if_active(ctx);
+    }
+
+    fn focus_current_owner(&self, ctx: &mut ViewContext<Self>) {
         if self.process_owns_input() {
-            if !ctx.is_self_focused() {
-                ctx.focus_self();
-            }
-        } else if ctx.is_self_focused() {
-            if let Some(blocker) = self.active_blocking_child(ctx) {
-                ctx.focus(&blocker);
-            } else {
-                ctx.focus(&self.input_view);
-            }
+            ctx.focus_self();
+        } else if let Some(blocker) = self.active_blocking_child(ctx) {
+            ctx.focus(&blocker);
+        } else {
+            ctx.focus(&self.input_view);
+        }
+    }
+
+    fn focus_current_owner_if_active(&self, ctx: &mut ViewContext<Self>) {
+        if self.is_focused_session(ctx) {
+            self.focus_current_owner(ctx);
+        }
+    }
+
+    fn focus_input_if_active(&self, ctx: &mut ViewContext<Self>) {
+        if self.is_focused_session(ctx) {
+            ctx.focus(&self.input_view);
         }
     }
     fn resume_after_user_controlled_command(
@@ -403,7 +412,7 @@ impl TuiTerminalSessionView {
                 transcript.detach_cli_subagent(initial_requested_command_action_id, view.id(), ctx);
             });
         }
-        ctx.focus(&self.input_view);
+        self.focus_input_if_active(ctx);
     }
     fn handle_cli_subagent_event(&mut self, event: &CLISubagentEvent, ctx: &mut ViewContext<Self>) {
         match event {
@@ -1018,20 +1027,6 @@ impl TuiTerminalSessionView {
         );
         ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
 
-        // Focus the input view so the keymap responder chain is
-        // [root, session, input]: input bindings win for keys they define,
-        // and unbound keys (ctrl-c) fall through to the session/root bindings.
-        // Background session views (e.g. orchestration children) must not
-        // steal window focus from the focused session at construction.
-        let is_focused_session = !ctx.has_singleton_model::<TuiSessions>()
-            || TuiSessions::as_ref(ctx)
-                .focused_session_id()
-                .is_none_or(|id| id.surface_id() == terminal_surface_id);
-
-        if is_focused_session {
-            ctx.focus(&input_view);
-        }
-
         Self {
             transcript,
             input_view,
@@ -1073,14 +1068,17 @@ impl TuiTerminalSessionView {
         self.transcript.as_ref(ctx).active_blocking_child(ctx)
     }
 
-    /// Whether this view projects the focused session. Background session
-    /// views must not claim window focus or write the exit summary. Absent
-    /// container state (unit tests) counts as focused.
+    /// Activates this session after the registry has made it authoritative.
+    pub(crate) fn activate(&mut self, ctx: &mut ViewContext<Self>) {
+        self.focus_current_owner(ctx);
+        self.write_exit_summary(ctx);
+    }
+
+    /// Whether this view projects the focused session.
     fn is_focused_session(&self, ctx: &AppContext) -> bool {
-        !ctx.has_singleton_model::<TuiSessions>()
-            || TuiSessions::as_ref(ctx)
-                .focused_session_id()
-                .is_none_or(|id| id.surface_id() == self.terminal_surface_id)
+        TuiSessions::as_ref(ctx)
+            .focused_session_id()
+            .is_some_and(|id| id.surface_id() == self.terminal_surface_id)
     }
 
     /// Reconciles focus with the derived blocker: a newly active blocker is
@@ -1092,18 +1090,8 @@ impl TuiTerminalSessionView {
         let blocker = self.active_blocking_child(ctx);
         let blocker_view_id = blocker.as_ref().map(ViewHandle::id);
         if blocker_view_id != self.active_blocker_view_id {
-            // A foreground process owns the rendered pane and keyboard. Defer
-            // both the focus handoff and its completion marker until the
-            // process releases input. Background-session blockers likewise
-            // remain pending rather than stealing focus from the foreground
-            // session, so either transition remains retryable.
-            if !self.process_owns_input() && self.is_focused_session(ctx) {
-                match &blocker {
-                    Some(child) => ctx.focus(child),
-                    None => ctx.focus(&self.input_view),
-                }
-                self.active_blocker_view_id = blocker_view_id;
-            }
+            self.active_blocker_view_id = blocker_view_id;
+            self.focus_current_owner_if_active(ctx);
         }
         ctx.notify();
     }
@@ -1269,7 +1257,7 @@ impl TuiTerminalSessionView {
 
         self.conversation_restore_state = ConversationRestoreState::Idle;
         self.refresh_exit_summary(ctx);
-        ctx.focus(&self.input_view);
+        self.focus_input_if_active(ctx);
         ctx.notify();
     }
 
@@ -1300,7 +1288,7 @@ impl TuiTerminalSessionView {
             future.abort();
         }
         self.next_restore_request_id = self.next_restore_request_id.wrapping_add(1);
-        ctx.focus(&self.input_view);
+        self.focus_input_if_active(ctx);
         ctx.notify();
         true
     }
@@ -1328,18 +1316,20 @@ impl TuiTerminalSessionView {
             TuiConversationRestoreOrigin::ConversationList => {
                 self.conversation_restore_state = ConversationRestoreState::Idle;
                 self.show_transient_hint(message, ctx);
-                ctx.focus(&self.input_view);
+                self.focus_input_if_active(ctx);
             }
         }
         ctx.notify();
     }
 
     fn refresh_exit_summary(&self, ctx: &AppContext) {
-        // The exit summary's resume hint tracks the focused session only;
-        // background children must not overwrite it with their own tokens.
         if !self.is_focused_session(ctx) {
             return;
         }
+        self.write_exit_summary(ctx);
+    }
+
+    fn write_exit_summary(&self, ctx: &AppContext) {
         let token = self
             .conversation_selection
             .as_ref(ctx)
