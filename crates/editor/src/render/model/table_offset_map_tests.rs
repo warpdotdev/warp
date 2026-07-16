@@ -144,18 +144,18 @@ fn test_cell_range() {
 }
 
 #[test]
-fn test_table_cell_offset_map_delegates_to_parser_source_map() {
-    let parsed = parse_inline_markdown_with_source_map("plain text");
+fn test_table_cell_offset_map_delegates_generic_newline_selection_mapping() {
+    let parsed = parse_inline_markdown_with_source_map("a\nb");
     let map = TableCellOffsetMap::from_source_map(parsed.source_map);
 
-    assert_eq!(map.rendered_length(), CharOffset::from(10));
-    assert_eq!(map.source_length(), CharOffset::from(10));
+    assert_eq!(map.rendered_length(), CharOffset::from(3));
+    assert_eq!(map.source_length(), CharOffset::from(3));
     assert_eq!(
-        map.rendered_to_source(CharOffset::from(4)),
-        CharOffset::from(4)
+        map.rendered_to_source(CharOffset::from(1)),
+        CharOffset::from(1)
     );
     assert_eq!(
-        map.source_to_rendered(CharOffset::from(7)),
-        CharOffset::from(7)
+        map.source_to_rendered(CharOffset::from(2)),
+        CharOffset::from(2)
     );
 }
