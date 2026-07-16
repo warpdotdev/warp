@@ -1649,7 +1649,6 @@ fn queued_command_completion_preserves_draft() {
             input.deferred_remote_operations.latest_block_id = BlockId::new();
             input.handle_block_completed_event(
                 BlockCompletedEvent {
-                    block_latency_data: None,
                     block_type: BlockType::User(UserBlockCompleted {
                         index: BlockIndex::zero(),
                         serialized_block: Arc::new(SerializedBlock::new_for_test(
