@@ -853,6 +853,7 @@ test-util = [
     "http_client/test-util",
     "warp_core/test-util",
     "ai/test-util",
+    "warp_server_client/test-util",
 ]
 team_workflows = ["team_features_override"]
 terminal_lifecycle_recovery = []

@@ -18,7 +18,7 @@ use crate::auth::auth_state::AuthState;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use crate::server::server_api::auth::MockAuthClient;
 use crate::server::server_api::auth::{AuthClient, SyncedUserSettings};
 use crate::terminal::safe_mode_settings::SafeModeSettings;
@@ -456,7 +456,7 @@ impl PrivacySettings {
     }
 
     /// Constructor for tests only.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn mock(_ctx: &mut ModelContext<Self>) -> Self {
         Self {
             auth_state: Arc::new(AuthState::new_for_test()),

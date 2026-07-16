@@ -65,7 +65,8 @@ pub use crate::ai::blocklist::history_model::{
     ConversationStatusUpdate,
 };
 pub use crate::ai::blocklist::orchestration_event_streamer::{
-    register_agent_event_consumer, unregister_agent_event_consumer,
+    OrchestrationEventStreamer, OrchestrationEventStreamerEvent, register_agent_event_consumer,
+    unregister_agent_event_consumer,
 };
 pub use crate::ai::blocklist::orchestration_topology::{
     OrchestrationParticipantKind, OrderedOrchestrationDescendant, ResolvedOrchestrationParticipant,
@@ -103,12 +104,15 @@ pub use crate::ai::harness_availability::{
 };
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::ai::orchestration::{
-    AuthSecretSelection, ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST, OptionBadge,
-    OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus, OrchestrationConfigState,
-    OrchestrationEditState, accept_disabled_reason_with_auth, api_key_snapshot,
-    auth_secret_selection_required, empty_env_recommendation_message, environment_snapshot,
-    harness_is_selectable, harness_snapshot, host_snapshot, location_snapshot, model_snapshot,
-    persist_environment_selection, persist_host_selection,
+    AuthSecretSelection, CloudAgentStartupBlocker, CloudAgentStartupFailure,
+    CloudAgentStartupIssue, ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
+    OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus,
+    OrchestrationConfigState, OrchestrationEditState, PrepareRemoteChildLaunchError,
+    PreparedRemoteChildLaunch, RemoteChildLaunchConfig, accept_disabled_reason_with_auth,
+    api_key_snapshot, auth_secret_selection_required, classify_cloud_agent_startup_error,
+    empty_env_recommendation_message, environment_snapshot, harness_is_selectable,
+    harness_snapshot, host_snapshot, location_snapshot, model_snapshot, oz_run_url,
+    persist_environment_selection, persist_host_selection, prepare_remote_child_launch,
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
     resolve_default_host_slug, should_show_auth_secret_picker,
 };
@@ -128,6 +132,10 @@ pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
 };
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
+pub use crate::server::server_api::ServerApiProvider;
+pub use crate::server::server_api::ai::{
+    AIClient, AgentConfigSnapshot, SpawnAgentRequest, SpawnAgentResponse,
+};
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
@@ -175,6 +183,8 @@ pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveS
 pub use crate::terminal::model::terminal_model::BlockIndex;
 pub use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
+#[cfg(feature = "tui")]
+pub use crate::terminal::shared_session::viewer::terminal_manager::initialize_tui_cloud_viewer_terminal;
 pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};

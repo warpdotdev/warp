@@ -48,6 +48,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::input::CommandExecutionSource;
+use crate::terminal::local_tty::terminal_manager::TerminalSurfaceInit;
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::ModelEventDispatcher;
@@ -111,9 +112,87 @@ pub struct TerminalManager {
     /// transitive `ancestor_run_id` filter.
     enable_orchestration_polling: bool,
 }
+
 pub struct TerminalManagerInit {
     pub(crate) manager: TerminalManager,
     pub(crate) view: ViewHandle<TerminalView>,
+}
+
+/// Creates the shared terminal state used by a deferred or connected
+/// shared-session viewer without spawning a local PTY.
+fn initialize_shared_session_viewer_terminal(
+    initial_size: Vector2F,
+    block_spacing: BlockSpacing,
+    is_ambient_agent: bool,
+    ctx: &mut AppContext,
+) -> (TerminalSurfaceInit, ChannelEventListener) {
+    let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let (executor_command_tx, _executor_command_rx) = async_channel::unbounded();
+    let (pty_reads_tx, pty_reads_rx) = async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
+    let inactive_pty_reads_rx = pty_reads_rx.deactivate();
+    let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
+    let sizes = compute_block_size(initial_size, &block_spacing, ctx);
+    let honor_ps1 = *SessionSettings::as_ref(ctx).honor_ps1;
+    let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
+    let is_inverted = input_mode.is_inverted_blocklist();
+    let model = if is_ambient_agent {
+        TerminalModel::new_for_cloud_mode_shared_session_viewer(
+            sizes,
+            terminal_colors_list(ctx),
+            channel_event_proxy.clone(),
+            ctx.background_executor().clone(),
+            block_spacing.show_memory_stats,
+            honor_ps1,
+            is_inverted,
+            ObfuscateSecrets::No,
+        )
+    } else {
+        TerminalModel::new_for_shared_session_viewer(
+            sizes,
+            terminal_colors_list(ctx),
+            channel_event_proxy.clone(),
+            ctx.background_executor().clone(),
+            block_spacing.show_memory_stats,
+            honor_ps1,
+            is_inverted,
+            ObfuscateSecrets::No,
+        )
+    };
+    let colors = model.colors();
+    let size_info = model.block_list().size().to_owned();
+    let model = Arc::new(FairMutex::new(model));
+    let sessions = ctx.add_model(|ctx| Sessions::new(executor_command_tx, ctx));
+    let model_events =
+        ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
+    (
+        TerminalSurfaceInit {
+            wakeups_rx,
+            model_events,
+            model,
+            sessions,
+            size_info,
+            colors,
+            inactive_pty_reads_rx,
+        },
+        channel_event_proxy,
+    )
+}
+
+/// Creates a deferred TUI cloud-viewer surface without spawning a local PTY.
+#[cfg(feature = "tui")]
+pub fn initialize_tui_cloud_viewer_terminal(
+    initial_size: Vector2F,
+    block_spacing: BlockSpacing,
+    ctx: &mut AppContext,
+) -> TerminalSurfaceInit {
+    initialize_shared_session_viewer_terminal(
+        initial_size,
+        block_spacing,
+        /*is_ambient_agent*/ true,
+        ctx,
+    )
+    .0
 }
 
 impl TerminalManager {
@@ -207,76 +286,28 @@ impl TerminalManager {
         is_ambient_agent: bool,
         ctx: &mut AppContext,
     ) -> TerminalManagerInit {
-        // Create all the necessary channels we need for communication.
-        let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
-        let (events_tx, events_rx) = async_channel::unbounded();
-        let (executor_command_tx, _executor_command_rx) = async_channel::unbounded();
+        let (surface_init, channel_event_proxy) = initialize_shared_session_viewer_terminal(
+            initial_size,
+            BlockSpacing::for_gui(ctx),
+            is_ambient_agent,
+            ctx,
+        );
+        let TerminalSurfaceInit {
+            wakeups_rx,
+            model_events,
+            model,
+            sessions,
+            size_info,
+            colors,
+            inactive_pty_reads_rx,
+        } = surface_init;
 
-        // Although the viewer doesn't have a local PTY, it receives PTY bytes from the sharer
-        // over the network. Those bytes are still broadcast through the ChannelEventListener,
-        // so we keep an inactive listener alive for PTY recordings and other consumers.
-        let (pty_reads_tx, pty_reads_rx) =
-            async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
-        let inactive_pty_reads_rx = pty_reads_rx.deactivate();
-
-        let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
-
-        let block_spacing = BlockSpacing::for_gui(ctx);
-        let show_memory_stats = block_spacing.show_memory_stats;
-
-        // TODO: we have to figure out what prompt the viewer will see.
-        // For now, just respect the viewer's settings.
-        let honor_ps1 = *SessionSettings::as_ref(ctx).honor_ps1;
-        let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
-        let is_inverted = input_mode.is_inverted_blocklist();
-
-        // TODO: use the sharer's size.
-        let sizes = compute_block_size(initial_size, &block_spacing, ctx);
-
-        let model = if is_ambient_agent {
-            TerminalModel::new_for_cloud_mode_shared_session_viewer(
-                sizes,
-                terminal_colors_list(ctx),
-                channel_event_proxy.clone(),
-                ctx.background_executor().clone(),
-                show_memory_stats,
-                honor_ps1,
-                is_inverted,
-                // When viewing a shared session, we don't want to apply our own
-                // secret redaction rules but rather rely on the sharer obfuscating
-                // the contents before reaching us.
-                ObfuscateSecrets::No,
-            )
-        } else {
-            TerminalModel::new_for_shared_session_viewer(
-                sizes,
-                terminal_colors_list(ctx),
-                channel_event_proxy.clone(),
-                ctx.background_executor().clone(),
-                show_memory_stats,
-                honor_ps1,
-                is_inverted,
-                // When viewing a shared session, we don't want to apply our own
-                // secret redaction rules but rather rely on the sharer obfuscating
-                // the contents before reaching us.
-                ObfuscateSecrets::No,
-            )
-        };
-
-        let colors = model.colors();
-        let model = Arc::new(FairMutex::new(model));
-
-        let sessions: ModelHandle<Sessions> =
-            ctx.add_model(|ctx| Sessions::new(executor_command_tx, ctx));
-        let cloned_model = model.clone();
-        let model_events =
-            ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
         // The prompt is initially empty until we receive the update from the server.
         let prompt_type =
             ctx.add_model(|_| PromptType::new_static(vec![], false, WarpPromptSeparator::None));
+        let cloned_model = model.clone();
 
         let view = ctx.add_typed_action_view(window_id, |ctx| {
-            let size_info = cloned_model.lock().block_list().size().to_owned();
             TerminalView::new(
                 resources,
                 wakeups_rx,

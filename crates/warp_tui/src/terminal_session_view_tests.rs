@@ -1,7 +1,7 @@
 use warp::appearance::Appearance;
 use warp::tui_export::{
-    BlockPadding, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, export_conversation_markdown,
-    register_tui_session_view_test_singletons,
+    BlockPadding, ConversationStatus, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate,
+    export_conversation_markdown, register_tui_session_view_test_singletons,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -9,8 +9,8 @@ use warpui::{
     AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, SingletonEntity, UpdateModel, ViewHandle,
 };
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
+    Color, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, TuiStyle,
 };
 use warpui_core::keymap::{Context, Keystroke, Trigger};
 use warpui_core::presenter::tui::TuiPresenter;
@@ -18,13 +18,15 @@ use warpui_core::{App, AppContext, TuiView, WindowInvalidation};
 
 use super::{
     ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, TuiTerminalSessionEvent, export_file_success_message,
-    log_bundle_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
+    log_bundle_success_message, orchestration_tab_icon, raw_prompt_if_not_blank,
+    render_left_footer_hint,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::keybindings::{
     CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
     PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME, TUI_BINDING_GROUP,
 };
+use crate::orchestrated_agent_identity_styling::AgentIdentity;
 use crate::orchestration_model::TuiOrchestrationModel;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
@@ -347,6 +349,46 @@ fn zero_state_transitions_through_bootstrap_lifecycle() {
                 !view.transcript.as_ref(ctx).is_empty(),
                 "post-bootstrap command with visible output should dismiss the zero state"
             );
+        });
+    });
+}
+
+#[test]
+fn orchestration_tab_icon_replaces_identity_only_while_active_or_blocked() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let identity = AgentIdentity {
+                glyph: "✠",
+                style: TuiStyle::default().fg(Color::Blue),
+            };
+            for (status, expected_glyph) in [
+                (ConversationStatus::InProgress, "●"),
+                (ConversationStatus::TransientError, "●"),
+                (ConversationStatus::WaitingForEvents, "●"),
+                (
+                    ConversationStatus::Blocked {
+                        blocked_action: "approval".to_owned(),
+                    },
+                    "■",
+                ),
+            ] {
+                assert_eq!(
+                    orchestration_tab_icon(&status, &identity, &builder).0,
+                    expected_glyph,
+                );
+            }
+            for status in [
+                ConversationStatus::Success,
+                ConversationStatus::Error,
+                ConversationStatus::Cancelled,
+            ] {
+                assert_eq!(
+                    orchestration_tab_icon(&status, &identity, &builder),
+                    (identity.glyph, identity.style),
+                );
+            }
         });
     });
 }

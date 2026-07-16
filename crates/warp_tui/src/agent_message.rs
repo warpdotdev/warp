@@ -25,7 +25,7 @@ struct AgentMessagePresentation {
 }
 
 /// Compact glyph for a conversation's lifecycle status.
-fn conversation_status_glyph(status: &ConversationStatus) -> &'static str {
+pub(crate) fn conversation_status_glyph(status: &ConversationStatus) -> &'static str {
     match status {
         ConversationStatus::InProgress
         | ConversationStatus::TransientError
@@ -37,7 +37,7 @@ fn conversation_status_glyph(status: &ConversationStatus) -> &'static str {
 }
 
 /// Semantic theme style for a conversation's lifecycle glyph.
-fn conversation_status_glyph_style(
+pub(crate) fn conversation_status_glyph_style(
     status: &ConversationStatus,
     builder: &TuiUiBuilder,
 ) -> TuiStyle {
