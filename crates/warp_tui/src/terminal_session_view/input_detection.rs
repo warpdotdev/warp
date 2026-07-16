@@ -56,6 +56,10 @@ fn input_detection_decision(
     let Some(parsed_token_count) = parsed_token_count else {
         return InputDetectionDecision::Parse;
     };
+    // Multi-token input has enough context to send through the shared classifier. A single token
+    // is classified only when it has at least two characters and exactly matches command evidence
+    // from the live shell, completion description, or command-signature registry. This keeps short
+    // or partial input biased toward Agent while preserving known standalone commands.
     if parsed_token_count >= 2
         || (parsed_token_count == 1
             && first_token_char_count >= MIN_STANDALONE_COMMAND_CHARS
@@ -74,7 +78,12 @@ fn should_reset_input_to_agent(
     !is_input_type_locked && decision == InputDetectionDecision::ResetToAgent
 }
 
-fn should_apply_input_detection(
+/// Returns whether an asynchronous parse result still applies to the live input.
+///
+/// This only validates snapshot freshness and that the buffer is not serving as an inline-menu
+/// query. [`input_detection_decision`] separately decides whether valid parsed input should reset
+/// to Agent or run through the shared classifier.
+fn parsed_result_is_applicable(
     parsed_buffer_text: &str,
     current_buffer_text: &str,
     has_active_inline_menu: bool,
@@ -167,7 +176,7 @@ impl TuiTerminalSessionView {
                     ctx,
                 )
                 .is_some();
-                if !should_apply_input_detection(
+                if !parsed_result_is_applicable(
                     &parsed_buffer_text,
                     &current_buffer_text,
                     has_active_inline_menu,

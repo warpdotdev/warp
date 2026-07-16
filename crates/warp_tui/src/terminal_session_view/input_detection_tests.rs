@@ -1,11 +1,17 @@
 use super::{
-    input_detection_decision, should_apply_input_detection, should_reset_input_to_agent,
+    input_detection_decision, parsed_result_is_applicable, should_reset_input_to_agent,
     InputDetectionDecision,
 };
 
+// These tests exercise only synchronous TUI coordinator decisions; they never invoke the NLD
+// classifier and are therefore deterministic. Shared classification behavior is covered by
+// `crates/input_classifier/src/heuristic_classifier/mod_tests.rs`, while GUI input-mode behavior
+// and shared model transitions are covered by `app/src/terminal/input_tests.rs` and
+// `app/src/ai/blocklist/input_model_tests.rs`.
+
 #[test]
-fn current_nld_result_is_applied_without_inline_menu() {
-    assert!(should_apply_input_detection(
+fn current_parse_result_is_applicable_without_inline_menu() {
+    assert!(parsed_result_is_applicable(
         "git status",
         "git status",
         false
@@ -13,13 +19,13 @@ fn current_nld_result_is_applied_without_inline_menu() {
 }
 
 #[test]
-fn stale_nld_result_is_ignored() {
-    assert!(!should_apply_input_detection("git", "git status", false));
+fn stale_parse_result_is_not_applicable() {
+    assert!(!parsed_result_is_applicable("git", "git status", false));
 }
 
 #[test]
-fn nld_result_is_ignored_while_inline_menu_is_active() {
-    assert!(!should_apply_input_detection("/agent", "/agent", true));
+fn parse_result_is_not_applicable_while_inline_menu_is_active() {
+    assert!(!parsed_result_is_applicable("/agent", "/agent", true));
 }
 
 #[test]
@@ -43,7 +49,7 @@ fn nonempty_input_is_parsed_before_detection() {
 }
 
 #[test]
-fn short_or_unknown_single_tokens_reset_to_agent() {
+fn decision_resets_short_or_unknown_single_tokens_to_agent() {
     assert_eq!(
         input_detection_decision("w", Some(1), 1, true),
         InputDetectionDecision::ResetToAgent
@@ -59,7 +65,7 @@ fn short_or_unknown_single_tokens_reset_to_agent() {
 }
 
 #[test]
-fn known_commands_and_multi_token_input_are_classified() {
+fn decision_routes_known_commands_and_multi_token_input_to_classifier() {
     assert_eq!(
         input_detection_decision("ls", Some(1), 2, true),
         InputDetectionDecision::Classify
