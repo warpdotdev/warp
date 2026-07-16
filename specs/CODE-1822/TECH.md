@@ -96,7 +96,7 @@ Focused unit coverage:
 - `keybindings_tests.rs` validates that the orchestration block's bindings remain TUI-owned.
 - `orchestration_topology_tests.rs` covers shared participant resolution and immediate-parent semantics for nested agents.
 - `agent_message_tests.rs` covers orchestrator/agent labels, direct conversation-status presentation, identity styling, collapse/expand behavior, wrapping, and subject fallback.
-- `agent_block_tests.rs` covers rich-message section extraction, omission of opaque lifecycle ids and `WaitForEvents`, and block-owned collapse state.
+- `agent_block_tests.rs` covers rich-message section extraction, omission of opaque lifecycle ids and `WaitForEvents`, zero-height rendering for hidden-only exchanges, and block-owned collapse state.
 - `tool_call_labels_tests.rs` independently covers tool-call-only presentation states.
 
 Live verification via `./script/run-tui` (per `tui-verify-change`): accept-without-edit, full Cloud edit loop, Local collapse, model search → click result → `Ctrl+E` reopening configuration from Acceptance, retry on failed secret fetch, narrow-terminal reflow, input draft preservation across a full accept/reject cycle.

@@ -1193,8 +1193,16 @@ impl TuiAIBlock {
     /// Builds this block's generic TUI element tree.
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let output_streaming = self.block_model.status(app).is_streaming();
-        let mut column = TuiFlex::column();
+
+        // Keep the view registered so a streaming exchange can gain visible
+        // sections later, but do not reserve inter-block padding while every
+        // message in this exchange is intentionally hidden.
         let sections = self.sections(app);
+        if sections.is_empty() {
+            return TuiFlex::column().finish();
+        }
+
+        let mut column = TuiFlex::column();
         let last_index = sections.len().saturating_sub(1);
         for (index, section) in sections.iter().enumerate() {
             let element = match section {

@@ -375,6 +375,39 @@ fn orchestration_outputs_render_without_wait_for_events_tool_row() {
 }
 
 #[test]
+fn hidden_only_orchestration_exchange_has_zero_height() {
+    App::test((), |mut app| async move {
+        let wait_action = AIAgentAction {
+            id: AIAgentActionId::from("wait-action".to_string()),
+            action: AIAgentActionType::WaitForEvents {
+                tool_call_id: "wait-call".to_string(),
+                idle_timeout_seconds: 600,
+            },
+            task_id: TaskId::new("wait-task".to_string()),
+            requires_result: false,
+        };
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    action_message("m1", wait_action),
+                    AIAgentOutputMessage::events_from_agents(
+                        MessageId::new("m2".to_owned()),
+                        vec!["event-1".to_owned()],
+                    ),
+                ]),
+            },
+        );
+
+        app.read(|ctx| {
+            let block = block.as_ref(ctx);
+            assert!(block.sections(ctx).is_empty());
+            assert_eq!(desired_height(block, 80, ctx), 0);
+        });
+    });
+}
+#[test]
 fn tool_call_row_glyph_and_colors_reflect_state() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());

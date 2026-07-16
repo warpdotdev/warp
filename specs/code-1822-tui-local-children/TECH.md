@@ -159,8 +159,8 @@ types remain behind their respective boundaries.
   identity presentation, collapse behavior, wrapping, and subject fallback.
 - `crates/warp_tui/src/agent_block_tests.rs` verifies that received messages
   remain distinct rich sections, opaque lifecycle ids render no row,
-  `WaitForEvents` contributes no tool row, and collapse state is owned by the
-  agent block.
+  `WaitForEvents` contributes no tool row, hidden-only exchanges reserve no
+  whitespace, and collapse state is owned by the agent block.
 - `crates/warp_tui/src/tool_call_labels_tests.rs` keeps tool-call-only
   constructing, pending, blocked, running, and terminal presentation covered
   independently of conversation lifecycle state.
