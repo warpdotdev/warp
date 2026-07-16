@@ -66,10 +66,16 @@ impl crate::Recorder for Recorder {
             .args(["-f", "x11grab"])
             .args(["-framerate", &config.frame_rate.to_string()])
             .args(["-video_size", &format!("{width}x{height}")])
-            .args(["-i", &display])
-            // Composite the X11 cursor into each captured frame so the
-            // viewer can see where the agent moves and clicks.
+            // Composite the X11 cursor. Must come BEFORE -i so ffmpeg
+            // treats it as an x11grab input option, not an output option.
             .args(["-draw_mouse", "1"])
+            // Limit capture wall-clock time as an INPUT option so the
+            // duration bound is independent of the output setpts speed
+            // filter. As an output option, max_duration would be stretched
+            // by the playback multiplier (e.g. 4x → effectively 40 min at 4x).
+            .arg("-t")
+            .arg(format!("{:.3}", config.max_duration.as_secs_f64()))
+            .args(["-i", &display])
             .args(["-c:v", "libx264"])
             .args(["-preset", "ultrafast"])
             .args(["-pix_fmt", "yuv420p"]);
@@ -80,12 +86,11 @@ impl crate::Recorder for Recorder {
             let setpts = format!("{:.6}*PTS", 1.0 / config.playback_speed_multiplier);
             command.args(["-vf", &format!("setpts={setpts}")]);
         }
-        command.args(["-movflags", "+faststart"]);
-        // Enforce capture limits in ffmpeg so abandoned recordings remain bounded.
+        // Max file size is an output limit; stays as an output option.
         command
-            .arg("-t")
-            .arg(format!("{:.3}", config.max_duration.as_secs_f64()));
-        command.arg("-fs").arg(config.max_size_bytes.to_string());
+            .args(["-movflags", "+faststart"])
+            .arg("-fs")
+            .arg(config.max_size_bytes.to_string());
         command
             .arg(&path)
             .stdin(Stdio::null())

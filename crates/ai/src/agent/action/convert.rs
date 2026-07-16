@@ -506,6 +506,13 @@ impl From<api::message::tool_call::RequestComputerUse> for AIAgentActionType {
 impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
     fn from(value: api::message::tool_call::StartRecording) -> Self {
         let limits = value.limits;
+        // Store the server-provided speed multiplier as f32 bits to satisfy
+        // the Eq bound on AIAgentActionType. Only carry values > 1.0 (a value
+        // of 0 means unset; 1.0 means real-time, same as the client default).
+        let playback_speed_bits = {
+            let s = value.playback_speed_multiplier;
+            (s.is_finite() && s > 1.0).then(|| s.to_bits())
+        };
         AIAgentActionType::StartRecording {
             frame_rate: value.frame_rate.max(0) as u32,
             max_duration: limits
@@ -518,6 +525,7 @@ impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
                 .filter(|&bytes| bytes > 0)
                 .map(|bytes| bytes as u64),
             summary: (!value.summary.trim().is_empty()).then_some(value.summary),
+            playback_speed_bits,
         }
     }
 }

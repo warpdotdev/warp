@@ -138,14 +138,18 @@ pub enum AIAgentActionType {
     RequestComputerUse(RequestComputerUseRequest),
 
     /// AI requested to start recording a video of the computer-use session.
-    /// Capture configuration (frame rate, limits) is server-owned and arrives
-    /// on the tool call; the client applies it. `frame_rate` of 0 means unset.
-    /// `summary` is an agent-authored, human-facing title for the recording.
+    /// Capture configuration (frame rate, limits, speed) is server-owned and
+    /// arrives on the tool call; the client applies it. `frame_rate` of 0 means
+    /// unset. `summary` is an agent-authored, human-facing title.
+    /// `playback_speed_bits` stores a server-provided `f32` playback multiplier
+    /// as its IEEE-754 bit pattern (`f32::to_bits()`) so the field satisfies
+    /// `Eq`. `None` or a value ≤ 1.0 means real-time (use client default).
     StartRecording {
         frame_rate: u32,
         max_duration: Option<Duration>,
         max_size_bytes: Option<u64>,
         summary: Option<String>,
+        playback_speed_bits: Option<u32>,
     },
 
     /// AI requested to stop an in-progress recording and publish the video.

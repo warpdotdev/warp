@@ -285,6 +285,8 @@ fn convert_provider(
         api::skill_descriptor::provider::Type::Droid(_) => Ok(SkillProvider::Droid),
         api::skill_descriptor::provider::Type::Github(_) => Ok(SkillProvider::Github),
         api::skill_descriptor::provider::Type::OpenCode(_) => Ok(SkillProvider::OpenCode),
+        // Kiro is a new provider not yet represented client-side; treat as invalid.
+        api::skill_descriptor::provider::Type::Kiro(_) => Err(SkillConversionError::ProviderInvalid),
     }
 }
 
