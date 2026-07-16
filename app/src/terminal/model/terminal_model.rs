@@ -1433,7 +1433,7 @@ impl TerminalModel {
     pub fn is_cloud_or_ambient_conversation(&self) -> bool {
         self.is_shared_ambient_agent_session()
             || matches!(
-                self.conversation_transcript_viewer_status,
+                self.conversation_transcript_viewer_status.as_ref(),
                 Some(ConversationTranscriptViewerStatus::ViewingAmbientConversation(_))
             )
     }
