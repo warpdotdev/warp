@@ -1344,6 +1344,20 @@ en:
       notifications_title: "Notifications"
       subtitle: "Select defaults for using agents like Claude Code, Codex, and Gemini."
       title: "Customize third party agents"
+    select_auth:
+      privacy_prefix_with_ai: "If you'd like to opt out of analytics and AI features, you can adjust your "
+      privacy_prefix_no_ai: "If you'd like to opt out of analytics, you can adjust your "
+      warp_drive:
+        title: "Get started with Warp Drive"
+        subtitle: "Connect your account to save and share notebooks, workflows, and more across devices."
+      warp_agent:
+        title: "Get started with AI"
+        subtitle: "Connect your account to enable AI-powered planning, coding, and automation."
+      third_party:
+        title: "Create an account"
+        subtitle: "Create a Warp account to enable AI-powered planning, coding, and automations."
+    browser_open:
+      sign_in_title: "Sign in on your browser to continue"
   settings.ai:
     add_router: "+ Add router"
     connect: "Connect"

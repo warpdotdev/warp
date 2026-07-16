@@ -506,9 +506,15 @@ impl LoginSlideView {
     /// Terminal+Drive), since there are no AI features to opt out of there.
     fn privacy_disclaimer_prefix(&self) -> &'static str {
         if self.ai_enabled {
-            "If you'd like to opt out of analytics and AI features, you can adjust your "
+            menu_label(
+                "onboarding.select_auth.privacy_prefix_with_ai",
+                "If you'd like to opt out of analytics and AI features, you can adjust your ",
+            )
         } else {
-            "If you'd like to opt out of analytics, you can adjust your "
+            menu_label(
+                "onboarding.select_auth.privacy_prefix_no_ai",
+                "If you'd like to opt out of analytics, you can adjust your ",
+            )
         }
     }
 
@@ -532,16 +538,16 @@ impl LoginSlideView {
 
         let (title_text, subtitle_text) = match self.login_purpose() {
             LoginPurpose::WarpDrive => (
-                "Get started with Warp Drive",
-                "Connect your account to save and share notebooks, workflows, and more across devices.",
+                menu_label("onboarding.select_auth.warp_drive.title", "Get started with Warp Drive"),
+                menu_label("onboarding.select_auth.warp_drive.subtitle", "Connect your account to save and share notebooks, workflows, and more across devices."),
             ),
             LoginPurpose::WarpAgent => (
-                "Get started with AI",
-                "Connect your account to enable AI-powered planning, coding, and automation.",
+                menu_label("onboarding.select_auth.warp_agent.title", "Get started with AI"),
+                menu_label("onboarding.select_auth.warp_agent.subtitle", "Connect your account to enable AI-powered planning, coding, and automation."),
             ),
             LoginPurpose::ThirdParty => (
-                "Create an account",
-                "Create a Warp account to enable AI-powered planning, coding, and automations.",
+                menu_label("onboarding.select_auth.third_party.title", "Create an account"),
+                menu_label("onboarding.select_auth.third_party.subtitle", "Create a Warp account to enable AI-powered planning, coding, and automations."),
             ),
         };
         let title = FormattedTextElement::from_str(title_text, appearance.ui_font_family(), 36.)
@@ -730,7 +736,10 @@ impl LoginSlideView {
         };
 
         let title = FormattedTextElement::from_str(
-            "Sign in on your browser to continue",
+            menu_label(
+                "onboarding.browser_open.sign_in_title",
+                "Sign in on your browser to continue",
+            ),
             appearance.ui_font_family(),
             36.,
         )
@@ -888,15 +897,18 @@ impl LoginSlideView {
     ) -> Vec<Box<dyn Element>> {
         let theme = appearance.theme();
 
-        let title =
-            FormattedTextElement::from_str("Privacy Settings", appearance.ui_font_family(), 36.)
-                .with_color(internal_colors::text_main(
-                    theme,
-                    theme.background().into_solid(),
-                ))
-                .with_weight(Weight::Medium)
-                .with_alignment(TextAlignment::Left)
-                .finish();
+        let title = FormattedTextElement::from_str(
+            menu_label("common.privacy_settings", "Privacy Settings"),
+            appearance.ui_font_family(),
+            36.,
+        )
+        .with_color(internal_colors::text_main(
+            theme,
+            theme.background().into_solid(),
+        ))
+        .with_weight(Weight::Medium)
+        .with_alignment(TextAlignment::Left)
+        .finish();
 
         let actions = PrivacySettingsActions {
             toggle_telemetry: LoginSlideAction::ToggleTelemetry,
