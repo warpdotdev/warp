@@ -440,6 +440,7 @@ pub(crate) fn build_worktree_config_toml(
     pane.insert("id".into(), Value::String("main".into()));
     pane.insert("type".into(), Value::String("terminal".into()));
     pane.insert("directory".into(), Value::String(repo.to_string()));
+    let base_branch = shell_family.escape(base_branch);
 
     if worktree_branch_name.is_some() {
         let worktree_branch_name = handlebars_placeholder("worktree_branch_name");

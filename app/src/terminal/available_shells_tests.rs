@@ -16,6 +16,13 @@ fn make_available_shells(shells: Vec<AvailableShell>) -> AvailableShells {
 }
 
 #[test]
+fn test_docker_sandbox_uses_posix_shell_family() {
+    let shell = AvailableShell::new_docker_sandbox_shell(PathBuf::from("/usr/bin/sbx"), None);
+
+    assert_eq!(shell.shell_family(), ShellFamily::Posix);
+}
+
+#[test]
 fn test_load_known_shells_with_empty_path_var() {
     FeatureFlag::ShellSelector.set_enabled(true);
 

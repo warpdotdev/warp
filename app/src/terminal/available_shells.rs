@@ -172,13 +172,11 @@ impl AvailableShell {
     #[cfg(feature = "local_tty")]
     fn shell_family(&self) -> ShellFamily {
         match self.state.as_ref() {
-            Config::SystemDefault | Config::DockerSandbox { .. } => {
-                OperatingSystem::get().default_shell_family()
-            }
+            Config::SystemDefault => OperatingSystem::get().default_shell_family(),
             Config::KnownLocal(LocalConfig { shell_type, .. })
             | Config::MSYS2(LocalConfig { shell_type, .. })
             | Config::Custom(LocalConfig { shell_type, .. }) => (*shell_type).into(),
-            Config::Wsl { .. } => ShellFamily::Posix,
+            Config::Wsl { .. } | Config::DockerSandbox { .. } => ShellFamily::Posix,
         }
     }
 }
