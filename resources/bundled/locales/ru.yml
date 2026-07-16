@@ -2084,6 +2084,9 @@ ru:
       base_model: Базовая модель
       recommend_selecting_environment: Рекомендуем выбрать окружение для облачных агентов.
       recommend_creating_environment: Рекомендуем создать окружение для облачных агентов.
+      custom_host: Свой хост…
+      no_harnesses_available: Среды исполнения недоступны
+      no_models_available: Модели недоступны
     ambient:
       auth_secret:
         search_placeholder: Найдите секреты или создайте новый

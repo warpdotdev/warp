@@ -1,10 +1,10 @@
 use warp_cli::agent::Harness;
 
 use super::{
-    build_api_key_snapshot, build_environment_snapshot, build_harness_snapshot,
-    build_host_snapshot, build_non_oz_model_snapshot, build_oz_model_snapshot,
-    AuthSecretNamesInput, HarnessEntryInput, ModelChoiceInput, OptionBadge, OptionFooter,
-    OptionSourceStatus, AUTH_SECRET_INHERIT_LABEL, DEFAULT_MODEL_LABEL,
+    auth_secret_inherit_label, build_api_key_snapshot, build_environment_snapshot,
+    build_harness_snapshot, build_host_snapshot, build_non_oz_model_snapshot,
+    build_oz_model_snapshot, default_model_label, AuthSecretNamesInput, HarnessEntryInput,
+    ModelChoiceInput, OptionBadge, OptionFooter, OptionSourceStatus,
 };
 use crate::ai::local_harness_setup::LocalHarnessSetupState;
 use crate::ai::orchestration::config_state::AuthSecretSelection;
@@ -164,7 +164,7 @@ fn non_oz_model_snapshot_puts_default_first_and_selects_server_model() {
         "sonnet",
     );
 
-    assert_eq!(snapshot.rows[0].label, DEFAULT_MODEL_LABEL);
+    assert_eq!(snapshot.rows[0].label, default_model_label());
     assert_eq!(snapshot.rows[0].id, "");
     assert_eq!(snapshot.selected_id.as_deref(), Some("sonnet"));
 }
@@ -192,7 +192,7 @@ fn api_key_snapshot_lists_skip_then_names() {
     );
 
     let labels: Vec<&str> = snapshot.rows.iter().map(|r| r.label.as_str()).collect();
-    assert_eq!(labels, vec![AUTH_SECRET_INHERIT_LABEL, "key-a", "key-b"]);
+    assert_eq!(labels, vec![auth_secret_inherit_label(), "key-a", "key-b"]);
     assert_eq!(snapshot.selected_id.as_deref(), Some("key-b"));
     assert_eq!(snapshot.status, OptionSourceStatus::Ready);
     assert_eq!(snapshot.footer, Some(OptionFooter::CreateNewAuthSecret));
@@ -274,6 +274,9 @@ fn environment_snapshot_puts_empty_option_first() {
     );
 
     assert_eq!(snapshot.rows[0].id, "");
-    assert_eq!(snapshot.rows[0].label, super::ORCHESTRATION_ENV_NONE_LABEL);
+    assert_eq!(
+        snapshot.rows[0].label,
+        super::orchestration_env_none_label()
+    );
     assert_eq!(snapshot.selected_id.as_deref(), Some("env-b"));
 }

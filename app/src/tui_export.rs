@@ -69,11 +69,11 @@ pub use crate::ai::orchestration::{
     accept_disabled_reason_with_auth, api_key_snapshot, auth_secret_selection_required,
     empty_env_recommendation_message, environment_snapshot, harness_is_selectable,
     harness_snapshot, host_snapshot, location_snapshot, model_snapshot,
-    persist_environment_selection, persist_host_selection,
+    orchestration_env_none_label, persist_environment_selection, persist_host_selection,
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
     resolve_default_host_slug, should_show_auth_secret_picker, AuthSecretSelection, OptionBadge,
     OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus, OrchestrationConfigState,
-    OrchestrationEditState, ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
+    OrchestrationEditState, ORCHESTRATION_WARP_WORKER_HOST,
 };
 pub use crate::ai::skills::{SkillManager, SkillReference};
 pub use crate::appearance::Appearance;

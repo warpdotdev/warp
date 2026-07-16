@@ -23,7 +23,9 @@ use crate::LLMPreferences;
 const DEFAULT_HOST_ENV_VAR: &str = "WARP_CLOUD_MODE_DEFAULT_HOST";
 
 pub const ORCHESTRATION_WARP_WORKER_HOST: &str = WARP_WORKER_HOST;
-pub const ORCHESTRATION_ENV_NONE_LABEL: &str = "Empty environment";
+pub fn orchestration_env_none_label() -> &'static str {
+    crate::menu_label("agent.orchestration.env_none_label", "Empty environment")
+}
 
 /// Returns Warp base-model choices for orchestration.
 pub(crate) fn get_base_model_choices<'a>(

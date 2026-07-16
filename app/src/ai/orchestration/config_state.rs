@@ -171,9 +171,10 @@ impl OrchestrationConfigState {
             RunAgentsExecutionMode::Remote { .. }
                 if self.harness_type.eq_ignore_ascii_case("opencode") =>
             {
-                Some(
+                Some(crate::menu_label(
+                    "agent.orchestration.opencode_not_supported_cloud",
                     "OpenCode is not supported on Cloud yet. Switch to Local or pick a different harness.",
-                )
+                ))
             }
             RunAgentsExecutionMode::Remote { .. } => None,
         }

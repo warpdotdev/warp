@@ -37,9 +37,9 @@ pub use crate::ai::orchestration::{
     OrchestrationConfigState, OrchestrationEditState, ORCHESTRATION_WARP_WORKER_HOST,
 };
 use crate::ai::orchestration::{
-    api_key_snapshot, environment_snapshot, harness_snapshot, host_snapshot, model_snapshot,
-    persist_auth_secret_selection, OptionBadge, OptionFooter, OptionRow, OptionSnapshot,
-    OptionSourceStatus, AUTH_SECRET_INHERIT_LABEL,
+    api_key_snapshot, auth_secret_inherit_label, environment_snapshot, harness_snapshot,
+    host_snapshot, model_snapshot, persist_auth_secret_selection, OptionBadge, OptionFooter,
+    OptionRow, OptionSnapshot, OptionSourceStatus,
 };
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -65,7 +65,6 @@ const ORCHESTRATION_SEGMENT_VERTICAL_PADDING: f32 = 4.;
 /// Label for the auth secret column.
 pub const AUTH_SECRET_COLUMN_LABEL: &str = "API key";
 const AUTH_SECRET_CREATE_NEW_LABEL: &str = "New API key…";
-
 
 // ── Action trait ────────────────────────────────────────────────────
 
@@ -523,12 +522,12 @@ pub fn populate_host_picker<V: View>(
 fn auth_secret_trigger_label(selection: &AuthSecretSelection, supports_create_new: bool) -> String {
     match selection {
         AuthSecretSelection::Named(name) => name.clone(),
-        AuthSecretSelection::Inherit => AUTH_SECRET_INHERIT_LABEL.to_string(),
+        AuthSecretSelection::Inherit => auth_secret_inherit_label().to_string(),
         AuthSecretSelection::CreatingNew => AUTH_SECRET_CREATE_NEW_LABEL.to_string(),
         AuthSecretSelection::Unset if supports_create_new => {
             AUTH_SECRET_CREATE_NEW_LABEL.to_string()
         }
-        AuthSecretSelection::Unset => AUTH_SECRET_INHERIT_LABEL.to_string(),
+        AuthSecretSelection::Unset => auth_secret_inherit_label().to_string(),
     }
 }
 

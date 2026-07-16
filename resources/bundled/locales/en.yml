@@ -2083,6 +2083,9 @@ en:
       base_model: Base model
       recommend_selecting_environment: We recommend selecting an environment for cloud agents.
       recommend_creating_environment: We recommend creating an environment for cloud agents.
+      custom_host: Custom host…
+      no_harnesses_available: No harnesses available
+      no_models_available: No models available
     ambient:
       auth_secret:
         search_placeholder: Search secrets or create a new one
