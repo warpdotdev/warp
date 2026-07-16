@@ -220,12 +220,12 @@ impl TemplatableMCPServerManager {
             .unwrap_or_default()
     }
 
-    #[cfg(feature = "tui")]
+    #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
     pub fn authorization_url(&self, uuid: Uuid) -> Option<&str> {
         self.authorization_urls.get(&uuid).map(String::as_str)
     }
 
-    #[cfg(feature = "tui")]
+    #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
     pub fn has_credentials(&self, installation_uuid: Uuid, app: &warpui::AppContext) -> bool {
         if let Some(hash) = FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) {
             return self.file_based_server_credentials.contains_key(&hash);
