@@ -263,6 +263,11 @@ plutil -insert NSCameraUsageDescription -string "A program in Warp wants to use 
 plutil -insert NSMicrophoneUsageDescription -string "A program in Warp wants to use your microphone." "$WARP_PLIST_PATH"
 plutil -insert NSContactsUsageDescription -string "A program in Warp wants to use your contacts." "$WARP_PLIST_PATH"
 plutil -insert NSCalendarsUsageDescription -string "A program in Warp wants to use your calendar." "$WARP_PLIST_PATH"
+plutil -insert NSRemindersUsageDescription -string "A program in Warp wants to use your reminders." "$WARP_PLIST_PATH"
+# macOS 14+ checks the FullAccess variants instead; without them EventKit requests from
+# terminal subprocesses (e.g. icalBuddy) are silently denied with no consent prompt (#13558).
+plutil -insert NSCalendarsFullAccessUsageDescription -string "A program in Warp wants full access to your calendar." "$WARP_PLIST_PATH"
+plutil -insert NSRemindersFullAccessUsageDescription -string "A program in Warp wants full access to your reminders." "$WARP_PLIST_PATH"
 plutil -insert NSLocationUsageDescription -string "A program in Warp wants to use your location information." "$WARP_PLIST_PATH"
 plutil -insert NSPhotoLibraryUsageDescription -string "A program in Warp wants to use your photo library." "$WARP_PLIST_PATH"
 
