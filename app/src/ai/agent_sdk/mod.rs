@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use anyhow::Context;
-pub(crate) use driver::harness::{task_env_vars, validate_cli_installed, ClaudeHarness};
+pub(crate) use driver::harness::{task_env_vars, ClaudeHarness};
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
 use telemetry::CliTelemetryEvent;
@@ -740,18 +740,6 @@ impl AgentDriverRunner {
                     .map_err(AgentDriverError::AwsBedrockCredentialsFailed)?;
             }
 
-            match &task.harness {
-                HarnessKind::Unsupported(harness) => {
-                    return Err(AgentDriverError::HarnessSetupFailed {
-                        harness: harness.to_string(),
-                        reason: format!(
-                            "The {harness} harness is only supported for local child agent launches."
-                        ),
-                    });
-                }
-                HarnessKind::Oz | HarnessKind::ThirdParty(_) => {}
-            }
-
             // Validate that the third-party harness is installed and authed.
             if let HarnessKind::ThirdParty(harness) = &task.harness {
                 harness.validate()?;
@@ -1397,12 +1385,6 @@ impl AgentDriverRunner {
                         .map(|payload| driver::ResumeOptions::ThirdParty(Box::new(payload))),
                 )
             }
-            HarnessKind::Unsupported(harness) => Err(AgentDriverError::HarnessSetupFailed {
-                harness: harness.to_string(),
-                reason: format!(
-                    "The {harness} harness is only supported for local child agent launches."
-                ),
-            }),
         }
     }
 

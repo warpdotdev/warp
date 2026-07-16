@@ -13,7 +13,7 @@ use crate::ai::agent_sdk::driver::harness::{
     HarnessKind,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
-use crate::ai::agent_sdk::{task_env_vars, validate_cli_installed};
+use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::task::{
     normalize_orchestrator_agent_name, HarnessConfig, HarnessModelConfig,
 };
@@ -140,13 +140,11 @@ pub(super) fn local_child_task_config(
         .and_then(normalize_orchestrator_agent_name);
     match harness {
         Harness::Oz | Harness::Unknown => None,
-        Harness::Claude | Harness::Codex => {
-            Some(AgentConfigSnapshot {
-                name: agent_name,
-                harness: Some(HarnessConfig::from_harness_type(harness)),
-                ..Default::default()
-            })
-        }
+        Harness::Claude | Harness::Codex => Some(AgentConfigSnapshot {
+            name: agent_name,
+            harness: Some(HarnessConfig::from_harness_type(harness)),
+            ..Default::default()
+        }),
     }
 }
 

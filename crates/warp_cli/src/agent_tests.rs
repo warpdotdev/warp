@@ -17,7 +17,10 @@ fn harness_config_name_round_trips_for_known_variants() {
 #[test]
 fn harness_from_config_name_legacy_names_map_to_unknown() {
     // opencode and gemini are legacy harness names that now map to Unknown for backward compatibility.
-    assert_eq!(Harness::from_config_name("opencode"), Some(Harness::Unknown));
+    assert_eq!(
+        Harness::from_config_name("opencode"),
+        Some(Harness::Unknown)
+    );
     assert_eq!(Harness::from_config_name("gemini"), Some(Harness::Unknown));
 }
 

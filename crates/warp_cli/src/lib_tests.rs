@@ -2073,10 +2073,7 @@ fn harness_parse_orchestration_harness_accepts_aliases() {
         Some(Harness::Claude)
     );
     // opencode and gemini are no longer supported harnesses; they parse as Unknown.
-    assert_eq!(
-        Harness::parse_orchestration_harness("open_code"),
-        None
-    );
+    assert_eq!(Harness::parse_orchestration_harness("open_code"), None);
 }
 
 #[test]

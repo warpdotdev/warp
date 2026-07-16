@@ -126,11 +126,7 @@ impl HiddenComputerUseArgs {
         }
     }
 }
-const HARNESS_VALUE_VARIANTS: [Harness; 3] = [
-    Harness::Oz,
-    Harness::Claude,
-    Harness::Codex,
-];
+const HARNESS_VALUE_VARIANTS: [Harness; 3] = [Harness::Oz, Harness::Claude, Harness::Codex];
 
 /// The execution harness for an agent run.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]

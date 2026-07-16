@@ -247,16 +247,14 @@ fn continuation_ui_state_for_harness_and_access(
                 .map(|conversation_id| TombstoneCta::ContinueLocally { conversation_id });
             Ok(CloudConversationContinuationUiState::Tombstone { cta })
         }
-        (
-            AIAgentHarness::ClaudeCode | AIAgentHarness::Codex,
-            ConversationAccess::Edit,
-        ) => Ok(CloudConversationContinuationUiState::Tombstone {
-            cta: Some(TombstoneCta::ContinueInCloud { task_id }),
-        }),
-        (
-            AIAgentHarness::ClaudeCode | AIAgentHarness::Codex,
-            ConversationAccess::ViewOnly,
-        ) => Ok(CloudConversationContinuationUiState::Tombstone { cta: None }),
+        (AIAgentHarness::ClaudeCode | AIAgentHarness::Codex, ConversationAccess::Edit) => {
+            Ok(CloudConversationContinuationUiState::Tombstone {
+                cta: Some(TombstoneCta::ContinueInCloud { task_id }),
+            })
+        }
+        (AIAgentHarness::ClaudeCode | AIAgentHarness::Codex, ConversationAccess::ViewOnly) => {
+            Ok(CloudConversationContinuationUiState::Tombstone { cta: None })
+        }
         (AIAgentHarness::Unknown, _) => Err(CloudConversationContinuationError::UnknownHarness),
         (_, ConversationAccess::Unknown) => {
             Err(CloudConversationContinuationError::UnknownConversationAccess)

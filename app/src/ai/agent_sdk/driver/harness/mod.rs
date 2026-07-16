@@ -216,11 +216,8 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
 /// Harness type for driver dispatch.
 pub(crate) enum HarnessKind {
     Oz,
-    /// Third-party CLI-backed harness (e.g. Claude, Gemini).
+    /// Third-party CLI-backed harness (e.g. Claude).
     ThirdParty(Box<dyn ThirdPartyHarness>),
-    /// Harnesses that exist in the shared CLI enum but are not supported by the
-    /// standalone agent driver.
-    Unsupported(Harness),
 }
 
 impl HarnessKind {
@@ -229,7 +226,6 @@ impl HarnessKind {
         match self {
             HarnessKind::Oz => Harness::Oz,
             HarnessKind::ThirdParty(h) => h.harness(),
-            HarnessKind::Unsupported(harness) => *harness,
         }
     }
 }

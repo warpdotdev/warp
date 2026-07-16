@@ -239,7 +239,6 @@ enum AdminEnablementSetting {
 enum AgentHarness {
   CLAUDE_CODE
   CODEX
-  GEMINI
   OZ
 }
 

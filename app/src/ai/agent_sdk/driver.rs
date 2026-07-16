@@ -2183,7 +2183,7 @@ impl AgentDriver {
                             .await?,
                     )
                 }
-                HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => None,
+                HarnessKind::ThirdParty(_) => None,
             };
 
             let harness = task.harness.harness();
@@ -2379,12 +2379,6 @@ impl AgentDriver {
                 )
                 .await
             }
-            HarnessKind::Unsupported(harness) => Err(AgentDriverError::HarnessSetupFailed {
-                harness: harness.to_string(),
-                reason: format!(
-                    "The {harness} harness is only supported for local child agent launches."
-                ),
-            }),
         }
     }
 
