@@ -738,7 +738,7 @@ fn parse_cell_content(cell: &str) -> Vec<FormattedTextFragment> {
 /// This is useful for parsing table cell content or other inline text that may contain
 /// formatting like **bold**, *italic*, `code`, [links](url), etc.
 pub fn parse_inline_markdown(text: &str) -> Vec<FormattedTextFragment> {
-    parse_inline_markdown_with_source_map(text).inline
+    parse_cell_content(text)
 }
 
 /// Parsed inline Markdown together with its parser-owned source-to-rendered mapping.

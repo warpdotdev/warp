@@ -15,7 +15,7 @@ use markdown_parser::markdown_parser::{
 use markdown_parser::weight::CustomWeight;
 use markdown_parser::{
     CodeBlockText, FormattedImage, FormattedTextLine, FormattedTextStyles, Hyperlink,
-    parse_inline_markdown_with_source_map,
+    parse_inline_markdown, parse_inline_markdown_with_source_map,
 };
 pub use markdown_parser::{
     FormattedTable, FormattedTableAlignment, FormattedTextFragment, FormattedTextInline,
@@ -195,7 +195,7 @@ impl<'a> std::ops::AddAssign<&'a Self> for TextSummary {
 }
 
 fn parse_table_cell_markdown_inline(cell: &str) -> FormattedTextInline {
-    parse_inline_markdown_with_source_map(cell).inline
+    parse_inline_markdown(cell)
 }
 
 impl std::ops::AddAssign<Self> for TextSummary {

@@ -534,7 +534,7 @@ fn formatted_inline_to_gfm_table_cell_markdown(inline: &FormattedTextInline) -> 
         let content =
             append_inline_formatting(&previous_styles, &fragment.styles, &text, &mut markdown);
         previous_styles.clone_from(&fragment.styles);
-        append_markdown_content(content, fragment.styles.inline_code, &mut markdown);
+        markdown.push_str(content);
     }
     append_inline_formatting(
         &previous_styles,
@@ -634,21 +634,6 @@ fn style_link(styles: &FormattedTextStyles) -> Option<&str> {
     match &styles.hyperlink {
         Some(Hyperlink::Url(url)) => Some(url),
         Some(Hyperlink::Action(_)) | None => None,
-    }
-}
-
-fn append_markdown_content(content: &str, should_escape: bool, markdown: &mut String) {
-    if !should_escape {
-        markdown.push_str(content);
-        return;
-    }
-
-    markdown.reserve(content.len());
-    for character in content.chars() {
-        if is_markdown_special_character(character) {
-            markdown.push('\\');
-        }
-        markdown.push(character);
     }
 }
 

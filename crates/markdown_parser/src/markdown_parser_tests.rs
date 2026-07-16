@@ -3024,6 +3024,21 @@ fn test_parse_table_with_html_line_breaks() {
 }
 
 #[test]
+fn test_table_gfm_round_trip_preserves_inline_code_punctuation() {
+    let source = "| Value |\n| --- |\n| `a*b_c` |\n";
+    let result = test_parse_markdown_with_gfm_tables(source);
+    let FormattedTextLine::Table(table) = &result[0] else {
+        panic!("Expected table");
+    };
+
+    assert_eq!(table.to_gfm_markdown(), source);
+    assert_eq!(
+        test_parse_markdown_with_gfm_tables(&table.to_gfm_markdown()),
+        result
+    );
+}
+
+#[test]
 fn test_table_literal_html_breaks_remain_literal_in_internal_format() {
     let source = concat!(
         "| Kind | Notes |\n",
