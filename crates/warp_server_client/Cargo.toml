@@ -60,6 +60,7 @@ warpui_core.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 diesel = { workspace = true, features = ["sqlite", "chrono"] }
+tempfile.workspace = true
 websocket.workspace = true
 
 [dev-dependencies]

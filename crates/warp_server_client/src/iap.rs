@@ -254,9 +254,14 @@ impl IapManager {
             .is_some_and(|s| s.get_cached().is_some())
     }
 
-    /// Establishes IAP access for a blocking caller: triggers a refresh
-    // and if no valid token lands within [`IAP_ACCESS_TIMEOUT`], emits
-    // [`IapManagerEvent::AccessUnavailable`] so the caller can fail closed.
+    /// Establishes IAP access for a blocking caller: triggers a refresh and, if
+    /// no valid token lands within [`IAP_ACCESS_TIMEOUT`], emits
+    /// [`IapManagerEvent::AccessUnavailable`] so the caller can fail closed.
+    /// A no-op when IAP is inactive.
+    ///
+    /// Callers should subscribe before calling: on [`IapManagerEvent::StateChanged`],
+    /// check [`Self::has_valid_token`] and, once it returns `true`, proceed with the
+    /// IAP-gated request; treat [`IapManagerEvent::AccessUnavailable`] as fatal.
     pub fn ensure_access(&mut self, ctx: &mut ModelContext<Self>) {
         if self.state.is_none() {
             return;
@@ -774,7 +779,8 @@ mod cache {
     const CACHE_SKEW: Duration = Duration::from_secs(30);
 
     fn cache_path() -> std::path::PathBuf {
-        warp_core::paths::state_dir()
+        warp_core::paths::secure_state_dir()
+            .unwrap_or_else(warp_core::paths::state_dir)
             .join("staging")
             .join("iap_cache.jwt")
     }
@@ -799,34 +805,20 @@ mod cache {
     }
 
     fn write_atomic(token: &str) -> std::io::Result<()> {
-        let path = cache_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        // Write to a sibling temp file then rename so a reader never observes a
-        // partially-written token.
-        let tmp = path.with_extension("tmp");
-        write_owner_only(&tmp, token.as_bytes())?;
-        std::fs::rename(&tmp, &path)
-    }
-
-    #[cfg(unix)]
-    fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
         use std::io::Write as _;
-        use std::os::unix::fs::OpenOptionsExt as _;
 
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        file.write_all(bytes)
-    }
-
-    #[cfg(not(unix))]
-    fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-        std::fs::write(path, bytes)
+        let path = cache_path();
+        let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        // Write to a uniquely-named temp file in the same dir, then atomically
+        // persist it over the target: readers never observe a partial token,
+        // concurrent writers don't share a temp path, and the temp file is
+        // cleaned up on drop if any step before `persist` fails. `NamedTempFile`
+        // is created owner-only (0600) on unix.
+        let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+        tmp.write_all(token.as_bytes())?;
+        tmp.persist(&path)?;
+        Ok(())
     }
 }
 
