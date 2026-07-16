@@ -39,7 +39,7 @@ use crate::inline_menu::{
     TuiInlineMenu, TuiInlineMenuAccepted, TuiInlineMenuHandle, TuiInlineMenuHeader,
     TuiInlineMenuSnapshot, TuiInlineMenuStatus,
 };
-use crate::input_mode_policy::{TuiInputModePolicy, AI_LOCKED_CONFIG};
+use crate::input_mode_policy::AI_LOCKED_CONFIG;
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::model_menu::TuiModelMenuModel;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
@@ -317,7 +317,7 @@ fn build_view_with_conversation_menu(
     ctx.add_singleton_model(|_| Appearance::mock());
     add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-    let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
     let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::Closed);
     let menu_model = ctx.add_model(|_| TestConversationMenu {
         is_open: false,
