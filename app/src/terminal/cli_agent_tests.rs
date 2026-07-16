@@ -585,3 +585,8 @@ fn test_oh_my_pi_supported_skill_providers() {
         ]
     );
 }
+
+#[test]
+fn test_oh_my_pi_supports_bash_mode() {
+    assert!(CLIAgent::OhMyPi.supports_bash_mode());
+}
