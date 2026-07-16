@@ -3020,6 +3020,7 @@ fn test_parse_table_with_html_line_breaks() {
         table.to_plain_text(),
         "| Feature | Notes |\n| --- | --- |\n| Export | CSV<br>JSON |"
     );
+    assert_eq!(table.to_gfm_markdown(), source);
 }
 
 #[test]
@@ -3062,6 +3063,199 @@ fn test_table_literal_html_breaks_remain_literal_in_internal_format() {
             r"| Backslash | first\\\<br>second |",
         )
     );
+    assert_eq!(
+        table.to_gfm_markdown(),
+        concat!(
+            "| Kind | Notes |\n",
+            "| --- | --- |\n",
+            "| Escaped | first\\<br>second |\n",
+            "| Entity | first\\<br>second |\n",
+            "| Break | first<br>second |\n",
+            r"| Backslash | first\\\<br>second |",
+            "\n",
+        )
+    );
+}
+
+#[test]
+fn test_inline_source_map_handles_formatting_and_escapes() {
+    let source = "**Bold** [Link](https://warp.dev)";
+    let parsed = parse_inline_markdown_with_source_map(source);
+
+    assert_eq!(parsed.source_map.rendered_length(), 9);
+    assert_eq!(parsed.source_map.source_length(), source.chars().count());
+    assert_eq!(parsed.source_map.rendered_to_source(0), 2);
+    assert_eq!(parsed.source_map.rendered_to_source(4), 8);
+    assert_eq!(parsed.source_map.rendered_to_source(5), 10);
+    assert_eq!(parsed.source_map.rendered_to_source(9), 14);
+    assert_eq!(parsed.source_map.source_to_rendered(0), 0);
+    assert_eq!(parsed.source_map.source_to_rendered(2), 0);
+    assert_eq!(parsed.source_map.source_to_rendered(11), 6);
+    assert_eq!(parsed.source_map.source_to_rendered(14), 9);
+    assert_eq!(parsed.source_map.source_to_rendered(32), 9);
+
+    let escaped_source = "a \\*star\\* b";
+    let escaped = parse_inline_markdown_with_source_map(escaped_source);
+    let rendered_text = escaped
+        .inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect::<String>();
+    assert_eq!(rendered_text, "a *star* b");
+    assert_eq!(escaped.source_map.rendered_length(), rendered_text.len());
+    assert_eq!(escaped.source_map.source_length(), escaped_source.len());
+    assert_eq!(escaped.source_map.rendered_to_source(2), 2);
+    assert_eq!(escaped.source_map.rendered_to_source(3), 4);
+    assert_eq!(escaped.source_map.rendered_to_source(7), 8);
+    assert_eq!(escaped.source_map.rendered_to_source(8), 10);
+    assert_eq!(escaped.source_map.source_to_rendered(2), 2);
+    assert_eq!(escaped.source_map.source_to_rendered(3), 3);
+    assert_eq!(escaped.source_map.source_to_rendered(4), 3);
+    assert_eq!(escaped.source_map.source_to_rendered(8), 7);
+    assert_eq!(escaped.source_map.source_to_rendered(9), 8);
+    assert_eq!(escaped.source_map.source_to_rendered(10), 8);
+    assert_eq!(
+        escaped
+            .source_map
+            .rendered_to_source(rendered_text.chars().count()),
+        escaped_source.chars().count()
+    );
+}
+
+#[test]
+fn test_inline_source_map_handles_html_entities() {
+    let source = "a&amp;b &#x2a; c";
+    let parsed = parse_inline_markdown_with_source_map(source);
+    let rendered_text = parsed
+        .inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect::<String>();
+    assert_eq!(rendered_text, "a&b * c");
+
+    assert_eq!(parsed.source_map.rendered_to_source(0), 0);
+    assert_eq!(parsed.source_map.rendered_to_source(1), 1);
+    assert_eq!(parsed.source_map.rendered_to_source(2), 6);
+    assert_eq!(parsed.source_map.rendered_to_source(4), 8);
+    assert_eq!(parsed.source_map.rendered_to_source(5), 14);
+    assert_eq!(parsed.source_map.source_to_rendered(1), 1);
+    for source_offset in 2..6 {
+        assert_eq!(parsed.source_map.source_to_rendered(source_offset), 2);
+    }
+    assert_eq!(parsed.source_map.source_to_rendered(6), 2);
+    assert_eq!(parsed.source_map.source_to_rendered(8), 4);
+    for source_offset in 9..14 {
+        assert_eq!(parsed.source_map.source_to_rendered(source_offset), 5);
+    }
+    assert_eq!(parsed.source_map.source_to_rendered(14), 5);
+}
+
+#[test]
+fn test_inline_source_map_handles_code_spans_and_escaped_autolinks() {
+    let source = "`a*b` https://warp.dev/a\\.b";
+    let parsed = parse_inline_markdown_with_source_map(source);
+    let rendered_text = parsed
+        .inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect::<String>();
+    assert_eq!(rendered_text, "a*b https://warp.dev/a.b");
+
+    assert_eq!(parsed.source_map.rendered_to_source(0), 1);
+    assert_eq!(parsed.source_map.rendered_to_source(1), 2);
+    assert_eq!(parsed.source_map.rendered_to_source(2), 3);
+    assert_eq!(parsed.source_map.source_to_rendered(0), 0);
+    assert_eq!(parsed.source_map.source_to_rendered(4), 3);
+
+    let escaped_dot_source = source.find("\\.").expect("escaped dot should be present");
+    let decoded_dot_rendered = rendered_text
+        .rfind('.')
+        .expect("decoded dot should be present");
+    assert_eq!(
+        parsed.source_map.rendered_to_source(decoded_dot_rendered),
+        escaped_dot_source
+    );
+    assert_eq!(
+        parsed.source_map.source_to_rendered(escaped_dot_source),
+        decoded_dot_rendered
+    );
+    assert_eq!(
+        parsed.source_map.source_to_rendered(escaped_dot_source + 1),
+        decoded_dot_rendered + 1
+    );
+}
+
+#[test]
+fn test_inline_source_map_uses_recognized_html_line_break_spans() {
+    for source in ["a<br>b", "a<br/>b", "a<br />b", "a<BR />b"] {
+        let parsed = parse_inline_markdown_with_source_map(source);
+        let rendered_text = parsed
+            .inline
+            .iter()
+            .map(|fragment| fragment.text.as_str())
+            .collect::<String>();
+        assert_eq!(rendered_text, "a\nb", "source: {source:?}");
+
+        let following_source_offset = source.chars().count() - 1;
+        assert_eq!(parsed.source_map.rendered_length(), 3);
+        assert_eq!(parsed.source_map.rendered_to_source(0), 0);
+        assert_eq!(parsed.source_map.rendered_to_source(1), 1);
+        assert_eq!(
+            parsed.source_map.rendered_to_source(2),
+            following_source_offset
+        );
+        assert_eq!(
+            parsed.source_map.rendered_to_source(3),
+            source.chars().count()
+        );
+        assert_eq!(parsed.source_map.source_to_rendered(0), 0);
+        assert_eq!(parsed.source_map.source_to_rendered(1), 1);
+        for source_offset in 2..following_source_offset {
+            assert_eq!(
+                parsed.source_map.source_to_rendered(source_offset),
+                2,
+                "source offset {source_offset} in {source:?}"
+            );
+        }
+        assert_eq!(
+            parsed
+                .source_map
+                .source_to_rendered(following_source_offset),
+            2
+        );
+    }
+}
+
+#[test]
+fn test_inline_source_map_handles_nested_styles() {
+    let source = "**a *b* c**";
+    let parsed = parse_inline_markdown_with_source_map(source);
+    let rendered_text = parsed
+        .inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect::<String>();
+    assert_eq!(rendered_text, "a b c");
+    assert_eq!(parsed.source_map.source_length(), source.chars().count());
+    assert_eq!(
+        parsed.source_map.rendered_length(),
+        rendered_text.chars().count()
+    );
+    for (rendered_offset, rendered_character) in rendered_text.chars().enumerate() {
+        let source_offset = parsed.source_map.rendered_to_source(rendered_offset);
+        assert_eq!(
+            source.chars().nth(source_offset),
+            Some(rendered_character),
+            "rendered {rendered_offset} ({rendered_character:?}) should map to same source character",
+        );
+    }
+    assert_eq!(parsed.source_map.source_to_rendered(0), 0);
+    assert_eq!(parsed.source_map.source_to_rendered(2), 0);
+    assert_eq!(parsed.source_map.source_to_rendered(4), 2);
+    assert_eq!(parsed.source_map.source_to_rendered(6), 3);
+    assert_eq!(parsed.source_map.source_to_rendered(8), 4);
+    assert_eq!(parsed.source_map.source_to_rendered(10), 5);
+    assert_eq!(parsed.source_map.source_to_rendered(11), 5);
 }
 
 #[test]

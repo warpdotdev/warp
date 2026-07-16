@@ -1,5 +1,4 @@
-use markdown_parser::weight::CustomWeight;
-use markdown_parser::{Hyperlink, parse_inline_markdown};
+use markdown_parser::parse_inline_markdown_with_source_map;
 
 use super::*;
 
@@ -145,165 +144,18 @@ fn test_cell_range() {
 }
 
 #[test]
-fn test_table_cell_offset_map_handles_bold_and_links() {
-    let source = "**Bold** [Link](https://warp.dev)";
-    let inline = parse_inline_markdown(source);
-    assert!(
-        inline.iter().any(|fragment| fragment
-            .styles
-            .weight
-            .is_some_and(|weight| matches!(weight, CustomWeight::Bold))),
-        "parsed inline should have a bold fragment"
-    );
-    assert!(
-        inline
-            .iter()
-            .any(|fragment| matches!(&fragment.styles.hyperlink, Some(Hyperlink::Url(url)) if url == "https://warp.dev")),
-        "parsed inline should have a hyperlink fragment"
-    );
-    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+fn test_table_cell_offset_map_delegates_to_parser_source_map() {
+    let parsed = parse_inline_markdown_with_source_map("plain text");
+    let map = TableCellOffsetMap::from_source_map(parsed.source_map);
 
-    assert_eq!(map.rendered_length(), CharOffset::from(9));
-    assert_eq!(
-        map.source_length(),
-        CharOffset::from(source.chars().count())
-    );
-    assert_eq!(
-        map.rendered_to_source(CharOffset::from(0)),
-        CharOffset::from(2)
-    );
+    assert_eq!(map.rendered_length(), CharOffset::from(10));
+    assert_eq!(map.source_length(), CharOffset::from(10));
     assert_eq!(
         map.rendered_to_source(CharOffset::from(4)),
-        CharOffset::from(8)
+        CharOffset::from(4)
     );
     assert_eq!(
-        map.rendered_to_source(CharOffset::from(5)),
-        CharOffset::from(10)
+        map.source_to_rendered(CharOffset::from(7)),
+        CharOffset::from(7)
     );
-    assert_eq!(
-        map.rendered_to_source(CharOffset::from(9)),
-        CharOffset::from(14)
-    );
-    assert_eq!(
-        map.source_to_rendered(CharOffset::from(0)),
-        CharOffset::from(0)
-    );
-    assert_eq!(
-        map.source_to_rendered(CharOffset::from(2)),
-        CharOffset::from(0)
-    );
-    assert_eq!(
-        map.source_to_rendered(CharOffset::from(11)),
-        CharOffset::from(6)
-    );
-    assert_eq!(
-        map.source_to_rendered(CharOffset::from(14)),
-        CharOffset::from(9)
-    );
-    assert_eq!(
-        map.source_to_rendered(CharOffset::from(32)),
-        CharOffset::from(9)
-    );
-}
-
-#[test]
-fn test_table_cell_offset_map_handles_backslash_escaped_punctuation() {
-    let source = "a \\*star\\* b";
-    let inline = parse_inline_markdown(source);
-    let rendered_text: String = inline
-        .iter()
-        .map(|fragment| fragment.text.as_str())
-        .collect();
-    assert_eq!(rendered_text, "a *star* b");
-
-    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
-    assert_eq!(
-        map.rendered_length(),
-        CharOffset::from(rendered_text.chars().count())
-    );
-    assert_eq!(
-        map.source_length(),
-        CharOffset::from(source.chars().count())
-    );
-    assert_eq!(
-        map.rendered_to_source(CharOffset::from(rendered_text.chars().count())),
-        CharOffset::from(source.chars().count())
-    );
-}
-
-#[test]
-fn test_table_cell_offset_map_collapses_html_line_break_tags() {
-    for source in ["a<br>b", "a<br/>b", "a<br />b", "a<BR />b"] {
-        let inline = parse_inline_markdown(source);
-        let rendered_text: String = inline
-            .iter()
-            .map(|fragment| fragment.text.as_str())
-            .collect();
-        assert_eq!(rendered_text, "a\nb", "source: {source:?}");
-
-        let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
-        let break_start = CharOffset::from(1);
-        let following_source_offset = CharOffset::from(source.chars().count() - 1);
-
-        assert_eq!(map.rendered_length(), CharOffset::from(3));
-        assert_eq!(
-            map.rendered_to_source(CharOffset::from(0)),
-            CharOffset::from(0)
-        );
-        assert_eq!(map.rendered_to_source(CharOffset::from(1)), break_start);
-        assert_eq!(
-            map.rendered_to_source(CharOffset::from(2)),
-            following_source_offset
-        );
-        assert_eq!(
-            map.rendered_to_source(CharOffset::from(3)),
-            CharOffset::from(source.chars().count())
-        );
-
-        assert_eq!(
-            map.source_to_rendered(CharOffset::from(0)),
-            CharOffset::from(0)
-        );
-        assert_eq!(map.source_to_rendered(break_start), CharOffset::from(1));
-        for source_offset in 2..following_source_offset.as_usize() {
-            assert_eq!(
-                map.source_to_rendered(CharOffset::from(source_offset)),
-                CharOffset::from(2),
-                "source offset {source_offset} in {source:?}"
-            );
-        }
-        assert_eq!(
-            map.source_to_rendered(following_source_offset),
-            CharOffset::from(2)
-        );
-    }
-}
-
-#[test]
-fn test_table_cell_offset_map_handles_nested_styles() {
-    let source = "**a *b* c**";
-    let inline = parse_inline_markdown(source);
-    let rendered_text: String = inline
-        .iter()
-        .map(|fragment| fragment.text.as_str())
-        .collect();
-    assert_eq!(rendered_text, "a b c");
-
-    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
-    assert_eq!(
-        map.source_length(),
-        CharOffset::from(source.chars().count())
-    );
-    assert_eq!(
-        map.rendered_length(),
-        CharOffset::from(rendered_text.chars().count())
-    );
-    for (rendered_idx, rendered_char) in rendered_text.chars().enumerate() {
-        let source_pos = map.rendered_to_source(CharOffset::from(rendered_idx));
-        assert_eq!(
-            source.chars().nth(source_pos.as_usize()),
-            Some(rendered_char),
-            "rendered {rendered_idx} ({rendered_char:?}) should map to same char in source",
-        );
-    }
 }

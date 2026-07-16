@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use markdown_parser::{compute_formatted_text_delta, parse_markdown};
+use markdown_parser::{
+    FormattedTable, FormattedText, FormattedTextFragment, FormattedTextLine, TableAlignment,
+    compute_formatted_text_delta, parse_markdown,
+};
 use serde_yaml::Value;
 use string_offset::CharOffset;
 use vec1::Vec1;
@@ -9,6 +12,7 @@ use warpui_core::{App, ReadModel};
 use super::MarkdownStyle;
 use crate::content::buffer::tests::TestEmbeddedItem;
 use crate::content::buffer::{Buffer, BufferEditAction, EditOrigin, StyledBlockBoundaryBehavior};
+use crate::content::selection_model::BufferSelectionModel;
 use crate::content::text::{IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG};
 
 #[test]
@@ -51,23 +55,6 @@ print_endline "Hello, World!"
 ```
 "#
     );
-}
-
-#[test]
-fn test_html_line_break_at_source_line_end_is_one_paragraph_newline() {
-    App::test((), |mut app| async move {
-        let (buffer, selection) = Buffer::mock_from_markdown(
-            "first<br>\nsecond\n",
-            None,
-            Box::new(|_, _| IndentBehavior::Ignore),
-            &mut app,
-        );
-
-        app.read_model(&selection, |selection, ctx| selection.validate_buffer(ctx));
-        app.read_model(&buffer, |buffer, _| {
-            assert_eq!(buffer.text().as_str(), "first\nsecond");
-        });
-    });
 }
 
 #[test]
@@ -353,32 +340,28 @@ fn test_table_markdown_round_trip() {
 }
 
 #[test]
-fn test_table_html_line_break_round_trip() {
+fn test_table_inline_newline_serializes_as_html_break() {
     App::test((), |mut app| async move {
-        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
-        let markdown = "\
-| Feature | Notes |\n\
-| --- | --- |\n\
-| Export | **CSV<br>JSON** |\n";
-        let (buffer, selection) = Buffer::mock_from_markdown(
-            markdown,
-            None,
-            Box::new(|_, _| IndentBehavior::Ignore),
-            &mut app,
-        );
-
-        app.read_model(&selection, |selection, ctx| selection.validate_buffer(ctx));
-        let internal_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown());
-        assert_eq!(
-            internal_markdown,
-            format!(
-                "```{}\nFeature\tNotes\nExport\t**CSV<br>JSON**\n```\n",
-                TABLE_BLOCK_MARKDOWN_LANG
-            )
-        );
-
-        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
-        assert_eq!(exported_markdown, markdown);
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+        let formatted = FormattedText::new(vec![FormattedTextLine::Table(FormattedTable {
+            headers: vec![vec![FormattedTextFragment::plain_text("Notes")]],
+            alignments: vec![TableAlignment::Left],
+            rows: vec![vec![vec![
+                FormattedTextFragment::bold("CSV"),
+                FormattedTextFragment::bold("\n"),
+                FormattedTextFragment::bold("JSON"),
+            ]]],
+        })]);
+        buffer.update(&mut app, |buffer, ctx| {
+            *buffer = Buffer::from_formatted_text(
+                formatted,
+                None,
+                Box::new(|_, _| IndentBehavior::Ignore),
+                selection,
+                ctx,
+            );
+        });
 
         let html = app
             .read_model(&buffer, |buffer, ctx| {
@@ -387,62 +370,6 @@ fn test_table_html_line_break_round_trip() {
             })
             .expect("table should serialize to HTML");
         assert!(html.contains("<strong>CSV<br>JSON</strong>"), "{html}");
-    });
-}
-
-#[test]
-fn test_table_literal_html_break_round_trip() {
-    App::test((), |mut app| async move {
-        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
-        let markdown = concat!(
-            "| Kind | Notes |\n",
-            "| --- | --- |\n",
-            "| Escaped | first\\<br>second |\n",
-            "| Entity | first&lt;br&gt;second |\n",
-            "| Break | first<br>second |\n",
-            r"| Backslash | first\\\<br>second |",
-            "\n",
-        );
-        let (buffer, selection) = Buffer::mock_from_markdown(
-            markdown,
-            None,
-            Box::new(|_, _| IndentBehavior::Ignore),
-            &mut app,
-        );
-
-        app.read_model(&selection, |selection, ctx| selection.validate_buffer(ctx));
-        let internal_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown());
-        assert_eq!(
-            internal_markdown,
-            format!(
-                concat!(
-                    "```{}\n",
-                    "Kind\tNotes\n",
-                    "Escaped\tfirst\\<br>second\n",
-                    "Entity\tfirst\\<br>second\n",
-                    "Break\tfirst<br>second\n",
-                    "Backslash\t",
-                    r"first\\\<br>second",
-                    "\n",
-                    "```\n",
-                ),
-                TABLE_BLOCK_MARKDOWN_LANG
-            )
-        );
-
-        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
-        assert_eq!(
-            exported_markdown,
-            concat!(
-                "| Kind | Notes |\n",
-                "| --- | --- |\n",
-                "| Escaped | first\\<br>second |\n",
-                "| Entity | first\\<br>second |\n",
-                "| Break | first<br>second |\n",
-                r"| Backslash | first\\\<br>second |",
-                "\n",
-            )
-        );
     });
 }
 

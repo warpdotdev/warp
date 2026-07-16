@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use markdown_parser::{FormattedTable, TableAlignment, parse_inline_markdown};
+use markdown_parser::{FormattedTable, FormattedTextFragment, TableAlignment};
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -783,7 +783,7 @@ fn test_layout_table_block_caches_cell_text_frames() {
 }
 
 #[test]
-fn test_layout_table_block_preserves_inline_html_line_breaks() {
+fn test_layout_table_block_preserves_inline_newlines() {
     App::test((), |app| async move {
         app.read(|ctx| {
             let layout_cache = LayoutCache::new();
@@ -794,16 +794,31 @@ fn test_layout_table_block_preserves_inline_html_line_breaks() {
                 f32::MAX,
             );
             let table = FormattedTable {
-                headers: vec![parse_inline_markdown("Header")],
+                headers: vec![vec![FormattedTextFragment::plain_text("Header")]],
                 alignments: vec![TableAlignment::Left],
                 rows: vec![
-                    vec![parse_inline_markdown("A<br>B")],
-                    vec![parse_inline_markdown("A<br>")],
-                    vec![parse_inline_markdown("A<br><br>")],
+                    vec![vec![
+                        FormattedTextFragment::plain_text("A"),
+                        FormattedTextFragment::plain_text("\n"),
+                        FormattedTextFragment::plain_text("B"),
+                    ]],
+                    vec![vec![
+                        FormattedTextFragment::plain_text("A"),
+                        FormattedTextFragment::plain_text("\n"),
+                    ]],
+                    vec![vec![
+                        FormattedTextFragment::plain_text("A"),
+                        FormattedTextFragment::plain_text("\n"),
+                        FormattedTextFragment::plain_text("\n"),
+                    ]],
                 ],
             };
 
-            let styled_runs = table_cell_runs(&parse_inline_markdown("A<br>**B**"));
+            let styled_runs = table_cell_runs(&vec![
+                FormattedTextFragment::plain_text("A"),
+                FormattedTextFragment::plain_text("\n"),
+                FormattedTextFragment::bold("B"),
+            ]);
             assert_eq!(
                 styled_runs
                     .iter()

@@ -9,8 +9,8 @@ use html5ever::{QualName, serialize};
 use itertools::Itertools;
 use markdown_parser::{
     CodeBlockText, FormattedIndentTextInline, FormattedTableAlignment, FormattedTaskList,
-    FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextInline,
-    FormattedTextLine, OrderedFormattedIndentTextInline, html_line_break_tag_len,
+    FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextLine,
+    OrderedFormattedIndentTextInline,
 };
 use markup5ever::ns;
 use string_offset::CharOffset;
@@ -159,45 +159,7 @@ impl<'a> BufferMarkdownParser<'a> {
     }
 
     fn serialize_table_to_gfm_markdown(table: &FormattedTable, buf: &mut String) {
-        let mut column_count = table.headers.len();
-        for row in &table.rows {
-            column_count = column_count.max(row.len());
-        }
-
-        if column_count == 0 {
-            return;
-        }
-
-        let header_cells = (0..column_count)
-            .map(|index| {
-                table
-                    .headers
-                    .get(index)
-                    .map(inline_to_markdown)
-                    .unwrap_or_default()
-            })
-            .collect::<Vec<_>>();
-        append_gfm_table_row(&header_cells, buf);
-
-        let separator_cells: Vec<String> = (0..column_count)
-            .map(|index| {
-                alignment_to_gfm_separator(
-                    table
-                        .alignments
-                        .get(index)
-                        .copied()
-                        .unwrap_or(FormattedTableAlignment::Left),
-                )
-            })
-            .collect();
-        append_gfm_table_row(&separator_cells, buf);
-
-        for row in &table.rows {
-            let row_cells = (0..column_count)
-                .map(|index| row.get(index).map(inline_to_markdown).unwrap_or_default())
-                .collect::<Vec<_>>();
-            append_gfm_table_row(&row_cells, buf);
-        }
+        buf.push_str(&table.to_gfm_markdown());
     }
 
     /// Emits Markdown formatting markers for changing from `prev_styles` to `next_styles`.
@@ -1257,86 +1219,6 @@ where
     serializer.end_elem(table_tag)?;
 
     Ok(())
-}
-
-fn inline_to_markdown(inline: &FormattedTextInline) -> String {
-    let mut markdown = String::new();
-    let mut previous_styles = TextStylesWithMetadata::default();
-    for fragment in inline {
-        let next_styles = TextStylesWithMetadata::from(fragment.styles.clone());
-        let text = if fragment.styles.inline_code {
-            fragment.text.clone()
-        } else {
-            escape_table_cell_markdown_text(&fragment.text)
-        };
-        let content = BufferMarkdownParser::append_formatting(
-            &previous_styles,
-            &next_styles,
-            &text,
-            &mut markdown,
-        );
-        previous_styles = next_styles;
-        BufferMarkdownParser::append_content(content, fragment.styles.inline_code, &mut markdown);
-    }
-    BufferMarkdownParser::append_formatting(
-        &previous_styles,
-        &TextStylesWithMetadata::default(),
-        "",
-        &mut markdown,
-    );
-    markdown
-}
-
-fn escape_table_cell_markdown_text(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    let mut remaining = text;
-    while !remaining.is_empty() {
-        if let Some(rest) = remaining.strip_prefix('\n') {
-            escaped.push_str("<br>");
-            remaining = rest;
-            continue;
-        }
-        if let Some(tag_len) = html_line_break_tag_len(remaining) {
-            escaped.push('\\');
-            escaped.push_str(&remaining[..tag_len]);
-            remaining = &remaining[tag_len..];
-            continue;
-        }
-
-        let ch = remaining
-            .chars()
-            .next()
-            .expect("remaining text should not be empty");
-        if BufferMarkdownParser::is_markdown_special_char(ch) {
-            escaped.push('\\');
-        }
-        escaped.push(ch);
-        remaining = &remaining[ch.len_utf8()..];
-    }
-    escaped
-}
-
-fn append_gfm_table_row(cells: &[String], buf: &mut String) {
-    buf.push('|');
-    for cell in cells {
-        buf.push(' ');
-        buf.push_str(&escape_gfm_table_cell(cell));
-        buf.push(' ');
-        buf.push('|');
-    }
-    buf.push('\n');
-}
-
-fn alignment_to_gfm_separator(alignment: FormattedTableAlignment) -> String {
-    match alignment {
-        FormattedTableAlignment::Left => "---".to_string(),
-        FormattedTableAlignment::Center => ":---:".to_string(),
-        FormattedTableAlignment::Right => "---:".to_string(),
-    }
-}
-
-fn escape_gfm_table_cell(cell: &str) -> String {
-    cell.replace('|', "\\|")
 }
 
 #[cfg(test)]
