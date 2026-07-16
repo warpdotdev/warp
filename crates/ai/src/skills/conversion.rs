@@ -286,6 +286,8 @@ fn convert_provider(
         api::skill_descriptor::provider::Type::Github(_) => Ok(SkillProvider::Github),
         api::skill_descriptor::provider::Type::OpenCode(_) => Ok(SkillProvider::OpenCode),
         // Kiro is a new provider not yet represented client-side; treat as invalid.
+        // TODO(@peicodes): Add SkillProvider::Kiro and map it here once Kiro
+        // support is implemented in the client.
         api::skill_descriptor::provider::Type::Kiro(_) => {
             Err(SkillConversionError::ProviderInvalid)
         }
