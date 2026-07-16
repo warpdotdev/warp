@@ -200,11 +200,18 @@ pub async fn describe_given_token<T: CompletionContext>(
                     // A flag token with an attached value (`-DWITH_TESTS` from
                     // `-DWITH_TESTS=OFF`) is not a bundle of short-hand flags. Skip
                     // bundle-style exact matches — Option suggestions whose display (e.g.
-                    // CMake's `-S`) differs from the token while their replacement equals
-                    // it — so such tokens aren't misdescribed/colored as that option (#9820).
+                    // CMake's `-S`) doesn't itself exact-match the token (the exact match
+                    // came from the bundle replacement) — so such tokens aren't
+                    // misdescribed/colored as that option (#9820). The display is compared
+                    // with the suggestion's own matcher so legitimately case-insensitive
+                    // options (`-force` for `-Force`) keep their description.
+                    let display_exactly_matches_token = matches!(
+                        matcher.get_match_type(trimmed_token_item, suggestion.display()),
+                        Some(Match::Exact { .. })
+                    );
                     if is_flag_with_attached_value
                         && matches!(suggestion.suggestion_type(), SuggestionType::Option(..))
-                        && suggestion.display() != trimmed_token_item
+                        && !display_exactly_matches_token
                     {
                         continue;
                     }

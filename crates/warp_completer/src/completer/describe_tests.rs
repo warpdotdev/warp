@@ -550,3 +550,25 @@ pub fn test_describe_attached_value_flag_not_treated_as_bundle() {
     let line = "cmake -DS=OFF";
     assert_eq!(describe_at_cursor(line, ByteOffset::from(8), &ctx), None);
 }
+
+/// The attached-value filter must not drop legitimately case-insensitive option matches:
+/// typing `-encoding=UTF8` (display `-Encoding`) is an exact case-insensitive match, not a
+/// bundle-style match, so the description is kept (#9820 review follow-up).
+#[test]
+pub fn test_describe_attached_value_keeps_case_insensitive_option_match() {
+    warp_core::features::mark_initialized();
+    let registry = create_test_command_registry([add_content_signature()]);
+    let ctx = FakeCompletionContext::new(registry);
+
+    assert_eq!(
+        describe_at_cursor("Add-Content -encoding=UTF8", ByteOffset::from(14), &ctx),
+        Some(Description {
+            token: "-encoding".to_string().spanned(Span::new(12, 21)),
+            description_text: None,
+            suggestion_type: SuggestionType::Option(
+                MatchRequirement::UniquePrefixOnly,
+                OptionCaseSensitivity::CaseInsensitive
+            ),
+        })
+    );
+}
