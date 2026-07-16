@@ -1,3 +1,4 @@
+mod ime_position;
 mod key_events;
 
 #[cfg(test)]
@@ -22,6 +23,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{self, KeyCode};
 use winit::window::WindowId as WinitWindowId;
 
+use self::ime_position::{ImeCandidateArea, ImePositionState};
 use self::key_events::convert_keyboard_input_event;
 use super::app::ClipboardEvent;
 use super::window::DEFAULT_TITLEBAR_HEIGHT;
@@ -157,6 +159,9 @@ struct WindowState {
     has_pending_drag_drop_timer: bool,
     /// The purpose of the last touch event.
     last_touch_purpose: Option<TouchPurpose>,
+    /// Tracks the IME candidate-window area last applied to winit so we can
+    /// plan cache-busting update sequences. See [`ime_position`] module docs.
+    ime_position: ImePositionState,
     /// Tracks scroll velocity during active touch scrolling and momentum scrolling.
     /// Active phase determined through `momentum_scroll_abort.is_some()`.
     scroll_velocity: Option<ScrollVelocity>,
@@ -182,6 +187,7 @@ impl WindowState {
             pending_drag_drop_files: Vec::new(),
             has_pending_drag_drop_timer: false,
             last_touch_purpose: None,
+            ime_position: ImePositionState::default(),
             scroll_velocity: None,
             momentum_scroll_abort: None,
             #[cfg(target_family = "wasm")]
@@ -741,9 +747,9 @@ impl EventLoop {
                 });
             }
             Event::UserEvent(CustomEvent::ActiveCursorPositionUpdated) => {
-                if self.ime_enabled {
-                    self.update_ime_position();
-                }
+                // The text cursor moved; keep the IME candidate window
+                // anchored to it.
+                self.refresh_ime_position_if_enabled();
             }
             Event::UserEvent(CustomEvent::AboutToSleep) => {
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -879,6 +885,10 @@ impl EventLoop {
                         mut inner_size_writer,
                     },
             } => {
+                // A scale-factor change moves the candidate window's physical
+                // location even when its logical position is unchanged.
+                self.refresh_ime_position_if_enabled();
+
                 // The following correction is only needed on Windows.
                 if !cfg!(windows) {
                     return;
@@ -1058,6 +1068,9 @@ impl EventLoop {
                 window.handle_resize();
                 self.callbacks.for_window(window).window_resized(window);
                 self.callbacks.window_resized();
+                // Resizing can move the text cursor (reflow) and invalidates
+                // winit's cached candidate-window position.
+                self.refresh_ime_position_if_enabled();
             }
             ConvertedEvent::ModifierKeyChanged { key_code, state } => {
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
@@ -1103,6 +1116,10 @@ impl EventLoop {
                     .for_window(window)
                     .window_moved(RectF::new(vec2f(position.x, position.y), size));
                 self.callbacks.window_moved();
+                // Moving the window changes the candidate window's screen
+                // position while the window-relative position stays the same,
+                // so force a refresh.
+                self.refresh_ime_position_if_enabled();
             }
             ConvertedEvent::MoveWindowBy {
                 current_touch,
@@ -1778,6 +1795,20 @@ impl EventLoop {
         abort_handle
     }
 
+    /// Refreshes the IME candidate-window position for the active window, if
+    /// IME input is currently enabled.
+    ///
+    /// This must be invoked whenever the on-screen location of the text
+    /// cursor may have changed relative to the platform's cached candidate
+    /// position: text-cursor movement (via
+    /// [`CustomEvent::ActiveCursorPositionUpdated`]), window moves, window
+    /// resizes, and scale-factor changes.
+    fn refresh_ime_position_if_enabled(&mut self) {
+        if self.ime_enabled {
+            self.update_ime_position();
+        }
+    }
+
     fn update_ime_position(&mut self) {
         let Some(active_window_id) = self.ui_app.read(|ctx| ctx.windows().active_window()) else {
             return;
@@ -1790,23 +1821,28 @@ impl EventLoop {
         };
 
         let mut window_callbacks = self.callbacks.for_window(window.as_ref());
-        let active_cursor_position = window_callbacks.get_active_cursor_position();
-        if let Some(active_cursor_position) = active_cursor_position {
-            let winit_window = downcast_window(window.as_ref());
-            let position = LogicalPosition::new(
-                active_cursor_position.position.origin_x(),
-                active_cursor_position.position.origin_y()
-                    + (1.2 * active_cursor_position.font_size),
-            );
-            // Currently the size argument is not supported on X11. We calculate it here anyway.
-            let size = LogicalSize::new(
-                active_cursor_position.font_size,
-                active_cursor_position.font_size,
-            );
-            // TODO(abhishek): We make sure that the position is different than last time to prevent winit from
-            // caching the old position and not properly updating on `WindowMoved` or `WindowResized` events.
-            winit_window.set_ime_position(LogicalPosition::new(position.x, position.y + 1.), size);
-            winit_window.set_ime_position(position, size);
+        let Some(active_cursor_position) = window_callbacks.get_active_cursor_position() else {
+            return;
+        };
+        let target = ImeCandidateArea::from_cursor_info(&active_cursor_position);
+
+        let Some(window_state) = self
+            .state
+            .windows
+            .values_mut()
+            .find(|window_state| window_state.window_id == active_window_id)
+        else {
+            return;
+        };
+
+        let winit_window = downcast_window(window.as_ref());
+        // Apply the full planned sequence: when the target is unchanged, the
+        // plan includes a nudge update to bust winit's cached position (see
+        // the `ime_position` module docs).
+        for update in window_state.ime_position.plan_updates(target) {
+            // Note: the size argument is unsupported (ignored) on X11; we
+            // pass it anyway for the platforms that support it.
+            winit_window.set_ime_position(update.position, update.size);
         }
     }
 
