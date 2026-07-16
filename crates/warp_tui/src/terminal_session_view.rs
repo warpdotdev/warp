@@ -70,16 +70,18 @@ use crate::keybindings::{
 };
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
+use crate::orchestrated_agent_identity_styling::assign_agent_identity_indices;
 use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::orchestration_model::{
-    TuiOrchestrationEvent, TuiOrchestrationModel, TuiOrchestrationTabSnapshot,
+    TuiOrchestrationEvent, TuiOrchestrationModel, TuiOrchestrationSnapshot,
 };
 use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tab_bar::{
-    TuiTab, TuiTabBarConfig, TuiTabBarEvent, TuiTabBarNavigationDirection, TuiTabBarView,
+    TuiTab, TuiTabBarConfig, TuiTabBarEvent, TuiTabBarNavigationDirection, TuiTabBarSecondaryEdge,
+    TuiTabBarView,
 };
 use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
@@ -248,11 +250,11 @@ pub(crate) enum TuiTerminalSessionAction {
     ForwardUserPtyBytes(Vec<u8>),
     /// Toggle the latest exposed inline plan.
     TogglePlan,
-    /// Return keyboard focus from tabs to the session interaction.
-    FocusSessionInteraction,
-    /// Select the previous tab using the component's settled layout.
+    /// Return keyboard focus from tabs to the session's default interaction target.
+    FocusDefaultInteractionTarget,
+    /// Select the previous tab using the tab view's semantic order.
     SelectPreviousOrchestrationTab,
-    /// Select the next tab using the component's settled layout.
+    /// Select the next tab using the tab view's semantic order.
     SelectNextOrchestrationTab,
     /// Select the first child tab, excluding the orchestrator.
     SelectFirstOrchestrationChild,
@@ -364,6 +366,9 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-p"),
     ]);
+
+    // Tab navigation is user-remappable, unlike the reserved session-control
+    // bindings above, so the two groups use different registration APIs.
     let tab_context = id!("TuiTerminalSessionView") & id!(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
     app.register_editable_bindings([
         EditableBinding::new(
@@ -417,7 +422,7 @@ pub(crate) fn init(app: &mut AppContext) {
         EditableBinding::new(
             "tui:orchestration_tabs:focus_input",
             "Return focus to the session input",
-            TuiTerminalSessionAction::FocusSessionInteraction,
+            TuiTerminalSessionAction::FocusDefaultInteractionTarget,
         )
         .with_context_predicate(tab_context)
         .with_group(TUI_BINDING_GROUP)
@@ -439,7 +444,10 @@ impl TuiTerminalSessionView {
 
     fn focus_current_owner(&mut self, ctx: &mut ViewContext<Self>) {
         match self.input_target() {
-            TuiInputTarget::Disabled | TuiInputTarget::Pty => ctx.focus_self(),
+            TuiInputTarget::Disabled | TuiInputTarget::Pty => {
+                self.orchestration_tabs_focused = false;
+                ctx.focus_self();
+            }
             TuiInputTarget::AgentEditor => {
                 if let Some(blocker) = self.active_blocking_child(ctx) {
                     self.orchestration_tabs_focused = false;
@@ -905,6 +913,7 @@ impl TuiTerminalSessionView {
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
         let transcript_for_input = transcript.clone();
+        let conversation_selection_for_input = conversation_selection.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
             TuiInputView::new(
                 input_editor_model,
@@ -912,6 +921,19 @@ impl TuiTerminalSessionView {
                 suggestions_mode_for_input,
                 inline_menus_for_input,
                 transcript_for_input,
+                move |ctx| {
+                    if !ctx.has_singleton_model::<TuiOrchestrationModel>()
+                        || !ctx.has_singleton_model::<TuiSessions>()
+                    {
+                        return false;
+                    }
+                    conversation_selection_for_input
+                        .as_ref(ctx)
+                        .selected_conversation_id(ctx)
+                        .is_some_and(|conversation_id| {
+                            TuiOrchestrationModel::as_ref(ctx).has_tabs(conversation_id, ctx)
+                        })
+                },
                 ctx,
             )
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
@@ -950,7 +972,7 @@ impl TuiTerminalSessionView {
             TuiInputViewEvent::AcceptedMcp(action) => {
                 view.handle_accepted_mcp_action(*action, ctx);
             }
-            TuiInputViewEvent::FocusAboveRequested => {
+            TuiInputViewEvent::MoveFocusUp => {
                 view.focus_orchestration_tabs(ctx);
             }
         });
@@ -974,7 +996,7 @@ impl TuiTerminalSessionView {
                 else {
                     return;
                 };
-                view.select_orchestration_conversation(
+                view.switch_to_orchestration_conversation(
                     conversation_id,
                     view.orchestration_tabs_focused,
                     ctx,
@@ -984,8 +1006,7 @@ impl TuiTerminalSessionView {
                 let Ok(page_anchor) = AIConversationId::try_from(page_anchor.clone()) else {
                     return;
                 };
-                let palette_len = TuiUiBuilder::from_app(ctx).agent_identity_palette().len();
-                let Some(snapshot) = view.orchestration_tab_snapshot(palette_len, ctx) else {
+                let Some(snapshot) = view.orchestration_tab_snapshot(ctx) else {
                     return;
                 };
                 TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
@@ -1249,8 +1270,8 @@ impl TuiTerminalSessionView {
         });
     }
 
-    /// Selects a newly materialized child conversation without changing view focus.
-    pub(crate) fn activate_orchestration_child_conversation(
+    /// Initializes a background child session with the conversation it owns.
+    pub(crate) fn initialize_orchestrated_child_conversation(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
@@ -1269,89 +1290,75 @@ impl TuiTerminalSessionView {
     }
 
     /// Resolves the orchestration tabs for this session's selected conversation.
-    fn orchestration_tab_snapshot(
-        &self,
-        identity_palette_len: usize,
-        ctx: &AppContext,
-    ) -> Option<TuiOrchestrationTabSnapshot> {
+    fn orchestration_tab_snapshot(&self, ctx: &AppContext) -> Option<TuiOrchestrationSnapshot> {
         if !ctx.has_singleton_model::<TuiOrchestrationModel>()
             || !ctx.has_singleton_model::<TuiSessions>()
         {
             return None;
         }
         let selected_conversation_id = self.selected_conversation_id(ctx)?;
-        TuiOrchestrationModel::as_ref(ctx).tab_snapshot(
-            selected_conversation_id,
-            identity_palette_len,
-            ctx,
-        )
+        TuiOrchestrationModel::as_ref(ctx).snapshot(selected_conversation_id, ctx)
     }
 
-    /// Reconciles input/tab focus availability after orchestration state changes.
+    /// Drops tab focus when this session no longer has an orchestration bar.
     fn handle_orchestration_tab_change(&mut self, ctx: &mut ViewContext<Self>) {
         let builder = TuiUiBuilder::from_app(ctx);
-        let snapshot = self.orchestration_tab_snapshot(builder.agent_identity_palette().len(), ctx);
-        let available = snapshot.is_some();
-        self.input_view.update(ctx, |input, ctx| {
-            input.set_focus_above_available(available, ctx);
-        });
+        let snapshot = self.orchestration_tab_snapshot(ctx);
         if let Some(snapshot) = snapshot.as_ref() {
             self.sync_orchestration_tab_bar(snapshot, &builder, ctx);
         }
-        if !available && self.orchestration_tabs_focused {
-            self.focus_session_interaction(ctx);
+        if snapshot.is_none() && self.orchestration_tabs_focused {
+            self.orchestration_tabs_focused = false;
+            if self.is_focused_session(ctx) {
+                self.focus_current_owner(ctx);
+            }
         }
         ctx.notify();
     }
 
     /// Gives keyboard focus to the orchestration tab bar when it is available.
     fn focus_orchestration_tabs(&mut self, ctx: &mut ViewContext<Self>) {
-        let builder = TuiUiBuilder::from_app(ctx);
-        let Some(snapshot) =
-            self.orchestration_tab_snapshot(builder.agent_identity_palette().len(), ctx)
-        else {
+        if self.orchestration_tab_snapshot(ctx).is_none() {
             return;
-        };
-        self.orchestration_tabs_focused = true;
-        self.sync_orchestration_tab_bar(&snapshot, &builder, ctx);
-        ctx.focus_self();
-        ctx.notify();
+        }
+        self.set_orchestration_tab_focus(true, ctx);
     }
 
-    /// Focuses the session's blocker or input and leaves tab-navigation mode.
-    fn focus_session_interaction(&mut self, ctx: &mut ViewContext<Self>) {
-        self.orchestration_tabs_focused = false;
+    /// Applies tab-focus mode, synchronizes presentation, and resolves the focus owner.
+    fn set_orchestration_tab_focus(&mut self, focused: bool, ctx: &mut ViewContext<Self>) {
+        self.orchestration_tabs_focused = focused;
         let builder = TuiUiBuilder::from_app(ctx);
-        if let Some(snapshot) =
-            self.orchestration_tab_snapshot(builder.agent_identity_palette().len(), ctx)
-        {
+        if let Some(snapshot) = self.orchestration_tab_snapshot(ctx) {
             self.sync_orchestration_tab_bar(&snapshot, &builder, ctx);
         }
         self.focus_current_owner(ctx);
         ctx.notify();
     }
 
-    /// Switches retained sessions and applies the requested target focus mode.
-    fn select_orchestration_conversation(
+    /// Leaves the tab bar and focuses the session's normal interaction owner.
+    fn focus_default_interaction_target(&mut self, ctx: &mut ViewContext<Self>) {
+        self.set_orchestration_tab_focus(false, ctx);
+    }
+
+    /// Switches to the retained session that owns an orchestration conversation.
+    fn switch_to_orchestration_conversation(
         &mut self,
         conversation_id: AIConversationId,
         keep_tab_focus: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let session_id = TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
-            model.select_conversation(conversation_id, ctx)
+            model.focus_conversation_session(conversation_id, ctx)
         });
         let Some(session_id) = session_id else {
             return;
         };
         if session_id.surface_id() == self.terminal_surface_id {
-            if keep_tab_focus {
-                self.focus_orchestration_tabs(ctx);
-            } else {
-                self.focus_session_interaction(ctx);
-            }
+            self.set_orchestration_tab_focus(keep_tab_focus, ctx);
             return;
         }
+        self.orchestration_tabs_focused = false;
+        ctx.notify();
         let target_view = TuiSessions::as_ref(ctx)
             .session(session_id)
             .map(|session| session.view().clone());
@@ -1359,51 +1366,45 @@ impl TuiTerminalSessionView {
             return;
         };
         target_view.update(ctx, |target, target_ctx| {
-            if keep_tab_focus {
-                target.focus_orchestration_tabs(target_ctx);
-            } else {
-                target.focus_session_interaction(target_ctx);
-            }
+            target.set_orchestration_tab_focus(keep_tab_focus, target_ctx);
             target.handle_orchestration_tab_change(target_ctx);
         });
-    }
-
-    /// Selects the first or last navigable child from the current snapshot.
-    fn select_orchestration_edge_child(&mut self, first: bool, ctx: &mut ViewContext<Self>) {
-        let palette_len = TuiUiBuilder::from_app(ctx).agent_identity_palette().len();
-        let Some(snapshot) = self.orchestration_tab_snapshot(palette_len, ctx) else {
-            return;
-        };
-        let target = if first {
-            snapshot.tabs.first()
-        } else {
-            snapshot.tabs.last()
-        };
-        if let Some(target) = target {
-            self.select_orchestration_conversation(target.conversation_id, true, ctx);
-        }
     }
 
     /// Builds the tab child-view configuration for an orchestration snapshot.
     fn orchestration_tab_bar_config(
         &self,
-        snapshot: &TuiOrchestrationTabSnapshot,
+        snapshot: &TuiOrchestrationSnapshot,
         builder: &TuiUiBuilder,
     ) -> TuiTabBarConfig {
         let palette = builder.agent_identity_palette();
+        let mut tabs_in_spawn_order = snapshot.tabs.iter().collect::<Vec<_>>();
+        tabs_in_spawn_order.sort_by_key(|tab| tab.spawn_index);
+        let identity_indices = assign_agent_identity_indices(
+            tabs_in_spawn_order.iter().map(|tab| tab.label.as_str()),
+            palette.len(),
+        );
+        let identity_by_conversation = tabs_in_spawn_order
+            .into_iter()
+            .map(|tab| tab.conversation_id)
+            .zip(identity_indices)
+            .collect::<HashMap<_, _>>();
         let tabs = snapshot
             .tabs
             .iter()
             .map(|tab| {
                 let identity = palette
-                    .get(tab.identity_index)
+                    .get(
+                        identity_by_conversation
+                            .get(&tab.conversation_id)
+                            .copied()
+                            .unwrap_or_default(),
+                    )
                     .or_else(|| palette.first())
                     .cloned()
                     .unwrap_or_default();
-                let glyph = identity.glyph.to_owned();
-                let style = identity.style;
                 TuiTab::new(tab.conversation_id.to_string(), tab.label.clone())
-                    .with_leading_text(glyph, style)
+                    .with_leading_text(identity.glyph, identity.style)
             })
             .collect();
         let mut config = TuiTabBarConfig::new(tabs);
@@ -1425,7 +1426,7 @@ impl TuiTerminalSessionView {
     /// Synchronizes the retained tab child view from current orchestration state.
     fn sync_orchestration_tab_bar(
         &self,
-        snapshot: &TuiOrchestrationTabSnapshot,
+        snapshot: &TuiOrchestrationSnapshot,
         builder: &TuiUiBuilder,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -2641,7 +2642,7 @@ impl TuiView for TuiTerminalSessionView {
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
         let mut context = Self::default_keymap_context();
-        if self.orchestration_tabs_focused {
+        if self.orchestration_tabs_focused && self.input_target().agent_editor_owns_input() {
             context.set.insert(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
         }
         if self.is_conversation_restore_loading() {
@@ -2704,8 +2705,7 @@ impl TuiView for TuiTerminalSessionView {
             })
             .flatten();
         let builder = TuiUiBuilder::from_app(ctx);
-        let identity_palette_len = builder.agent_identity_palette().len();
-        let orchestration_tabs = self.orchestration_tab_snapshot(identity_palette_len, ctx);
+        let orchestration_tabs = self.orchestration_tab_snapshot(ctx);
         let orchestration_tabs_available = orchestration_tabs.is_some();
 
         // Ctrl-c (cancel/clear/exit) is handled by the keymap pass via the
@@ -2863,8 +2863,8 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.hand_back_terminal_use_control(ctx)
             }
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
-            TuiTerminalSessionAction::FocusSessionInteraction => {
-                self.focus_session_interaction(ctx)
+            TuiTerminalSessionAction::FocusDefaultInteractionTarget => {
+                self.focus_default_interaction_target(ctx)
             }
             TuiTerminalSessionAction::SelectPreviousOrchestrationTab => {
                 if let Some(conversation_id) = self
@@ -2873,7 +2873,7 @@ impl TypedActionView for TuiTerminalSessionView {
                     .navigation_target(TuiTabBarNavigationDirection::Previous)
                     .and_then(|key| AIConversationId::try_from(key).ok())
                 {
-                    self.select_orchestration_conversation(conversation_id, true, ctx);
+                    self.switch_to_orchestration_conversation(conversation_id, true, ctx);
                 }
             }
             TuiTerminalSessionAction::SelectNextOrchestrationTab => {
@@ -2883,14 +2883,28 @@ impl TypedActionView for TuiTerminalSessionView {
                     .navigation_target(TuiTabBarNavigationDirection::Next)
                     .and_then(|key| AIConversationId::try_from(key).ok())
                 {
-                    self.select_orchestration_conversation(conversation_id, true, ctx);
+                    self.switch_to_orchestration_conversation(conversation_id, true, ctx);
                 }
             }
             TuiTerminalSessionAction::SelectFirstOrchestrationChild => {
-                self.select_orchestration_edge_child(true, ctx)
+                if let Some(conversation_id) = self
+                    .orchestration_tab_bar
+                    .as_ref(ctx)
+                    .secondary_edge_target(TuiTabBarSecondaryEdge::First)
+                    .and_then(|key| AIConversationId::try_from(key).ok())
+                {
+                    self.switch_to_orchestration_conversation(conversation_id, true, ctx);
+                }
             }
             TuiTerminalSessionAction::SelectLastOrchestrationChild => {
-                self.select_orchestration_edge_child(false, ctx)
+                if let Some(conversation_id) = self
+                    .orchestration_tab_bar
+                    .as_ref(ctx)
+                    .secondary_edge_target(TuiTabBarSecondaryEdge::Last)
+                    .and_then(|key| AIConversationId::try_from(key).ok())
+                {
+                    self.switch_to_orchestration_conversation(conversation_id, true, ctx);
+                }
             }
             TuiTerminalSessionAction::ForwardUserPtyBytes(bytes) => {
                 // Raw passthrough: the bytes are already the app's escape

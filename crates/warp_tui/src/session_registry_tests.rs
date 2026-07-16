@@ -66,12 +66,6 @@ fn focus_drives_events() {
             TuiSessions::register_session(&sessions, second, second_manager, false, ctx)
         });
         assert_eq!(second_id.surface_id(), second_view_id);
-        assert_eq!(
-            app.read_model(&sessions, |sessions, _| {
-                sessions.session_id_for_surface(second_view_id)
-            }),
-            Some(second_id),
-        );
         assert!(std::mem::take(&mut *events.borrow_mut()).is_empty());
         assert_eq!(
             app.read_model(&sessions, |sessions, _| sessions.focused_session_id()),

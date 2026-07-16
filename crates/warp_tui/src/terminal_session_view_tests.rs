@@ -1,24 +1,70 @@
 use warp::appearance::Appearance;
 use warp::tui_export::{
-    export_conversation_markdown, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate,
+    export_conversation_markdown, register_tui_session_view_test_singletons, PtyIntent,
+    PtyIntentEvent, SizeInfo, SizeUpdate,
 };
-use warpui::EntityIdMap;
+use warpui::platform::WindowStyle;
+use warpui::{AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, UpdateModel, ViewHandle};
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
 };
 use warpui_core::keymap::{Context, Keystroke, Trigger};
-use warpui_core::{App, AppContext};
+use warpui_core::{App, AppContext, TuiView};
 
 use super::{
     export_file_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
-    TuiTerminalSessionEvent,
+    TuiTerminalSessionEvent, ORCHESTRATION_TAB_BAR_FOCUSED_FLAG,
 };
+use crate::autoupdate::TuiAutoupdater;
 use crate::keybindings::{
     CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
     PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
 };
+use crate::orchestration_model::TuiOrchestrationModel;
+use crate::root_view::RootTuiView;
+use crate::session_registry::{TuiSessionId, TuiSessions};
+use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 use crate::tui_builder::TuiUiBuilder;
+
+struct FocusTestFixture {
+    window_id: warpui_core::WindowId,
+    sessions: ModelHandle<TuiSessions>,
+}
+
+fn focus_test_fixture(app: &mut App) -> FocusTestFixture {
+    register_tui_session_view_test_singletons(app);
+    add_test_semantic_selection(app);
+    app.update(TuiAutoupdater::register);
+    let (window_id, _) = app.update(|ctx| {
+        ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| RootTuiView::new(),
+        )
+    });
+    let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
+    let orchestration = app.update(TuiOrchestrationModel::register);
+    app.update(|ctx| TuiSessions::wire_orchestration(&sessions, &orchestration, ctx));
+    FocusTestFixture {
+        window_id,
+        sessions,
+    }
+}
+
+fn add_focus_test_session(
+    app: &mut App,
+    fixture: &FocusTestFixture,
+    focus: bool,
+) -> (ViewHandle<super::TuiTerminalSessionView>, TuiSessionId) {
+    let (view, manager) = add_test_terminal_session(app, fixture.window_id);
+    let session_id = app.update(|ctx| {
+        TuiSessions::register_session(&fixture.sessions, view.clone(), manager, focus, ctx)
+    });
+    (view, session_id)
+}
 
 fn render_element(mut element: Box<dyn TuiElement>, ctx: &AppContext, width: u16) -> TuiBuffer {
     let mut rendered_views = EntityIdMap::default();
@@ -204,4 +250,49 @@ fn resize_event_maps_to_pty_resize_intent() {
     };
     assert_eq!(actual_update.new_size().rows(), 8);
     assert_eq!(actual_update.new_size().columns(), 42);
+}
+
+#[test]
+fn alternate_screen_clears_orchestration_tab_focus_and_bindings() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.orchestration_tabs_focused = true;
+            view.terminal_model.lock().process_bytes("\u{1b}[?1049h");
+            view.focus_current_owner(ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert!(!view.orchestration_tabs_focused);
+            assert!(!view
+                .keymap_context(ctx)
+                .set
+                .contains(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG));
+        });
+    });
+}
+
+#[test]
+fn background_tab_refresh_never_moves_responder_focus() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, foreground_id) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+
+        background.update(&mut app, |view, ctx| {
+            view.orchestration_tabs_focused = true;
+            view.handle_orchestration_tab_change(ctx);
+        });
+
+        assert_eq!(
+            app.read_model(&fixture.sessions, |sessions, _| {
+                sessions.focused_session_id()
+            }),
+            Some(foreground_id)
+        );
+        assert!(app
+            .read(|ctx| { ctx.check_view_or_child_focused(fixture.window_id, &foreground.id()) }));
+        assert!(!background.read(&app, |view, _| view.orchestration_tabs_focused));
+    });
 }

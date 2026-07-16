@@ -5,6 +5,7 @@
 //! orchestration pill bar so other surfaces (e.g. keyboard navigation and
 //! the agent-mode usage footer's credit rollup) can walk and order the same
 //! tree without duplicating the logic.
+use std::collections::HashSet;
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -98,6 +99,28 @@ pub fn resolve_orchestration_participant(
         kind: OrchestrationParticipantKind::Agent { name },
         conversation_id: Some(conversation_id),
     }
+}
+
+/// Returns the topmost loaded conversation in an orchestration tree.
+///
+/// Conversations without descendants are not orchestration roots. Malformed
+/// parent cycles and missing ancestors fail closed.
+pub fn orchestration_root_conversation_id(
+    history: &BlocklistAIHistoryModel,
+    conversation_id: AIConversationId,
+) -> Option<AIConversationId> {
+    history.conversation(&conversation_id)?;
+    let mut current = conversation_id;
+    let mut visited = HashSet::new();
+    while visited.insert(current) {
+        let conversation = history.conversation(&current)?;
+        let Some(parent) = history.resolved_parent_conversation_id_for_conversation(conversation)
+        else {
+            return (!history.child_conversation_ids_of(&current).is_empty()).then_some(current);
+        };
+        current = parent;
+    }
+    None
 }
 
 const DONE_STATUS_KEY: u8 = 3;

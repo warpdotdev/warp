@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
-    BannerState, IsSharedSessionCreator, LocalTtyTerminalManager, ServerConversationToken,
-    TerminalManagerTrait, TerminalSurfaceResult,
+    AIConversationId, BannerState, BlocklistAIHistoryModel, IsSharedSessionCreator,
+    LocalTtyTerminalManager, ServerConversationToken, TerminalManagerTrait, TerminalSurfaceResult,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -325,12 +325,17 @@ impl TuiSessions {
     pub(crate) fn session(&self, id: TuiSessionId) -> Option<&TuiSession> {
         self.sessions.iter().find(|session| session.id == id)
     }
-    /// Looks up a retained session by its terminal surface id.
-    pub(crate) fn session_id_for_surface(&self, surface_id: EntityId) -> Option<TuiSessionId> {
+
+    /// Resolves a loaded conversation to the retained session that owns it.
+    pub(crate) fn session_id_for_conversation(
+        &self,
+        history: &BlocklistAIHistoryModel,
+        conversation_id: AIConversationId,
+    ) -> Option<TuiSessionId> {
+        let surface_id = history.terminal_surface_id_for_conversation(&conversation_id)?;
         self.sessions
             .iter()
-            .find(|session| session.id.surface_id() == surface_id)
-            .map(|session| session.id)
+            .find_map(|session| (session.id.surface_id() == surface_id).then_some(session.id))
     }
 
     /// Whether no session has been registered.

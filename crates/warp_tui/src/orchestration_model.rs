@@ -1,13 +1,14 @@
-//! [`TuiOrchestrationModel`]: the TUI's child-agent coordinator.
+//! [`TuiOrchestrationModel`]: TUI orchestration runtime and navigation state.
 //!
 //! The shared `StartAgentExecutor` (one per session surface) emits
 //! `CreateAgent` and waits for a frontend to materialize the child. In the
 //! GUI that materializer is `TerminalView` → `PaneGroup`'s hidden child
 //! panes; in the TUI, [`crate::session_registry::TuiSessions`] owns
 //! materialization. This singleton prepares native Oz children, requests
-//! background session lifecycle changes, and tracks the session dimension of
-//! the orchestration tree — conversation lineage itself stays in
-//! `BlocklistAIHistoryModel`.
+//! background session lifecycle changes, tracks the session dimension of the
+//! orchestration tree, and projects that tree into the single visible tab bar.
+//! Conversation lineage and ordering policy stay in `BlocklistAIHistoryModel`
+//! and the shared topology helpers.
 //!
 //! Native (Oz) local children run in background TUI sessions. Local
 //! CLI-harness and remote child requests resolve with an explicit failure.
@@ -18,9 +19,10 @@ use std::path::PathBuf;
 use warp::tui_export::{
     apply_child_agent_model_override, descendant_conversation_ids_in_pill_order,
     descendant_conversation_ids_in_spawn_order, inherit_child_agent_settings,
-    prepare_local_oz_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
-    AIConversationId, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus,
-    Harness, RenderableAIError, StartAgentExecutionMode, StartAgentRequest,
+    orchestration_root_conversation_id, prepare_local_oz_child_launch,
+    register_agent_event_consumer, unregister_agent_event_consumer, AIConversationId,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus, Harness,
+    RenderableAIError, StartAgentExecutionMode, StartAgentRequest,
 };
 use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
@@ -28,18 +30,17 @@ use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewH
 use crate::orchestrated_agent_identity_styling::assign_agent_identity_indices;
 use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::terminal_session_view::TuiTerminalSessionView;
-
 /// One navigable child tab in an orchestration snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TuiOrchestrationTab {
     pub(crate) conversation_id: AIConversationId,
     pub(crate) label: String,
-    pub(crate) identity_index: usize,
+    pub(crate) spawn_index: usize,
 }
 
-/// Plain-data tab state for one complete orchestration tree.
+/// Live semantic state for the orchestration tab bar.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TuiOrchestrationTabSnapshot {
+pub(crate) struct TuiOrchestrationSnapshot {
     pub(crate) root_conversation_id: AIConversationId,
     pub(crate) selected_conversation_id: AIConversationId,
     pub(crate) tabs: Vec<TuiOrchestrationTab>,
@@ -48,12 +49,7 @@ pub(crate) struct TuiOrchestrationTabSnapshot {
 }
 
 
-#[derive(Default)]
-struct TuiOrchestrationTabState {
-    page_anchor: Option<AIConversationId>,
-    explicitly_paged: bool,
-}
-/// The TUI's child-agent coordinator singleton. See the module docs.
+/// The TUI's orchestration singleton. See the module docs.
 pub(crate) struct TuiOrchestrationModel {
     /// Session hosting each live child conversation. The session dimension
     /// only — conversation lineage is read from `BlocklistAIHistoryModel`
@@ -61,76 +57,10 @@ pub(crate) struct TuiOrchestrationModel {
     child_session_by_conversation: HashMap<AIConversationId, TuiSessionId>,
     /// Conversations whose event streams are consumed by each live session.
     event_consumers_by_session: HashMap<TuiSessionId, HashSet<AIConversationId>>,
-    tab_state_by_root: HashMap<AIConversationId, TuiOrchestrationTabState>,
-}
-
-/// Resolves the topmost loaded conversation in a tree, rejecting cycles.
-fn conversation_tree_root(
-    history: &BlocklistAIHistoryModel,
-    conversation_id: AIConversationId,
-) -> Option<AIConversationId> {
-    history.conversation(&conversation_id)?;
-    let mut current = conversation_id;
-    let mut visited = HashSet::new();
-    while visited.insert(current) {
-        let conversation = history.conversation(&current)?;
-        let Some(parent) = history.resolved_parent_conversation_id_for_conversation(conversation)
-        else {
-            return Some(current);
-        };
-        current = parent;
-    }
-    None
-}
-/// Resolves a child-bearing orchestration root for tab navigation.
-fn orchestration_root(
-    history: &BlocklistAIHistoryModel,
-    conversation_id: AIConversationId,
-) -> Option<AIConversationId> {
-    let root = conversation_tree_root(history, conversation_id)?;
-    (!history.child_conversation_ids_of(&root).is_empty()).then_some(root)
-}
-
-/// Resolves a conversation through history ownership to a retained TUI session.
-fn navigable_session_id(
-    history: &BlocklistAIHistoryModel,
-    sessions: &TuiSessions,
-    conversation_id: AIConversationId,
-) -> Option<TuiSessionId> {
-    let surface_id = history.terminal_surface_id_for_conversation(&conversation_id)?;
-    sessions.session_id_for_surface(surface_id)
-}
-
-/// Returns the child-agent label used by orchestration tabs.
-fn conversation_label(
-    history: &BlocklistAIHistoryModel,
-    conversation_id: AIConversationId,
-) -> String {
-    history
-        .conversation(&conversation_id)
-        .and_then(|conversation| conversation.agent_name())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("Agent")
-        .to_string()
-}
-
-/// Whether a history event can change tab membership, order, label, or selection.
-fn history_event_changes_tab_bar(event: &BlocklistAIHistoryEvent) -> bool {
-    matches!(
-        event,
-        BlocklistAIHistoryEvent::StartedNewConversation { .. }
-            | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
-            | BlocklistAIHistoryEvent::SetActiveConversation { .. }
-            | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-            | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
-            | BlocklistAIHistoryEvent::SplitConversation { .. }
-            | BlocklistAIHistoryEvent::RemoveConversation { .. }
-            | BlocklistAIHistoryEvent::DeletedConversation { .. }
-            | BlocklistAIHistoryEvent::RestoredConversations { .. }
-            | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
-            | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
-            | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces { .. }
-    )
+    /// Page state for the single orchestration tab bar visible at a time.
+    page_root_conversation_id: Option<AIConversationId>,
+    page_anchor: Option<AIConversationId>,
+    explicitly_paged: bool,
 }
 pub(crate) enum TuiOrchestrationEvent {
     CreateLocalOzChildSession {
@@ -167,80 +97,119 @@ impl TuiOrchestrationModel {
         let model = ctx.add_singleton_model(|_| Self {
             child_session_by_conversation: HashMap::new(),
             event_consumers_by_session: HashMap::new(),
-            tab_state_by_root: HashMap::new(),
+            page_root_conversation_id: None,
+            page_anchor: None,
+            explicitly_paged: false,
         });
         let model_for_history = model.clone();
         ctx.subscribe_to_model(&history, move |_, event, ctx| {
-            if !history_event_changes_tab_bar(event) {
-                return;
+            let topology_changed = match event {
+                BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+                | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
+                | BlocklistAIHistoryEvent::SplitConversation { .. }
+                | BlocklistAIHistoryEvent::RemoveConversation { .. }
+                | BlocklistAIHistoryEvent::DeletedConversation { .. }
+                | BlocklistAIHistoryEvent::RestoredConversations { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
+                | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces {
+                    ..
+                } => true,
+                BlocklistAIHistoryEvent::CreatedSubtask { .. }
+                | BlocklistAIHistoryEvent::UpgradedTask { .. }
+                | BlocklistAIHistoryEvent::AppendedExchange { .. }
+                | BlocklistAIHistoryEvent::ReassignedExchange { .. }
+                | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
+                | BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+                | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
+                | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
+                | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
+                | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
+                | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+                | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+                | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => false,
+            };
+
+            if topology_changed {
+                model_for_history.update(ctx, |model, ctx| model.topology_changed(ctx));
             }
-            model_for_history.update(ctx, |model, ctx| {
-                model.prune_tab_state(ctx);
-                ctx.emit(TuiOrchestrationEvent::TabBarChanged);
-                ctx.notify();
-            });
         });
         model
     }
 
     /// Builds the current navigable tab tree for a selected conversation.
-    pub(crate) fn tab_snapshot(
+    pub(crate) fn snapshot(
         &self,
         selected_conversation_id: AIConversationId,
-        identity_palette_len: usize,
         ctx: &AppContext,
-    ) -> Option<TuiOrchestrationTabSnapshot> {
+    ) -> Option<TuiOrchestrationSnapshot> {
         let history = BlocklistAIHistoryModel::as_ref(ctx);
-        let root_conversation_id = orchestration_root(history, selected_conversation_id)?;
+        let root_conversation_id =
+            orchestration_root_conversation_id(history, selected_conversation_id)?;
         let sessions = TuiSessions::as_ref(ctx);
-        navigable_session_id(history, sessions, root_conversation_id)?;
+        sessions.session_id_for_conversation(history, root_conversation_id)?;
 
         let spawn_order = descendant_conversation_ids_in_spawn_order(history, root_conversation_id)
             .into_iter()
             .filter(|conversation_id| {
-                navigable_session_id(history, sessions, *conversation_id).is_some()
+                sessions
+                    .session_id_for_conversation(history, *conversation_id)
+                    .is_some()
             })
             .collect::<Vec<_>>();
         if spawn_order.is_empty() {
             return None;
         }
-        let names = spawn_order
+        let spawn_index_by_conversation = spawn_order
             .iter()
-            .map(|conversation_id| conversation_label(history, *conversation_id));
-        let identity_indices = assign_agent_identity_indices(names, identity_palette_len);
-        let identity_by_conversation = spawn_order
-            .iter()
-            .copied()
-            .zip(identity_indices)
+            .enumerate()
+            .map(|(index, conversation_id)| (*conversation_id, index))
             .collect::<HashMap<_, _>>();
 
         let tabs = descendant_conversation_ids_in_pill_order(history, root_conversation_id)
             .into_iter()
             .filter_map(|conversation_id| {
-                navigable_session_id(history, sessions, conversation_id)?;
+                sessions.session_id_for_conversation(history, conversation_id)?;
+                let conversation = history.conversation(&conversation_id)?;
                 Some(TuiOrchestrationTab {
                     conversation_id,
-                    label: conversation_label(history, conversation_id),
-                    identity_index: *identity_by_conversation.get(&conversation_id)?,
+                    label: conversation
+                        .agent_name()
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or("Agent")
+                        .to_owned(),
+                    spawn_index: *spawn_index_by_conversation.get(&conversation_id)?,
                 })
             })
             .collect::<Vec<_>>();
         if tabs.is_empty() {
             return None;
         }
-        let state = self.tab_state_by_root.get(&root_conversation_id);
-        let explicitly_paged = state.is_some_and(|state| state.explicitly_paged);
-        let stored_anchor = state.and_then(|state| state.page_anchor);
-        let page_anchor = stored_anchor
+
+        let page_state_applies = self.page_root_conversation_id == Some(root_conversation_id);
+        let page_anchor = page_state_applies
+            .then_some(self.page_anchor)
+            .flatten()
             .filter(|anchor| tabs.iter().any(|tab| tab.conversation_id == *anchor))
             .or_else(|| tabs.first().map(|tab| tab.conversation_id));
-        Some(TuiOrchestrationTabSnapshot {
+        Some(TuiOrchestrationSnapshot {
             root_conversation_id,
             selected_conversation_id,
             tabs,
             page_anchor,
-            reveal_selected: !explicitly_paged,
+            reveal_selected: !page_state_applies || !self.explicitly_paged,
         })
+    }
+
+    pub(crate) fn has_tabs(
+        &self,
+        selected_conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) -> bool {
+        self.snapshot(selected_conversation_id, ctx).is_some()
     }
 
     /// Stores an explicitly selected secondary page without switching sessions.
@@ -250,43 +219,54 @@ impl TuiOrchestrationModel {
         page_anchor: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.tab_state_by_root.insert(
-            root_conversation_id,
-            TuiOrchestrationTabState {
-                page_anchor: Some(page_anchor),
-                explicitly_paged: true,
-            },
-        );
-        ctx.emit(TuiOrchestrationEvent::TabBarChanged);
-        ctx.notify();
+        self.page_root_conversation_id = Some(root_conversation_id);
+        self.page_anchor = Some(page_anchor);
+        self.explicitly_paged = true;
+        self.emit_changed(ctx);
     }
 
-    /// Focuses the retained session for a conversation and clears explicit paging.
-    pub(crate) fn select_conversation(
+    /// Focuses the retained session for a conversation and resumes automatic reveal.
+    pub(crate) fn focus_conversation_session(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<TuiSessionId> {
+        let current_page_anchor = self
+            .snapshot(conversation_id, ctx)
+            .and_then(|snapshot| snapshot.page_anchor);
         let history = BlocklistAIHistoryModel::as_ref(ctx);
-        let root_conversation_id = orchestration_root(history, conversation_id)?;
-        let session_id = navigable_session_id(history, TuiSessions::as_ref(ctx), conversation_id)?;
-        self.tab_state_by_root
-            .entry(root_conversation_id)
-            .or_default()
-            .explicitly_paged = false;
+        let root_conversation_id = orchestration_root_conversation_id(history, conversation_id)?;
+        let session_id =
+            TuiSessions::as_ref(ctx).session_id_for_conversation(history, conversation_id)?;
+        if self.page_root_conversation_id != Some(root_conversation_id) {
+            // Capture the page before focus changes any ordering inputs. The
+            // first switch in a tree must not replace the visible page with a
+            // new fallback anchor.
+            self.page_anchor = current_page_anchor;
+        }
+        self.page_root_conversation_id = Some(root_conversation_id);
+        self.explicitly_paged = false;
         TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
             sessions.focus_session(session_id, ctx);
         });
-        ctx.emit(TuiOrchestrationEvent::TabBarChanged);
-        ctx.notify();
+        self.emit_changed(ctx);
         Some(session_id)
     }
 
-    /// Drops page state for orchestration roots no longer present in history.
-    fn prune_tab_state(&mut self, ctx: &AppContext) {
-        let history = BlocklistAIHistoryModel::as_ref(ctx);
-        self.tab_state_by_root
-            .retain(|root, _| history.conversation(root).is_some());
+    fn topology_changed(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.page_root_conversation_id.is_some_and(|root| {
+            orchestration_root_conversation_id(BlocklistAIHistoryModel::as_ref(ctx), root).is_none()
+        }) {
+            self.page_root_conversation_id = None;
+            self.page_anchor = None;
+            self.explicitly_paged = false;
+        }
+        self.emit_changed(ctx);
+    }
+
+    fn emit_changed(&self, ctx: &mut ModelContext<Self>) {
+        ctx.emit(TuiOrchestrationEvent::TabBarChanged);
+        ctx.notify();
     }
 
 
@@ -414,7 +394,7 @@ impl TuiOrchestrationModel {
         self.register_event_consumer(parent_session_id, request.parent_conversation_id, ctx);
         self.register_event_consumer(session_id, conversation_id, ctx);
         session_view.update(ctx, |view, ctx| {
-            view.activate_orchestration_child_conversation(conversation_id, ctx);
+            view.initialize_orchestrated_child_conversation(conversation_id, ctx);
         });
 
         let prompt = request.prompt;
@@ -424,8 +404,7 @@ impl TuiOrchestrationModel {
 
         self.child_session_by_conversation
             .insert(conversation_id, session_id);
-        ctx.emit(TuiOrchestrationEvent::TabBarChanged);
-        ctx.notify();
+        self.emit_changed(ctx);
     }
 
     /// Tears down the background session of a child that failed at the

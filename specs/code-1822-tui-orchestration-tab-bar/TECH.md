@@ -35,56 +35,53 @@ Re-export `descendant_conversation_ids_in_pill_order` through `app/src/tui_expor
 
 Filtering occurs after canonical ordering so the relative order of navigable descendants remains identical to the GUI. The model does not use `child_session_by_conversation` for rendering or navigation; that map remains narrowly scoped to failed-child cleanup.
 
-Add `TuiSessions::session_id_for_surface(EntityId)` and a narrow session-view lookup so the model can compose `BlocklistAIHistoryModel::terminal_surface_id_for_conversation` with retained TUI ownership. This makes restored conversations self-correcting without another conversation/session index.
+Add `TuiSessions::session_id_for_conversation` so the registry composes `BlocklistAIHistoryModel::terminal_surface_id_for_conversation` with retained TUI ownership. This makes restored conversations self-correcting without another conversation/session index.
 
 ### 2. Orchestration-owned tab state and actions
-Extend `TuiOrchestrationModel` from launch coordination to the owner of semantic orchestration tab state. Add a per-orchestrator entry containing:
+`TuiOrchestrationModel` owns TUI-specific orchestration runtime state: child launch materialization and cleanup, semantic tab snapshots, session navigation, and the one page state needed by the single visible tab bar:
+- The orchestration root whose page is retained.
 - The child page-anchor conversation ID.
 - Whether the user explicitly paged away from the active tab.
 
-Expose a plain-data snapshot for `TuiTerminalSessionView` containing the root, ordered child tabs, active conversation ID, spawn-order-derived identity indices, page anchor, and whether the component should reveal an off-page selection. The session view maps identity indices and semantic tab states to current-theme styles before updating the generalized component. Snapshot construction reads live history and session state each time; cached UI state never becomes the source of truth for membership, status, ordering, or selection.
+Expose a plain-data snapshot for `TuiTerminalSessionView` containing the root, ordered child tabs, active conversation ID, spawn indices, page anchor, and whether the component should reveal an off-page selection. The session view assigns theme-specific identities from spawn order and maps semantic tab state to current-theme styles before updating the generalized component. Snapshot construction reads live history and session state each time; cached UI state never becomes the source of truth for membership, status, ordering, or selection.
 
 Model operations:
-- `select_conversation` resolves the target's retained session, calls `TuiSessions::focus_session`, and clears explicit paging without replacing the current page anchor. The component reveals the deterministic page containing an off-page selection.
-- `select_first_child`/`select_last_child` exclude the orchestrator.
+- `focus_conversation_session` resolves the target's retained session, captures the snapshot's current fallback anchor when initializing page state for a tree, calls `TuiSessions::focus_session`, and clears explicit paging without replacing the current page anchor. The component reveals the deterministic page containing an off-page selection.
 - `set_explicit_page` records the page anchor emitted by the tab bar and marks it explicit. It never calls `focus_session`.
 - A dynamic ordering update automatically re-anchors to the active child only when explicit paging is false.
-- Removed roots prune their per-tree state; removed children clamp invalid anchors through fresh snapshot resolution.
+- Removed roots clear the active page state; removed children clamp invalid anchors through fresh snapshot resolution.
 
-Subscribe to `BlocklistAIHistoryModel` events that can change membership, parent linkage, labels, status, recency, pin order, or active selection, and to all `TuiSessionsEvent` variants. Emit a narrow `TabBarChanged` event so every retained session view in the affected tree redraws. These subscriptions also make child materialization/removal visible without polling.
+Subscribe exhaustively to `BlocklistAIHistoryModel` events that can change membership, parent linkage, labels, status, recency, or pin order, and to session addition/removal. Pin mutations emit `UpdatedConversationMetadata`, so ordering and invalidation share the same history boundary. Emit a narrow `Changed` event so retained session views redraw without polling.
 
 ### 3. Session switching and focus handoff
 The model owns tab selection and page state, but actual responder focus remains view-owned because only a `ViewContext` can focus a view.
 
 Add orchestration-tab actions and a keymap-context flag to `TuiTerminalSessionView`:
-- `FocusInput`
+- `FocusDefaultInteractionTarget`
 - `SelectPrevious` / `SelectNext`
 - `SelectFirstChild` / `SelectLastChild`
-- `SelectConversation(AIConversationId)`
-- `SetPage(AIConversationId)`
 
 Register `Left`, `Right`, `Tab`, `Shift+Tab`, `Shift+Left`, `Shift+Right`, and `Shift+Down` only under the tab-focused context. Keep the existing session-level `Ctrl+C` binding unchanged; the focused footer omits kill copy in this PR.
 
-The input's `FocusAboveRequested` event directly enters tab focus. `SelectPrevious` and `SelectNext` ask the tab-bar component for a target from its private settled layout; the session view then delegates that semantic selection to `TuiOrchestrationModel`. The session and model never read a visible range.
+The input's `MoveFocusUp` event directly enters tab focus. `SelectPrevious` and `SelectNext` ask `TuiTabBarView` for a target from its semantic tab order; first/last child navigation resolves through the view's secondary order. The session view delegates semantic selection to `TuiOrchestrationModel`. The session and model never read a visible range.
 
 Track whether the session view itself currently owns tab-bar focus. A switch performs two coordinated operations:
 1. Ask `TuiOrchestrationModel` to select/focus the target retained session.
 2. Focus the target `TuiTerminalSessionView` and set its tab-focused mode for keyboard switches or already-focused mouse switches; otherwise invoke a target-session helper that applies existing precedence: alternate screen, active blocker, then input.
-
-This closes the current `TuiSessionsEvent::FocusChanged` projection/focus gap for tab-driven switches without letting a background session steal focus. Add an explicit test that the projected root child and responder chain move together.
+The source session clears its tab-focused mode during cross-session navigation. Process and blocker ownership also clear tab focus, and model-driven refreshes invoke focus APIs only for the focused session.
 
 ### 4. Input boundary handoff
-Add a generic `FocusAboveRequested` event/availability flag to `TuiInputView`; do not import orchestration types into the input module.
+Add a generic `MoveFocusUp` event and owner-supplied live availability predicate to `TuiInputView`; do not import orchestration types into the input module or cache availability state.
 
 When handling `SelectUp`, the input requests focus above only if:
-- Its owner marked an above-target available.
+- Its owner's live predicate reports an above-target available.
 - The selection is empty.
 - The cursor's display point is display row zero.
 
-Use the editor's char-cell render state and `display_lattice(...).offset_to_display_point(...)`, the same projection used by `TuiEditorElement`, rather than counting newlines or duplicating soft-wrap math. If any condition is false, call the existing `select_up` path unchanged. `TuiTerminalSessionView` updates availability from the orchestration snapshot and maps `FocusAboveRequested` to `FocusTabs`.
+Use the editor's char-cell render state and `display_lattice(...).offset_to_display_point(...)`, the same projection used by `TuiEditorElement`, rather than counting newlines or duplicating soft-wrap math. If any condition is false, call the existing `select_up` path unchanged. The owner predicate reads the selected conversation and `TuiOrchestrationModel` at action time, so render visibility and focus handoff cannot diverge.
 
 ### 5. Session rendering and owner callbacks
-Render the generalized bar from `TuiTerminalSessionView`, matching the architecture that each rendered terminal session asks `TuiOrchestrationModel` for its current tree.
+Own `TuiTabBarView` as a retained child of `TuiTerminalSessionView`. Each session asks `TuiOrchestrationModel` for its current tree, maps the snapshot into `TuiTabBarConfig`, and synchronizes the child view before embedding it with `TuiChildView`.
 
 Restructure the normal render tree into:
 - A full-width optional orchestration tab row.
@@ -94,25 +91,25 @@ The alt-screen early return remains unchanged and therefore owns the complete pa
 
 When the bar is unfocused, render the normal footer with the conditional `Shift + ↑ sub-agents` hint. When focused, keep the input visible but blurred and replace the normal footer with the PRODUCT (18) navigation footer.
 
-Tab and overflow callbacks dispatch typed actions back to the owning `TuiTerminalSessionView`:
+Tab and overflow interactions emit semantic child-view events subscribed by `TuiTerminalSessionView`:
 - Tab clicks select immediately. The owner preserves tab focus only if it was already active; otherwise it focuses the target session's normal interaction target.
 - Overflow clicks carry the page anchor computed by the component to the model's `set_explicit_page` operation and never call a focus API, so input focus remains unchanged.
 
 ### 6. Styling and identities
-Add semantic orchestration-tab style recipes to `TuiUiBuilder` rather than embedding raw colors in the element. Supply those styles to `TuiTabBar`:
+Add semantic orchestration-tab style recipes to `TuiUiBuilder` rather than embedding raw colors in the view. Supply those styles through `TuiTabBarConfig`:
 - Magenta-tinted bar background.
 - Focused selected tab background and contrasting text.
 - Unfocused active-tab emphasis.
 - Muted divider, overflow, and non-selected labels.
 
-Reuse `agent_identity_palette` and `assign_agent_identity_indices`. Assign identities from stable spawn order, then project them into dynamic pill order so a status change never changes a child's glyph or color. The generic tab element receives only the resulting optional leading glyph/style.
+Reuse `agent_identity_palette` and `assign_agent_identity_indices`. Assign identities from stable spawn order, then project them into dynamic pill order so a status change never changes a child's glyph or color. Each tab-view entry receives only the resulting optional leading glyph/style.
 
 ## Testing and validation
 ### Integration tests
-Extend `orchestration_model_tests.rs`, `sessions_tests.rs`, `terminal_session_view_tests.rs`, and `input/view_tests.rs`:
+Extend `orchestration_model_tests.rs`, `session_registry_tests.rs`, `terminal_session_view_tests.rs`, and `input/view_tests.rs`:
 - Exact reuse of GUI pin/status/error/active/done-recency/spawn ordering after filtering non-navigable sessions — PRODUCT (4, 9-12).
 - The same root and tabs from orchestrator and child sessions; newly materialized and removed sessions — PRODUCT (1-5, 47-49).
-- Shared per-root page state, explicit-page persistence, active reveal, and first/last-visible keyboard origin — PRODUCT (26-27, 39-42).
+- Shared active-tree page state, explicit-page persistence, active reveal, and first/last-visible keyboard origin — PRODUCT (26-27, 39-42).
 - Wrapped-row and selection-aware `Shift+Up` behavior; `Shift+Down` restoration — PRODUCT (13-18).
 - Wrapped adjacent navigation, child-only first/last jumps, and tab focus preserved across full-session projection — PRODUCT (19-25).
 - Focused and unfocused mouse switches, no-op active clicks, overflow clicks that neither select nor move focus, and blocker precedence — PRODUCT (28-32, 38, 45-46).
@@ -139,7 +136,7 @@ The reusable component lands in the lower `harry/code-1822-tui-tab-bar-component
 
 ## Risks and mitigations
 - **Dynamic order versus explicit paging:** store page anchors by conversation ID, not index, and distinguish automatic reveal from explicit paging. Re-resolve every anchor against the fresh canonical order.
-- **Layout/event drift:** the tab bar resolves navigation against the same private settled range and ordered snapshot it rendered, then emits a stable tab ID. The orchestration model resolves that ID against fresh state and no-ops unavailable targets.
+- **Layout/event drift:** each size-switch row owns the tabs and overflow callbacks it renders, while keyboard navigation uses the same semantic config held by the retained tab view. The orchestration model resolves emitted stable IDs against fresh state and no-ops unavailable targets.
 - **Focus without projection:** make every tab selection update `TuiSessions` and the target view's focus mode in one owner action; test both root projection and responder focus.
 - **Stale child-session cache:** use history's authoritative conversation→surface mapping plus `TuiSessions` lookup for navigation. Keep the existing child map only for launch cleanup.
 - **Identity changes during reorder:** assign identities in stable spawn order, independent of canonical display order.

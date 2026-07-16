@@ -22,6 +22,7 @@
 //! See `specs/tui-input-view/TECH.md` for the full keybinding table.
 
 use std::ops::Range;
+use std::rc::Rc;
 
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
@@ -115,8 +116,8 @@ pub enum TuiInputViewEvent {
     AcceptedModel(LLMId),
     /// The user selected an action from the MCP menu.
     AcceptedMcp(TuiMcpAction),
-    /// Shift+Up reached an available focus target above the first visual row.
-    FocusAboveRequested,
+    /// Shift+Up should move focus from the first visual row to the region above.
+    MoveFocusUp,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,8 +173,8 @@ pub struct TuiInputView {
     /// construction always provides this; isolated input tests omit it.
     transcript: Option<ViewHandle<TuiTranscriptView>>,
     keyboard_enhancement_supported: bool,
-    /// Whether Shift+Up may hand focus to an owner-provided region above.
-    focus_above_available: bool,
+    /// Consults the owner live before Shift+Up leaves the first visual row.
+    can_move_focus_up: Rc<dyn Fn(&AppContext) -> bool>,
 }
 
 impl Entity for TuiInputView {
@@ -200,6 +201,7 @@ impl TuiInputView {
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
         transcript: ViewHandle<TuiTranscriptView>,
+        can_move_focus_up: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         Self::new_internal(
@@ -208,6 +210,7 @@ impl TuiInputView {
             suggestions_mode,
             inline_menus,
             Some(transcript),
+            can_move_focus_up,
             ctx,
         )
     }
@@ -218,9 +221,18 @@ impl TuiInputView {
         input_mode: ModelHandle<BlocklistAIInputModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
+        can_move_focus_up: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        Self::new_internal(model, input_mode, suggestions_mode, inline_menus, None, ctx)
+        Self::new_internal(
+            model,
+            input_mode,
+            suggestions_mode,
+            inline_menus,
+            None,
+            can_move_focus_up,
+            ctx,
+        )
     }
 
     fn new_internal(
@@ -229,6 +241,7 @@ impl TuiInputView {
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
         transcript: Option<ViewHandle<TuiTranscriptView>>,
+        can_move_focus_up: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
@@ -251,19 +264,7 @@ impl TuiInputView {
             focused: false,
             transcript,
             keyboard_enhancement_supported: false,
-            focus_above_available: false,
-        }
-    }
-
-    /// Enables or disables the first-row Shift+Up focus handoff.
-    pub(crate) fn set_focus_above_available(
-        &mut self,
-        available: bool,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if self.focus_above_available != available {
-            self.focus_above_available = available;
-            ctx.notify();
+            can_move_focus_up: Rc::new(can_move_focus_up),
         }
     }
 
@@ -481,7 +482,7 @@ impl TypedActionView for TuiInputView {
             }
             TuiInputAction::EditorCommand(command) => {
                 if matches!(*command, TuiEditorCommand::SelectUp) && self.can_focus_above(ctx) {
-                    ctx.emit(TuiInputViewEvent::FocusAboveRequested);
+                    ctx.emit(TuiInputViewEvent::MoveFocusUp);
                     ctx.notify();
                     return;
                 }
@@ -586,14 +587,16 @@ impl TuiInputView {
 
     /// Whether Shift+Up should leave the input instead of extending selection.
     fn can_focus_above(&self, ctx: &AppContext) -> bool {
-        if !self.focus_above_available || self.selection_range(ctx).is_some() {
+        if !(self.can_move_focus_up)(ctx) || self.selection_range(ctx).is_some() {
             return false;
         }
+
         let model = self.model.as_ref(ctx);
         let render = model.render_state().as_ref(ctx);
         let Some(char_cell) = render.char_cell() else {
             return false;
         };
+
         let cursor_offset = CharOffset::from(self.cursor_offset(ctx).as_usize().saturating_sub(1));
         let hidden = char_cell.hidden_line_ranges(ctx);
         char_cell
