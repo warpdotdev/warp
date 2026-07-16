@@ -155,6 +155,13 @@ impl FileDataSource {
 
             for chunk in contents.chunks(50) {
                 for item in chunk {
+                    // Never show directories in the files palette. The palette
+                    // only opens files, so directories are excluded in both the
+                    // zero-state and fuzzy-search paths for a consistent listing.
+                    if item.is_directory {
+                        continue;
+                    }
+
                     let mut file_ranking = if git_changed_files.contains(&item.path) {
                         FileRanking::ChangedInGit
                     } else {
@@ -265,6 +272,13 @@ impl FileDataSource {
             // allow the main thread to abort the search if needed.
             for chunk in contents.chunks(CHUNK_SIZE) {
                 for item in chunk {
+                    // Never show directories in the files palette. The palette
+                    // only opens files, so directories are excluded in both the
+                    // zero-state and fuzzy-search paths for a consistent listing.
+                    if item.is_directory {
+                        continue;
+                    }
+
                     let Some(mut match_result) =
                         FileSearchModel::fuzzy_match_path(&item.path, &query_file_content)
                     else {

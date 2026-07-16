@@ -27,27 +27,43 @@ fn dir(path: &str) -> FileSearchResult {
     }
 }
 
-/// Regression test: a non-empty (fuzzy) files-palette query must include
-/// matching directories, not just files. Previously the fuzzy path dropped all
-/// directories, so a directory could never be found by typing a query even
-/// though the zero-state (empty query) listing showed it — the inconsistency
-/// reported by users.
+fn any_directory_result(results: &[QueryResult<CommandPaletteItemAction>]) -> bool {
+    results.iter().any(|r| {
+        matches!(
+            r.accept_result(),
+            CommandPaletteItemAction::OpenDirectory { .. }
+        )
+    })
+}
+
+fn any_file_result(results: &[QueryResult<CommandPaletteItemAction>]) -> bool {
+    results
+        .iter()
+        .any(|r| matches!(r.accept_result(), CommandPaletteItemAction::OpenFile { .. }))
+}
+
+/// Regression test: the files palette must never surface directories, in
+/// either the zero-state (empty query) listing or the fuzzy-search (non-empty
+/// query) results. Previously the two paths were inconsistent — the zero-state
+/// listing showed directories while the fuzzy path dropped them — which is the
+/// inconsistency reported by users. The palette only opens files, so both
+/// states should consistently exclude directories.
 #[test]
-fn test_fuzzy_search_includes_matching_directories() {
-    App::test((), |mut app| async move {
+fn test_files_palette_excludes_directories() {
+    App::test((), |app| async move {
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(FileSearchModel::new);
         app.add_singleton_model(|_| OpenedFilesModel::new());
 
-        let data_source = FileDataSource::new_current_folder_with_contents(vec![
-            dir("crates"),
-            file("crates/foo.rs"),
-        ]);
+        let contents = vec![dir("crates"), file("crates/foo.rs")];
 
-        let results = app
+        // Fuzzy-search (non-empty query) must exclude the matching directory
+        // while still returning the matching file.
+        let fuzzy_source = FileDataSource::new_current_folder_with_contents(contents.clone());
+        let fuzzy_results = app
             .read(|ctx| {
-                data_source.run_query(
+                fuzzy_source.run_query(
                     &Query {
                         text: "crates".to_string(),
                         filters: HashSet::from([QueryFilter::Files]),
@@ -56,21 +72,39 @@ fn test_fuzzy_search_includes_matching_directories() {
                 )
             })
             .await
-            .expect("query run failed");
+            .expect("fuzzy query run failed");
 
-        // The matching directory must be present alongside the matching file.
         assert!(
-            results.iter().any(|r| matches!(
-                r.accept_result(),
-                CommandPaletteItemAction::OpenDirectory { .. }
-            )),
-            "expected the matching directory to be included in filtered results"
+            !any_directory_result(&fuzzy_results),
+            "fuzzy-search results must not include directories"
         );
         assert!(
-            results
-                .iter()
-                .any(|r| matches!(r.accept_result(), CommandPaletteItemAction::OpenFile { .. })),
-            "expected the matching file to be included in filtered results"
+            any_file_result(&fuzzy_results),
+            "expected the matching file to be included in fuzzy-search results"
+        );
+
+        // Zero-state (empty query) must also exclude the directory.
+        let zero_source = FileDataSource::new_current_folder_with_contents(contents);
+        let zero_results = app
+            .read(|ctx| {
+                zero_source.run_query(
+                    &Query {
+                        text: String::new(),
+                        filters: HashSet::from([QueryFilter::Files]),
+                    },
+                    ctx,
+                )
+            })
+            .await
+            .expect("zero-state query run failed");
+
+        assert!(
+            !any_directory_result(&zero_results),
+            "zero-state results must not include directories"
+        );
+        assert!(
+            any_file_result(&zero_results),
+            "expected the file to be included in zero-state results"
         );
     });
 }
