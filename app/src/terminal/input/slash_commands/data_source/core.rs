@@ -676,7 +676,7 @@ impl InlineItem {
             match skill.provider {
                 SkillProvider::Warp => WarpIcon::Warp,
                 SkillProvider::Claude => WarpIcon::ClaudeLogo,
-                SkillProvider::Codex => WarpIcon::OpenAILogo,
+                SkillProvider::Codex | SkillProvider::Omp => WarpIcon::OpenAILogo,
                 SkillProvider::Gemini => WarpIcon::GeminiLogo,
                 SkillProvider::Droid => WarpIcon::DroidLogo,
                 SkillProvider::OpenCode => WarpIcon::OpenCodeLogo,
