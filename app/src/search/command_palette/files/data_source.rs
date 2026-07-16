@@ -61,6 +61,16 @@ impl FileDataSource {
             },
         }
     }
+
+    /// Create a current-folder data source from an explicit set of contents.
+    /// Test-only seam so query behavior can be exercised without a live
+    /// working directory or repo-metadata index.
+    #[cfg(test)]
+    pub fn new_current_folder_with_contents(cached_contents: Vec<FileSearchResult>) -> Self {
+        Self {
+            mode: FileDataSourceMode::CurrentFolder { cached_contents },
+        }
+    }
 }
 
 impl AsyncDataSource for FileDataSource {
@@ -261,11 +271,6 @@ impl FileDataSource {
                         continue;
                     };
 
-                    // Never show directories -- there's no way to open them currently.
-                    if item.is_directory {
-                        continue;
-                    }
-
                     if opened_files
                         .as_ref()
                         .and_then(|of: &OpenedFilesInRepo| of.get(&item.path))
@@ -313,3 +318,7 @@ impl FileDataSource {
 impl Entity for FileDataSource {
     type Event = ();
 }
+
+#[cfg(test)]
+#[path = "data_source_tests.rs"]
+mod tests;
