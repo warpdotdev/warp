@@ -2180,6 +2180,10 @@ impl BlocklistAIHistoryModel {
 
         self.all_conversations_metadata.remove(&conversation_id);
         self.conversations_by_id.remove(&conversation_id);
+        self.children_by_parent.retain(|_, child_ids| {
+            child_ids.retain(|child_id| *child_id != conversation_id);
+            !child_ids.is_empty()
+        });
 
         if let Some(terminal_surface_id) = terminal_surface_id {
             if self

@@ -187,6 +187,10 @@ impl TuiSessions {
     pub(crate) fn is_empty(&self) -> bool {
         self.sessions.is_empty()
     }
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.sessions.len()
+    }
 
     /// Consumes the startup resume token.
     pub(crate) fn take_resume_token(&mut self) -> Option<ServerConversationToken> {

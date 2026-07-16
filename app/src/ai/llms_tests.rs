@@ -933,6 +933,29 @@ fn tui_agent_model_known_id_resolves_to_that_model() {
 }
 
 #[test]
+fn tui_surface_override_precedes_file_backed_default() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.read(|app_ctx| {
+            let surface_id = EntityId::new();
+            let mut preferences = preferences_for_tui_tests();
+            preferences
+                .base_llm_for_terminal_view
+                .insert(surface_id, LLMId::from("auto"));
+
+            let info = preferences.get_preferred_base_model_for_settings_mode(
+                settings::SettingsMode::Tui,
+                app_ctx,
+                Some(surface_id),
+            );
+
+            assert_eq!(info.id.as_str(), "auto");
+        });
+    });
+}
+
+#[test]
 fn tui_agent_model_unknown_id_falls_back_to_the_default_model() {
     tui_agent_model_test(|preferences, app| {
         assert_eq!(

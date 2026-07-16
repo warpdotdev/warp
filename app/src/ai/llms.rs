@@ -854,14 +854,6 @@ impl LLMPreferences {
         app: &AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &LLMInfo {
-        // In the TUI, the file-backed `agents.model` setting is the source of
-        // truth for the base model: it overrides both per-surface overrides
-        // and the cloud-synced execution profile, keeping the TUI's TOML file
-        // the single place the model is configured.
-        if settings_mode == settings::SettingsMode::Tui {
-            return self.tui_agent_model_info(AISettings::as_ref(app).agent_model.value(), app);
-        }
-
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override {
@@ -873,6 +865,12 @@ impl LLMPreferences {
             }
         }
 
+        // In the TUI, the file-backed `agents.model` setting is the default
+        // for every surface. Explicit per-surface overrides still take
+        // precedence for orchestrated children launched with a model override.
+        if settings_mode == settings::SettingsMode::Tui {
+            return self.tui_agent_model_info(AISettings::as_ref(app).agent_model.value(), app);
+        }
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
 
         profile
@@ -1497,11 +1495,31 @@ impl LLMPreferences {
                 .is_some()
         } else {
             self.base_llm_for_terminal_view
-                .insert(terminal_view_id, preferred_llm_id.clone());
-            true
+                .insert(terminal_view_id, preferred_llm_id.clone())
+                != Some(preferred_llm_id.clone())
         };
 
         if changed {
+            self.trigger_snapshot_save(ctx);
+            ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+        }
+    }
+
+    /// Sets an explicit runtime override without normalizing it against the
+    /// execution profile. Orchestrated child runs use this because a requested
+    /// model equal to the profile default must still override the TUI's
+    /// file-backed model setting.
+    pub(crate) fn set_agent_mode_llm_override(
+        &mut self,
+        terminal_view_id: EntityId,
+        model_id: LLMId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .base_llm_for_terminal_view
+            .insert(terminal_view_id, model_id.clone())
+            != Some(model_id)
+        {
             self.trigger_snapshot_save(ctx);
             ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
         }

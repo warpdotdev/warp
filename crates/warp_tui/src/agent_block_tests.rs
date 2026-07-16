@@ -15,8 +15,9 @@ use warp::tui_export::{
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoList,
     AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, AgentOutputImage,
     AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable, Appearance, LLMId,
-    MessageId, OutputStatusUpdateCallback, RequestCommandOutputResult, ServerOutputId, Shared,
-    SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus, UserQueryMode,
+    MessageId, OutputStatusUpdateCallback, ReceivedMessageDisplay, RequestCommandOutputResult,
+    ServerOutputId, Shared, SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus,
+    UserQueryMode,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
@@ -309,6 +310,72 @@ fn agent_block_renders_multiple_tool_calls_in_order() {
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
                 vec!["", "○ Init project", "", "○ Init project"],
+            );
+        });
+    });
+}
+
+#[test]
+fn orchestration_outputs_render_without_wait_for_events_tool_row() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let wait_action = AIAgentAction {
+            id: AIAgentActionId::from("wait-action".to_string()),
+            action: AIAgentActionType::WaitForEvents {
+                tool_call_id: "wait-call".to_string(),
+                idle_timeout_seconds: 600,
+            },
+            task_id: TaskId::new("wait-task".to_string()),
+            requires_result: false,
+        };
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    action_message("m1", wait_action),
+                    AIAgentOutputMessage {
+                        id: MessageId::new("m2".to_string()),
+                        message: AIAgentOutputMessageType::MessagesReceivedFromAgents {
+                            messages: vec![ReceivedMessageDisplay {
+                                message_id: "message-1".to_string(),
+                                sender_agent_id: "researcher".to_string(),
+                                addresses: vec!["lead".to_string()],
+                                subject: "Investigation complete".to_string(),
+                                message_body: "Found the issue".to_string(),
+                            }],
+                        },
+                        citations: Vec::new(),
+                    },
+                    AIAgentOutputMessage {
+                        id: MessageId::new("m3".to_string()),
+                        message: AIAgentOutputMessageType::EventsFromAgents {
+                            event_ids: vec!["event-1".to_string(), "event-2".to_string()],
+                        },
+                        citations: Vec::new(),
+                    },
+                ]),
+            },
+        );
+
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::PlainText(
+                        "Received message from agent researcher: Investigation complete"
+                            .to_string(),
+                    ),
+                    TuiAIBlockSection::PlainText("Received 2 agent lifecycle events".to_string(),),
+                ],
+            );
+            assert_eq!(
+                render_block_lines(block, 80, app_ctx),
+                vec![
+                    "Received message from agent researcher: Investigation complete",
+                    "Received 2 agent lifecycle events",
+                ],
             );
         });
     });

@@ -1,6 +1,6 @@
 use warp::tui_export::{
-    register_tui_session_view_test_singletons, StartAgentExecutionMode, StartAgentExecutor,
-    StartAgentOutcome,
+    register_tui_session_view_test_singletons, AIConversationId, BlocklistAIHistoryModel,
+    StartAgentExecutionMode, StartAgentExecutor, StartAgentOutcome,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
@@ -55,10 +55,7 @@ fn add_dispatching_session(
         sessions.add_session(session.clone(), manager, focus, ctx)
     });
     add_active_test_conversation(app, session_id.surface_id());
-    let executor = app.read(|ctx| {
-        let action_model = session.as_ref(ctx).ai_action_model().clone();
-        ctx.read_model(&action_model, |model, app| model.start_agent_executor(app))
-    });
+    let executor = app.read(|ctx| session.as_ref(ctx).start_agent_executor_for_test(ctx));
     (session_id, executor)
 }
 
@@ -71,7 +68,7 @@ fn dispatch_and_recv(
     session_id: TuiSessionId,
     executor: &ModelHandle<StartAgentExecutor>,
     execution_mode: StartAgentExecutionMode,
-) -> StartAgentOutcome {
+) -> (AIConversationId, StartAgentOutcome) {
     let parent_conversation_id = app.read(|ctx| {
         warp::tui_export::BlocklistAIHistoryModel::as_ref(ctx)
             .active_conversation(session_id.surface_id())
@@ -90,9 +87,12 @@ fn dispatch_and_recv(
             ctx,
         )
     });
-    receiver
-        .try_recv()
-        .expect("unsupported-mode dispatches resolve before the update returns")
+    (
+        parent_conversation_id,
+        receiver
+            .try_recv()
+            .expect("unsupported-mode dispatches resolve before the update returns"),
+    )
 }
 
 fn assert_error_containing(outcome: StartAgentOutcome, needle: &str) {
@@ -106,13 +106,33 @@ fn assert_error_containing(outcome: StartAgentOutcome, needle: &str) {
     }
 }
 
+fn assert_failed_launch_cleaned_up(
+    app: &App,
+    fixture: &OrchestrationFixture,
+    parent_conversation_id: AIConversationId,
+    expected_session_count: usize,
+) {
+    app.read(|ctx| {
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        assert!(history
+            .child_conversation_ids_of(&parent_conversation_id)
+            .is_empty());
+        assert!(TuiOrchestrationModel::as_ref(ctx)
+            .event_consumers_by_session
+            .is_empty());
+    });
+    assert_eq!(
+        app.read_model(&fixture.sessions, |sessions, _| sessions.len()),
+        expected_session_count,
+    );
+}
 #[test]
 fn local_harness_children_fail_cleanly() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture(&mut app);
         let (session_id, executor) = add_dispatching_session(&mut app, &fixture, true);
 
-        let outcome = dispatch_and_recv(
+        let (parent_conversation_id, outcome) = dispatch_and_recv(
             &mut app,
             &fixture,
             session_id,
@@ -123,6 +143,7 @@ fn local_harness_children_fail_cleanly() {
             },
         );
         assert_error_containing(outcome, "aren't supported in the Warp TUI yet");
+        assert_failed_launch_cleaned_up(&app, &fixture, parent_conversation_id, 1);
     });
 }
 
@@ -132,7 +153,7 @@ fn remote_children_fail_cleanly() {
         let fixture = orchestration_fixture(&mut app);
         let (session_id, executor) = add_dispatching_session(&mut app, &fixture, true);
 
-        let outcome = dispatch_and_recv(
+        let (parent_conversation_id, outcome) = dispatch_and_recv(
             &mut app,
             &fixture,
             session_id,
@@ -149,6 +170,7 @@ fn remote_children_fail_cleanly() {
             },
         );
         assert_error_containing(outcome, "Cloud child agents aren't supported");
+        assert_failed_launch_cleaned_up(&app, &fixture, parent_conversation_id, 1);
     });
 }
 
@@ -161,7 +183,7 @@ fn sessions_registered_after_init_are_wired_for_orchestration() {
         let _ = add_dispatching_session(&mut app, &fixture, true);
         let (late_session_id, late_executor) = add_dispatching_session(&mut app, &fixture, false);
 
-        let outcome = dispatch_and_recv(
+        let (parent_conversation_id, outcome) = dispatch_and_recv(
             &mut app,
             &fixture,
             late_session_id,
@@ -174,5 +196,6 @@ fn sessions_registered_after_init_are_wired_for_orchestration() {
         // A resolved outcome proves the late session's executor is wired to
         // the orchestration model (an unwired executor would never resolve).
         assert_error_containing(outcome, "aren't supported in the Warp TUI yet");
+        assert_failed_launch_cleaned_up(&app, &fixture, parent_conversation_id, 2);
     });
 }

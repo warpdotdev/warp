@@ -1082,7 +1082,8 @@ impl TuiAIBlock {
                         TodoOperation::UpdateTodos { .. }
                         | TodoOperation::MarkAsCompleted { .. } => {}
                     },
-                    // TODO: add full status rendering based on MOCs.
+
+                    // TODO: add full status rendering for sub-agents.
                     AIAgentOutputMessageType::MessagesReceivedFromAgents { messages } => {
                         for received in messages {
                             sections.push(TuiAIBlockSection::RichText(
@@ -1100,6 +1101,7 @@ impl TuiAIBlock {
                             format!("Received {count} agent lifecycle event{plural}"),
                         )));
                     }
+
                     // Other message kinds are not rendered by the TUI transcript yet.
                     AIAgentOutputMessageType::Summarization { .. }
                     | AIAgentOutputMessageType::Subagent(_)

@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::error::ErrorKind;
@@ -170,7 +171,13 @@ fn create_terminal_session_after_login(
 
     let resume_token = sessions.update(ctx, |sessions, _| sessions.take_resume_token());
     let window_id = root.window_id(ctx);
-    let (_, surface) = create_local_terminal_session(sessions, window_id, true, ctx);
+    let (_, surface) = create_local_terminal_session(
+        sessions,
+        window_id,
+        true,
+        std::env::current_dir().ok(),
+        ctx,
+    );
     if let Some(token) = resume_token {
         surface.update(ctx, |view, ctx| {
             view.restore_conversation(
@@ -188,6 +195,7 @@ pub(crate) fn create_local_terminal_session(
     sessions: &ModelHandle<TuiSessions>,
     window_id: WindowId,
     focus: bool,
+    startup_directory: Option<PathBuf>,
     ctx: &mut AppContext,
 ) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
     let (exit_summary, keyboard_enhancement_supported) =
@@ -196,7 +204,7 @@ pub(crate) fn create_local_terminal_session(
     // TUI does not render a separate banner surface.
     let banner = ctx.add_model(|_| BannerState::default());
     let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(
-        std::env::current_dir().ok(),
+        startup_directory,
         HashMap::<OsString, OsString>::from_iter(std::env::vars_os()),
         IsSharedSessionCreator::No,
         None,

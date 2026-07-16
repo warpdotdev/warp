@@ -1,148 +1,112 @@
 # TECH: `TuiOrchestrationModel` + background local child agents
-
-Second PR of the two-PR stack, building on the full-view `TuiSessions`
-container. Accepting a local `run_agents` request in the TUI spawns native
-child agents in background sessions and makes the run observable in the
-parent transcript.
-
-## Context
-
-The shared orchestration engine is frontend-neutral and already partially wired into the TUI:
-
-- The TUI's `TuiRunAgentsCardView` drives the shared `RunAgentsExecutor` accept path
-  ([crates/warp_tui/src/run_agents_card_view.rs:200-236 @ 41d0b004](https://github.com/warpdotdev/warp/blob/41d0b004219adff1624cbaf942f52b2d64244d75/crates/warp_tui/src/run_agents_card_view.rs#L200-L236)).
-- `RunAgentsExecutor` fans out per child to `StartAgentExecutor::dispatch`, which emits
-  `StartAgentExecutorEvent::CreateAgent(Box<StartAgentRequest>)` and awaits materialization
-  ([app/src/ai/blocklist/action_model/execute/start_agent.rs:499,532-566 @ 41d0b004](https://github.com/warpdotdev/warp/blob/41d0b004219adff1624cbaf942f52b2d64244d75/app/src/ai/blocklist/action_model/execute/start_agent.rs#L532-L566)).
-  Nothing in `crates/warp_tui` subscribes to that event today, and `StartAgentExecutor` is not yet
-  exported via `app/src/tui_export.rs`.
-- In the GUI, materialization is `TerminalView::handle_start_agent_executor_event`
-  ([app/src/terminal/view.rs:7630-7650 @ 41d0b004](https://github.com/warpdotdev/warp/blob/41d0b004219adff1624cbaf942f52b2d64244d75/app/src/terminal/view.rs#L7630-L7650))
-  → `PaneGroup::create_hidden_child_agent_conversation`
-  ([app/src/pane_group/child_agent/mod.rs:130-179 @ 41d0b004](https://github.com/warpdotdev/warp/blob/41d0b004219adff1624cbaf942f52b2d64244d75/app/src/pane_group/child_agent/mod.rs#L130-L179)) —
-  pane-tree machinery the TUI cannot reuse. The frontend-neutral pieces it calls are reusable:
-  `BlocklistAIHistoryModel::start_new_child_conversation`
-  ([history_model.rs:508-544 @ 41d0b004](https://github.com/warpdotdev/warp/blob/41d0b004219adff1624cbaf942f52b2d64244d75/app/src/ai/blocklist/history_model.rs#L508-L544)),
-  the `children_by_parent` lineage index, `ai_client.create_agent_task`, and
-  `StartAgentExecutor`'s self-completion off `BlocklistAIHistoryEvent`s
-  ([start_agent.rs:144-310 @ 41d0b004](https://github.com/warpdotdev/warp/blob/41d0b004219adff1624cbaf942f52b2d64244d75/app/src/ai/blocklist/action_model/execute/start_agent.rs#L144-L310)).
-- Messaging/lifecycle needs almost no TUI work: `OrchestrationEventStreamer`,
-  `OrchestrationEventService`, `LocalAgentTaskSyncModel`, and `MessageHydrator` are
-  frontend-neutral singletons already registered by the shared bootstrap the TUI binary runs
-  ([app/src/lib.rs:2051-2057 @ 41d0b004](https://github.com/warpdotdev/warp/blob/41d0b004219adff1624cbaf942f52b2d64244d75/app/src/lib.rs#L2051-L2057)).
-  Transport is server-mediated (SSE + RPC) even between local agents in one process. The one
-  gap (found in live verification): the streamer only opens a conversation's SSE stream once a
-  *consumer* registers for it (`register_agent_event_consumer`), which the GUI drives from the
-  agent view's `ActiveAgentViewsModel` bridge — a surface the TUI lacks. Without it, children
-  sent messages but the parent never received them. `TuiOrchestrationModel` therefore registers
-  the parent as a consumer on dispatch and each child on materialization (and unregisters on
-  failed-launch cleanup).
-- The TUI transcript currently drops orchestration traffic on the floor:
-  `MessagesReceivedFromAgents`/`EventsFromAgents` are explicit no-ops
-  ([crates/warp_tui/src/agent_block.rs:670-671 @ 41d0b004](https://github.com/warpdotdev/warp/blob/41d0b004219adff1624cbaf942f52b2d64244d75/crates/warp_tui/src/agent_block.rs#L670-L671)).
-
-Scope decisions (from the architecture discussion): native Oz children only; CLI-harness children
-(Claude/Codex/OpenCode) are a follow-up, and remote children (whose GUI spawn path is coupled to
-ambient-agent panes) also resolve as explicit per-child failures for now. Children stay invisible
-— no navigation, no status bar; `TuiSessions` focus never moves off session 0 in this PR.
-Following the GUI's hidden-pane prior art, each child session gets a full (backgrounded)
-`TuiTerminalSessionView` retained by `TuiSessions`; the view doubles as the
-terminal manager's PTY surface.
-
-## Proposed changes
-
-### Changed: `app/src/tui_export.rs`
-
-- Re-export `StartAgentExecutor`, `StartAgentExecutorEvent`, and `StartAgentRequest` (plus any
-  associated outcome types needed to fail a child), mirroring the existing
-  `RunAgentsExecutor` exports.
-
-### New: `crates/warp_tui/src/orchestration_model.rs` — `TuiOrchestrationModel`
-
-A `SingletonEntity` owning all TUI orchestration coordination:
-
-- Subscribes to `TuiSessions::SessionAdded` and, for each registered session, subscribes to that
-  session's `StartAgentExecutor`. Because all session creation flows through `TuiSessions`
-  (PR 2 invariant), every session — including children, enabling future nesting — is wired.
-- On `StartAgentExecutorEvent::CreateAgent`, dispatches on the request mirroring the GUI's
-  per-mode dispatch:
-  - **Native (no harness)**: `ai_client.create_agent_task` (server task row → run_id, which is
-    what activates messaging/lifecycle for the child) → create a background session via the
-    shared `create_local_terminal_session` helper (PTY manager + full backgrounded view,
-    registered unfocused with `TuiSessions`) → inherit the parent's execution
-    profile/base model and apply the run-wide model override →
-    `BlocklistAIHistoryModel::start_new_child_conversation` + `set_task_id` →
-    `record_new_conversation_request_complete` (echoes the child `AIConversationId` so
-    `StartAgentExecutor` resolves its pending slot) → send the child's prompt via the child
-    session's `BlocklistAIController::send_agent_query_in_conversation`.
-  - **CLI-harness (Claude/Codex/OpenCode) and Remote**: resolve the pending slot with a clear
-    per-child failure outcome — a clean `failed` entry in the `launched` result rather than a
-    spawn-timeout hang. The failure path creates the child conversation on a synthetic surface,
-    marks it `Error`, and echoes it to the executor (which then also emits
-    `CleanupFailedChildLaunch`; the model tears down any mapped child session on that event).
-    TODO(code-1822): implement CLI-harness children by reusing the frontend-neutral
-    `prepare_local_harness_child_launch`
-    ([app/src/pane_group/pane/local_harness_launch.rs:158 @ 41d0b004](https://github.com/warpdotdev/warp/blob/41d0b004219adff1624cbaf942f52b2d64244d75/app/src/pane_group/pane/local_harness_launch.rs#L158)),
-    and remote children with a TUI-native spawn path.
-- `crates/warp_tui/src/session.rs` extracts `create_local_terminal_session`, the single
-  session-materialization helper shared by the login bootstrap (focused) and child creation
-  (background). Callers provide the window from their existing view context, while the helper
-  obtains process-level exit-summary context from `TuiSessions`; `TuiOrchestrationModel` derives
-  the window from the requesting parent session rather than storing view-layer state.
-- Tracking state is thin and session-dimensional only:
-  - `child_session_by_conversation: HashMap<AIConversationId, TuiSessionId>`
-  - `parent_sessions: HashSet<TuiSessionId>`
-  Conversation lineage is always read from `BlocklistAIHistoryModel` (`children_by_parent`,
-  `parent_conversation_id`) — never mirrored here. This model adds only the conversation↔session
-  mapping that the shared layer doesn't know about, and is the future home/data source for session
-  navigation and child-status UI.
-- `TuiTerminalSessionView` remains orchestration-ignorant; the coordinator
-  uses narrow accessors for its action model and controller.
-
-### Changed: `crates/warp_tui/src/agent_block.rs` — minimal orchestration transcript rendering
-
-- Replace the no-op arms for `MessagesReceivedFromAgents` and `EventsFromAgents` with simple
-  rendered lines: sender + subject for messages; sender + lifecycle transition for events.
-- `TODO: add full status rendering based on MOCs.` marks the intentionally
-  minimal message/lifecycle lines.
-- Suppress the `WaitForEvents` tool-call row ("Waiting for agent events…") entirely: the GUI
-  renders nothing for this action (its output match falls through to a no-op), so the TUI skips
-  emitting a transcript section for it rather than using the generic fallback label.
-
-### Non-goals
-
-- Remote and CLI-harness local children (explicit per-child failures, above), session
-  navigation/reveal, child cleanup UX on completion (children idle like GUI hidden panes;
-  lifecycle events surface state).
-
+This change builds on the full-view `TuiSessions` container. Accepting a local
+`run_agents` request in the TUI creates native Oz children in background terminal
+sessions while the parent remains focused and receives orchestration traffic.
+## Architecture
+### Shared local Oz launch contract
+The GUI and TUI share the frontend-neutral parts of native child launch through
+`app/src/ai/blocklist/child_agent_launch.rs (16-93)`:
+- `prepare_local_oz_child_launch` normalizes the child name and creates the server task row with
+  the prompt and parent run id. The returned `PreparedLocalOzChildLaunch` contains the task id and
+  normalized conversation name needed by the frontend-specific materializer.
+- `inherit_child_agent_settings` copies the parent's execution profile and effective base model to
+  the child surface.
+- `apply_child_agent_model_override` installs a non-empty run-wide model override after inheritance.
+The GUI hidden-pane path uses the same helpers in
+`app/src/pane_group/pane/terminal_pane.rs (1528-1705)`. The TUI therefore does
+not export or directly compose `AIClient`, `AgentConfigSnapshot`,
+`ServerApiProvider`, or `AIExecutionProfilesModel`.
+### Session event bridge
+Each `TuiTerminalSessionView` owns its `StartAgentExecutor` subscription and
+converts executor events into semantic session events
+(`crates/warp_tui/src/terminal_session_view.rs (111-136, 599-614)`):
+- `CreateAgent` emits `StartAgentConversation` with the request and a snapshot of the parent's
+  current working directory.
+- `CleanupFailedChildLaunch` emits the corresponding cleanup event.
+`TuiOrchestrationModel::register` runs before the first session is created. It
+subscribes to `TuiSessions` and, for every `SessionAdded`, subscribes to that
+session view through `AppContext`; `SessionRemoved` tears down session-owned
+streamer consumers (`crates/warp_tui/src/orchestration_model.rs (47-112)`).
+Because every session, including a background child session, is registered in
+`TuiSessions`, children are also wired to launch descendants.
+### Native child launch
+`TuiOrchestrationModel` separates task creation from TUI surface creation
+(`crates/warp_tui/src/orchestration_model.rs (114-238)`):
+1. `begin_local_oz_child_launch` starts shared server-task preparation.
+2. `create_local_oz_child_session` creates an unfocused terminal session using the parent's
+   captured working directory.
+3. The child inherits the parent's execution profile and effective base model, then receives the
+   requested run-wide model override.
+4. `BlocklistAIHistoryModel::start_new_child_conversation` establishes lineage on the child
+   surface. The task id is stamped before `record_new_conversation_request_complete` resolves the
+   pending `StartAgentExecutor` slot.
+5. The coordinator registers event consumers for the parent and child conversations.
+6. `TuiTerminalSessionView::start_orchestrated_child` attaches the task id to the child controller
+   and sends the first prompt (`crates/warp_tui/src/terminal_session_view.rs (1034-1049)`).
+`create_local_terminal_session` is the single session factory for both the
+focused bootstrap session and background children. Callers pass the window from
+their existing view context rather than storing it in `TuiSessions`; child
+orchestration derives it from the requesting parent session. The factory's
+explicit startup-directory parameter preserves the parent's current directory
+for child shells (`crates/warp_tui/src/session.rs (152-217)`).
+### Model selection
+TUI `agents.model` remains the default model for ordinary TUI surfaces.
+Explicit per-surface overrides are resolved first so a child `model_id` always
+wins, including when it equals the execution profile default
+(`app/src/ai/llms.rs (844-878, 1504-1526)`).
+### Streamer and session ownership
+The coordinator stores only frontend-specific runtime ownership
+(`crates/warp_tui/src/orchestration_model.rs (31-39)`):
+- `child_session_by_conversation` maps a child conversation to its background session.
+- `event_consumers_by_session` records which conversation streams each live session consumes.
+Conversation lineage remains canonical in `BlocklistAIHistoryModel`. Removing a
+conversation also removes its id from `children_by_parent`
+(`app/src/ai/blocklist/history_model.rs (2112-2182)`).
+### Unsupported modes and failed launch cleanup
+Local CLI-harness and remote requests resolve as explicit per-child failures
+instead of waiting for the spawn timeout
+(`crates/warp_tui/src/orchestration_model.rs (114-159, 239-296)`).
+The failure path creates an errored child conversation on a synthetic surface
+and echoes its id to `StartAgentExecutor`. The resulting cleanup event:
+- deletes the child conversation and persisted state,
+- removes it from the parent-child topology,
+- removes any mapped background session, and
+- unregisters consumers when the session is removed.
+This leaves no dead child conversation, session, or streamer registration.
+### Transcript rendering
+`crates/warp_tui/src/agent_block.rs (775-888)`:
+- suppresses the `WaitForEvents` tool-call row, matching the GUI,
+- renders sender and subject for each `MessagesReceivedFromAgents` entry, and
+- renders the number of received lifecycle events for `EventsFromAgents`.
+Lifecycle output currently contains event ids rather than event details, so the
+TUI intentionally renders a count rather than a sender/status transition.
+## Exports
+`app/src/tui_export.rs (52-75)` exposes the shared child-launch functions and
+prepared result plus the `StartAgentExecutor` request/event/outcome types needed
+by the TUI surface bridge. Server-client and execution-profile implementation
+types remain behind the shared launch API.
+## Non-goals
+- Local CLI-harness children (Claude, Codex, OpenCode, Gemini).
+- Remote/cloud child materialization.
+- Navigation to or revealing background child sessions.
+- Removing completed child sessions; successful children remain retained like GUI hidden panes.
+- Rich message bodies and per-event lifecycle status rendering.
 ## Testing and validation
-
-- Unit tests on `TuiOrchestrationModel` (per `rust-unit-tests`/`tui-testing` conventions):
-  - `CreateAgent` with a CLI harness or Remote mode resolves the executor's pending slot with the
-    per-child failure message and materializes no session.
-  - Sessions added after model init get their executors subscribed (the nesting invariant),
-    proven by a late-registered session's dispatch resolving.
-  - The native path's session materialization spawns a real PTY, so it is validated end-to-end
-    (below) rather than unit-tested against a mocked server client.
-- Render-to-lines test: transcript renders message/lifecycle lines for
-  `MessagesReceivedFromAgents`/`EventsFromAgents` outputs.
-- End-to-end manual validation per `tui-verify-change` (the key checkpoint that run_id
-  registration + SSE lifecycle work for TUI-spawned children): in `./script/run-tui`, prompt an
-  orchestration (`run_agents` with 2 local children) → accept → card shows launched; child
-  lifecycle (`in_progress`/`succeeded`) and completion messages appear in the parent transcript;
-  parent's tool result contains per-child `launched` entries with agent run ids.
-- `./script/presubmit` before submit.
-
-## Parallelization
-
-Mostly none — the orchestration model, tui_export additions, and materializer are one coupled unit.
-The transcript-rendering change (`agent_block.rs`) is independent and could be split to a parallel
-local agent in a separate worktree, but it is ~50 LOC; not worth the coordination overhead. A
-single agent implements this PR sequentially.
-
+- `crates/warp_tui/src/orchestration_model_tests.rs (121-199)` verifies that local-harness and
+  remote requests resolve with explicit failures while leaving no child topology, extra session,
+  or event-consumer state. It also proves that sessions added after coordinator initialization are
+  wired for orchestration.
+- `crates/warp_tui/src/agent_block_tests.rs (290-362)` renders orchestration messages and lifecycle
+  counts while asserting that `WaitForEvents` contributes no tool row.
+- `app/src/ai/llms_tests.rs (936-959)` verifies that an explicit surface override precedes the TUI
+  file-backed default.
+- `app/src/ai/blocklist/history_model_tests.rs (1872-1897)` verifies that removing a child
+  conversation cleans the parent index.
+- `cargo check -p warp_tui` passes.
+- `cargo clippy -p warp_tui --all-targets --all-features --tests -- -D warnings` passes.
+- `cargo clippy -p warp --lib --tests --features tui,test-util -- -D warnings` passes.
 ## Follow-ups
-
-- CLI-harness local children (see TODO above).
-- Richer transcript rendering for agent messages/events (see TODO above).
-- Session navigation + child-status surface (next milestone; builds on `TuiSessions` focus and
-  `TuiOrchestrationModel` tracking).
+- Add local CLI-harness children by reusing the existing local-harness preparation path.
+- Add a TUI-native remote child materializer.
+- Add richer received-message and lifecycle-event rendering.
+- Add child-session navigation and status UI on top of the retained `TuiSessions` entries.
