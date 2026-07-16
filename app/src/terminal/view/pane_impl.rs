@@ -906,17 +906,25 @@ impl TerminalView {
                 .is_some_and(|model| model.as_ref(ctx).is_ambient_agent())
     }
 
-    /// Whether this pane should be treated as a cloud/ambient conversation for display
-    /// purposes (e.g. the cloud agent icon in the pane header and vertical tab). This is the
+    /// Whether this pane should be treated as an ambient agent conversation for display
+    /// purposes (e.g. the ambient agent icon in the pane header and vertical tab). This is the
     /// single source of truth for that check; surfaces should call it rather than re-deriving
     /// the condition, so they can't drift apart.
     ///
-    /// It keys off cloud-execution semantics only: a live ambient agent view, a shared
-    /// *ambient* session, or viewing an ambient conversation. It deliberately does NOT treat a
-    /// manually shared *local* (`User`) session as cloud even though it now carries an
-    /// orchestrator task id on its `source_task_id` sidecar (see QUALITY-726).
+    /// Two signals are combined because they live in different places and neither subsumes the
+    /// other:
+    /// - [`Self::is_ambient_agent_session`] reads the pane's [`AmbientAgentViewModel`], which is
+    ///   how a cloud/ambient run composed or spawned *in this view* is recognized before it has
+    ///   any shared-session source.
+    /// - [`TerminalModel::is_ambient_agent_conversation`] reads model state — a shared *ambient*
+    ///   session or viewing an ambient conversation transcript — which the view model doesn't
+    ///   carry (e.g. a viewer that joined someone else's ambient session).
+    ///
+    /// It deliberately does NOT treat a manually shared *local* (`User`) session as ambient
+    /// even though it now carries an orchestrator task id on its `source_task_id` sidecar (see
+    /// QUALITY-726).
     pub fn is_cloud_agent_session(&self, ctx: &AppContext) -> bool {
-        self.is_ambient_agent_session(ctx) || self.model.lock().is_cloud_or_ambient_conversation()
+        self.is_ambient_agent_session(ctx) || self.model.lock().is_ambient_agent_conversation()
     }
 
     fn selected_conversation_for_user_facing_chrome<'a>(

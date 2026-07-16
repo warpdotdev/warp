@@ -121,7 +121,7 @@ fn generic_shared_session_viewer_model_starts_view_pending() {
 }
 
 #[test]
-fn is_cloud_or_ambient_conversation_only_true_for_genuine_cloud_sessions() {
+fn is_ambient_agent_conversation_only_true_for_genuine_ambient_sessions() {
     use std::str::FromStr;
 
     let make_model = || {
@@ -140,26 +140,26 @@ fn is_cloud_or_ambient_conversation_only_true_for_genuine_cloud_sessions() {
 
     // Baseline: no shared session source and not viewing a transcript.
     let mut model = make_model();
-    assert!(!model.is_cloud_or_ambient_conversation());
+    assert!(!model.is_ambient_agent_conversation());
 
     // A manually shared *local* (`User`) session carries an orchestrator task id on its
-    // `source_task_id` sidecar (QUALITY-726) but is NOT a cloud conversation. This is the
-    // regression: before the fix, this task id leaked into the cloud/ambient icon check.
+    // `source_task_id` sidecar (QUALITY-726) but is NOT an ambient agent conversation. This is
+    // the regression: before the fix, this task id leaked into the ambient agent icon check.
     model.set_shared_session_source(SharedSessionSource::user(Some(task_id.to_owned())));
-    assert!(!model.is_cloud_or_ambient_conversation());
+    assert!(!model.is_ambient_agent_conversation());
 
-    // A shared *ambient* (cloud) session is a cloud conversation.
+    // A shared *ambient* (cloud) session is an ambient agent conversation.
     model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(task_id.to_owned())));
-    assert!(model.is_cloud_or_ambient_conversation());
+    assert!(model.is_ambient_agent_conversation());
 
-    // Viewing an ambient conversation transcript is a cloud conversation.
+    // Viewing an ambient conversation transcript is an ambient agent conversation.
     let mut model = make_model();
     model.set_conversation_transcript_viewer_status(Some(
         ConversationTranscriptViewerStatus::ViewingAmbientConversation(
             AmbientAgentTaskId::from_str(task_id).expect("valid task id"),
         ),
     ));
-    assert!(model.is_cloud_or_ambient_conversation());
+    assert!(model.is_ambient_agent_conversation());
 }
 
 fn iterm_file_osc(name: &str, inline: bool, payload: &[u8]) -> String {
