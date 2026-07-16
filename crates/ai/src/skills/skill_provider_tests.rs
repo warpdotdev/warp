@@ -94,8 +94,9 @@ fn omp_provider_path_is_classified_by_structure() {
 
 #[test]
 fn omp_api_conversion_is_intentionally_lossy() {
-    use crate::skills::{ParsedSkill, SkillPathOrigin};
     use warp_multi_agent_api as api;
+
+    use crate::skills::{ParsedSkill, SkillPathOrigin};
     let omp_skill = ParsedSkill {
         path: LocalOrRemotePath::Local(std::path::PathBuf::from(
             "/repo/.omp/skills/my-skill/SKILL.md",

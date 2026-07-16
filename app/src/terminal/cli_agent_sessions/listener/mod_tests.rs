@@ -254,7 +254,9 @@ fn oh_my_pi_end_to_end_parsing_and_handling() {
     assert_eq!(parsed_stop.agent, CLIAgent::OhMyPi);
     assert_eq!(parsed_stop.event, CLIAgentEventType::Stop);
 
-    let handled_stop = handler.handle_event(parsed_stop).expect("should forward stop event");
+    let handled_stop = handler
+        .handle_event(parsed_stop)
+        .expect("should forward stop event");
     assert_eq!(handled_stop.agent, CLIAgent::OhMyPi);
     assert_eq!(handled_stop.event, CLIAgentEventType::Stop);
 }
