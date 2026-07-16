@@ -37,8 +37,7 @@ use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
-use crate::status::TuiStatusState;
-use crate::tool_call_labels::tool_call_display_state;
+use crate::tool_call_labels::{tool_call_display_state, ToolCallDisplayState};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageEvent, TuiDiffStorageHandle};
 
@@ -253,7 +252,7 @@ impl TuiFileEditsView {
     }
 
     /// The action's display state, driving the header glyph and styling.
-    fn display_state(&self, app: &AppContext) -> TuiStatusState {
+    fn display_state(&self, app: &AppContext) -> ToolCallDisplayState {
         let status = self
             .action_model
             .as_ref(app)

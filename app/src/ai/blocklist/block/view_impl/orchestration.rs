@@ -37,6 +37,10 @@ use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::{
     render_requested_action_row, render_requested_action_row_for_text,
 };
+use crate::ai::blocklist::orchestration_topology::{
+    orchestrator_agent_id_for_conversation, resolve_orchestration_participant,
+    OrchestrationParticipantKind,
+};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
 use crate::terminal::view::TerminalAction;
@@ -63,14 +67,6 @@ impl OrchestrationParticipant {
         }
     }
 
-    fn unknown_child() -> Self {
-        Self {
-            display_name: "Unknown agent".to_string(),
-            avatar: OrchestrationAvatar::agent("Unknown agent".to_string()),
-            conversation_id: None,
-        }
-    }
-
     fn is_orchestrator(&self) -> bool {
         matches!(&self.avatar, OrchestrationAvatar::Orchestrator)
     }
@@ -90,21 +86,27 @@ fn participant_for_agent_id(
     orchestrator_agent_id: Option<&str>,
     app: &AppContext,
 ) -> OrchestrationParticipant {
-    if let Some(conversation_id) = conversation_id_for_agent_id(agent_id, app) {
-        if let Some(conversation) =
-            BlocklistAIHistoryModel::as_ref(app).conversation(&conversation_id)
-        {
-            return participant_for_conversation(
-                conversation,
-                orchestrator_agent_id,
-                Some(agent_id),
-            );
+    let participant = resolve_orchestration_participant(
+        BlocklistAIHistoryModel::as_ref(app),
+        agent_id,
+        orchestrator_agent_id,
+    );
+    let avatar = match participant.kind {
+        OrchestrationParticipantKind::Orchestrator => OrchestrationAvatar::Orchestrator,
+        OrchestrationParticipantKind::Agent | OrchestrationParticipantKind::Unknown => {
+            OrchestrationAvatar::agent(participant.display_name.clone())
         }
+    };
+    OrchestrationParticipant {
+        display_name: participant.display_name,
+        avatar,
+        conversation_id: match participant.kind {
+            OrchestrationParticipantKind::Orchestrator | OrchestrationParticipantKind::Unknown => {
+                None
+            }
+            OrchestrationParticipantKind::Agent => participant.conversation_id,
+        },
     }
-    if orchestrator_agent_id.is_some_and(|id| id == agent_id) {
-        return OrchestrationParticipant::orchestrator();
-    }
-    OrchestrationParticipant::unknown_child()
 }
 
 fn participant_for_conversation(
@@ -128,18 +130,6 @@ fn participant_for_conversation(
         display_name: display_name.clone(),
         avatar: OrchestrationAvatar::agent(display_name),
         conversation_id: Some(conversation.id()),
-    }
-}
-
-fn orchestrator_agent_id_for_conversation(
-    conversation: &AIConversation,
-    app: &AppContext,
-) -> Option<String> {
-    match conversation.parent_conversation_id() {
-        Some(parent_id) => BlocklistAIHistoryModel::as_ref(app)
-            .conversation(&parent_id)
-            .and_then(|parent| parent.orchestration_agent_id()),
-        None => conversation.orchestration_agent_id(),
     }
 }
 
@@ -343,10 +333,9 @@ pub(super) fn render_messages_received_from_agents(
     if messages.is_empty() {
         return Empty::new().finish();
     }
-    let orchestrator_agent_id = props
-        .model
-        .conversation(app)
-        .and_then(|conversation| orchestrator_agent_id_for_conversation(conversation, app));
+    let orchestrator_agent_id = props.model.conversation(app).and_then(|conversation| {
+        orchestrator_agent_id_for_conversation(BlocklistAIHistoryModel::as_ref(app), conversation)
+    });
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
     for (index, msg) in messages.iter().enumerate() {
         let sender =
@@ -422,10 +411,9 @@ pub(super) fn render_send_message(
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let status = props.action_model.as_ref(app).get_action_status(action_id);
-    let orchestrator_agent_id = props
-        .model
-        .conversation(app)
-        .and_then(|conversation| orchestrator_agent_id_for_conversation(conversation, app));
+    let orchestrator_agent_id = props.model.conversation(app).and_then(|conversation| {
+        orchestrator_agent_id_for_conversation(BlocklistAIHistoryModel::as_ref(app), conversation)
+    });
     let recipient_participants =
         participant_for_agent_ids(address, orchestrator_agent_id.as_deref(), app);
     let recipients = participant_display_names(&recipient_participants);

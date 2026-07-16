@@ -1,36 +1,77 @@
 //! Rich TUI rendering for messages received from orchestration participants.
 
 use warp::tui_export::{
-    AIConversationId, BlocklistAIHistoryModel, ConversationStatus, MessageId,
+    orchestrator_agent_id_for_conversation, resolve_orchestration_participant, AIConversationId,
+    BlocklistAIHistoryModel, ConversationStatus, MessageId, OrchestrationParticipantKind,
     ReceivedMessageDisplay,
 };
 use warpui::SingletonEntity;
-use warpui_core::elements::tui::{tui_collapsible, Modifier, TuiContainer, TuiElement, TuiText};
+use warpui_core::elements::tui::{
+    tui_collapsible, Modifier, TuiContainer, TuiElement, TuiStyle, TuiText,
+};
 use warpui_core::AppContext;
 
 use crate::agent_block::{CollapsibleSectionStates, TuiAIBlockAction};
-use crate::orchestrated_agent_identity_styling::{stable_hash, AgentIdentity};
-use crate::orchestration_model::{TuiOrchestrationModel, TuiOrchestrationParticipantKind};
-use crate::status::TuiStatusState;
+use crate::orchestrated_agent_identity_styling::{
+    assign_agent_identity_indices, stable_hash, AgentIdentity,
+};
 use crate::tui_builder::TuiUiBuilder;
 
 /// Render-ready identity and lifecycle presentation for a message sender.
 struct AgentMessagePresentation {
     name: String,
-    status: TuiStatusState,
+    status: ConversationStatus,
     identity: AgentIdentity,
 }
-/// Maps a shared conversation lifecycle into the common TUI status contract.
-fn agent_status(status: &ConversationStatus) -> TuiStatusState {
+
+/// Compact glyph for a conversation's lifecycle status.
+fn conversation_status_glyph(status: &ConversationStatus) -> &'static str {
     match status {
         ConversationStatus::InProgress
         | ConversationStatus::TransientError
-        | ConversationStatus::WaitingForEvents => TuiStatusState::Running,
-        ConversationStatus::Success => TuiStatusState::Succeeded,
-        ConversationStatus::Error => TuiStatusState::Failed,
-        ConversationStatus::Cancelled => TuiStatusState::Cancelled,
-        ConversationStatus::Blocked { .. } => TuiStatusState::Blocked,
+        | ConversationStatus::WaitingForEvents => "●",
+        ConversationStatus::Success => "✓",
+        ConversationStatus::Error => "×",
+        ConversationStatus::Cancelled | ConversationStatus::Blocked { .. } => "■",
     }
+}
+
+/// Semantic theme style for a conversation's lifecycle glyph.
+fn conversation_status_glyph_style(
+    status: &ConversationStatus,
+    builder: &TuiUiBuilder,
+) -> TuiStyle {
+    match status {
+        ConversationStatus::InProgress
+        | ConversationStatus::TransientError
+        | ConversationStatus::WaitingForEvents
+        | ConversationStatus::Blocked { .. } => builder.attention_glyph_style(),
+        ConversationStatus::Success => builder.success_glyph_style(),
+        ConversationStatus::Error => builder.error_text_style(),
+        ConversationStatus::Cancelled => builder.muted_text_style(),
+    }
+}
+
+/// Returns a child's stable identity index among its siblings.
+fn child_identity_index(
+    history: &BlocklistAIHistoryModel,
+    conversation_id: AIConversationId,
+    palette_len: usize,
+) -> Option<usize> {
+    let conversation = history.conversation(&conversation_id)?;
+    let parent_id = history.resolved_parent_conversation_id_for_conversation(conversation)?;
+    let siblings = history.child_conversations_of(parent_id);
+    let sender_index = siblings
+        .iter()
+        .position(|sibling| sibling.id() == conversation_id)?;
+    assign_agent_identity_indices(
+        siblings
+            .iter()
+            .map(|sibling| sibling.agent_name().unwrap_or("Agent")),
+        palette_len,
+    )
+    .get(sender_index)
+    .copied()
 }
 
 /// Resolves a sender's name and sibling-stable identity.
@@ -42,31 +83,36 @@ fn message_presentation(
 ) -> AgentMessagePresentation {
     let history = BlocklistAIHistoryModel::as_ref(app);
     let palette = builder.agent_identity_palette();
-    let participant = TuiOrchestrationModel::as_ref(app).participant_snapshot(
-        current_conversation_id,
+    let orchestrator_agent_id = history
+        .conversation(&current_conversation_id)
+        .and_then(|conversation| orchestrator_agent_id_for_conversation(history, conversation));
+    let participant = resolve_orchestration_participant(
+        history,
         sender_agent_id,
-        palette.len(),
-        app,
+        orchestrator_agent_id.as_deref(),
     );
     let sender = participant
         .conversation_id
         .and_then(|conversation_id| history.conversation(&conversation_id));
     let name = participant.display_name;
     let status = sender
-        .map(|conversation| agent_status(conversation.status()))
-        .unwrap_or(TuiStatusState::Running);
+        .map(|conversation| conversation.status().clone())
+        .unwrap_or(ConversationStatus::InProgress);
     let fallback_identity_index = (!palette.is_empty()).then(|| {
         usize::try_from(stable_hash(sender_agent_id) % palette.len() as u64).unwrap_or_default()
     });
     let identity = match participant.kind {
-        TuiOrchestrationParticipantKind::Orchestrator => AgentIdentity::default(),
-        TuiOrchestrationParticipantKind::Child => participant
-            .identity_index
+        OrchestrationParticipantKind::Orchestrator => AgentIdentity::default(),
+        OrchestrationParticipantKind::Agent => participant
+            .conversation_id
+            .and_then(|conversation_id| {
+                child_identity_index(history, conversation_id, palette.len())
+            })
             .or(fallback_identity_index)
             .and_then(|index| palette.get(index))
             .cloned()
             .unwrap_or_default(),
-        TuiOrchestrationParticipantKind::Unknown => fallback_identity_index
+        OrchestrationParticipantKind::Unknown => fallback_identity_index
             .and_then(|index| palette.get(index))
             .cloned()
             .unwrap_or_default(),
@@ -99,8 +145,8 @@ pub(crate) fn render_agent_message(
     );
     let header_spans = [
         (
-            format!("{} ", presentation.status.glyph()),
-            presentation.status.glyph_style(&builder),
+            format!("{} ", conversation_status_glyph(&presentation.status)),
+            conversation_status_glyph_style(&presentation.status, &builder),
         ),
         (
             format!("{} ", presentation.identity.glyph),

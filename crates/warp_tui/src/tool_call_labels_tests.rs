@@ -6,8 +6,10 @@ use warp::tui_export::{
 };
 use warp_core::command::ExitCode;
 
-use super::{tool_call_display_state, tool_call_label, CommandBlockState, ResolvedCommandBlock};
-use crate::status::TuiStatusState;
+use super::{
+    tool_call_display_state, tool_call_label, CommandBlockState, ResolvedCommandBlock,
+    ToolCallDisplayState,
+};
 
 /// Builds a `Finished` status wrapping the given result.
 fn finished(result: AIAgentActionResultType) -> AIActionStatus {
@@ -45,22 +47,22 @@ fn command_action(command: &str) -> AIAgentAction {
 }
 
 #[test]
-fn tool_call_states_map_to_shared_tui_statuses() {
+fn tool_call_statuses_map_to_tool_call_display_states() {
     assert_eq!(
         tool_call_display_state(None, true, None),
-        TuiStatusState::Constructing
+        ToolCallDisplayState::Constructing
     );
     assert_eq!(
         tool_call_display_state(None, false, None),
-        TuiStatusState::Pending
+        ToolCallDisplayState::Pending
     );
     assert_eq!(
         tool_call_display_state(Some(&AIActionStatus::Blocked), false, None),
-        TuiStatusState::Blocked
+        ToolCallDisplayState::Blocked
     );
     assert_eq!(
         tool_call_display_state(Some(&AIActionStatus::RunningAsync), false, None),
-        TuiStatusState::Running
+        ToolCallDisplayState::Running
     );
 }
 

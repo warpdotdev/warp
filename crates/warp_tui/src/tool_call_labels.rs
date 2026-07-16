@@ -10,8 +10,10 @@ use warp::tui_export::{
     StartAgentExecutionMode, SuggestNewConversationResult,
 };
 use warp_core::command::ExitCode;
+use warpui_core::elements::tui::TuiStyle;
 
-use crate::status::TuiStatusState as State;
+use self::ToolCallDisplayState as State;
+use crate::tui_builder::TuiUiBuilder;
 
 /// Ground-truth state of the terminal block backing a shell-command tool
 /// call, resolved by the caller. When a block exists, its state supersedes
@@ -42,6 +44,56 @@ pub(crate) struct ResolvedCommandBlock {
 /// so tool-call rows stay scannable one-liners.
 const MAX_INLINE_LEN: usize = 80;
 
+/// Coarse presentation state for a tool call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ToolCallDisplayState {
+    /// The tool call's arguments are still streaming and may be incomplete.
+    Constructing,
+    /// The tool call is waiting to begin execution.
+    Pending,
+    /// The tool call is blocked on user confirmation.
+    Blocked,
+    /// The tool call is executing asynchronously.
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+impl ToolCallDisplayState {
+    /// The compact leading glyph for this state.
+    pub(crate) fn glyph(self) -> &'static str {
+        match self {
+            Self::Constructing | Self::Pending => "○",
+            Self::Blocked | Self::Cancelled => "■",
+            Self::Running => "●",
+            Self::Succeeded => "✓",
+            Self::Failed => "×",
+        }
+    }
+
+    /// The semantic theme style for this state's glyph.
+    pub(crate) fn glyph_style(self, builder: &TuiUiBuilder) -> TuiStyle {
+        match self {
+            Self::Constructing | Self::Pending => builder.dim_text_style(),
+            Self::Blocked | Self::Running => builder.attention_glyph_style(),
+            Self::Succeeded => builder.success_glyph_style(),
+            Self::Failed => builder.error_text_style(),
+            Self::Cancelled => builder.muted_text_style(),
+        }
+    }
+
+    /// The semantic text style paired with this state.
+    pub(crate) fn label_style(self, builder: &TuiUiBuilder) -> TuiStyle {
+        match self {
+            Self::Constructing | Self::Pending => builder.dim_text_style(),
+            Self::Blocked | Self::Running | Self::Succeeded | Self::Failed | Self::Cancelled => {
+                builder.primary_text_style()
+            }
+        }
+    }
+}
+
 /// Collapses an optional action status into the coarse display state.
 /// `output_streaming` is whether the exchange output is still streaming;
 /// a status-less action in a streaming output is still being constructed
@@ -52,7 +104,7 @@ pub(crate) fn tool_call_display_state(
     status: Option<&AIActionStatus>,
     output_streaming: bool,
     block_state: Option<CommandBlockState>,
-) -> State {
+) -> ToolCallDisplayState {
     // A block existing means the command actually started executing, so its
     // state is authoritative over the action status/result.
     match block_state {

@@ -20,14 +20,26 @@ The frontend-neutral edit state, option snapshots, and the reusable selector thi
 Live catalogs come from `HarnessAvailabilityModel` ([`app/src/ai/harness_availability.rs`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/app/src/ai/harness_availability.rs)), `LLMPreferences`, `CloudAmbientAgentEnvironment`, `ConnectedSelfHostedWorkersModel`, `CloudAgentSettings`, `UserWorkspaces`.
 
 ### TUI plumbing
-- [`crates/warp_tui/src/agent_block.rs (105-306) @ 27da0f48`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/crates/warp_tui/src/agent_block.rs#L105-L306) — `TuiToolCallView` enum plus `sync_action_views`, the lazy per-action child-view registration seam (currently `FileEdits`, `ShellCommand`).
+- `crates/warp_tui/src/agent_block.rs` — `TuiToolCallView` plus `sync_action_views`, the lazy per-action child-view registration seam for `FileEdits`, `ShellCommand`, and `OrchestrationBlock`.
 - [`crates/warp_tui/src/terminal_session_view.rs @ 27da0f48`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/crates/warp_tui/src/terminal_session_view.rs) — renders transcript, inline menu, input box, footer; focuses the input at startup (620) and after restore flows (808, 839, 867).
 - [`crates/warp_tui/src/inline_menu.rs @ 27da0f48`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/crates/warp_tui/src/inline_menu.rs) — `TuiInlineMenuHandle`/`TuiInlineMenuSnapshot`; scroll/selection math shared with GUI via `warp_search_core::inline_menu::InlineMenuSelection`.
 - [`crates/warp_tui/src/tool_call_labels.rs (503-577) @ 27da0f48`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/crates/warp_tui/src/tool_call_labels.rs#L503-L577) — existing static RunAgents status labels (kept for restored/terminal fallbacks).
 - [`crates/warp_tui/src/tui_builder.rs @ 27da0f48`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/crates/warp_tui/src/tui_builder.rs) — `TuiUiBuilder` theme→style recipes; all colors derive from `WarpTheme`, no raw hex.
 - [`app/src/tui_export.rs @ 27da0f48`](https://github.com/warpdotdev/warp/blob/27da0f4885aa23603c4feb442c7806b0170cde70/app/src/tui_export.rs) — the sole `warp` → `warp_tui` export seam.
 
-There is no TUI permission/confirmation UI for `RunAgents` today and no generalized input-hiding mechanism; the closest precedent is the inline-menu overlay, which keeps the input visible and focused.
+The `RunAgents` permission card is registered as a stateful `TuiAIBlock` child view. Session input replacement is derived from the front-of-queue blocker rather than stored as a separate suppression flag, so draft input state remains owned by the normal input view.
+
+### Local child runtime and participant identity (later stack layers)
+The permission card is followed by three runtime layers:
+- [specs/code-1822-tui-multi-session/TECH.md](../code-1822-tui-multi-session/TECH.md) introduces `TuiSessions`, retaining a complete view and terminal manager for each focused or background terminal surface.
+- [specs/code-1822-tui-local-children/TECH.md](../code-1822-tui-local-children/TECH.md) introduces `TuiOrchestrationModel`, which materializes native local Oz children as background TUI sessions and owns only session/event-consumer runtime mappings.
+- The rich-message change on top renders `MessagesReceivedFromAgents` using frontend-neutral participant discovery shared with the GUI.
+
+Incoming `ReceivedMessageDisplay` values carry a server-side sender run id, not a display name, status, or local conversation id. `BlocklistAIHistoryModel` already owns the durable data needed to interpret that id: the run-id reverse index, loaded conversations, immediate-parent links, parent-to-children index, participant names, and `ConversationStatus`. `app/src/ai/blocklist/orchestration_topology.rs` therefore owns the shared semantic bridge:
+- `orchestrator_agent_id_for_conversation` resolves the current conversation's immediate parent agent.
+- `resolve_orchestration_participant` maps the sender run id to role, local conversation id, and display name through the history index.
+
+This resolution is a one-parent lookup plus an indexed agent-id lookup, not a second graph traversal. `TuiOrchestrationModel` remains an ephemeral session materializer so restored, remote, or otherwise pre-existing conversations do not require duplicated participant metadata in the TUI coordinator. GUI and TUI apply their own presentation after the shared semantic result is resolved.
 
 ## Proposed changes
 ### 1. TUI orchestration block `crates/warp_tui/src/orchestration_block.rs`
@@ -63,26 +75,47 @@ Input visibility is a pure function of the front-of-queue blocker rather than a 
 ### 4. Export seam
 `tui_export.rs` re-exports the neutral surface only: `OrchestrationConfigState`, `OrchestrationEditState`, `AuthSecretSelection`, snapshot types and builders, validation helpers, `RunAgentsExecutor`/`RunAgentsExecutorEvent`/`RunAgentsSpawningSnapshot`, `HarnessAvailabilityModel` + events, `RunAgentsRequest`/`RunAgentsExecutionMode`/`RunAgentsAgentRunConfig`, `OrchestrationConfig`/`OrchestrationConfigStatus`, and the shared orchestration telemetry types. No GUI element types cross the seam.
 
+### 5. Full-view sessions and local child materialization
+`TuiSessions` replaces the single-session root with a registry that retains focused and background `TuiTerminalSessionView`s. The root renders and routes input only to the focused session. `TuiOrchestrationModel` subscribes to every registered session's `StartAgentExecutor`, including child sessions, so nested local Oz children can be materialized without putting background views into the render or responder chain.
 
+The coordinator uses the shared local-launch helpers, creates the child's background session, establishes conversation lineage in `BlocklistAIHistoryModel`, applies inherited and requested model settings, registers event consumers, and submits the first prompt. Its state is limited to child-conversation → session and session → event-consumer ownership; conversation topology and participant metadata are not mirrored.
+
+### 6. Rich orchestration transcript messages
+`TuiAIBlockSection::AgentMessage` preserves each received message payload. `agent_message.rs` resolves the current conversation's immediate orchestrator and the sender through the shared history/topology API, then applies TUI-only presentation:
+- direct `ConversationStatus` glyph/style,
+- deterministic sibling-based identity color and glyph,
+- bold participant name,
+- collapsed-by-default body with subject fallback and hanging indentation.
+
+Opaque `EventsFromAgents` ids render no transcript row. Tool calls keep a separate `ToolCallDisplayState` because constructing and pending are tool-call states, not conversation lifecycle states.
 ## Testing and validation
 Focused unit coverage:
 - `orchestration_block_tests.rs` covers page sequencing, approved-config and auth-secret resolution, request reconstruction, selector-to-edit-state navigation, and decision/focus behavior. Focus regression coverage drives the model-page search editor, confirms a result as a row click does, then verifies that Acceptance owns focus so `Ctrl+E` is no longer shadowed by the hidden editor. The interaction tests inject a local controller, so they exercise the real block, selector, and typed actions without exporting app test infrastructure.
 - `option_selector_tests.rs` covers the reusable selector's navigation, confirmation, search, disabled/loading/failure states, custom text, scrolling, and refresh behavior.
-- `agent_identity_tests.rs` covers palette size, deterministic assignment, uniqueness, and cycling.
+- `orchestrated_agent_identity_styling_tests.rs` covers palette size, deterministic assignment, uniqueness, and cycling.
 - `keybindings_tests.rs` validates that the orchestration block's bindings remain TUI-owned.
+- `orchestration_topology_tests.rs` covers shared participant resolution and immediate-parent semantics for nested agents.
+- `agent_message_tests.rs` covers orchestrator/agent labels, direct conversation-status presentation, identity styling, collapse/expand behavior, wrapping, and subject fallback.
+- `agent_block_tests.rs` covers rich-message section extraction, omission of opaque lifecycle ids and `WaitForEvents`, and block-owned collapse state.
+- `tool_call_labels_tests.rs` independently covers tool-call-only presentation states.
 
 Live verification via `./script/run-tui` (per `tui-verify-change`): accept-without-edit, full Cloud edit loop, Local collapse, model search → click result → `Ctrl+E` reopening configuration from Acceptance, retry on failed secret fetch, narrow-terminal reflow, input draft preservation across a full accept/reject cycle.
 
 Commands: `cargo nextest run -p warp -E 'test(orchestration) + test(run_agents)'`, `cargo nextest run -p warp_tui`, `cargo nextest run -p warpui_core --features tui` (if element changes land there), `./script/format`, `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings`, `./script/presubmit` before PR.
 
 ## Orchestration
-The work ships as a four-PR Graphite stack, each mergeable on its own:
-1. `harry/code-1822-edit-state` — the frontend-neutral orchestration domain module (`app/src/ai/orchestration/`: edit state, session, transitions, providers, validation) and the executor retarget; specified in [specs/code-1822-edit-state/TECH.md](../code-1822-edit-state/TECH.md).
-2. `harry/code-1822-option-snapshots` — option snapshots and their builders, plus the behavior-preserving GUI picker adaptation onto them; specified in [specs/code-1822-option-snapshots/TECH.md](../code-1822-option-snapshots/TECH.md).
-3. `harry/code-1822-tui-option-selector` — the reusable `TuiOptionSelector` primitive; specified in [specs/code-1822-tui-option-selector/TECH.md](../code-1822-tui-option-selector/TECH.md).
-4. The final PR (this spec's remaining scope) — the TUI orchestration block, generalized input replacement, theming, and agent identity, reviewed against the PRODUCT invariants.
+The implementation ships as a Graphite stack whose layers remain independently reviewable:
+1. `harry/code-1822-generic-editor-view` — reusable TUI editor view; specified in [specs/code-1822-tui-generic-editor-view/TECH.md](../code-1822-tui-generic-editor-view/TECH.md).
+2. `harry/code-1822-tui-option-selector` — reusable `TuiOptionSelector`; specified in [specs/code-1822-tui-option-selector/TECH.md](../code-1822-tui-option-selector/TECH.md).
+3. `harry/code-1822-tui-orchestration-card` — permission/configuration card, input replacement, theming, and request identity.
+4. `harry/code-1822-tui-multi-session` — retained full-view session registry; specified in [specs/code-1822-tui-multi-session/TECH.md](../code-1822-tui-multi-session/TECH.md).
+5. `harry/code-1822-tui-local-children` — native local Oz child materialization; specified in [specs/code-1822-tui-local-children/TECH.md](../code-1822-tui-local-children/TECH.md).
+6. `harry/code-1822-rich-child-message-rendering` — shared participant resolution and rich received-message rows.
+7. `harry/code-1822-tui-tab-bar-component` and `harry/code-1822-orchestration-tab-bar` — child-session navigation and orchestration-specific tab presentation.
+8. `harry/code-1822-cloud-agent-orchestration` — remote/cloud child materialization.
 
 ## Risks and mitigations
 - Catalog events arriving mid-configuration can reshape option lists — the selector preserves the selected id when still present; disappearance surfaces the PRODUCT (50) unavailability copy rather than silently reselecting.
 - Focus derivation vs. event ordering: `SpawningStarted` must flip `wants_focus` before the next render; both arrive through the same entity-event loop, and the render-time derivation (not cached state) makes late events self-correcting.
 - Theme switches would rebuild the identity palette; the card pins its palette at construction so in-flight requests keep stable identities, at the cost of using pre-switch colors until the next request.
+- Participant lookup depends on history indexes being updated through canonical history-model mutation APIs. Tests and runtime launch paths use those APIs rather than adding render-time scans or mirroring participant state in `TuiOrchestrationModel`.

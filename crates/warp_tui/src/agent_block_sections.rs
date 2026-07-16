@@ -78,9 +78,10 @@ pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiE
 /// hanging indent under itself. State lives in the glyph, so labels keep the
 /// normal foreground except in-flight rows, which stay dim until execution
 /// starts. `output_streaming` marks tool calls whose arguments are still
-/// streaming in (see `TuiStatusState::Constructing`); `block` carries
-/// the terminal block's ground truth for shell-command tool calls (see
-/// `ResolvedCommandBlock`).
+/// streaming in (see
+/// [`crate::tool_call_labels::ToolCallDisplayState::Constructing`]); `block`
+/// carries the terminal block's ground truth for shell-command tool calls
+/// (see `ResolvedCommandBlock`).
 pub(crate) fn render_fallback_tool_call_section(
     action: &AIAgentAction,
     status: Option<&AIActionStatus>,

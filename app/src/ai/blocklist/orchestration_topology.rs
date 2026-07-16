@@ -15,6 +15,84 @@ pub enum OrchestrationNavigationDirection {
     Next,
 }
 
+/// Semantic role of a participant in an orchestration transcript.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrchestrationParticipantKind {
+    Orchestrator,
+    Agent,
+    Unknown,
+}
+
+/// Frontend-independent identity for an orchestration participant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedOrchestrationParticipant {
+    pub kind: OrchestrationParticipantKind,
+    pub conversation_id: Option<AIConversationId>,
+    pub display_name: String,
+}
+
+impl ResolvedOrchestrationParticipant {
+    fn orchestrator(conversation_id: Option<AIConversationId>) -> Self {
+        Self {
+            kind: OrchestrationParticipantKind::Orchestrator,
+            conversation_id,
+            display_name: "Orchestrator".to_string(),
+        }
+    }
+
+    fn unknown() -> Self {
+        Self {
+            kind: OrchestrationParticipantKind::Unknown,
+            conversation_id: None,
+            display_name: "Unknown agent".to_string(),
+        }
+    }
+}
+
+/// Returns the agent ID of the conversation that orchestrates `conversation`.
+pub fn orchestrator_agent_id_for_conversation(
+    history: &BlocklistAIHistoryModel,
+    conversation: &AIConversation,
+) -> Option<String> {
+    match history.resolved_parent_conversation_id_for_conversation(conversation) {
+        Some(parent_id) => history
+            .conversation(&parent_id)
+            .and_then(AIConversation::orchestration_agent_id)
+            .or_else(|| conversation.parent_agent_id().map(str::to_owned)),
+        None => conversation
+            .parent_agent_id()
+            .map(str::to_owned)
+            .or_else(|| conversation.orchestration_agent_id()),
+    }
+}
+
+/// Resolves a server-side agent ID to frontend-independent participant data.
+pub fn resolve_orchestration_participant(
+    history: &BlocklistAIHistoryModel,
+    agent_id: &str,
+    orchestrator_agent_id: Option<&str>,
+) -> ResolvedOrchestrationParticipant {
+    let conversation_id = history.conversation_id_for_agent_id(agent_id);
+    if orchestrator_agent_id == Some(agent_id) {
+        return ResolvedOrchestrationParticipant::orchestrator(conversation_id);
+    }
+    let Some(conversation_id) = conversation_id else {
+        return ResolvedOrchestrationParticipant::unknown();
+    };
+    let Some(conversation) = history.conversation(&conversation_id) else {
+        return ResolvedOrchestrationParticipant::unknown();
+    };
+    ResolvedOrchestrationParticipant {
+        kind: OrchestrationParticipantKind::Agent,
+        conversation_id: Some(conversation_id),
+        display_name: conversation
+            .agent_name()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("Agent")
+            .to_string(),
+    }
+}
+
 const DONE_STATUS_KEY: u8 = 3;
 
 fn pill_status_sort_key(status: Option<&ConversationStatus>) -> u8 {

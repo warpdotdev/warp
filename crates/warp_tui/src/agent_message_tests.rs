@@ -1,38 +1,39 @@
 use warp::tui_export::{
-    AIConversationId, Appearance, BlocklistAIHistoryModel, ConversationStatus,
-    ReceivedMessageDisplay,
+    register_tui_session_view_test_singletons, AIConversationId, BlocklistAIHistoryModel,
+    ConversationStatus, ReceivedMessageDisplay,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, EntityId};
 
-use super::{agent_message_section_id, agent_status, render_agent_message};
+use super::{agent_message_section_id, conversation_status_glyph, render_agent_message};
 use crate::agent_block::CollapsibleSectionStates;
-use crate::orchestration_model::TuiOrchestrationModel;
-use crate::status::TuiStatusState;
 use crate::tui_builder::TuiUiBuilder;
+
 const INFRA_RUN_ID: &str = "00000000-0000-0000-0000-000000000001";
 const UI_RUN_ID: &str = "00000000-0000-0000-0000-000000000002";
 const PARENT_RUN_ID: &str = "00000000-0000-0000-0000-000000000003";
 
 /// Registers the appearance and history models needed by the renderer.
 fn register_models(app: &mut App) {
-    app.add_singleton_model(|_| Appearance::mock());
-    app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
-    app.add_singleton_model(|_| TuiOrchestrationModel::new_for_test());
+    register_tui_session_view_test_singletons(app);
 }
 
 /// Creates one parent conversation for child-message tests.
 fn add_parent(app: &mut App) -> AIConversationId {
     app.update(|ctx| {
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            let surface_id = EntityId::new();
             let conversation_id =
-                history.start_new_conversation(EntityId::new(), false, false, false, ctx);
-            history
-                .conversation_mut(&conversation_id)
-                .expect("parent conversation was just created")
-                .set_run_id(PARENT_RUN_ID.to_string());
+                history.start_new_conversation(surface_id, false, false, false, ctx);
+            history.assign_run_id_for_conversation(
+                conversation_id,
+                PARENT_RUN_ID.to_string(),
+                None,
+                surface_id,
+                ctx,
+            );
             conversation_id
         })
     })
@@ -55,8 +56,14 @@ fn add_child(
                 .conversation_mut(&conversation_id)
                 .expect("child conversation was just created");
             conversation.set_agent_name(name.to_owned());
-            conversation.set_run_id(run_id.to_owned());
             history.set_parent_for_conversation(conversation_id, parent_id);
+            history.assign_run_id_for_conversation(
+                conversation_id,
+                run_id.to_owned(),
+                None,
+                surface_id,
+                ctx,
+            );
             history.update_conversation_status(surface_id, conversation_id, status, ctx);
             conversation_id
         })
@@ -104,36 +111,30 @@ fn message(sender: &str, subject: &str, body: &str) -> ReceivedMessageDisplay {
 }
 
 #[test]
-fn conversation_statuses_map_to_shared_tui_statuses() {
+fn conversation_statuses_render_expected_glyphs() {
     assert_eq!(
-        agent_status(&ConversationStatus::InProgress),
-        TuiStatusState::Running
+        conversation_status_glyph(&ConversationStatus::InProgress),
+        "●"
     );
     assert_eq!(
-        agent_status(&ConversationStatus::TransientError),
-        TuiStatusState::Running
+        conversation_status_glyph(&ConversationStatus::TransientError),
+        "●"
     );
     assert_eq!(
-        agent_status(&ConversationStatus::WaitingForEvents),
-        TuiStatusState::Running
+        conversation_status_glyph(&ConversationStatus::WaitingForEvents),
+        "●"
     );
     assert_eq!(
-        agent_status(&ConversationStatus::Blocked {
+        conversation_status_glyph(&ConversationStatus::Blocked {
             blocked_action: "approval".to_owned(),
         }),
-        TuiStatusState::Blocked
+        "■"
     );
+    assert_eq!(conversation_status_glyph(&ConversationStatus::Success), "✓");
+    assert_eq!(conversation_status_glyph(&ConversationStatus::Error), "×");
     assert_eq!(
-        agent_status(&ConversationStatus::Success),
-        TuiStatusState::Succeeded
-    );
-    assert_eq!(
-        agent_status(&ConversationStatus::Error),
-        TuiStatusState::Failed
-    );
-    assert_eq!(
-        agent_status(&ConversationStatus::Cancelled),
-        TuiStatusState::Cancelled
+        conversation_status_glyph(&ConversationStatus::Cancelled),
+        "■"
     );
 }
 
@@ -172,8 +173,8 @@ fn running_child_message_matches_the_design_layout_and_styles() {
             let builder = TuiUiBuilder::from_app(ctx);
             assert_eq!(
                 frame.buffer[(0, 0)].fg,
-                TuiStatusState::Running
-                    .glyph_style(&builder)
+                builder
+                    .attention_glyph_style()
                     .fg
                     .expect("running status has a foreground")
             );
