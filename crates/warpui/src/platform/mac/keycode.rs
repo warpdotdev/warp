@@ -1,5 +1,4 @@
-use std::slice;
-
+use super::utils::nsstring_as_str;
 use cocoa::base::{id, BOOL};
 use cocoa::foundation::NSUInteger;
 use objc2::rc::Retained;
@@ -18,6 +17,73 @@ extern "C" {
     fn keyCodeToChar(keyCode: NSUInteger, shifted: BOOL) -> id;
 }
 
+#[cfg(test)]
+mod tests {
+    use cocoa::base::id;
+
+    use super::super::AutoreleasePoolGuard;
+    use super::nsstring_as_str;
+
+    extern "C" {
+        fn KeyFromTranslatedUnicodeChars(
+            unicodeString: *const u16,
+            actualStringLength: u32,
+            keyCode: u16,
+        ) -> id;
+    }
+
+    fn key_from_translated_unicode_chars(chars: &[u16], key_code: u16) -> Option<String> {
+        let _pool = AutoreleasePoolGuard::new();
+        let key =
+            unsafe { KeyFromTranslatedUnicodeChars(chars.as_ptr(), chars.len() as u32, key_code) };
+        if key.is_null() {
+            None
+        } else {
+            unsafe { nsstring_as_str(key) }.ok().map(str::to_owned)
+        }
+    }
+
+    #[test]
+    fn empty_translation_is_handled_safely() {
+        assert_eq!(key_from_translated_unicode_chars(&[], 0), None);
+        assert_eq!(
+            key_from_translated_unicode_chars(&[], 0x24),
+            Some("enter".to_owned())
+        );
+    }
+
+    #[test]
+    fn single_character_translation_is_preserved() {
+        assert_eq!(
+            key_from_translated_unicode_chars(&['a' as u16], 0),
+            Some("a".to_owned())
+        );
+    }
+    #[test]
+    fn single_control_character_uses_control_key_mapping() {
+        assert_eq!(
+            key_from_translated_unicode_chars(&['\t' as u16], 0x30),
+            Some("tab".to_owned())
+        );
+    }
+
+    #[test]
+    fn surrogate_pair_translation_is_preserved() {
+        assert_eq!(
+            key_from_translated_unicode_chars(&[0xD83D, 0xDE00], 0),
+            Some("😀".to_owned())
+        );
+    }
+
+    #[test]
+    fn multi_character_translation_is_preserved() {
+        assert_eq!(
+            key_from_translated_unicode_chars(&['a' as u16, 'b' as u16], 0),
+            Some("ab".to_owned())
+        );
+    }
+}
+
 pub struct Keycode(pub u16);
 
 impl Keycode {
@@ -33,11 +99,7 @@ impl Keycode {
                 return None;
             }
 
-            let key = &*key.cast::<NSString>();
-            let cstr = key.UTF8String() as *const u8;
-            std::str::from_utf8(slice::from_raw_parts(cstr, key.len()))
-                .ok()
-                .map(|s| s.to_string())
+            nsstring_as_str(key).ok().map(|s| s.to_string())
         }
     }
 
