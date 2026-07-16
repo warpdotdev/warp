@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use async_channel::Sender;
 use instant::Instant;
 use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
@@ -26,12 +27,12 @@ use warp::tui_export::{
     ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
     GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, ModelEvent,
     ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
-    RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SkillReference,
-    SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
-    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
-    UserTakeOverReason, COMMAND_REGISTRY, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
-    WAKEUP_THROTTLE_PERIOD,
+    RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate,
+    SkillReference, SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiMcpAction,
+    TuiMcpManager, TuiSlashCommand, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
+    TuiZeroStateDataSource, UserTakeOverReason, COMMAND_REGISTRY,
+    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
@@ -40,16 +41,17 @@ use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiText,
+    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiText,
 };
 use warpui_core::keymap::macros::*;
-use warpui_core::keymap::FixedBinding;
+use warpui_core::keymap::{self, FixedBinding};
 use warpui_core::platform::TerminationMode;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
+use crate::alt_screen_view::AltScreenElement;
 use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
@@ -60,13 +62,15 @@ use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
 use crate::keybindings::TUI_BINDING_GROUP;
+use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::resume::TuiExitSummaryHandle;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
+use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
-    hide_agent_requested_command_from_top_level, terminal_use_conversation_to_resume,
-    terminal_use_interrupt_action, user_controlled_line_bytes, TerminalUseInterruptAction,
+    hide_agent_requested_command_from_top_level, inline_process_owns_input,
+    terminal_use_conversation_to_resume, terminal_use_interrupt_action, TerminalUseInterruptAction,
 };
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
@@ -85,6 +89,8 @@ const MAX_INPUT_TEXT_ROWS: u16 = 6;
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
+const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
+const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
 
 /// Events emitted by the TUI terminal session surface.
 pub(crate) enum TuiTerminalSessionEvent {
@@ -94,6 +100,8 @@ pub(crate) enum TuiTerminalSessionEvent {
         bytes: Cow<'static, [u8]>,
         mode: AIAgentPtyWriteMode,
     },
+    WriteUserInput(Cow<'static, [u8]>),
+    Resize(SizeUpdate),
 }
 
 impl PtyIntentEvent for TuiTerminalSessionEvent {
@@ -105,6 +113,8 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
                 bytes: bytes.clone(),
                 mode: *mode,
             }),
+            Self::WriteUserInput(bytes) => Some(PtyIntent::WriteBytes(bytes.clone())),
+            Self::Resize(size_update) => Some(PtyIntent::Resize(*size_update)),
         }
     }
 }
@@ -188,6 +198,8 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Click on the footer's usage entry: flips the persisted credits⇄cost
     /// display-mode setting.
     ToggleUsageDisplay,
+    /// Raw user bytes to forward to the foreground PTY process.
+    ForwardUserPtyBytes(Vec<u8>),
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -199,6 +211,7 @@ pub(crate) struct TuiTerminalSessionView {
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
     model_menu: ModelHandle<TuiModelMenuModel>,
     skills_menu: ModelHandle<TuiSkillMenuModel>,
+    mcp_menu: ModelHandle<TuiMcpMenuModel>,
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
@@ -222,6 +235,15 @@ pub(crate) struct TuiTerminalSessionView {
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
+    /// Last dimensions applied to the terminal model and PTY.
+    size_info: SizeInfo,
+    /// Reports the area allocated to whichever element displays PTY content
+    /// (the block-list content column or the full-screen alt-screen grid).
+    /// This layout→channel→view pathway is the GUI's terminal-resize prior
+    /// art (`TerminalSizeElement::after_layout` → `resize_tx` →
+    /// `after_terminal_view_layout`): layout lacks a `ViewContext`, so the
+    /// settled size is handed off to a view-side handler to apply.
+    terminal_resize_tx: Sender<TuiSize>,
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
     /// shell submission).
     transient_hint: TransientHint,
@@ -244,19 +266,37 @@ pub(crate) fn init(app: &mut AppContext) {
         FixedBinding::new(
             "escape",
             TuiTerminalSessionAction::CancelRestore,
-            id!(TuiTerminalSessionView::ui_name()),
+            id!(SESSION_CAN_CANCEL_RESTORE_FLAG),
         )
         .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
             HAND_BACK_KEY_BINDING,
             TuiTerminalSessionAction::HandBackTerminalUseControl,
-            id!(TuiTerminalSessionView::ui_name()),
+            id!(SESSION_CAN_HAND_BACK_CONTROL_FLAG),
         )
         .with_group(TUI_BINDING_GROUP),
     ]);
 }
 
 impl TuiTerminalSessionView {
+    /// Returns whether the foreground process should receive keyboard input
+    /// instead of Warp's editor. This is true for alt-screen applications and
+    /// for inline long-running commands currently controlled by the user, and
+    /// drives the session's focus, rendering, and event-routing transitions.
+    fn process_owns_input(&self) -> bool {
+        let terminal_model = self.terminal_model.lock();
+        terminal_model.is_alt_screen_active() || inline_process_owns_input(&terminal_model)
+    }
+
+    fn update_process_input_focus(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.process_owns_input() {
+            if !ctx.is_self_focused() {
+                ctx.focus_self();
+            }
+        } else if ctx.is_self_focused() {
+            ctx.focus(&self.input_view);
+        }
+    }
     fn resume_after_user_controlled_command(
         &mut self,
         block_id: &BlockId,
@@ -362,14 +402,22 @@ impl TuiTerminalSessionView {
                 });
             }
         }
+        self.update_process_input_focus(ctx);
         ctx.notify();
     }
 
     fn handle_terminal_use_interrupt(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let Some(target) = self.cli_subagent_controller.as_ref(ctx).active_target() else {
+        let control_state = self
+            .cli_subagent_controller
+            .as_ref(ctx)
+            .active_target()
+            .map(|target| target.control_state);
+        let Some(action) =
+            terminal_use_interrupt_action(control_state.as_ref(), self.process_owns_input())
+        else {
             return false;
         };
-        match terminal_use_interrupt_action(&target.control_state) {
+        match action {
             TerminalUseInterruptAction::TakeControl => {
                 self.cli_subagent_controller.update(ctx, |controller, ctx| {
                     controller.switch_control_to_user(
@@ -379,6 +427,7 @@ impl TuiTerminalSessionView {
                         ctx,
                     );
                 });
+                self.update_process_input_focus(ctx);
                 true
             }
             TerminalUseInterruptAction::InterruptCommand => {
@@ -395,6 +444,7 @@ impl TuiTerminalSessionView {
         self.cli_subagent_controller.update(ctx, |controller, ctx| {
             controller.handoff_active_command_control_to_agent(ctx);
         });
+        self.update_process_input_focus(ctx);
     }
 
     fn active_agent_controlled_target(&self, ctx: &AppContext) -> Option<CLISubagentTarget> {
@@ -443,20 +493,6 @@ impl TuiTerminalSessionView {
         true
     }
 
-    fn send_user_controlled_pty_input(&mut self, input: &str, ctx: &mut ViewContext<Self>) -> bool {
-        if self.active_user_controlled_target(ctx).is_none() {
-            return false;
-        }
-        ctx.emit(TuiTerminalSessionEvent::WriteAgentInput {
-            bytes: Cow::Owned(user_controlled_line_bytes(input)),
-            mode: AIAgentPtyWriteMode::Raw,
-        });
-        self.input_view.update(ctx, |input, ctx| {
-            input.clear(ctx);
-            input.exit_shell_mode(ctx);
-        });
-        true
-    }
     /// Builds the transcript-capable terminal surface for a manager-backed session.
     pub(crate) fn new(
         surface_init: TerminalSurfaceInit,
@@ -468,8 +504,10 @@ impl TuiTerminalSessionView {
             sessions,
             model_events,
             wakeups_rx,
+            size_info,
             ..
         } = surface_init;
+        let (terminal_resize_tx, terminal_resize_rx) = async_channel::unbounded();
         model
             .lock()
             .block_list_mut()
@@ -619,6 +657,11 @@ impl TuiTerminalSessionView {
         ctx.subscribe_to_model(&skills_menu, |_, _, _: &TuiSkillMenuEvent, ctx| {
             ctx.notify();
         });
+        let mcp_menu = ctx.add_model(|ctx| TuiMcpMenuModel::new(suggestions_mode.clone(), ctx));
+        ctx.subscribe_to_model(&mcp_menu, |_, _, event, ctx| {
+            let TuiMcpMenuEvent::Updated = event;
+            ctx.notify();
+        });
         // Typing after a ctrl-c press disarms the pending exit confirmation.
         // The ctrl-c buffer clear leaves the buffer empty, so the window it
         // arms survives its own clear.
@@ -662,6 +705,7 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(conversation_menu.clone()),
             TuiInlineMenu::new(model_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
+            TuiInlineMenu::new(mcp_menu.clone()),
         ];
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
@@ -699,6 +743,9 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::AcceptedModel(id) => {
                 view.handle_accepted_model(id, ctx);
+            }
+            TuiInputViewEvent::AcceptedMcp(action) => {
+                view.handle_accepted_mcp_action(*action, ctx);
             }
         });
         // The input box border color and the footer's shell-mode hint depend
@@ -746,6 +793,9 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
+        ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| {
+            ctx.notify();
+        });
 
         // Bridge shared shell-tool executor events into terminal-manager PTY intents.
         let shell_command_executor = action_model.as_ref(ctx).shell_command_executor(ctx);
@@ -759,10 +809,14 @@ impl TuiTerminalSessionView {
         ctx.subscribe_to_model(&model_events, |view, _, event, ctx| match event {
             ModelEvent::BlockCompleted(completed) => {
                 view.resume_after_user_controlled_command(&completed.block_id, ctx);
+                view.update_process_input_focus(ctx);
                 ctx.notify();
             }
-            ModelEvent::AfterBlockStarted { .. }
-            | ModelEvent::BlockMetadataReceived(_)
+            ModelEvent::AfterBlockStarted { .. } => {
+                view.update_process_input_focus(ctx);
+                ctx.notify();
+            }
+            ModelEvent::BlockMetadataReceived(_)
             | ModelEvent::BlockWorkingDirectoryUpdated(_)
             | ModelEvent::BackgroundBlockStarted
             | ModelEvent::TerminalClear
@@ -871,11 +925,13 @@ impl TuiTerminalSessionView {
                         model.block_list_mut().update_active_block_height();
                     }
                 }
+                view.update_process_input_focus(ctx);
 
                 ctx.notify();
             },
             |_, _| {},
         );
+        ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
 
         // Focus the input view so the keymap responder chain is
         // [root, session, input]: input bindings win for keys they define,
@@ -890,6 +946,7 @@ impl TuiTerminalSessionView {
             conversation_menu,
             model_menu,
             skills_menu,
+            mcp_menu,
             slash_commands_source,
             conversation_selection,
             ai_action_model: action_model,
@@ -905,6 +962,8 @@ impl TuiTerminalSessionView {
             ai_context_model: context_model,
             ai_input_model,
             terminal_model: model,
+            size_info,
+            terminal_resize_tx,
             transient_hint: TransientHint::default(),
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
@@ -1149,6 +1208,32 @@ impl TuiTerminalSessionView {
         self.exit_summary.set_token(token);
     }
 
+    /// Applies a laid-out terminal content size to the terminal model and PTY.
+    /// TUI counterpart of the GUI's `after_terminal_view_layout`
+    /// (`app/src/terminal/view.rs`): consumes the after-layout resize channel
+    /// and commits the resize with a `ViewContext`. Fed by the
+    /// [`TuiTerminalContentElement`] wrapping the block-list content column or the
+    /// alt-screen grid, so the PTY tracks whichever region PTY content
+    /// currently occupies.
+    fn handle_terminal_resize(&mut self, size: TuiSize, ctx: &mut ViewContext<Self>) {
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        let size_update = SizeUpdate::from_cell_dimensions(
+            self.size_info,
+            usize::from(size.height),
+            usize::from(size.width),
+        );
+        if !size_update.rows_or_columns_changed() {
+            return;
+        }
+
+        self.terminal_model.lock().resize(size_update);
+        self.size_info = size_update.new_size();
+        ctx.emit(TuiTerminalSessionEvent::Resize(size_update));
+        ctx.notify();
+    }
+
     /// Re-renders on history events that can change the warping indicator:
     /// the selected conversation's status changing, or an exchange starting
     /// (which re-anchors the elapsed counter) on this surface.
@@ -1232,14 +1317,14 @@ impl TuiTerminalSessionView {
             ctx.terminate_app(TerminationMode::ForceTerminate, None);
             return;
         }
-        let now = Instant::now();
-        if self.exit_confirmation.should_exit(now) {
-            ctx.terminate_app(TerminationMode::ForceTerminate, None);
-            return;
-        }
         if self.handle_terminal_use_interrupt(ctx) {
             self.exit_confirmation.disarm();
             ctx.notify();
+            return;
+        }
+        let now = Instant::now();
+        if self.exit_confirmation.should_exit(now) {
+            ctx.terminate_app(TerminationMode::ForceTerminate, None);
             return;
         }
 
@@ -1492,12 +1577,10 @@ impl TuiTerminalSessionView {
         if self.send_terminal_use_prompt(&text, ctx) {
             self.input_view
                 .update(ctx, |input, ctx| input.exit_shell_mode(ctx));
-        } else if !self.send_user_controlled_pty_input(&text, ctx) {
-            if self.is_shell_mode(ctx) {
-                self.execute_user_command(&text, ctx);
-            } else {
-                self.handle_submitted_input(&text, ctx);
-            }
+        } else if self.is_shell_mode(ctx) {
+            self.execute_user_command(&text, ctx);
+        } else {
+            self.handle_submitted_input(&text, ctx);
         }
         ctx.notify();
     }
@@ -1766,6 +1849,12 @@ impl TuiTerminalSessionView {
         }
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
     }
+    fn handle_accepted_mcp_action(&mut self, action: TuiMcpAction, ctx: &mut ViewContext<Self>) {
+        TuiMcpManager::handle(ctx).update(ctx, |model, ctx| {
+            model.apply_action(action, ctx);
+        });
+        ctx.notify();
+    }
 
     fn select_tui_slash_command(&mut self, command: &StaticCommand, ctx: &mut ViewContext<Self>) {
         match slash_command_selection_behavior(command) {
@@ -1835,6 +1924,11 @@ impl TuiTerminalSessionView {
                     return;
                 }
                 self.skills_menu.update(ctx, |menu, ctx| menu.open(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            TuiSlashCommand::Mcp => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                self.mcp_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             TuiSlashCommand::CreateNewProject => {
@@ -2015,6 +2109,17 @@ impl TuiView for TuiTerminalSessionView {
         vec![self.transcript.id(), self.input_view.id()]
     }
 
+    fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.is_conversation_restore_loading() {
+            context.set.insert(SESSION_CAN_CANCEL_RESTORE_FLAG);
+        }
+        if self.active_user_controlled_target(ctx).is_some() {
+            context.set.insert(SESSION_CAN_HAND_BACK_CONTROL_FLAG);
+        }
+        context
+    }
+
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         match &self.conversation_restore_state {
             ConversationRestoreState::Loading {
@@ -2030,26 +2135,34 @@ impl TuiView for TuiTerminalSessionView {
             }
             ConversationRestoreState::Idle => {}
         }
-        let inline_menu = active_inline_menu(
-            &self.inline_menus,
-            self.suggestions_mode.as_ref(ctx).mode(),
-            ctx,
-        )
-        .and_then(|menu| menu.render(ctx));
-        // The border takes the shell-mode accent while in shell mode.
-        let builder = TuiUiBuilder::from_app(ctx);
-        let border_style = if self.is_shell_mode(ctx) {
-            builder.shell_mode_accent_style()
-        } else {
-            builder.accent_border_style()
+        // While a full-screen (alt-screen) app is active, hand the whole pane to
+        // it: render its grid and forward input, instead of the block UI.
+        let (alt_screen_active, inline_process_owns_input) = {
+            let terminal_model = self.terminal_model.lock();
+            (
+                terminal_model.is_alt_screen_active(),
+                inline_process_owns_input(&terminal_model),
+            )
         };
-        let input_box = TuiConstrainedBox::new(
-            TuiContainer::new(TuiChildView::new(&self.input_view).finish())
-                .with_padding_x(1)
-                .with_border_style(border_style)
-                .finish(),
-        )
-        .with_max_rows(MAX_INPUT_TEXT_ROWS + 2);
+        if alt_screen_active {
+            return TuiTerminalContentElement::new(
+                self.terminal_resize_tx.clone(),
+                AltScreenElement::new(self.terminal_model.clone()).finish(),
+            )
+            .with_pty_input(self.terminal_model.clone())
+            .finish();
+        }
+
+        let inline_menu = (!inline_process_owns_input)
+            .then(|| {
+                active_inline_menu(
+                    &self.inline_menus,
+                    self.suggestions_mode.as_ref(ctx).mode(),
+                    ctx,
+                )
+                .and_then(|menu| menu.render(ctx))
+            })
+            .flatten();
 
         // Ctrl-c (cancel/clear/exit) is handled by the keymap pass via the
         // fixed binding registered in [`Self::init`], so no element-level key
@@ -2070,17 +2183,22 @@ impl TuiView for TuiTerminalSessionView {
 
         // While the selected conversation is in progress (the GUI warping
         // indicator's core condition), the animated warping indicator sits
-        // between the transcript and the input box. Its elapsed counter is
-        // anchored to the latest exchange's start so animation survives
-        // element-tree rebuilds; the conversation's final status update
-        // re-renders the view without it.
-        let selected_conversation = self
-            .conversation_selection
-            .as_ref(ctx)
-            .selected_conversation_id(ctx)
-            .and_then(|conversation_id| {
-                BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
-            });
+        // between the transcript and the input box. Hide it while a process
+        // owns input: user takeover intentionally leaves the conversation in
+        // progress, so the indicator would otherwise appear stuck. Its elapsed
+        // counter is anchored to the latest exchange's start so animation
+        // survives element-tree rebuilds; the conversation's final status
+        // update re-renders the view without it.
+        let selected_conversation = (!inline_process_owns_input)
+            .then(|| {
+                self.conversation_selection
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+                    .and_then(|conversation_id| {
+                        BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
+                    })
+            })
+            .flatten();
         if let Some(conversation) = selected_conversation {
             if conversation.status().is_in_progress() {
                 let warping_elapsed = conversation
@@ -2128,12 +2246,43 @@ impl TuiView for TuiTerminalSessionView {
                     .finish(),
             );
         }
-        content = content.child(input_box.finish()).child(
-            TuiConstrainedBox::new(self.render_footer(ctx).finish())
-                .with_max_rows(1)
+        if !inline_process_owns_input {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let border_style = if self.is_shell_mode(ctx) {
+                builder.shell_mode_accent_style()
+            } else {
+                builder.accent_border_style()
+            };
+            content = content.child(
+                TuiConstrainedBox::new(
+                    TuiContainer::new(TuiChildView::new(&self.input_view).finish())
+                        .with_padding_x(1)
+                        .with_border_style(border_style)
+                        .finish(),
+                )
+                .with_max_rows(MAX_INPUT_TEXT_ROWS + 2)
                 .finish(),
-        );
-        TuiContainer::new(content.finish())
+            );
+            content = content.child(
+                TuiConstrainedBox::new(self.render_footer(ctx).finish())
+                    .with_max_rows(1)
+                    .finish(),
+            );
+        }
+        let content = content.finish();
+        let terminal_content =
+            TuiTerminalContentElement::new(self.terminal_resize_tx.clone(), content);
+        let terminal_content = if inline_process_owns_input {
+            terminal_content.with_pty_input(self.terminal_model.clone())
+        } else {
+            terminal_content
+        };
+
+        // The terminal-content wrapper sits inside the horizontal padding so
+        // the PTY's columns match the width block content actually renders at
+        // (the GUI wraps its view root, but its padding is sub-cell; here it is
+        // 4 whole columns).
+        TuiContainer::new(terminal_content.finish())
             .with_padding_x(2)
             .with_padding_top(2)
             .finish()
@@ -2153,6 +2302,13 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.hand_back_terminal_use_control(ctx)
             }
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
+            TuiTerminalSessionAction::ForwardUserPtyBytes(bytes) => {
+                // Raw passthrough: the bytes are already the app's escape
+                // sequence, so write them to the PTY unmodified.
+                ctx.emit(TuiTerminalSessionEvent::WriteUserInput(Cow::Owned(
+                    bytes.clone(),
+                )));
+            }
         }
     }
 }

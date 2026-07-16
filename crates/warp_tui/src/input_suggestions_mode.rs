@@ -14,6 +14,7 @@ pub(crate) enum TuiInputSuggestionsMode {
     ConversationMenu,
     ModelSelector,
     SkillMenu,
+    Mcp,
 }
 
 impl TuiInputSuggestionsMode {
@@ -69,7 +70,8 @@ impl TuiInputSuggestionsModeModel {
             TuiInputSuggestionsMode::SlashCommands
             | TuiInputSuggestionsMode::ConversationMenu
             | TuiInputSuggestionsMode::ModelSelector
-            | TuiInputSuggestionsMode::SkillMenu => false,
+            | TuiInputSuggestionsMode::SkillMenu
+            | TuiInputSuggestionsMode::Mcp => false,
         }
     }
 

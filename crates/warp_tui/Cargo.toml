@@ -35,6 +35,7 @@ path = "src/bin/stable.rs"
 [dependencies]
 ai.workspace = true
 anyhow.workspace = true
+async-channel.workspace = true
 async-fs.workspace = true
 base64.workspace = true
 channel_versions.workspace = true
@@ -47,10 +48,12 @@ http_client.workspace = true
 instant.workspace = true
 itertools.workspace = true
 log.workspace = true
+markdown_parser.workspace = true
 num-traits.workspace = true
 parking_lot.workspace = true
 pathfinder_color.workspace = true
 pathfinder_geometry.workspace = true
+rangemap.workspace = true
 serde_json.workspace = true
 similar.workspace = true
 string-offset.workspace = true
@@ -80,7 +83,6 @@ warp_core = { workspace = true, features = ["test-util"] }
 # `test-util` exposes `RenderState::layout_complete()`, used to deterministically
 # await async layout (e.g. diff ghost blocks) in tests instead of busy-polling.
 warp_editor = { workspace = true, features = ["test-util"] }
-async-channel.workspace = true
 # Process-level worker-dispatch regression test.
 command.workspace = true
 pathfinder_color.workspace = true
@@ -92,6 +94,8 @@ warp = { workspace = true, features = ["tui", "test-util"] }
 # stays off and the local bin uses the runtime generator; wiring the embedded
 # config path (a `build.rs`) is phase 2 of the channel setup.
 release_bundle = ["warp/release_bundle"]
+# Enable Rust Sentry reporting without the GUI-only Cocoa SDK.
+crash_reporting = ["warp/crash_reporting"]
 # Self-contained TUI build (the binary is not inside a `.app` bundle). Enables
 # `warp/standalone`, which turns on `warp_core/standalone` so
 # `warp_core::paths::bundled_resources_dir()` resolves the sibling `resources/`

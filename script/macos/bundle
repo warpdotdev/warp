@@ -368,6 +368,9 @@ elif [[ "$ARTIFACT" == tui ]]; then
     *) WARP_BIN="warp-tui-$RELEASE_CHANNEL" ;;
   esac
   WARP_TUI_FEATURES="release_bundle,standalone"
+  if [[ "$RELEASE_CHANNEL" != "oss" ]]; then
+    WARP_TUI_FEATURES="$WARP_TUI_FEATURES,crash_reporting"
+  fi
 elif [[ "$ARTIFACT" == app ]]; then
   # All channels ship the v3 classifier and v2 heuristic.
   FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"
