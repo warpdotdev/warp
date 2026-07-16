@@ -394,7 +394,7 @@ impl GetRelevantFilesController {
                 });
             }
             Err(e) => {
-                report_error!(anyhow!(e).context("get_relevant_files failed"));
+                log::warn!("get_relevant_files failed: {e:#}");
                 ctx.emit(GetRelevantFilesControllerEvent::Error { action_id });
             }
         };

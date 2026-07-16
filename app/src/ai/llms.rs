@@ -508,12 +508,9 @@ impl AvailableLLMs {
             let fallback_default = choices
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("Choices should not be empty"))?;
-            report_error!(
-                "Default LLM ID not present in choices, falling back to first choice",
-                extra: {
-                    "default_id" => %default_id,
-                    "fallback_choice" => %fallback_default.display_name
-                }
+            log::warn!(
+                "Default LLM ID not present in choices, falling back to first choice (default_id={default_id}, fallback_choice={})",
+                fallback_default.display_name
             );
             default_id = fallback_default.id.clone();
         }
@@ -557,12 +554,10 @@ impl AvailableLLMs {
             .choices
             .first()
             .expect("AvailableLLMs must have at least one choice");
-        report_error!(
-            "Default LLM ID not present in choices, falling back to first choice",
-            extra: {
-                "default_id" => %self.default_id,
-                "fallback_choice" => %fallback.display_name
-            }
+        log::warn!(
+            "Default LLM ID not present in choices, falling back to first choice (default_id={}, fallback_choice={})",
+            self.default_id,
+            fallback.display_name
         );
         fallback
     }
@@ -1637,7 +1632,7 @@ impl LLMPreferences {
                     }
                 }
                 Err(e) => {
-                    report_error!(e.context("Failed to fetch LLMs from server"));
+                    log::warn!("Failed to fetch LLMs from server: {e:#}");
                 }
             },
         );
@@ -1655,7 +1650,7 @@ impl LLMPreferences {
                     }
                 }
                 Err(e) => {
-                    report_error!(e.context("Failed to fetch free-tier LLMs from server"));
+                    log::warn!("Failed to fetch free-tier LLMs from server: {e:#}");
                 }
             },
         );

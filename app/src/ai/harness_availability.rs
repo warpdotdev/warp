@@ -237,7 +237,7 @@ impl HarnessAvailabilityModel {
                 }
                 RequestState::RequestFailed(e) => {
                     let msg = e.to_string();
-                    report_error!(e.context("Failed to fetch harness auth secrets"));
+                    log::warn!("Failed to fetch harness auth secrets: {e:#}");
                     me.auth_secrets
                         .insert(harness, AuthSecretFetchState::Failed(msg));
                     me.auth_secret_retry_after
@@ -295,7 +295,7 @@ impl HarnessAvailabilityModel {
             }
             Err(e) => {
                 let msg = e.to_string();
-                report_error!(e.context("Failed to create harness auth secret"));
+                log::warn!("Failed to create harness auth secret: {e:#}");
                 ctx.emit(HarnessAvailabilityEvent::AuthSecretCreationFailed { error: msg });
             }
         });
@@ -327,7 +327,7 @@ impl HarnessAvailabilityModel {
             }
             Err(e) => {
                 let msg = e.to_string();
-                report_error!(e.context("Failed to delete harness auth secret"));
+                log::warn!("Failed to delete harness auth secret: {e:#}");
                 ctx.emit(HarnessAvailabilityEvent::AuthSecretDeletionFailed {
                     harness,
                     name,
@@ -361,7 +361,7 @@ impl HarnessAvailabilityModel {
                     }
                 }
                 Err(e) => {
-                    report_error!(e.context("Failed to fetch available harnesses"));
+                    log::warn!("Failed to fetch available harnesses: {e:#}");
                 }
             },
         );

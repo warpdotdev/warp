@@ -6,7 +6,6 @@ use chrono::{DateTime, Local, Utc};
 use instant::Instant;
 use serde::{Deserialize, Serialize};
 use warp_core::user_preferences::GetUserPreferences as _;
-use warp_errors::report_error;
 pub use warp_graphql::billing::BonusGrantType;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -369,7 +368,7 @@ impl AIRequestUsageModel {
                     }
                 }
                 Err(e) => {
-                    report_error!(e);
+                    log::warn!("{e:#}");
                 }
             },
         );

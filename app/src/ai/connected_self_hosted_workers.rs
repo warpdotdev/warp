@@ -1,4 +1,3 @@
-use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
@@ -93,7 +92,7 @@ impl ConnectedSelfHostedWorkersModel {
                     }
                 }
                 Err(e) => {
-                    report_error!(e.context("Failed to fetch connected self-hosted workers"));
+                    log::warn!("Failed to fetch connected self-hosted workers: {e:#}");
                 }
             },
         );

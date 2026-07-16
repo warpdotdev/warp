@@ -13,7 +13,6 @@ use repo_metadata::repository::{
 };
 use repo_metadata::{CanonicalizedPath, DirectoryWatcher, Repository, RepositoryUpdate};
 use settings::Setting as _;
-use warp_errors::report_error;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::OutlineStatus;
@@ -256,7 +255,7 @@ impl RepoOutlines {
                                 {
                                     Ok(handle) => handle,
                                     Err(e) => {
-                                        report_error!(e);
+                                        log::warn!("Failed to start tracking repository: {e:#}");
                                         return;
                                     }
                                 };

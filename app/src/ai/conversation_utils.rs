@@ -1,6 +1,5 @@
 use anyhow::Context as _;
 use warp_core::features::FeatureFlag;
-use warp_errors::report_error;
 use warpui::{AppContext, EntityId, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -31,7 +30,7 @@ pub fn delete_conversation(
                             .await
                             .context("Failed to delete conversation from cloud")
                         {
-                            report_error!(e);
+                            log::warn!("{e:#}");
                         } else {
                             log::info!("Successfully deleted conversation from cloud: {token}");
                         }
