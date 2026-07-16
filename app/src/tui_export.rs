@@ -2,6 +2,7 @@
 
 pub use repo_metadata::repositories::RepoDetectionSource;
 pub use warp_cli::agent::Harness;
+use warp_completer::completer::{CompletionContext as _, TopLevelCommandCaseSensitivity};
 use warp_completer::signatures::CommandRegistry;
 use warpui::SingletonEntity as _;
 
@@ -169,6 +170,42 @@ pub fn tui_completion_session_context(
         current_working_directory,
         app,
     ))
+}
+
+/// Returns whether `command` exactly matches a top-level command available in
+/// the TUI's live shell completion context.
+pub fn tui_completion_context_has_exact_command(
+    completion_context: &SessionContext,
+    command: &str,
+) -> bool {
+    let case_sensitivity = completion_context.command_case_sensitivity();
+    let is_live_shell_command =
+        completion_context
+            .top_level_commands()
+            .any(|candidate| match case_sensitivity {
+                TopLevelCommandCaseSensitivity::CaseSensitive => candidate == command,
+                TopLevelCommandCaseSensitivity::CaseInsensitive => {
+                    candidate.eq_ignore_ascii_case(command)
+                }
+            });
+    if is_live_shell_command {
+        return true;
+    }
+
+    #[cfg(feature = "completions_v2")]
+    {
+        completion_context
+            .command_registry()
+            .get_signature(command)
+            .is_some()
+    }
+    #[cfg(not(feature = "completions_v2"))]
+    {
+        completion_context
+            .command_registry()
+            .signature_from_line(command, case_sensitivity)
+            .is_some()
+    }
 }
 
 /// Returns whether cloud conversation metadata failed to load.

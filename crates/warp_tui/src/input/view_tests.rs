@@ -1487,6 +1487,22 @@ fn bang_at_start_enters_shell_mode() {
 }
 
 #[test]
+fn explicit_shell_mode_survives_deleting_the_buffer() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "!cargo");
+            for _ in 0.."cargo".chars().count() {
+                dispatch(&view, ctx, &[TuiInputAction::Backspace]);
+            }
+
+            assert_eq!(text(&view, ctx), "");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+        });
+    });
+}
+
+#[test]
 fn autodetected_unlocked_shell_uses_shell_mode_ui() {
     App::test((), |mut app| async move {
         app.update(|ctx| {

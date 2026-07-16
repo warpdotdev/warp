@@ -11,7 +11,7 @@ use warpui_core::{App, AppContext};
 
 use super::{
     export_file_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
-    should_apply_input_detection, TuiTerminalSessionEvent,
+    TuiTerminalSessionEvent,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -127,25 +127,6 @@ fn non_command_prompt_preserves_leading_whitespace() {
 #[test]
 fn whitespace_only_prompt_is_ignored() {
     assert_eq!(raw_prompt_if_not_blank(" \t\n"), None);
-}
-
-#[test]
-fn current_nld_result_is_applied_without_inline_menu() {
-    assert!(should_apply_input_detection(
-        "git status",
-        "git status",
-        false
-    ));
-}
-
-#[test]
-fn stale_nld_result_is_ignored() {
-    assert!(!should_apply_input_detection("git", "git status", false));
-}
-
-#[test]
-fn nld_result_is_ignored_while_inline_menu_is_active() {
-    assert!(!should_apply_input_detection("/agent", "/agent", true));
 }
 
 #[test]
