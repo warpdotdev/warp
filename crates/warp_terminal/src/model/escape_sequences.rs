@@ -4,6 +4,7 @@ use lazy_static::lazy_static;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::OperatingSystem;
 
+use super::indexing::Point;
 use super::mouse::{MouseAction, MouseButton, MouseState};
 use super::TermMode;
 
@@ -349,6 +350,37 @@ impl<T: ModeProvider> ToEscapeSequence<T> for MouseState {
         .repeat(repeats);
         Some(msg.into_bytes())
     }
+}
+
+/// Encodes alt-screen wheel movement as mouse reports or SS3 arrow keys.
+pub fn alt_screen_scroll_to_pty_bytes<T: ModeProvider>(
+    lines_to_scroll: i32,
+    point: Point,
+    report_mouse: bool,
+    mode_provider: &T,
+) -> Option<Vec<u8>> {
+    if lines_to_scroll == 0 {
+        return None;
+    }
+    if report_mouse {
+        return MouseState::new(
+            MouseButton::Wheel,
+            MouseAction::Scrolled {
+                delta: lines_to_scroll,
+            },
+            Default::default(),
+        )
+        .set_point(point)
+        .to_escape_sequence(mode_provider);
+    }
+
+    let arrow = if lines_to_scroll > 0 {
+        EscCodes::ARROW_UP
+    } else {
+        EscCodes::ARROW_DOWN
+    };
+    let sequence = EscCodes::build_escape_sequence_with_c1(C1::SS3, &[arrow]);
+    Some(sequence.repeat(lines_to_scroll.unsigned_abs() as usize))
 }
 
 pub trait ToModifierEscapeByte {

@@ -1,5 +1,6 @@
 use ai::agent::action_result::StopRecordingResult;
 use computer_use::RecordingHandle;
+use instant::Instant;
 use warpui::{App, SingletonEntity};
 
 use super::super::recording_controller::ActiveRecording;
@@ -26,6 +27,8 @@ fn cancellation_finalization_skips_upload() {
             id: "recording".to_string(),
             conversation_id: AIConversationId::new(),
             handle,
+            started_at: Instant::now(),
+            actions: Vec::new(),
         };
 
         let result =

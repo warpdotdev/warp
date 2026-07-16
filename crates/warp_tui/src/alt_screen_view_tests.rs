@@ -22,8 +22,8 @@ fn layout_fills_the_allocated_pane() {
 
             let size = element.layout(TuiConstraint::loose(expected_size), &mut layout_ctx, app);
             assert_eq!(size, expected_size);
-            // The laid-out size is retained for the size wrapper and mouse
-            // hit-testing to read back.
+            // The laid-out size is retained for the terminal-content wrapper
+            // and mouse hit-testing to read back.
             assert_eq!(element.size(), Some(expected_size));
         });
     });

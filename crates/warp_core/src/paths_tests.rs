@@ -62,6 +62,18 @@ fn test_warp_home_skills_and_mcp_paths() {
         Some(config_dir.join(".mcp.json"))
     );
 }
+
+#[test]
+fn test_tui_mcp_config_path_is_separate_from_gui() {
+    let tui_mcp_path = tui_mcp_config_file_path();
+
+    assert_eq!(tui_mcp_path, tui_config_local_dir().join(".mcp.json"));
+    assert_ne!(
+        Some(tui_mcp_path),
+        warp_home_mcp_config_file_path(),
+        "GUI and TUI MCP configuration must remain isolated"
+    );
+}
 #[test]
 fn test_cache_dir_path() {
     let home_dir = home_dir().expect("Should be able to compute home directory");

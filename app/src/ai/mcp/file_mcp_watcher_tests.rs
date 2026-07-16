@@ -1,6 +1,14 @@
+use std::collections::{HashMap, HashSet};
 use std::env;
+use std::path::PathBuf;
 
-use super::substitute_env_vars;
+use futures::stream::AbortHandle;
+
+use super::{
+    parse_mcp_config_file, substitute_env_vars, FileMCPConfigDiagnosticKind,
+    FileMCPConfigParseOutcome, FileMCPWatcher,
+};
+use crate::ai::mcp::MCPProvider;
 
 fn cleanup_env_vars(vars: &[&str]) {
     for var in vars {
@@ -8,6 +16,26 @@ fn cleanup_env_vars(vars: &[&str]) {
     }
 }
 
+#[test]
+fn abort_config_parse_cancels_and_removes_inflight_task() {
+    let (file_mcp_tx, _file_mcp_rx) = async_channel::unbounded();
+    let config_path = PathBuf::from("/tmp/.mcp.json");
+    let key = (config_path.clone(), MCPProvider::Warp);
+    let (abort_handle, _abort_registration) = AbortHandle::new_pair();
+    let observed_handle = abort_handle.clone();
+    let mut watcher = FileMCPWatcher {
+        file_mcp_tx,
+        parse_abort_handles: HashMap::from([(key.clone(), abort_handle)]),
+        home_provider_watchers: HashMap::new(),
+        project_repo_watchers: HashSet::new(),
+        cloud_env_pending: HashMap::new(),
+    };
+
+    watcher.abort_config_parse(&config_path, MCPProvider::Warp);
+
+    assert!(observed_handle.is_aborted());
+    assert!(!watcher.parse_abort_handles.contains_key(&key));
+}
 #[test]
 fn test_substitute_env_vars_success() {
     let test_vars = ["FOO", "BAZ", "REPEATED"];
@@ -72,4 +100,49 @@ fn test_substitute_env_vars_missing_or_empty() {
 
     // Cleanup
     cleanup_env_vars(&["EMPTY_VAR"]);
+}
+
+#[tokio::test]
+async fn parse_outcomes_distinguish_missing_invalid_and_valid_configs() {
+    let directory = tempfile::tempdir().expect("temporary directory should be created");
+    let path = directory.path().join(".mcp.json");
+
+    assert!(matches!(
+        parse_mcp_config_file(&path, MCPProvider::Warp).await,
+        FileMCPConfigParseOutcome::Missing
+    ));
+
+    std::fs::write(&path, "{invalid").expect("invalid config should be written");
+    match parse_mcp_config_file(&path, MCPProvider::Warp).await {
+        FileMCPConfigParseOutcome::Error(diagnostic) => {
+            assert_eq!(diagnostic.kind, FileMCPConfigDiagnosticKind::Parse);
+        }
+        _ => panic!("invalid JSON should produce a parse diagnostic"),
+    }
+
+    std::env::remove_var("WARP_MCP_TEST_MISSING");
+    std::fs::write(
+        &path,
+        r#"{"mcpServers":{"test":{"command":"${WARP_MCP_TEST_MISSING}"}}}"#,
+    )
+    .expect("missing-env config should be written");
+    match parse_mcp_config_file(&path, MCPProvider::Warp).await {
+        FileMCPConfigParseOutcome::Error(diagnostic) => {
+            assert_eq!(
+                diagnostic.kind,
+                FileMCPConfigDiagnosticKind::MissingEnvironmentVariable
+            );
+        }
+        _ => panic!("missing env should produce a diagnostic"),
+    }
+
+    std::fs::write(
+        &path,
+        r#"{"mcpServers":{"test":{"command":"test-command"}}}"#,
+    )
+    .expect("valid config should be written");
+    match parse_mcp_config_file(&path, MCPProvider::Warp).await {
+        FileMCPConfigParseOutcome::Parsed(servers) => assert_eq!(servers.len(), 1),
+        _ => panic!("valid config should produce one server"),
+    }
 }
