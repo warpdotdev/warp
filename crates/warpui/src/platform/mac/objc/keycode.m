@@ -109,31 +109,67 @@ CFDataRef GetKeyboardLayoutData() {
     return layout_data;
 }
 
+// Maximum number of UTF-16 code units UCKeyTranslate may produce for a single keypress.
+#define kMaxTranslatedChars 255
+
 // Referenced from chromium:
 // https://chromium.googlesource.com/chromium/src/+/lkgr/ui/events/keycodes/keyboard_code_conversion_mac.mm
 // Here we take the keyboard layout, keycode, modifier keys, and keyboard type to
-// determine the output character.
-// Notice that we don't yet handle multiple character case here. But this should
-// be minor given Chrome also doesn't support it.
-UniChar TranslatedUnicodeCharFromKeyCode(CFDataRef layout_data, UInt16 key_code,
-                                         UInt32 modifier_key_state, UInt32 keyboard_type) {
-    if (!layout_data) return 0xFFFD;  // REPLACEMENT CHARACTER
+// determine the output characters.
+// The full translated UTF-16 sequence is written to `out_chars` (which must have room
+// for at least `max_length` UniChars). Returns the number of code units written, which
+// may be zero (e.g. for dead keys or layouts that produce no output for the keycode).
+UniCharCount TranslatedUnicodeStringFromKeyCode(CFDataRef layout_data, UInt16 key_code,
+                                                UInt32 modifier_key_state, UInt32 keyboard_type,
+                                                UniChar* out_chars, UniCharCount max_length) {
+    if (!layout_data) {
+        // REPLACEMENT CHARACTER
+        if (max_length < 1) return 0;
+        out_chars[0] = 0xFFFD;
+        return 1;
+    }
 
     const UCKeyboardLayout* keyboardLayout = (const UCKeyboardLayout*)CFDataGetBytePtr(layout_data);
 
     UInt32 deadKeyState = 0;
-    UniCharCount maxStringLength = 255;
     UniCharCount actualStringLength = 0;
-    UniChar unicodeString[maxStringLength];
 
-    UCKeyTranslate(keyboardLayout, key_code, kUCKeyActionDown, modifier_key_state, keyboard_type,
-                   kUCKeyTranslateNoDeadKeysBit, &deadKeyState, maxStringLength,
-                   &actualStringLength, unicodeString);
-    // TODO(kevin): Handle multiple character case. Should be rare.
-    return unicodeString[0];
+    OSStatus status = UCKeyTranslate(keyboardLayout, key_code, kUCKeyActionDown, modifier_key_state,
+                                     keyboard_type, kUCKeyTranslateNoDeadKeysBit, &deadKeyState,
+                                     max_length, &actualStringLength, out_chars);
+    if (status != noErr) {
+        return 0;
+    }
+    // UCKeyTranslate reports the full length even if it exceeds the buffer; clamp so
+    // callers never read past what was actually written.
+    if (actualStringLength > max_length) {
+        actualStringLength = max_length;
+    }
+    return actualStringLength;
 }
 
-// Convert keycode to its corresponding character on the keyboard.
+// Converts a translated UTF-16 sequence into the key name for `keyCode`.
+//
+// UCKeyTranslate can't translate control characters like function keys and arrow
+// keys, and may produce no characters at all for some keys. We keep a separate
+// mapping for those cases. This is the same behavior as chromium:
+// https://chromium.googlesource.com/chromium/src/+/lkgr/ui/events/keycodes/keyboard_code_conversion_mac.mm#873
+//
+// Multi-character translations (including surrogate pairs) are preserved in full.
+// Exposed (non-static) so it can be unit tested from Rust.
+NSString* KeyNameFromTranslatedChars(const UniChar* chars, UniCharCount length, UInt16 keyCode) {
+    if (length == 0) {
+        // Zero-character translations: fall back to the control-key mapping so we
+        // never index into an empty buffer.
+        return KeyFromControlKeyCode(keyCode);
+    }
+    if (length == 1 && IsUnicodeControl(chars[0])) {
+        return KeyFromControlKeyCode(keyCode);
+    }
+    return [NSString stringWithCharacters:chars length:length];
+}
+
+// Convert keycode to its corresponding character(s) on the keyboard.
 NSString* keyCodeToChar(UInt16 keyCode, BOOL shifted) {
     UInt32 modifier_key_state = 0;
 
@@ -145,17 +181,12 @@ NSString* keyCodeToChar(UInt16 keyCode, BOOL shifted) {
     }
 
     CFDataRef layout_data = GetKeyboardLayoutData();
-    UniChar translated_char =
-        TranslatedUnicodeCharFromKeyCode(layout_data, keyCode, modifier_key_state, LMGetKbdLast());
+    UniChar translated_chars[kMaxTranslatedChars];
+    UniCharCount translated_length =
+        TranslatedUnicodeStringFromKeyCode(layout_data, keyCode, modifier_key_state, LMGetKbdLast(),
+                                           translated_chars, kMaxTranslatedChars);
 
-    // UCKeyTranslate can't translate control characters like function keys and arrow
-    // keys. We keep a separate mapping for this case. This is the same behavior as chromium:
-    // https://chromium.googlesource.com/chromium/src/+/lkgr/ui/events/keycodes/keyboard_code_conversion_mac.mm#873
-    if (IsUnicodeControl(translated_char)) {
-        return KeyFromControlKeyCode(keyCode);
-    } else {
-        return [NSString stringWithFormat:@"%C", translated_char];
-    }
+    return KeyNameFromTranslatedChars(translated_chars, translated_length, keyCode);
 }
 
 NSArray<NSNumber*>* charToKeyCodes(NSString* keyChar) {
@@ -168,25 +199,20 @@ NSArray<NSNumber*>* charToKeyCodes(NSString* keyChar) {
         for (i = 0; i < 128; ++i) {
             UInt32 shift_key = 1 << 1;
 
-            // Compute a shifted and unshifted version for one keycode.
-            UniChar unshifted =
-                TranslatedUnicodeCharFromKeyCode(layout_data, (UInt16)i, 0, LMGetKbdLast());
-            UniChar shifted =
-                TranslatedUnicodeCharFromKeyCode(layout_data, (UInt16)i, shift_key, LMGetKbdLast());
+            // Compute a shifted and unshifted version for one keycode, preserving the
+            // full translated UTF-16 sequence in each case.
+            UniChar unshifted_chars[kMaxTranslatedChars];
+            UniCharCount unshifted_length = TranslatedUnicodeStringFromKeyCode(
+                layout_data, (UInt16)i, 0, LMGetKbdLast(), unshifted_chars, kMaxTranslatedChars);
+            UniChar shifted_chars[kMaxTranslatedChars];
+            UniCharCount shifted_length = TranslatedUnicodeStringFromKeyCode(
+                layout_data, (UInt16)i, shift_key, LMGetKbdLast(), shifted_chars,
+                kMaxTranslatedChars);
 
-            NSString* unshifted_str;
-            if (IsUnicodeControl(unshifted)) {
-                unshifted_str = KeyFromControlKeyCode(i);
-            } else {
-                unshifted_str = [NSString stringWithFormat:@"%C", unshifted];
-            }
-
-            NSString* shifted_str;
-            if (IsUnicodeControl(shifted)) {
-                shifted_str = KeyFromControlKeyCode(i);
-            } else {
-                shifted_str = [NSString stringWithFormat:@"%C", shifted];
-            }
+            NSString* unshifted_str =
+                KeyNameFromTranslatedChars(unshifted_chars, unshifted_length, (UInt16)i);
+            NSString* shifted_str =
+                KeyNameFromTranslatedChars(shifted_chars, shifted_length, (UInt16)i);
 
             if (unshifted_str != nil && [unshifted_str length] > 0) {
                 if ([keycodeDict objectForKey:unshifted_str] == nil) {

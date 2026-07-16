@@ -3,7 +3,7 @@ use std::slice;
 use cocoa::base::{id, BOOL};
 use cocoa::foundation::NSUInteger;
 use objc2::rc::Retained;
-use objc2_foundation::{NSArray, NSNumber, NSString};
+use objc2_foundation::{NSArray, NSNumber, NSString, NSUTF8StringEncoding};
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
 
@@ -16,6 +16,29 @@ pub const CONTROL_KEY: u16 = 4096;
 extern "C" {
     fn charToKeyCodes(keyChar: id) -> id;
     fn keyCodeToChar(keyCode: NSUInteger, shifted: BOOL) -> id;
+    /// Defined in `objc/keycode.m`. Converts a translated UTF-16 sequence into a
+    /// key name, falling back to the control-key mapping for empty translations
+    /// and single control characters.
+    fn KeyNameFromTranslatedChars(chars: *const u16, length: NSUInteger, keyCode: u16) -> id;
+}
+
+/// Converts an autoreleased `NSString*` returned by the objc keycode helpers into an
+/// owned Rust string. Returns `None` for null pointers or invalid UTF-8.
+unsafe fn nsstring_id_to_string(string: id) -> Option<String> {
+    if string.is_null() {
+        return None;
+    }
+    let string = &*string.cast::<NSString>();
+    let cstr = string.UTF8String() as *const u8;
+    if cstr.is_null() {
+        return None;
+    }
+    // `len()` returns the UTF-16 length; the UTF-8 byte length can be longer for
+    // non-ASCII translations (e.g. multi-byte characters or surrogate pairs).
+    let utf8_len = string.lengthOfBytesUsingEncoding(NSUTF8StringEncoding);
+    std::str::from_utf8(slice::from_raw_parts(cstr, utf8_len))
+        .ok()
+        .map(|s| s.to_string())
 }
 
 pub struct Keycode(pub u16);
@@ -29,15 +52,7 @@ impl Keycode {
             #[allow(clippy::useless_conversion)]
             let key = keyCodeToChar(self.0 as u64, shift_key_pressed.into());
 
-            if key.is_null() {
-                return None;
-            }
-
-            let key = &*key.cast::<NSString>();
-            let cstr = key.UTF8String() as *const u8;
-            std::str::from_utf8(slice::from_raw_parts(cstr, key.len()))
-                .ok()
-                .map(|s| s.to_string())
+            nsstring_id_to_string(key)
         }
     }
 
@@ -239,4 +254,84 @@ pub(crate) fn scancode_to_physicalkey(scancode: u32) -> PhysicalKey {
         0x7f => KeyCode::Power, // On 10.7 and 10.8 only
         _ => return PhysicalKey::Unidentified(NativeKeyCode::MacOS(scancode as u16)),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use objc2::rc::autoreleasepool;
+
+    use super::*;
+
+    // Carbon virtual keycodes used by the tests.
+    const KVK_ANSI_A: u16 = 0x00;
+    const KVK_RETURN: u16 = 0x24;
+    const KVK_ESCAPE: u16 = 0x35;
+
+    fn key_name_from_chars(chars: &[u16], key_code: u16) -> Option<String> {
+        autoreleasepool(|_| unsafe {
+            let name =
+                KeyNameFromTranslatedChars(chars.as_ptr(), chars.len() as NSUInteger, key_code);
+            nsstring_id_to_string(name)
+        })
+    }
+
+    #[test]
+    fn empty_translation_falls_back_to_control_key_mapping() {
+        // A zero-character translation for a control keycode should use the
+        // control-key name instead of indexing an empty buffer.
+        assert_eq!(
+            key_name_from_chars(&[], KVK_RETURN).as_deref(),
+            Some("enter")
+        );
+    }
+
+    #[test]
+    fn empty_translation_with_unmapped_keycode_returns_none() {
+        // A zero-character translation for a non-control keycode has no name.
+        assert_eq!(key_name_from_chars(&[], KVK_ANSI_A), None);
+    }
+
+    #[test]
+    fn single_character_translation_is_preserved() {
+        assert_eq!(
+            key_name_from_chars(&[u16::from(b'a')], KVK_ANSI_A).as_deref(),
+            Some("a")
+        );
+    }
+
+    #[test]
+    fn single_control_character_uses_control_key_mapping() {
+        assert_eq!(
+            key_name_from_chars(&[0x1B], KVK_ESCAPE).as_deref(),
+            Some("escape")
+        );
+    }
+
+    #[test]
+    fn surrogate_pair_translation_is_preserved() {
+        // U+1F600 (😀) encoded as a UTF-16 surrogate pair.
+        assert_eq!(
+            key_name_from_chars(&[0xD83D, 0xDE00], KVK_ANSI_A).as_deref(),
+            Some("😀")
+        );
+    }
+
+    #[test]
+    fn multi_character_translation_is_preserved() {
+        // Some layouts translate a single keypress into multiple characters;
+        // the full sequence must be preserved.
+        let chars: Vec<u16> = "ch".encode_utf16().collect();
+        assert_eq!(
+            key_name_from_chars(&chars, KVK_ANSI_A).as_deref(),
+            Some("ch")
+        );
+
+        // Multi-character sequences are treated as text even if they contain
+        // control code units, rather than falling back to the control mapping.
+        let with_control: Vec<u16> = vec![0x1B, u16::from(b'x')];
+        assert_eq!(
+            key_name_from_chars(&with_control, KVK_ESCAPE).as_deref(),
+            Some("\u{1B}x")
+        );
+    }
 }
