@@ -14,8 +14,8 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext, TuiView as _, TypedActionView as _, ViewHandle};
 
 use super::{
-    OptionSelectorPage, SelectorItem, TuiOptionSelector, TuiOptionSelectorAction,
-    TuiOptionSelectorEvent,
+    OptionSelectorHeader, OptionSelectorPage, SelectorItem, TuiOptionSelector,
+    TuiOptionSelectorAction, TuiOptionSelectorEvent,
 };
 use crate::editor_element::TuiEditorAction;
 use crate::editor_interaction::TuiEditorCommand;
@@ -60,9 +60,11 @@ fn snapshot_of(rows: Vec<OptionRow>, selected: Option<&str>) -> OptionSnapshot {
 /// Builds one selector page with shared test metadata.
 fn page(snapshot: OptionSnapshot, searchable: bool) -> OptionSelectorPage {
     OptionSelectorPage {
-        field_label: "Host".to_string(),
-        position: (4, 6),
-        prompt: "Which host should run the agents?".to_string(),
+        header: Some(OptionSelectorHeader {
+            field_label: "Host".to_string(),
+            position: (4, 6),
+            prompt: "Which host should run the agents?".to_string(),
+        }),
         snapshot,
         searchable,
     }
@@ -490,6 +492,29 @@ fn renders_field_label_position_prompt_and_initial_selection() {
                 .expect("selected option has a foreground")
         );
         assert!(selected.modifier.contains(Modifier::BOLD));
+    });
+}
+
+#[test]
+fn normal_selector_selected_row_does_not_depend_on_question_selected_ids() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        set_page(&mut app, &selector, snapshot(&["a", "b"], Some("b")));
+
+        assert!(selector.read(&app, |selector, _| {
+            !selector.question_style && selector.selected_ids.is_empty()
+        }));
+
+        let buffer = render_buffer(&app, &selector, 60);
+        let selected_fg = app
+            .read(TuiUiBuilder::from_app)
+            .option_selector_selected_style()
+            .fg
+            .expect("selected option has a foreground");
+        for cell in [&buffer[(0, 4)], &buffer[(4, 4)]] {
+            assert_eq!(cell.fg, selected_fg);
+            assert!(cell.modifier.contains(Modifier::BOLD));
+        }
     });
 }
 

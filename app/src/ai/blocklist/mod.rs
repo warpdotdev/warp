@@ -43,15 +43,15 @@ pub(crate) use action_model::recording_finalize::{
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use action_model::AIActionStatus;
-// Consumed by `tui_export` for the `warp_tui` frontend.
-#[cfg(feature = "tui")]
-pub use action_model::RequestFileEditsExecutor;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
     apply_edits, read_local_file_context, FileReadResult, ReadFileContextResult,
     RequestFileEditsFormatKind, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
     StartAgentRequestId,
 };
+// Consumed by `tui_export` for the `warp_tui` frontend.
+#[cfg(feature = "tui")]
+pub use action_model::{AskUserQuestionExecutor, RequestFileEditsExecutor};
 pub use action_model::{
     BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent,
 };

@@ -33,6 +33,7 @@ use warpui_core::{
     ViewHandle,
 };
 
+use super::tui_ask_question_view::{TuiAskQuestionView, TuiAskQuestionViewEvent};
 use super::tui_file_edits_view::{TuiFileEditsView, TuiFileEditsViewEvent};
 use super::tui_shell_command_view::{TuiShellCommandView, TuiShellCommandViewEvent};
 use crate::agent_block_sections::{
@@ -159,6 +160,7 @@ impl CollapsibleSectionStates {
 /// [`TuiAIBlockSection::render_element`]; a tool type gets a variant here only
 /// when it needs owned state or interactivity.
 enum TuiToolCallView {
+    AskQuestion(ViewHandle<TuiAskQuestionView>),
     FileEdits(ViewHandle<TuiFileEditsView>),
     Plan(ViewHandle<TuiPlanView>),
     ShellCommand(ViewHandle<TuiShellCommandView>),
@@ -169,6 +171,7 @@ impl TuiToolCallView {
     /// The registered view's entity id, for [`TuiView::child_view_ids`].
     fn view_id(&self) -> EntityId {
         match self {
+            Self::AskQuestion(view) => view.id(),
             Self::FileEdits(view) => view.id(),
             Self::Plan(view) => view.id(),
             Self::ShellCommand(view) => view.id(),
@@ -179,6 +182,7 @@ impl TuiToolCallView {
     /// Renders the registered child view into the block's element tree.
     fn render_child(&self) -> TuiChildView {
         match self {
+            Self::AskQuestion(view) => TuiChildView::new(view),
             Self::FileEdits(view) => TuiChildView::new(view),
             Self::Plan(view) => TuiChildView::new(view),
             Self::ShellCommand(view) => TuiChildView::new(view),
@@ -327,6 +331,7 @@ impl TuiAIBlock {
     ) {
         let status = self.block_model.status(ctx);
         let output_streaming = status.is_streaming();
+        let mut ask_question_actions = Vec::new();
         let mut file_edit_action_ids = Vec::new();
         let mut plan_actions = Vec::new();
         let mut shell_command_actions = Vec::new();
@@ -341,7 +346,9 @@ impl TuiAIBlock {
                     continue;
                 };
                 self.action_ids.insert(action.id.clone());
-                if matches!(&action.action, AIAgentActionType::RequestFileEdits { .. }) {
+                if let AIAgentActionType::AskUserQuestion { questions } = &action.action {
+                    ask_question_actions.push((action.id.clone(), questions.clone()));
+                } else if matches!(&action.action, AIAgentActionType::RequestFileEdits { .. }) {
                     file_edit_action_ids.push(action.id.clone());
                 } else if matches!(
                     &action.action,
@@ -359,6 +366,41 @@ impl TuiAIBlock {
             }
         }
 
+        for (action_id, questions) in ask_question_actions {
+            let needs_init = match self.action_views.get(&action_id) {
+                Some(TuiToolCallView::AskQuestion(view)) => {
+                    !view.as_ref(ctx).matches_action(&action_id, &questions)
+                }
+                Some(
+                    TuiToolCallView::FileEdits(_)
+                    | TuiToolCallView::Plan(_)
+                    | TuiToolCallView::ShellCommand(_)
+                    | TuiToolCallView::OrchestrationBlock(_),
+                )
+                | None => true,
+            };
+            if !needs_init {
+                continue;
+            }
+            let view_action_id = action_id.clone();
+            let action_model = action_model.clone();
+            let conversation_id = self.conversation_id;
+            let view = ctx.add_typed_action_tui_view(move |ctx| {
+                TuiAskQuestionView::new(
+                    action_model,
+                    conversation_id,
+                    view_action_id,
+                    questions,
+                    ctx,
+                )
+            });
+            ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
+                TuiAskQuestionViewEvent::LayoutChanged => me.invalidate_layout(ctx),
+            });
+            self.action_views
+                .insert(action_id, TuiToolCallView::AskQuestion(view));
+            ctx.notify();
+        }
         for action_id in file_edit_action_ids {
             if self.action_views.contains_key(&action_id) {
                 continue;
@@ -524,7 +566,8 @@ impl TuiAIBlock {
                 .is_awaiting_confirmation(ctx)
                 .then(|| view.clone()),
             // These tool views render inline and never replace the input.
-            TuiToolCallView::FileEdits(_)
+            TuiToolCallView::AskQuestion(_)
+            | TuiToolCallView::FileEdits(_)
             | TuiToolCallView::Plan(_)
             | TuiToolCallView::ShellCommand(_) => None,
         }
@@ -724,7 +767,8 @@ impl TuiAIBlock {
         self.last_measured_width.get() != Some(width)
             || self.block_model.status(app).is_streaming()
             || self.action_views.values().any(|view| match view {
-                TuiToolCallView::FileEdits(_)
+                TuiToolCallView::AskQuestion(_)
+                | TuiToolCallView::FileEdits(_)
                 | TuiToolCallView::Plan(_)
                 | TuiToolCallView::OrchestrationBlock(_) => false,
                 TuiToolCallView::ShellCommand(view) => {

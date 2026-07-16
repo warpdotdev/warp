@@ -260,6 +260,16 @@ impl TuiUiBuilder {
     pub(crate) fn agent_identity_palette(&self) -> Vec<AgentIdentity> {
         agent_identity_palette(self.warp_theme.terminal_colors())
     }
+    /// Bold cyan option text for the ask-question card.
+    pub(crate) fn question_option_selected_style(&self) -> TuiStyle {
+        self.accent_text_style().add_modifier(Modifier::BOLD)
+    }
+
+    /// Accent-tinted surface behind an interactive ask-question card.
+    pub(crate) fn question_surface_background(&self) -> Color {
+        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        cell_color(self.base_background().blend(&accent.with_opacity(10)))
+    }
 
     /// Collapsible-header style while the pointer hovers it.
     fn hovered_header_style(&self) -> TuiStyle {

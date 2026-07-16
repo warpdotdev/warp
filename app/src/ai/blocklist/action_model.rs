@@ -30,12 +30,13 @@ pub(crate) use execute::{
 #[cfg(test)]
 pub(crate) use execute::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
 pub use execute::{
-    read_local_file_context, EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent,
-    EditResolvedEvent, EditStats, NewConversationDecision, PromptSuggestionExecutor,
-    ReadFileContextResult, RequestFileEditsExecutor, RequestFileEditsFormatKind,
-    RequestFileEditsTelemetryEvent, RunAgentsExecutor, RunAgentsExecutorEvent,
-    RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
-    StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
+    read_local_file_context, AskUserQuestionExecutor, EditAcceptAndContinueClickedEvent,
+    EditAcceptClickedEvent, EditResolvedEvent, EditStats, NewConversationDecision,
+    PromptSuggestionExecutor, ReadFileContextResult, RequestFileEditsExecutor,
+    RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent, RunAgentsExecutor,
+    RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
+    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
+    StartAgentRequestId,
 };
 use futures::future::{join_all, BoxFuture};
 use itertools::Itertools;
@@ -43,7 +44,6 @@ use parking_lot::FairMutex;
 use preprocess::{PendingPreprocessedActions, PreprocessId};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use self::execute::ask_user_question::AskUserQuestionExecutor;
 use self::execute::search_codebase::SearchCodebaseExecutor;
 use self::execute::{
     BlocklistAIActionExecutor, BlocklistAIActionExecutorEvent, NotExecutedReason,

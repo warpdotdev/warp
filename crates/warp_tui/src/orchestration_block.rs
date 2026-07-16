@@ -38,7 +38,9 @@ use configuration::{
 };
 
 use crate::keybindings::TUI_BINDING_GROUP;
-use crate::option_selector::{OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent};
+use crate::option_selector::{
+    OptionSelectorHeader, OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent,
+};
 use crate::orchestrated_agent_identity_styling::AgentIdentity;
 use crate::tui_builder::TuiUiBuilder;
 
@@ -469,9 +471,11 @@ impl TuiOrchestrationBlock {
             Self::page_sequence(&self.orchestration_edit_state.orchestration_config_state);
         let position = sequence.iter().position(|p| *p == page).unwrap_or(0) + 1;
         let selector_page = OptionSelectorPage {
-            field_label: "Edit agent configuration".to_string(),
-            position: (position, sequence.len()),
-            prompt: page.question(self.request_fields.agent_run_configs.len()),
+            header: Some(OptionSelectorHeader {
+                field_label: "Edit agent configuration".to_string(),
+                position: (position, sequence.len()),
+                prompt: page.question(self.request_fields.agent_run_configs.len()),
+            }),
             snapshot: self.snapshot_for_page(page, ctx),
             searchable: page.is_searchable(),
         };
@@ -604,6 +608,7 @@ impl TuiOrchestrationBlock {
                     self.finish_page_confirmation(ConfigPage::Host, ctx);
                 }
             }
+            TuiOptionSelectorEvent::CustomTextOpened => {}
             TuiOptionSelectorEvent::RetryRequested => {
                 self.pending_page_navigation = None;
                 self.ensure_auth_secrets_fetched(ctx);

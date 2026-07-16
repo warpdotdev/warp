@@ -1,5 +1,11 @@
 //! Public app APIs used by the `warp_tui` frontend.
 
+pub use ::ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
+pub use ::ai::agent::action_result::AskUserQuestionAnswerItem;
+pub use ::ai::agent::{
+    AskUserQuestionAction, AskUserQuestionEffect, AskUserQuestionPhase, AskUserQuestionSession,
+    QuestionDraft,
+};
 pub use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 pub use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 pub use repo_metadata::repositories::RepoDetectionSource;
@@ -58,11 +64,12 @@ pub use crate::ai::blocklist::history_model::{
 };
 pub use crate::ai::blocklist::view_util::format_credits;
 pub use crate::ai::blocklist::{
-    block_context_from_terminal_model, AIActionStatus, BlocklistAIActionEvent,
-    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
-    InputConfig, InputModePolicy, InputModePolicyHandle, InputType, InputTypeAutoDetectionSource,
-    PolicyConfigUpdate, RequestFileEditsExecutor, RunAgentsExecutor, RunAgentsExecutorEvent,
-    RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent,
+    block_context_from_terminal_model, AIActionStatus, AskUserQuestionExecutor,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIInputModel, InputConfig, InputModePolicy, InputModePolicyHandle, InputType,
+    InputTypeAutoDetectionSource, PolicyConfigUpdate, RequestFileEditsExecutor, RunAgentsExecutor,
+    RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
+    ShellCommandExecutorEvent,
 };
 pub use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,

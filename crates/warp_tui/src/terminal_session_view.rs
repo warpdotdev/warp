@@ -15,13 +15,14 @@ use warp::tui_export::{
     block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
     export_conversation_markdown, prepare_conversation_block_restoration,
     record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
-    slash_command_selection_behavior, throttle, AIAgentActionId, AIAgentContext,
-    AIAgentPtyWriteMode, AIConversation, AIConversationId, AcceptSlashCommandOrSavedPrompt,
-    ActiveSession, ActiveSessionEvent, AgentConversationEntryId, AgentConversationListEntryState,
-    AgentConversationsModel, AgentInteractionMetadata, AgentViewEntryOrigin, BlockId,
-    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
-    CLISubagentEvent, CLISubagentTarget, CancellationReason, ChangelogModel, ChangelogModelEvent,
+    slash_command_selection_behavior, throttle, AIAgentActionId, AIAgentActionResultType,
+    AIAgentContext, AIAgentPtyWriteMode, AIConversation, AIConversationId,
+    AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent, AgentConversationEntryId,
+    AgentConversationListEntryState, AgentConversationsModel, AgentInteractionMetadata,
+    AgentViewEntryOrigin, BlockId, BlocklistAIActionEvent, BlocklistAIActionModel,
+    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController, CLISubagentEvent,
+    CLISubagentTarget, CancellationReason, ChangelogModel, ChangelogModelEvent,
     ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
     ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
     ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
@@ -824,6 +825,20 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::AcceptedMcp(action) => {
                 view.handle_accepted_mcp_action(*action, ctx);
+            }
+        });
+        ctx.subscribe_to_model(&action_model, |view, action_model, event, ctx| {
+            let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event else {
+                return;
+            };
+            let finished_asking_question = action_model
+                .as_ref(ctx)
+                .get_action_result(action_id)
+                .is_some_and(|result| {
+                    matches!(&result.result, AIAgentActionResultType::AskUserQuestion(_))
+                });
+            if finished_asking_question {
+                ctx.focus(&view.input_view);
             }
         });
         // The input box border color and the footer's shell-mode hint depend
