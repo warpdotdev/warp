@@ -10,7 +10,9 @@ Warp already persists the user-controlled font size as `FontSettings::monospace_
 
 The existing Settings editor parses whole-pixel values and accepts the inclusive `1..=120` range ([`app/src/settings_view/appearance_page.rs#L106-L113`](https://github.com/warpdotdev/warp/blob/fd210f13fe5904f01308d3853e09268d15aa6597/app/src/settings_view/appearance_page.rs#L106-L113), [`app/src/settings_view/appearance_page.rs#L1864-L1878`](https://github.com/warpdotdev/warp/blob/fd210f13fe5904f01308d3853e09268d15aa6597/app/src/settings_view/appearance_page.rs#L1864-L1878)). This proposal preserves that validation and must lay out safely at both exact boundaries.
 
-`Appearance::ui_font_size()` is not that setting: it returns the fixed `DEFAULT_UI_FONT_SIZE` of 12 px. Window Zoom is also distinct; `WindowSettings::zoom_level` sets WarpUI's global zoom factor and therefore already scales the complete scene ([`app/src/window_settings.rs#L79-L106`](https://github.com/warpdotdev/warp/blob/fd210f13fe5904f01308d3853e09268d15aa6597/app/src/window_settings.rs#L79-L106), [`app/src/lib.rs#L1334-L1342`](https://github.com/warpdotdev/warp/blob/fd210f13fe5904f01308d3853e09268d15aa6597/app/src/lib.rs#L1334-L1342)). This change must read `Appearance::monospace_font_size()` and must not add a setting or reuse Zoom.
+`Appearance::ui_font_size()` is not that setting: it returns the fixed `DEFAULT_UI_FONT_SIZE` of 12 px. Window Zoom is also distinct; `WindowSettings::zoom_level` sets WarpUI's global zoom factor and therefore already scales the complete scene ([`app/src/window_settings.rs#L79-L106`](https://github.com/warpdotdev/warp/blob/fd210f13fe5904f01308d3853e09268d15aa6597/app/src/window_settings.rs#L79-L106), [`app/src/lib.rs#L1334-L1342`](https://github.com/warpdotdev/warp/blob/fd210f13fe5904f01308d3853e09268d15aa6597/app/src/lib.rs#L1334-L1342)). This change must derive from the existing monospace setting and must not add a setting or reuse Zoom.
+
+`Appearance` already provides the derivation used when UI text or geometry should track that setting: `monospace_ui_scalar()` returns `monospace_font_size / DEFAULT_UI_FONT_SIZE` ([`crates/warp_core/src/ui/appearance.rs#L288-L305`](https://github.com/warpdotdev/warp/blob/fd210f13fe5904f01308d3853e09268d15aa6597/crates/warp_core/src/ui/appearance.rs#L288-L305)). Existing consumers multiply a UI baseline by this scalar, including profile/model-selector text and subordinate todo text ([`app/src/terminal/profile_model_selector.rs#L91-L96`](https://github.com/warpdotdev/warp/blob/fd210f13fe5904f01308d3853e09268d15aa6597/app/src/terminal/profile_model_selector.rs#L91-L96), [`app/src/ai/blocklist/block/view_impl/todos.rs#L209-L218`](https://github.com/warpdotdev/warp/blob/fd210f13fe5904f01308d3853e09268d15aa6597/app/src/ai/blocklist/block/view_impl/todos.rs#L209-L218)). The Tools pane must reuse that accessor rather than reimplementing the division or treating the selected monospace size as a 14 px UI baseline.
 
 The Tools pane currently has four views: `ProjectExplorer`, `ConversationListView`, `GlobalSearch`, and `WarpDrive` ([`app/src/workspace/view/left_panel.rs#L104-L110`](https://github.com/warpdotdev/warp/blob/fd210f13fe5904f01308d3853e09268d15aa6597/app/src/workspace/view/left_panel.rs#L104-L110)). Each tab contains fixed typography:
 
@@ -25,16 +27,16 @@ Render-time text automatically sees an `Appearance` change because the app inval
 
 ### 1. Define shared Tools pane typography roles
 
-Add a small shared module under `app/src/workspace/view/` that derives Tools pane font roles from an `Appearance`:
+Add a small shared module under `app/src/workspace/view/` that derives Tools pane font roles from an `Appearance`. Read `let scalar = appearance.monospace_ui_scalar()` once and apply it to the tabs' existing UI baselines:
 
-- `primary = appearance.monospace_font_size()`
-- `secondary = primary * (12.0 / 14.0)`
-- `heading = primary * (16.0 / 14.0)`
-- `overline = primary * (11.0 / 14.0)`
+- `primary = 14.0 * scalar`
+- `secondary = 12.0 * scalar`
+- `heading = 16.0 * scalar`
+- `overline = 11.0 * scalar`
 
-Return these values from a copyable `ToolsPaneTypography` struct or equivalently named helpers. The ratios preserve today's hierarchy exactly when the primary size is 14 px, stay finite and positive across the exact inclusive 1–120 range, and avoid unrelated per-tab constants drifting apart. Do not round the derived values before layout. At 1 and 120 px the roles must still satisfy `heading > primary > secondary > overline`; layout safety, rather than legibility at 1 px or full horizontal visibility at 120 px, is the boundary guarantee.
+Return these values from a copyable `ToolsPaneTypography` struct or equivalently named helpers. Reusing `monospace_ui_scalar()` follows the app's established UI-scaling path and preserves today's hierarchy exactly at the 12 px unit-scalar point. At the current 13 px default, the roles are approximately 15.17/13/17.33/11.92 px; at 14 px they are approximately 16.33/14/18.67/12.83 px. The results stay finite and positive across the exact inclusive 1–120 range and avoid unrelated per-tab constants drifting apart. Do not round the derived values before layout. At 1 and 120 px the roles must still satisfy `heading > primary > secondary > overline`; layout safety, rather than legibility at 1 px or full horizontal visibility at 120 px, is the boundary guarantee.
 
-Keep `Appearance::ui_font_family()` as the family for all four tabs. The existing setting supplies the size only. Do not add fields or events to `FontSettings`, `CodeSettings`, `WindowSettings`, or `Appearance`, and do not change `appearance.text.font_size` persistence or validation.
+Keep `Appearance::ui_font_family()` as the family for all four tabs. The existing setting supplies the scalar only; each role retains its UI baseline. Do not add fields or events to `FontSettings`, `CodeSettings`, `WindowSettings`, or `Appearance`, and do not change `appearance.text.font_size` persistence or validation.
 
 The shared roles apply only to content rendered inside the four `ToolPanelView` variants. Toolbelt buttons and panel chrome remain on standard UI metrics. Dialogs, menus, workflow editors, and full panes launched from Warp Drive are not consumers of this helper.
 
@@ -57,7 +59,7 @@ In `app/src/workspace/view/global_search/view.rs`:
 
 - Use `primary` for the query editor, Search label, directory/file labels, matching lines, and zero-state body text that is 14 px today.
 - Use `secondary` for paths, match counts, progress/result summaries, capped-result copy, and badges that are 12 px today.
-- Use `heading` for zero-state headings currently expressed as `appearance.ui_font_size() + 2.` or another 14/16 px fixed role, choosing the role that preserves the current hierarchy at a 14 px primary value.
+- Use `heading` for zero-state headings currently expressed as `appearance.ui_font_size() + 2.` or another 14/16 px fixed role, choosing the role that preserves the current hierarchy at the 12 px unit-scalar point.
 - Update the existing query editor with `set_font_size(primary, ctx)` on `MonospaceFontSizeChanged`; preserve its buffer, selection, focus, debounce channel, and search model.
 - Keep query controls and file icons at their existing dimensions. Let result and directory row containers grow from their text rather than introducing fixed heights.
 
@@ -100,13 +102,13 @@ Do not rebuild filesystem, search, conversation, or cloud models. Preserve exist
 
 Add focused tests for the shared typography helper:
 
-- 14 px produces exactly 14 px primary, 12 px secondary, 16 px heading, and 11 px overline roles;
-- exact 1 and 120 px boundaries plus the current 13 px default produce finite positive roles and preserve `heading > primary > secondary > overline`;
-- the helper reads `Appearance::monospace_font_size()` and never `ui_font_size()` or window Zoom.
+- a 12 px app font size produces a unit scalar and exactly 14 px primary, 12 px secondary, 16 px heading, and 11 px overline roles;
+- exact 1 and 120 px boundaries plus the current 13 px default and 14 px value produce finite positive roles and preserve `heading > primary > secondary > overline`;
+- the helper reuses `Appearance::monospace_ui_scalar()` and never duplicates its division or reads window Zoom.
 
 Extend the existing view tests for each tab:
 
-- Project Explorer starts with a configured primary size and a live change updates the same inline-editor handle without changing flattened paths, selection, expansion, pending-edit text/selection, or scroll handle. Error-state heading/body render at `primary` at 1, 14, and 120 px and retain the UI family and semibold heading distinction.
+- Project Explorer starts with a configured primary size and a live change updates the same inline-editor handle without changing flattened paths, selection, expansion, pending-edit text/selection, or scroll handle. Error-state heading/body render at `primary` for app font settings 1, 12, 13, 14, and 120 px and retain the UI family and semibold heading distinction.
 - Global Search starts and updates its query editor at the primary role without changing query text, result data, collapsed directories, selected result, or debounce/search state.
 - Conversation History updates its query and rename editors without changing buffers, active rename, selection, collapsed sections, or conversation ordering.
 - Warp Drive constructs the title editor with `primary` and `Appearance::ui_font_family()`, then a size event updates the same handle without changing that family, buffer, focus, ordered items, focused item, sections, sorting, drag state, or cloud actions.
@@ -116,7 +118,7 @@ Where renderer-test helpers cannot expose text styles or measured bounds without
 
 ### Manual / GUI integration validation
 
-1. Set **Font size (px)** to exactly 1, the current 13 px default, 14, and exactly 120. Open all four Tools pane tabs and verify their primary and subordinate roles move together.
+1. Set **Font size (px)** to exactly 1, the 12 px unit-scalar compatibility point, the current 13 px default, 14, and exactly 120. Open all four Tools pane tabs and verify their primary and subordinate roles move together.
 2. Change size with a Project Explorer rename active, a Global Search query and result selected, a conversation rename active, and a Drive title edit active. Confirm buffers, selections, focus, and operations survive.
 3. Exercise long names, deep nesting, badges, warnings, empty/error states, ignored files, search matches, timestamps, and Drive metadata at narrow and wide panel widths. At 1 px verify fixed icon/control minimums; at 120 px verify vertical remeasurement and existing horizontal overflow behavior without overlap.
 4. Scroll and expand populated views, change size in both directions, and confirm logical selection, expansion, and scroll location remain stable.
@@ -144,7 +146,7 @@ Where renderer-test helpers cannot expose text styles or measured bounds without
 
 ### Confusing configurable font size with fixed UI size or Zoom
 
-`Appearance::ui_font_size()` is fixed, and Zoom already scales everything. The shared helper accepts `Appearance` and explicitly derives its base from `monospace_font_size()`. A unit test locks that source, while the implementation makes no `WindowSettings` or zoom-factor changes.
+`Appearance::ui_font_size()` is fixed, and Zoom already scales everything. The shared helper accepts `Appearance` and reuses `monospace_ui_scalar()`, which derives from `monospace_font_size()` and the fixed UI baseline. A unit test locks the unit-scalar and boundary behavior, while the implementation makes no `WindowSettings` or zoom-factor changes.
 
 ### Long-lived editors retaining stale sizes
 
@@ -152,7 +154,7 @@ Parent invalidation does not rewrite an existing editor's captured `TextOptions`
 
 ### Typography hierarchy drifting between tabs
 
-Hard-coded 16/14/12/11 px values are replaced by one shared role calculation. A 14 px compatibility test locks the current relationships and prevents a tab from inventing a new independent base.
+Hard-coded 16/14/12/11 px values are replaced by one shared role calculation. A 12 px unit-scalar compatibility test locks the current values and prevents a tab from inventing a new independent derivation.
 
 ### Larger text clipping or destabilizing virtualized lists
 
