@@ -175,6 +175,29 @@ fn test_mouse_actions_to_escape_sequence() {
 }
 
 #[test]
+fn test_alt_screen_scroll_to_pty_bytes() {
+    let terminal_model = TerminalModelMock::new();
+    let point = Point::new(3, 2);
+
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(2, point, false, &terminal_model),
+        Some(b"\x1bOA\x1bOA".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(-2, point, false, &terminal_model),
+        Some(b"\x1bOB\x1bOB".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(1, point, true, &terminal_model),
+        Some(b"\x1b[<64;3;4M".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(0, point, true, &terminal_model),
+        None
+    );
+}
+
+#[test]
 fn test_cursor_movement_keystroke_without_modifier_to_escape_sequence() {
     // Expected mapping taken from the xterm spec
     // [here](https://www.xfree86.org/current/ctlseqs.html).

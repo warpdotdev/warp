@@ -10,24 +10,53 @@
 //! passes cannot do themselves.
 //!
 //! When configured with [`TuiTerminalContentElement::with_pty_input`], the same
-//! wrapper also gives the foreground process first refusal on key and paste
-//! events. Keeping both responsibilities here ensures the subtree measured for
-//! the PTY is also the subtree that owns its input.
+//! wrapper also gives the foreground process first refusal on key, paste, and
+//! pointer events. Keeping both responsibilities here ensures the subtree
+//! measured for the PTY is also the subtree that owns its input.
 
 use std::ops::Deref as _;
 use std::sync::Arc;
 
 use async_channel::Sender;
 use parking_lot::FairMutex;
-use warp::tui_export::{KeystrokeWithDetails, TerminalModel};
-use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
+use warp::tui_export::{
+    should_intercept_mouse, should_intercept_scroll, KeystrokeWithDetails, TermMode, TerminalModel,
+    ToEscapeSequence as _,
+};
+use warp_terminal::model::escape_sequences::{
+    alt_screen_scroll_to_pty_bytes, ModeProvider, BRACKETED_PASTE_END, BRACKETED_PASTE_START,
+};
+use warp_terminal::model::mouse::{MouseAction, MouseButton, MouseState};
+use warp_terminal::model::Point;
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize,
+    TuiPaintSurface, TuiPoint, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
+    TuiScreenRect, TuiSize,
 };
 use warpui_core::AppContext;
 
 use crate::terminal_session_view::TuiTerminalSessionAction;
+/// Which terminal mouse reports the active process and user settings allow.
+#[derive(Clone, Copy)]
+struct MouseReportPolicy {
+    /// Clicks, releases, and drags.
+    report_buttons: bool,
+    /// Hover motion.
+    report_motion: bool,
+    /// Wheel events as SGR reports.
+    report_scroll: bool,
+}
+
+impl MouseReportPolicy {
+    /// Derives the current reporting policy from terminal state and settings.
+    fn current(model: &TerminalModel, app: &AppContext) -> Self {
+        Self {
+            report_buttons: !should_intercept_mouse(model, false, app),
+            report_motion: model.is_term_mode_set(TermMode::MOUSE_MOTION),
+            report_scroll: !should_intercept_scroll(model, app),
+        }
+    }
+}
 
 /// Wraps the element displaying PTY content, reports its laid-out size, and
 /// optionally forwards input to the foreground process.
@@ -47,7 +76,7 @@ impl TuiTerminalContentElement {
         }
     }
 
-    /// Gives the foreground process first refusal on key and paste events for
+    /// Gives the foreground process first refusal on input events for
     /// this terminal-content subtree.
     pub(crate) fn with_pty_input(mut self, model: Arc<FairMutex<TerminalModel>>) -> Self {
         self.pty_input_model = Some(model);
@@ -126,7 +155,26 @@ impl TuiElement for TuiTerminalContentElement {
                 | TuiEvent::LeftMouseDragged { .. }
                 | TuiEvent::MiddleMouseDown { .. }
                 | TuiEvent::RightMouseDown { .. }
-                | TuiEvent::MouseMoved { .. } => {}
+                | TuiEvent::MouseMoved { .. } => {
+                    let bytes =
+                        self.child
+                            .origin()
+                            .zip(self.child.size())
+                            .and_then(|(origin, size)| {
+                                pointer_pty_bytes(
+                                    event,
+                                    TuiScreenRect::new(origin, size),
+                                    model,
+                                    app,
+                                )
+                            });
+                    if let Some(bytes) = bytes {
+                        event_ctx.dispatch_typed_action(
+                            TuiTerminalSessionAction::ForwardUserPtyBytes(bytes),
+                        );
+                        return true;
+                    }
+                }
             }
         }
         self.child.dispatch_event(event, event_ctx, app)
@@ -134,7 +182,7 @@ impl TuiElement for TuiTerminalContentElement {
 }
 
 /// Converts one semantic TUI input event to bytes for the foreground process.
-/// Pointer events and composing key events are left for the child subtree.
+/// Composing key and pointer events are handled separately.
 fn pty_bytes_for_event(event: &TuiEvent, model: &Arc<FairMutex<TerminalModel>>) -> Option<Vec<u8>> {
     match event {
         TuiEvent::KeyDown {
@@ -166,6 +214,84 @@ fn pty_bytes_for_event(event: &TuiEvent, model: &Arc<FairMutex<TerminalModel>>) 
         | TuiEvent::RightMouseDown { .. }
         | TuiEvent::MouseMoved { .. } => None,
     }
+}
+
+/// Encodes a pointer event using the current terminal state.
+fn pointer_pty_bytes(
+    event: &TuiEvent,
+    bounds: TuiScreenRect,
+    model: &Arc<FairMutex<TerminalModel>>,
+    app: &AppContext,
+) -> Option<Vec<u8>> {
+    let model = model.lock();
+    mouse_event_to_pty_bytes(
+        event,
+        bounds,
+        MouseReportPolicy::current(model.deref(), app),
+        model.is_alt_screen_active(),
+        model.deref(),
+    )
+}
+
+/// Encodes a supported pointer event for the foreground process.
+fn mouse_event_to_pty_bytes<T: ModeProvider>(
+    event: &TuiEvent,
+    bounds: TuiScreenRect,
+    policy: MouseReportPolicy,
+    allow_arrow_fallback: bool,
+    mode_provider: &T,
+) -> Option<Vec<u8>> {
+    let point = cell_point(event.position()?, bounds)?;
+
+    let state = match event {
+        TuiEvent::ScrollWheel {
+            delta: (_, rows), ..
+        } => {
+            if !policy.report_scroll && !allow_arrow_fallback {
+                return None;
+            }
+            return alt_screen_scroll_to_pty_bytes(
+                i32::try_from(*rows).ok()?,
+                point,
+                policy.report_scroll,
+                mode_provider,
+            );
+        }
+        TuiEvent::LeftMouseDown { modifiers, .. } if policy.report_buttons && !modifiers.shift => {
+            MouseState::new(MouseButton::Left, MouseAction::Pressed, *modifiers)
+        }
+        TuiEvent::RightMouseDown { modifiers, .. } if policy.report_buttons && !modifiers.shift => {
+            MouseState::new(MouseButton::Right, MouseAction::Pressed, *modifiers)
+        }
+        TuiEvent::LeftMouseUp { modifiers, .. } if policy.report_buttons && !modifiers.shift => {
+            MouseState::new(MouseButton::Left, MouseAction::Released, *modifiers)
+        }
+        TuiEvent::LeftMouseDragged { modifiers, .. }
+            if policy.report_buttons && !modifiers.shift =>
+        {
+            MouseState::new(MouseButton::LeftDrag, MouseAction::Pressed, *modifiers)
+        }
+        TuiEvent::MouseMoved {
+            modifiers,
+            is_synthetic: false,
+            ..
+        } if policy.report_motion => {
+            MouseState::new(MouseButton::Move, MouseAction::Pressed, *modifiers)
+        }
+        _ => return None,
+    };
+    state.set_point(point).to_escape_sequence(mode_provider)
+}
+
+/// Converts an in-bounds screen position to terminal grid coordinates.
+fn cell_point(position: TuiPoint, bounds: TuiScreenRect) -> Option<Point> {
+    if !bounds.contains(position) {
+        return None;
+    }
+    Some(Point::new(
+        usize::try_from(i32::from(position.y) - bounds.origin.y).ok()?,
+        usize::try_from(i32::from(position.x) - bounds.origin.x).ok()?,
+    ))
 }
 
 fn paste_bytes(text: &str, needs_bracketed_paste: bool) -> Vec<u8> {

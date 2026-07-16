@@ -6,9 +6,9 @@
 //! element full-area instead of the block/transcript UI — mirroring the GUI's
 //! `AltScreenElement` (`app/src/terminal/alt_screen/alt_screen_element.rs`).
 //!
-//! Covers rendering and the cursor. PTY sizing and keyboard forwarding are
-//! handled by the session view's `TuiTerminalContentElement` wrapper. Mouse
-//! forwarding remains a follow-up.
+//! Covers rendering and the cursor. PTY sizing plus keyboard, paste, and mouse
+//! forwarding are handled by the session view's `TuiTerminalContentElement`
+//! wrapper.
 //!
 //! [`TuiTerminalSessionView`]: crate::terminal_session_view::TuiTerminalSessionView
 //! [`TerminalModel::is_alt_screen_active`]: warp::tui_export::TerminalModel
