@@ -1164,7 +1164,6 @@ impl SizeUpdateBuilder {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[cfg_attr(feature = "remote_tty", allow(dead_code))]
     fn for_viewer_size_report(last_size: SizeInfo, num_rows: usize, num_cols: usize) -> Self {
         // Viewer size reports don't change the sharer's actual pane size.
         Self {
