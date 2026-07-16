@@ -351,7 +351,7 @@ impl TuiTerminalSessionView {
             }
         } else if ctx.is_self_focused() {
             if let Some(blocker) = self.active_blocking_child(ctx) {
-                ctx.focus(&blocker.view);
+                ctx.focus(&blocker);
             } else {
                 ctx.focus(&self.input_view);
             }
