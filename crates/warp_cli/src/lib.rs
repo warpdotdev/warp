@@ -123,7 +123,7 @@ Use the CLI to:
 * Manage the environments that cloud agents run in
 * Upload secrets to Oz's secure storage"#
 )]
-#[clap(args_conflicts_with_subcommands = true)]
+#[clap(subcommand_precedence_over_arg = true)]
 pub struct Args {
     #[clap(flatten)]
     global_options: GlobalOptions,
