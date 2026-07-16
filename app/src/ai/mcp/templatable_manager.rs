@@ -319,13 +319,19 @@ pub enum TemplatableMCPServerManagerEvent {
     /// A server managed by this shared runtime needs interactive OAuth.
     /// Frontends choose how to present and receive the authorization flow.
     AuthenticationRequired {
-        #[cfg_attr(not(feature = "tui"), expect(dead_code))]
+        #[cfg_attr(
+            all(not(target_family = "wasm"), not(feature = "tui")),
+            expect(dead_code)
+        )]
         uuid: Uuid,
     },
     /// The shared secure credential cache changed for an installation.
     /// Frontends can refresh any authentication controls or status they expose.
     CredentialsChanged {
-        #[cfg_attr(not(feature = "tui"), expect(dead_code))]
+        #[cfg_attr(
+            all(not(target_family = "wasm"), not(feature = "tui")),
+            expect(dead_code)
+        )]
         uuid: Uuid,
     },
     // TODO(aeybel) Right now most of the app doesn't use these events to communicate
