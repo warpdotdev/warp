@@ -156,15 +156,30 @@ fn new_ffmpeg_capture_command(
     if let Some(window) = window_id {
         command.args(["-window_id", &format!("0x{window:x}")]);
     }
-    // Enforce capture limits in ffmpeg so abandoned recordings remain bounded.
     command
+        // Composite the X11 cursor. Must come BEFORE -i so ffmpeg
+        // treats it as an x11grab input option, not an output option.
+        .args(["-draw_mouse", "1"])
+        // Limit capture wall-clock time as an INPUT option so the
+        // duration bound is independent of the output setpts speed
+        // filter. As an output option, max_duration would be stretched
+        // by the playback multiplier (e.g. 4x → effectively 40 min at 4x).
+        .arg("-t")
+        .arg(format!("{:.3}", config.max_duration.as_secs_f64()))
         .args(["-i", display])
         .args(["-c:v", "libx264"])
         .args(["-preset", "ultrafast"])
-        .args(["-pix_fmt", "yuv420p"])
+        .args(["-pix_fmt", "yuv420p"]);
+    // Apply playback speed: rescale presentation timestamps so the video
+    // plays faster than real time. A multiplier of 4 makes a 4-minute
+    // recording play in 1 minute. Values <= 1 are skipped (real-time).
+    if config.playback_speed_multiplier > 1.0 {
+        let setpts = format!("{:.6}*PTS", 1.0 / config.playback_speed_multiplier);
+        command.args(["-vf", &format!("setpts={setpts}")]);
+    }
+    // Max file size is an output limit; stays as an output option.
+    command
         .args(["-movflags", "+faststart"])
-        .arg("-t")
-        .arg(format!("{:.3}", config.max_duration.as_secs_f64()))
         .arg("-fs")
         .arg(config.max_size_bytes.to_string());
     command

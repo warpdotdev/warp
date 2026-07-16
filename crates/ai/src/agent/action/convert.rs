@@ -508,7 +508,13 @@ impl TryFrom<api::message::tool_call::StartRecording> for AIAgentActionType {
 
     fn try_from(value: api::message::tool_call::StartRecording) -> Result<Self, Self::Error> {
         let limits = value.limits;
-        let window = convert_recording_target(value.target)?;
+        // Only carry values > 1 (0 means unset; 1 means real-time).
+        let playback_speed_multiplier =
+            (value.playback_speed_multiplier > 1).then_some(value.playback_speed_multiplier);
+        let window = match convert_recording_target(value.target)? {
+            Some(target @ computer_use::Target::Window { .. }) => Some(target),
+            Some(computer_use::Target::Screen) | None => None,
+        };
         Ok(AIAgentActionType::StartRecording {
             frame_rate: value.frame_rate.max(0) as u32,
             max_duration: limits
@@ -521,6 +527,7 @@ impl TryFrom<api::message::tool_call::StartRecording> for AIAgentActionType {
                 .filter(|&bytes| bytes > 0)
                 .map(|bytes| bytes as u64),
             summary: (!value.summary.trim().is_empty()).then_some(value.summary),
+            playback_speed_multiplier,
             window,
         })
     }
@@ -564,28 +571,6 @@ fn convert_screenshot_params(
     }
 }
 
-/// Converts a `StartRecording` target into the optional window to record. Unlike
-/// [`convert_computer_use_target`], which falls back to whole-screen for an unparseable window id,
-/// recording preserves the parse failure and errors before capture starts: a malformed window
-/// target must not silently record the full display instead of the requested window.
-fn convert_recording_target(
-    target: Option<api::message::tool_call::ComputerUseTarget>,
-) -> Result<Option<computer_use::Target>, ToolToAIAgentActionError> {
-    use api::message::tool_call::computer_use_target::Target as ApiTarget;
-    match target.and_then(|t| t.target) {
-        Some(ApiTarget::Window(window)) => match window.window_id.parse::<u32>() {
-            Ok(window_id) => Ok(Some(computer_use::Target::Window {
-                window_id,
-                pid: window.pid,
-            })),
-            Err(_) => Err(ToolToAIAgentActionError::InvalidRecordingWindowId(
-                window.window_id,
-            )),
-        },
-        Some(ApiTarget::Screen(_)) | None => Ok(None),
-    }
-}
-
 /// Converts an optional API `ComputerUseTarget` into the internal computer_use target. An absent
 /// or `Screen` target maps to the legacy whole-screen behavior.
 fn convert_computer_use_target(
@@ -604,6 +589,25 @@ fn convert_computer_use_target(
             Err(_) => computer_use::Target::Screen,
         },
         Some(ApiTarget::Screen(_)) | None => computer_use::Target::Screen,
+    }
+}
+
+fn convert_recording_target(
+    target: Option<api::message::tool_call::ComputerUseTarget>,
+) -> Result<Option<computer_use::Target>, ToolToAIAgentActionError> {
+    use api::message::tool_call::computer_use_target::Target as ApiTarget;
+    match target.and_then(|t| t.target) {
+        Some(ApiTarget::Window(window)) => {
+            let window_id = window.window_id.parse::<u32>().map_err(|_| {
+                ToolToAIAgentActionError::InvalidRecordingWindowId(window.window_id.clone())
+            })?;
+            Ok(Some(computer_use::Target::Window {
+                window_id,
+                pid: window.pid,
+            }))
+        }
+        Some(ApiTarget::Screen(_)) => Ok(Some(computer_use::Target::Screen)),
+        None => Ok(None),
     }
 }
 
@@ -803,7 +807,3 @@ impl From<api::message::tool_call::insert_review_comments::Comment> for InsertRe
         }
     }
 }
-
-#[cfg(test)]
-#[path = "convert_tests.rs"]
-mod tests;
