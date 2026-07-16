@@ -540,9 +540,6 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             Self::ArtifactUpload | Self::ArtifactGet | Self::ArtifactDownload => {
                 EnablementState::Flag(FeatureFlag::ArtifactCommand)
             }
-            Self::ApiKeyList | Self::ApiKeyCreate | Self::ApiKeyExpire => {
-                EnablementState::Flag(FeatureFlag::APIKeyManagement)
-            }
             Self::RunMessageWatch
             | Self::RunMessageSend
             | Self::RunMessageList
