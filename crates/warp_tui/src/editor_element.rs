@@ -312,12 +312,17 @@ impl TuiEditorElement {
             0
         };
         let content_width = full_width.saturating_sub(self.gutter_cols);
+        let width_changed = char_cell.terminal_width() != content_width;
         char_cell.set_terminal_width(content_width);
 
         let chars: Vec<char> = self.text.chars().collect();
         let cursor_offset = CharOffset::from(self.cursor_offset.as_usize().saturating_sub(1));
         if let Some(viewport_rows) = self.viewport_rows {
-            char_cell.clamp_scroll_offset(cursor_offset, viewport_rows, &hidden);
+            if width_changed {
+                char_cell.follow_cursor(cursor_offset, viewport_rows, &hidden);
+            } else {
+                char_cell.clamp_scroll_offset(cursor_offset, viewport_rows, &hidden);
+            }
         }
         // The first visible row is model-side scroll state; unwindowed
         // consumers always render from the top.

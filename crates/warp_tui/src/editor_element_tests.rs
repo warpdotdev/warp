@@ -310,3 +310,26 @@ fn scroll_windows_the_visible_rows() {
         });
     });
 }
+
+#[test]
+fn width_change_follows_cursor_after_reflow() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let model = model(ctx, "abcde");
+            model.update(ctx, |model, ctx| {
+                model.select_at(CharOffset::from(6), false, ctx);
+                model.end_selection(ctx);
+            });
+
+            let wide = TuiEditorElement::new(&model, ctx).with_viewport_rows(1);
+            assert_eq!(render_lines(ctx, wide, 10, 10), vec!["abcde"]);
+
+            let narrow = TuiEditorElement::new(&model, ctx).with_viewport_rows(1);
+            assert_eq!(render_lines(ctx, narrow, 3, 10), vec!["de"]);
+            let render = model.as_ref(ctx).render_state().as_ref(ctx);
+            let char_cell = render.char_cell().expect("char-cell model");
+            assert_eq!(char_cell.scroll_offset(), 1);
+        });
+    });
+}

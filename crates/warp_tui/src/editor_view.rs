@@ -5,6 +5,7 @@
 //! and behavior while reusing model-backed editing and focus handling.
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
+use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
 use warpui_core::elements::tui::{TuiElement, TuiHoverable};
 use warpui_core::elements::MouseStateHandle;
@@ -39,10 +40,6 @@ pub(crate) struct TuiEditorView {
     editor_state: TuiEditorState,
     editor_behavior: TuiEditorBehavior,
     focused: bool,
-    /// Target text of an in-flight programmatic replacement. Content events
-    /// are suppressed until the model reaches this value (including an
-    /// intermediate clear event).
-    suppressed_text_target: Option<String>,
     mouse_state: MouseStateHandle,
 }
 
@@ -55,13 +52,7 @@ impl TuiEditorView {
                 return;
             }
             let text = editor.text(ctx);
-            if let Some(target) = &editor.suppressed_text_target {
-                if &text == target {
-                    editor.suppressed_text_target = None;
-                }
-            } else {
-                ctx.emit(TuiEditorViewEvent::Changed(text));
-            }
+            ctx.emit(TuiEditorViewEvent::Changed(text));
             ctx.notify();
         });
         Self {
@@ -69,7 +60,6 @@ impl TuiEditorView {
             editor_state: TuiEditorState::default(),
             editor_behavior: TuiEditorBehavior::single_line(),
             focused: false,
-            suppressed_text_target: None,
             mouse_state: MouseStateHandle::default(),
         }
     }
@@ -97,10 +87,8 @@ impl TuiEditorView {
         if self.text(ctx) == text {
             return;
         }
-        self.suppressed_text_target = Some(text.clone());
         self.model.update(ctx, |model, ctx| {
-            model.clear_buffer(ctx);
-            model.user_insert(&text, ctx);
+            model.reset_content(InitialBufferState::plain_text(&text), ctx);
         });
         ctx.notify();
     }
