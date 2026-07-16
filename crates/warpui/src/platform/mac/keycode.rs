@@ -1,11 +1,11 @@
-use std::slice;
-
 use cocoa::base::{id, BOOL};
 use cocoa::foundation::NSUInteger;
 use objc2::rc::Retained;
 use objc2_foundation::{NSArray, NSNumber, NSString};
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
+
+use super::utils::nsstring_as_str;
 
 // Modifier key mask values for the Carbon API.
 pub const CMD_KEY: u16 = 256;
@@ -33,11 +33,9 @@ impl Keycode {
                 return None;
             }
 
-            let key = &*key.cast::<NSString>();
-            let cstr = key.UTF8String() as *const u8;
-            std::str::from_utf8(slice::from_raw_parts(cstr, key.len()))
-                .ok()
-                .map(|s| s.to_string())
+            // Decode via UTF-8 byte length so multi-unit UTF-16 sequences
+            // (surrogate pairs, combining marks) survive round-trip intact.
+            nsstring_as_str(key).ok().map(str::to_owned)
         }
     }
 
@@ -240,3 +238,7 @@ pub(crate) fn scancode_to_physicalkey(scancode: u32) -> PhysicalKey {
         _ => return PhysicalKey::Unidentified(NativeKeyCode::MacOS(scancode as u16)),
     })
 }
+
+#[cfg(test)]
+#[path = "keycode_tests.rs"]
+mod tests;
