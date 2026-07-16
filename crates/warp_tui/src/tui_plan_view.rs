@@ -40,7 +40,7 @@ pub(super) enum TuiPlanViewEvent {
 
 #[derive(Clone, Debug)]
 pub(super) enum TuiPlanViewAction {
-    ToggleCollapsed,
+    SetCollapsed(bool),
 }
 
 pub(super) struct TuiPlanView {
@@ -106,6 +106,14 @@ impl TuiPlanView {
 
     pub(super) fn renders_rich_body(&self) -> bool {
         !self.documents.is_empty()
+    }
+    pub(super) fn toggle_collapsed(&mut self, ctx: &mut ViewContext<Self>) {
+        self.set_collapsed(!self.collapsed, ctx);
+    }
+
+    fn set_collapsed(&mut self, collapsed: bool, ctx: &mut ViewContext<Self>) {
+        self.collapsed = collapsed;
+        self.invalidate_layout(ctx);
     }
 
     fn sync_documents(&mut self, ctx: &mut ViewContext<Self>) -> bool {
@@ -326,7 +334,7 @@ impl TuiView for TuiPlanView {
             self.header_mouse_state.clone(),
             || self.render_documents(app),
             move |event_ctx, _app| {
-                event_ctx.dispatch_typed_action(TuiPlanViewAction::ToggleCollapsed);
+                event_ctx.dispatch_typed_action(TuiPlanViewAction::SetCollapsed(!collapsed));
             },
         );
         if collapsed {
@@ -349,9 +357,8 @@ impl TypedActionView for TuiPlanView {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            TuiPlanViewAction::ToggleCollapsed => {
-                self.collapsed = !self.collapsed;
-                self.invalidate_layout(ctx);
+            TuiPlanViewAction::SetCollapsed(collapsed) => {
+                self.set_collapsed(*collapsed, ctx);
             }
         }
     }

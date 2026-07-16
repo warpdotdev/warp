@@ -623,6 +623,9 @@ jobs:
             # feature-gated logic for the WIP completions-on-js implementation.
             cargo clippy --locked -p warp_completer --all-targets --tests -- -D warnings
           fi
+          # Workspace feature unification enables `warp/tui` through the `warp_tui` package.
+          # Also lint the default GUI configuration used by `cargo run` and `./script/run`.
+          cargo clippy --locked -p warp --all-targets --tests -- -D warnings
         env:
           # Attach the GitHub auth token so that requests to the GitHub API
           # don't get rate limited during compilation (e.g.: retrieving

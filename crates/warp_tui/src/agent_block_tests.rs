@@ -369,7 +369,7 @@ fn tool_call_row_glyph_and_colors_reflect_state() {
             let frame = render(&command_action, Some(&failed));
             assert_eq!(
                 frame.buffer.to_lines()[0].trim_end(),
-                "✗ `git status` denied (denylisted)"
+                "× `git status` denied (denylisted)"
             );
             assert_eq!(frame.buffer[(0, 0)].fg, red);
             assert_eq!(frame.buffer[(2, 0)].fg, primary);
@@ -540,7 +540,7 @@ fn plan_collapse_invalidates_agent_block_layout() {
             ctx.dispatch_typed_action_for_view(
                 plan_view.window_id(ctx),
                 plan_view.id(),
-                &TuiPlanViewAction::ToggleCollapsed,
+                &TuiPlanViewAction::SetCollapsed(true),
             );
         });
 

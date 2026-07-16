@@ -57,7 +57,7 @@ fn streamed_create_renders_cached_markdown_and_code_children() {
             assert!(lines
                 .iter()
                 .skip(2)
-                .filter(|line| { !line.is_empty() && line.trim_end() != plan_toggle_hint })
+                .filter(|line| !line.is_empty() && line.trim_end() != plan_toggle_hint)
                 .all(|line| line.starts_with("  ")));
             let plan_background = TuiUiBuilder::from_app(ctx).plan_background();
             assert_eq!(buffer[(0, 0)].bg, Color::Reset);
@@ -278,7 +278,7 @@ fn collapse_persists_across_payload_updates_and_invalidates_layout() {
         });
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&TuiPlanViewAction::ToggleCollapsed, ctx);
+            view.handle_action(&TuiPlanViewAction::SetCollapsed(true), ctx);
             view.sync_action(
                 create_action("create-1", [("Plan", "second body")]),
                 true,

@@ -296,6 +296,14 @@ pub struct RecordingConfig {
     pub max_duration: Duration,
     /// Maximum output size in bytes before the runtime auto-stops recording.
     pub max_size_bytes: u64,
+    /// How many times faster the output video should play back relative to real
+    /// time. For example, 4.0 makes a 4-minute recording play in 1 minute. A
+    /// value of 0.0 or 1.0 means real-time (no speedup). Applied via an ffmpeg
+    /// presentation-timestamp rescale filter on the output video.
+    pub playback_speed_multiplier: f32,
+    /// The surface to capture. `Screen` records the whole X display (legacy behavior);
+    /// `Window` records the targeted window after making it foreground-visible when supported.
+    pub target: Target,
 }
 
 impl Default for RecordingConfig {
@@ -306,6 +314,11 @@ impl Default for RecordingConfig {
             // NOTE: Bounds every capture so an unattended recording can't grow without bound (~10 min / 1 GiB).
             max_duration: Duration::from_secs(10 * 60),
             max_size_bytes: 1024 * 1024 * 1024,
+            // NOTE: 4x playback speed keeps demo videos short and watchable. A 4-minute
+            // recording plays in 1 minute. The server can override via the StartRecording
+            // tool call's playback_speed_multiplier field.
+            playback_speed_multiplier: 4.0,
+            target: Target::Screen,
         }
     }
 }

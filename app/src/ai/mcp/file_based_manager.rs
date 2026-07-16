@@ -497,10 +497,12 @@ impl FileBasedMCPManager {
             .find(|(_, server)| server.uuid() == installation_uuid)
             .map(|(hash, _)| *hash)
     }
+    #[cfg(any(feature = "tui", test))]
     pub fn config_diagnostic(&self, config_path: &Path) -> Option<&FileMCPConfigDiagnostic> {
         self.config_diagnostics_by_path.get(config_path)
     }
 
+    #[cfg(feature = "tui")]
     pub fn global_warp_servers(&self) -> Vec<&TemplatableMCPServerInstallation> {
         self.file_based_servers
             .iter()
@@ -509,6 +511,7 @@ impl FileBasedMCPManager {
             .collect()
     }
 
+    #[cfg(feature = "tui")]
     pub fn global_warp_installation_by_hash(
         &self,
         hash: u64,
@@ -518,6 +521,7 @@ impl FileBasedMCPManager {
             .flatten()
     }
 
+    #[cfg(feature = "tui")]
     pub fn activate_global_warp_servers(&mut self, ctx: &mut ModelContext<Self>) {
         if self.global_warp_servers_activated {
             return;

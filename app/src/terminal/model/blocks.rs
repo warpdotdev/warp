@@ -2666,6 +2666,38 @@ impl BlockList {
             })
     }
 
+    /// Like [`Self::url_at_point`] but for OSC 8 hyperlinks. Returns the
+    /// contiguous span of cells around `point` that share a `HyperlinkId`,
+    /// along with the URI those cells link to. The URI is owned by the
+    /// block's `HyperlinkRegistry` — the caller gets a clone.
+    pub fn hyperlink_at_point(
+        &self,
+        point: &WithinBlock<Point>,
+    ) -> Option<(WithinBlock<Link>, String)> {
+        let block_grid = match point.grid {
+            GridType::Output => self.blocks.get(point.block_index.0)?.output_grid(),
+            GridType::PromptAndCommand => self
+                .blocks
+                .get(point.block_index.0)?
+                .prompt_and_command_grid(),
+            GridType::Prompt | GridType::Rprompt => return None,
+        };
+
+        let link = block_grid.grid_handler.hyperlink_at_point(point.inner)?;
+        let uri = block_grid
+            .grid_handler
+            .hyperlink_uri_at_point(point.inner)?
+            .to_owned();
+        Some((
+            WithinBlock {
+                inner: link,
+                block_index: point.block_index,
+                grid: point.grid,
+            },
+            uri,
+        ))
+    }
+
     pub fn is_bootstrapped(&self) -> bool {
         self.bootstrap_stage.is_bootstrapped()
     }
@@ -3609,6 +3641,10 @@ impl ansi::Handler for BlockList {
 
     fn input(&mut self, c: char) {
         delegate!(self.input(c));
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        delegate!(self.set_hyperlink(hyperlink));
     }
 
     fn goto(&mut self, row: VisibleRow, col: usize) {

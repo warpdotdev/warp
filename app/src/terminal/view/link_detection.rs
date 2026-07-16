@@ -120,6 +120,12 @@ pub enum GridHighlightedLink {
     Url(WithinModel<Link>),
     #[cfg(feature = "local_fs")]
     File(WithinModel<FileLink>),
+    /// OSC 8 hyperlink span. Carries the URI directly because — unlike `Url`
+    /// — it isn't recoverable from the cell text.
+    Hyperlink {
+        link: WithinModel<Link>,
+        uri: String,
+    },
 }
 
 impl GridHighlightedLink {
@@ -128,6 +134,7 @@ impl GridHighlightedLink {
             GridHighlightedLink::Url(url) => url.contains(position),
             #[cfg(feature = "local_fs")]
             GridHighlightedLink::File(file_link) => file_link.contains(position),
+            GridHighlightedLink::Hyperlink { link, .. } => link.contains(position),
         }
     }
 
@@ -146,6 +153,7 @@ impl GridHighlightedLink {
             #[cfg(feature = "local_fs")]
             GridHighlightedLink::File(_) => "Open file",
             GridHighlightedLink::Url(_) => "Open link",
+            GridHighlightedLink::Hyperlink { .. } => "Open link",
         }
     }
 }
@@ -163,6 +171,9 @@ impl Serialize for GridHighlightedLink {
             GridHighlightedLink::File(_) => {
                 serializer.serialize_unit_variant("HighlightedLink", 1, "File")
             }
+            GridHighlightedLink::Hyperlink { .. } => {
+                serializer.serialize_unit_variant("HighlightedLink", 2, "Hyperlink")
+            }
         }
     }
 }
@@ -175,6 +186,10 @@ impl TryFrom<GridHighlightedLink> for Link {
             GridHighlightedLink::Url(WithinModel::AltScreen(url)) => Ok(url),
             #[cfg(feature = "local_fs")]
             GridHighlightedLink::File(WithinModel::AltScreen(file_link)) => Ok(file_link.link),
+            GridHighlightedLink::Hyperlink {
+                link: WithinModel::AltScreen(link),
+                ..
+            } => Ok(link),
             _ => Err(anyhow::anyhow!(
                 "HighlightedLink is not within the alt screen"
             )),
@@ -192,6 +207,10 @@ impl TryFrom<GridHighlightedLink> for WithinBlock<Link> {
             GridHighlightedLink::File(WithinModel::BlockList(file_link)) => {
                 Ok(file_link.map(|file_link| file_link.link))
             }
+            GridHighlightedLink::Hyperlink {
+                link: WithinModel::BlockList(link),
+                ..
+            } => Ok(link),
             _ => Err(anyhow::anyhow!(
                 "HighlightedLink is not within the block list"
             )),
@@ -282,6 +301,25 @@ impl HighlightedLinkOption {
                         .set_smart_select_override(file_link.link.range.clone());
                 }
             },
+            GridHighlightedLink::Hyperlink {
+                link: within_model, ..
+            } => match within_model {
+                WithinModel::BlockList(within_block) => {
+                    let point_range = WithinBlock::new(
+                        within_block.inner.range.clone(),
+                        within_block.block_index,
+                        within_block.grid,
+                    );
+                    model
+                        .block_list_mut()
+                        .set_smart_select_override(point_range);
+                }
+                WithinModel::AltScreen(link) => {
+                    model
+                        .alt_screen_mut()
+                        .set_smart_select_override(link.range.clone());
+                }
+            },
         }
         self.inner = Some(link);
     }
@@ -367,22 +405,43 @@ impl super::TerminalView {
             new_cursor_shape = Some(Cursor::Arrow);
         }
 
-        let (url_at_point, new_fragment_boundary) = {
+        let (hyperlink_at_point, url_at_point, new_fragment_boundary) = {
             let model = self.model.lock();
+            // OSC 8 wins over auto-detected URLs on the same cell, so check for
+            // a hyperlink first and only run the urlocator scan when no OSC 8
+            // span covers `position`.
+            let hyperlink_at_point = model.hyperlink_at_point(position);
+            let url_at_point = if hyperlink_at_point.is_none() {
+                model.url_at_point(position)
+            } else {
+                None
+            };
             (
-                model.url_at_point(position),
+                hyperlink_at_point,
+                url_at_point,
                 model.fragment_boundary_at_point(position),
             )
         };
 
-        match (url_at_point, &self.last_hover_fragment_boundary) {
-            (Some(url), _) => {
+        match (
+            hyperlink_at_point,
+            url_at_point,
+            &self.last_hover_fragment_boundary,
+        ) {
+            (Some((link, uri)), _, _) => {
+                self.highlighted_link.set(
+                    GridHighlightedLink::Hyperlink { link, uri },
+                    &mut self.model.lock(),
+                );
+                new_cursor_shape = Some(Cursor::PointingHand);
+            }
+            (None, Some(url), _) => {
                 self.highlighted_link
                     .set(GridHighlightedLink::Url(url), &mut self.model.lock());
                 new_cursor_shape = Some(Cursor::PointingHand);
             }
             // Only scan for links if the mouse hovered on a new word.
-            (_, Some(last_hover_fragment_boundary))
+            (_, _, Some(last_hover_fragment_boundary))
                 if !last_hover_fragment_boundary.contains(position) =>
             {
                 // Use try_send to return an error directly when the channel is full
@@ -393,7 +452,7 @@ impl super::TerminalView {
                 });
             }
             // If there's no last hover fragment boundary, we scan for links.
-            (_, None) => {
+            (_, _, None) => {
                 let _ = self.find_link_tx.try_send(FindLinkArg {
                     position: *position,
                     from_editor,
@@ -460,8 +519,14 @@ impl super::TerminalView {
                 }
             }
             GridHighlightedLink::Url(url) => {
-                let model = self.model.lock();
-                ctx.open_url(&model.link_at_range(url, RespectObfuscatedSecrets::No));
+                let uri = self
+                    .model
+                    .lock()
+                    .link_at_range(url, RespectObfuscatedSecrets::No);
+                ctx.open_url(&uri);
+            }
+            GridHighlightedLink::Hyperlink { uri, .. } => {
+                self.open_hyperlink_uri(uri, ctx);
             }
         };
     }

@@ -45,7 +45,7 @@ use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeB
 use crate::tui_markdown::{
     render_formatted_table, render_formatted_text, TuiMarkdownBlockHooks, TuiMarkdownPalette,
 };
-use crate::tui_plan_view::{TuiPlanView, TuiPlanViewAction, TuiPlanViewEvent};
+use crate::tui_plan_view::{TuiPlanView, TuiPlanViewEvent};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct TuiCodeBlockKey {
@@ -566,7 +566,7 @@ impl TuiAIBlock {
             return false;
         };
         plan.update(ctx, |plan, ctx| {
-            plan.handle_action(&TuiPlanViewAction::ToggleCollapsed, ctx);
+            plan.toggle_collapsed(ctx);
         });
         true
     }
