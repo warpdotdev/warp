@@ -548,7 +548,7 @@ fn plan_collapse_invalidates_agent_block_layout() {
         app.read(|ctx| {
             assert_eq!(
                 render_tui_view_lines(plan_view.as_ref(ctx), 40, 5, ctx),
-                vec!["○ Create Plan +1 ▸"]
+                vec!["○ Create plan ▸"]
             );
         });
     });
