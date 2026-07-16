@@ -699,6 +699,35 @@ fn move_left_on_non_empty_buffer_only_moves_cursor() {
     });
 }
 
+/// The `!` shell prefix is not part of `plain_text`, so an empty shell command
+/// must not trip the empty-buffer Left branch: Left in shell mode stays a plain
+/// cursor move and never opens the conversation picker.
+#[test]
+fn move_left_in_shell_mode_does_not_open_conversation_menu() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (view, menu_model, _) = build_view_with_conversation_menu(ctx);
+            type_str(&view, ctx, "!");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            assert!(
+                view.as_ref(ctx).is_empty(ctx),
+                "the `!` prefix is not buffered"
+            );
+
+            dispatch(&view, ctx, &[TuiInputAction::MoveLeft]);
+
+            assert!(
+                !menu_model.as_ref(ctx).is_open,
+                "Left in shell mode must not open the conversation picker"
+            );
+            assert!(
+                view.as_ref(ctx).is_shell_mode(ctx),
+                "input stays in shell mode"
+            );
+        });
+    });
+}
+
 #[test]
 fn cursor_at_origin_when_empty() {
     App::test((), |mut app| async move {

@@ -860,7 +860,14 @@ impl TypedActionView for TuiInputView {
                 });
             }
             TuiInputAction::MoveLeft => {
-                if self.plain_text(ctx).is_empty() && self.is_cursor_at_start(ctx) {
+                // Only open the conversation list from normal agent input; in
+                // `!` shell mode the `!` prefix is not part of `plain_text`, so
+                // an empty shell command would otherwise trip this branch and
+                // open the picker while the input stayed shell-mode.
+                if !self.is_shell_mode(ctx)
+                    && self.plain_text(ctx).is_empty()
+                    && self.is_cursor_at_start(ctx)
+                {
                     if let Some(menu) = self
                         .inline_menus
                         .iter()
