@@ -9,5 +9,4 @@
 //! `specs/tui-input-view/TECH.md` for details.
 
 pub mod view;
-
 pub use view::{TuiInputView, TuiInputViewEvent, init};

@@ -370,6 +370,36 @@ impl BlocklistAIHistoryModel {
         Self::default()
     }
 
+    /// Builds a history model seeded with agent prompt (`ai_queries`) rows for
+    /// tests in other crates (e.g. `warp_tui`) via the `test-util` feature.
+    /// `prompts` are ordered oldest-first; each becomes a persisted query
+    /// categorized as a different-session prompt (matching how restored
+    /// `ai_queries` are seeded at startup), with ascending timestamps so the
+    /// slice order is preserved by the up-arrow ordering.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn mock_with_ai_queries(prompts: Vec<String>) -> Self {
+        let base = Local::now();
+        let persisted_queries = prompts
+            .into_iter()
+            .enumerate()
+            .map(|(index, text)| PersistedAIInput {
+                exchange_id: AIAgentExchangeId::new(),
+                conversation_id: AIConversationId::new(),
+                start_ts: base + chrono::Duration::milliseconds(index as i64),
+                inputs: vec![PersistedAIInputType::Query {
+                    text,
+                    context: Default::default(),
+                    referenced_attachments: Default::default(),
+                }],
+                output_status: AIQueryHistoryOutputStatus::Completed,
+                working_directory: None,
+                model_id: crate::ai::llms::LLMId::from("test-model"),
+                coding_model_id: crate::ai::llms::LLMId::from("test-model"),
+            })
+            .collect();
+        Self::new(persisted_queries, vec![], &[])
+    }
+
     /// Returns a flattened and ordered (oldest first) list of live conversations for a terminal surface.
     /// This works for terminal surfaces that have been closed.
     pub fn all_live_conversations_for_terminal_surface(

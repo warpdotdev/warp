@@ -122,6 +122,9 @@ pub enum TuiInputViewEvent {
     AcceptedMcp(TuiMcpAction),
     /// Shift+Up should move focus from the first visual row to the region above.
     MoveFocusUp,
+    /// The user accepted a prompt from the up-arrow prompt-history menu. Carries
+    /// the prompt text to fill into the input and submit.
+    AcceptedPromptHistory(String),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -541,13 +544,13 @@ impl TypedActionView for TuiInputView {
                     && self.plain_text(ctx).is_empty()
                     && self.is_cursor_at_start(ctx)
                 {
-                    if let Some(menu) = self
-                        .inline_menus
-                        .iter()
-                        .find(|menu| menu.mode() == TuiInputSuggestionsMode::ConversationMenu)
-                    {
-                        menu.open(ctx);
-                    }
+                    self.open_inline_menu(TuiInputSuggestionsMode::ConversationMenu, ctx);
+                    TuiEditorInteractionOutcome::FollowCursor
+                } else if matches!(*command, TuiEditorCommand::MoveUp)
+                    && !self.is_shell_mode(ctx)
+                    && self.single_cursor_on_first_row(ctx)
+                {
+                    self.open_inline_menu(TuiInputSuggestionsMode::PromptHistory, ctx);
                     TuiEditorInteractionOutcome::FollowCursor
                 // With nothing left to delete, backspace removes the `!`
                 // affordance instead; typed text is preserved.
@@ -593,6 +596,11 @@ impl TypedActionView for TuiInputView {
 
 impl TuiInputView {
     // ── Read helpers ──────────────────────────────────────────────────────────
+    fn open_inline_menu(&self, mode: TuiInputSuggestionsMode, ctx: &mut ViewContext<Self>) {
+        if let Some(menu) = self.inline_menus.iter().find(|menu| menu.mode() == mode) {
+            menu.open(ctx);
+        }
+    }
 
     fn plain_text(&self, ctx: &AppContext) -> String {
         let inner = self.model.as_ref(ctx);
@@ -639,7 +647,15 @@ impl TuiInputView {
 
     /// Whether Shift+Up should leave the input instead of extending selection.
     fn can_focus_above(&self, ctx: &AppContext) -> bool {
-        if !(self.can_move_focus_up)(ctx) || self.selection_range(ctx).is_some() {
+        (self.can_move_focus_up)(ctx) && self.single_cursor_on_first_row(ctx)
+    }
+
+    /// Whether the single caret sits on the first visual row of the input with
+    /// no active selection — the position where Up opens the prompt-history
+    /// menu. Accounts for soft-wrapping via the char-cell display lattice,
+    /// mirroring the GUI editor view's `single_cursor_on_first_row`.
+    fn single_cursor_on_first_row(&self, ctx: &AppContext) -> bool {
+        if self.selection_range(ctx).is_some() {
             return false;
         }
 
@@ -763,6 +779,9 @@ impl TuiInputView {
                         }
                         TuiInlineMenuAccepted::Mcp(action) => {
                             ctx.emit(TuiInputViewEvent::AcceptedMcp(action));
+                        }
+                        TuiInlineMenuAccepted::PromptHistory(text) => {
+                            ctx.emit(TuiInputViewEvent::AcceptedPromptHistory(text));
                         }
                     }
                 }

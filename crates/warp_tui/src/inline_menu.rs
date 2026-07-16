@@ -19,6 +19,7 @@ use crate::conversation_menu::TuiConversationMenuModel;
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::mcp_menu::TuiMcpMenuModel;
 use crate::model_menu::TuiModelMenuModel;
+use crate::prompt_history_menu::TuiPromptHistoryMenuModel;
 use crate::skills_menu::TuiSkillMenuModel;
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tui_builder::TuiUiBuilder;
@@ -57,6 +58,9 @@ impl TuiInlineMenuHandle for ModelHandle<TuiMcpMenuModel> {
     }
     fn is_open(&self, ctx: &AppContext) -> bool {
         self.as_ref(ctx).is_open(ctx)
+    }
+    fn open(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.open(ctx));
     }
 
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
@@ -262,6 +266,8 @@ pub(crate) enum TuiInlineMenuAccepted {
     Conversation(AgentConversationEntryId),
     Model(LLMId),
     Mcp(TuiMcpAction),
+    /// The text of a prompt accepted from the up-arrow prompt-history menu.
+    PromptHistory(String),
 }
 
 /// Type-erased operations shared by TUI inline-menu model handles.
@@ -419,12 +425,57 @@ impl TuiInlineMenuHandle for ModelHandle<TuiConversationMenuModel> {
     }
 }
 
+impl TuiInlineMenuHandle for ModelHandle<TuiPromptHistoryMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::PromptHistory
+    }
+
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open(ctx)
+    }
+    fn open(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.open(ctx));
+    }
+
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.update(ctx, |model, ctx| model.accept_selected(ctx))
+            .map(TuiInlineMenuAccepted::PromptHistory)
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot(ctx)
+    }
+}
+
 impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
     fn mode(&self) -> TuiInputSuggestionsMode {
         TuiInputSuggestionsMode::ModelSelector
     }
     fn is_open(&self, ctx: &AppContext) -> bool {
         self.as_ref(ctx).is_open(ctx)
+    }
+    fn open(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.open(ctx));
     }
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
         None
@@ -463,6 +514,9 @@ impl TuiInlineMenuHandle for ModelHandle<TuiSkillMenuModel> {
     }
     fn is_open(&self, ctx: &AppContext) -> bool {
         self.as_ref(ctx).is_open(ctx)
+    }
+    fn open(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.open(ctx));
     }
 
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {

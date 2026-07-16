@@ -85,6 +85,7 @@ use crate::orchestration_tab_bar::{
     render_orchestration_tab_footer,
 };
 use crate::platform::reveal_path_in_file_manager;
+use crate::prompt_history_menu::{TuiPromptHistoryMenuEvent, TuiPromptHistoryMenuModel};
 use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
@@ -1013,10 +1014,23 @@ impl TuiTerminalSessionView {
             let TuiMcpMenuEvent::Updated = event;
             ctx.notify();
         });
-        // Typing after ctrl-c disarms the pending exit confirmation; the
-        // ctrl-c buffer clear leaves the buffer empty, so the window it arms
-        // survives its own clear. Content changes also drive input detection
-        // and must invalidate this parent view as well as the input child.
+        let prompt_history_menu = ctx.add_model(|ctx| {
+            TuiPromptHistoryMenuModel::new(
+                input_editor_model.clone(),
+                suggestions_mode.clone(),
+                terminal_surface_id,
+                ctx,
+            )
+        });
+        ctx.subscribe_to_model(&prompt_history_menu, |_, _, event, ctx| {
+            let TuiPromptHistoryMenuEvent::Updated = event;
+            ctx.notify();
+        });
+        // The footer's conversations callout depends on whether the input is
+        // empty, so content changes must invalidate this parent view as well as
+        // the input child. Typing after ctrl-c also disarms the pending exit
+        // confirmation; the ctrl-c buffer clear leaves the buffer empty, so the
+        // window it arms survives its own clear.
         let editor_for_footer = input_editor_model.clone();
         ctx.subscribe_to_model(&input_editor_model, move |view, _, event, ctx| {
             let CodeEditorModelEvent::ContentChanged { origin } = event else {
@@ -1060,6 +1074,7 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(model_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
             TuiInlineMenu::new(mcp_menu.clone()),
+            TuiInlineMenu::new(prompt_history_menu.clone()),
         ];
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
@@ -1148,6 +1163,9 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::AcceptedMcp(action) => {
                 view.handle_accepted_mcp_action(*action, ctx);
+            }
+            TuiInputViewEvent::AcceptedPromptHistory(text) => {
+                view.handle_accepted_prompt_history(text.clone(), ctx);
             }
             TuiInputViewEvent::MoveFocusUp => {
                 view.focus_orchestration_tabs(ctx);
@@ -2579,6 +2597,16 @@ impl TuiTerminalSessionView {
             model.apply_action(action, ctx);
         });
         ctx.notify();
+    }
+
+    /// Fills the accepted prompt-history prompt into the input and submits it
+    /// immediately, matching the GUI's accept-a-prompt-from-history behavior
+    /// (PRODUCT.md invariant 16). The menu has already closed itself.
+    fn handle_accepted_prompt_history(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        self.input_view.update(ctx, |input, ctx| {
+            input.set_text(&text, ctx);
+        });
+        self.handle_submitted(text, ctx);
     }
 
     fn select_tui_slash_command(&mut self, command: &StaticCommand, ctx: &mut ViewContext<Self>) {
