@@ -9,13 +9,13 @@ The TUI cell-grid library has the layout, styling, retained-geometry, and click 
 - [`crates/warpui_core/src/elements/tui/mod.rs (215-292) @ caa826c2`](https://github.com/warpdotdev/warp/blob/caa826c2ef395faee32c87c19c533a44ef88d81b/crates/warpui_core/src/elements/tui/mod.rs#L215-L292) — `layout` must remain side-effect free, while `after_layout` is the settled post-layout side-effect seam.
 - [`crates/warpui_core/src/elements/tui/hoverable.rs (40-189) @ caa826c2`](https://github.com/warpdotdev/warp/blob/caa826c2ef395faee32c87c19c533a44ef88d81b/crates/warpui_core/src/elements/tui/hoverable.rs#L40-L189) — `TuiHoverable` requires stable `MouseStateHandle`s across per-frame element reconstruction and limits hit testing to retained painted bounds.
 - [`crates/warpui_core/src/elements/tui/flex.rs @ caa826c2`](https://github.com/warpdotdev/warp/blob/caa826c2ef395faee32c87c19c533a44ef88d81b/crates/warpui_core/src/elements/tui/flex.rs) — row composition and child layout.
-- [`crates/warpui_core/src/elements/tui/text.rs @ caa826c2`](https://github.com/warpdotdev/warp/blob/caa826c2ef395faee32c87c19c533a44ef88d81b/crates/warpui_core/src/elements/tui/text.rs) — styled terminal text and existing single-element truncation.
+- [`crates/warpui_core/src/elements/tui/text.rs @ caa826c2`](https://github.com/warpdotdev/warp/blob/caa826c2ef395faee32c87c19c533a44ef88d81b/crates/warpui_core/src/elements/tui/text.rs) — styled terminal text rendering.
 
 The component is intentionally domain-neutral. The orchestration integration that first consumes it is specified separately in `specs/code-1822-tui-orchestration-tab-bar/`.
 
 ## Proposed changes
 ### Public component contract
-Add `crates/warpui_core/src/elements/tui/tab_bar.rs` and export the component's public types from `crates/warpui_core/src/elements/tui/mod.rs`.
+Add `crates/warpui_core/src/elements/tui/tab_bar.rs` and export the component's public types from `crates/warpui_core/src/elements/tui/mod.rs`. Add `crates/warpui_core/src/elements/tui/text_helpers.rs` for shared terminal display-cell measurement and grapheme-safe ellipsis truncation used by the tab bar and existing TUI column formatting.
 
 Use a stable string key rather than indices so dynamic reordering cannot retarget callbacks without parameterizing the component and every supporting layout type. The public data surface contains:
 - `TuiTab`: string key, label, and an optional factory for caller-rendered leading content. During each layout pass, the component builds the element once, measures it, and moves that same instance into the rendered tab.
@@ -70,20 +70,24 @@ Wrap every painted tab and overflow control in `TuiHoverable` with component-own
 The consuming view remains responsible for binding keys, forwarding directions, and applying the returned semantic target. This keeps keymap and application-selection policy outside the component while keeping width-dependent target resolution inside it.
 
 ## Testing and validation
-Add `crates/warpui_core/src/elements/tui/tab_bar_tests.rs` using the element render and event-dispatch test harness:
-- Optional/absent main tab, empty secondary tabs, caller-rendered leading elements, and fixed chrome — PRODUCT (1-5).
-- Private mouse-state reuse and pruning across config changes — PRODUCT (6-11).
-- Focused/unfocused selected treatments and missing selection — PRODUCT (12-15).
-- ASCII, wide Unicode, and combining-character measurement; configured and final-tab truncation — PRODUCT (16-22).
-- Initial, middle, and final pages; anchor clamping; resize; previous/next control visibility; stable selected-tab reveal — PRODUCT (23-32).
-- Tab clicks, overflow clicks, hit bounds, cancelled press/release, focus independence, and hover treatments — PRODUCT (33-35, 38-41).
-- Visible and off-page previous/next navigation, including complete-order wraparound — PRODUCT (36-37).
+Add focused, scenario-based unit coverage:
+- fixed-main layout, explicit/missing page anchors, and complete navigation order;
+- overflow reservation, final-tab truncation, and strict next-page progress at narrow widths;
+- explicit page ownership and selected-tab reveal stability;
+- visible wraparound and off-page keyboard navigation without a main tab;
+- selected styling and one-build-per-layout caller leading elements;
+- tab and overflow hover treatments;
+- semantic tab-selection and page-change click events;
+- retained mouse-state reuse and removed-key pruning; and
+- shared display-cell measurement and grapheme-safe truncation in `text_helpers_tests.rs`.
 
 Run:
-- `cargo nextest run -p warpui_core --features tui tab_bar`
 - `cargo test -p warpui_core --features tui tab_bar`
+- `cargo test -p warpui_core --features tui text_helpers`
+- `cargo test -p warp_tui tui_column_layout`
 - `./script/format`
-- The repository-prescribed Clippy command before submitting the branch.
+- `cargo clippy -p warpui_core --features tui --tests -- -D warnings`
+- `cargo clippy -p warp_tui --tests -- -D warnings`
 
 ## Parallelization
 Do not split this component across child agents. Its public contract, private retained state, layout result, and event tests are tightly coupled and should land as one coherent PR. Long-running workspace validation can run separately after focused tests pass.
@@ -92,5 +96,5 @@ Do not split this component across child agents. Its public contract, private re
 - **Public geometry leakage:** keep `TabBarLayout` and `SettledNavigation` private to `tab_bar.rs`; expose semantic callbacks only.
 - **Layout/event disagreement:** paint and dispatch from one settled layout result.
 - **Stale navigation after mutation:** invalidate private layout on config changes and resolve callback keys against the latest supplied key set.
-- **Unicode width corruption:** keep one grapheme-safe display-cell truncation helper in the TUI text layer and use it from the tab bar and two-column formatter.
+- **Unicode width corruption:** keep one grapheme-safe display-cell truncation helper in `text_helpers.rs` and use it from the tab bar and two-column formatter.
 - **Hover-state churn:** key mouse state by stable tab key and prune only removed keys.
