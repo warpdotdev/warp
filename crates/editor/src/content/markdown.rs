@@ -1172,7 +1172,25 @@ where
             serializer.start_elem(QualName::new(None, ns!(html), "code".into()), iter::empty())?;
         }
 
-        serializer.write_text(&fragment.text)?;
+        // An authored hard break (raw HTML `<br>`) is stored as an embedded newline. In an
+        // HTML table cell a raw newline collapses to a space, silently dropping the break, so
+        // emit a real `<br>` element between the split parts instead. Inline code cannot
+        // contain such a newline (the `.md` inline parser never produces one), so it is written
+        // verbatim. Mirrors the guard in `inline_to_markdown`.
+        if !styles.is_inline_code() && fragment.text.contains('\n') {
+            let mut parts = fragment.text.split('\n');
+            if let Some(first) = parts.next() {
+                serializer.write_text(first)?;
+            }
+            for part in parts {
+                let br_tag = QualName::new(None, ns!(html), "br".into());
+                serializer.start_elem(br_tag.clone(), iter::empty())?;
+                serializer.end_elem(br_tag)?;
+                serializer.write_text(part)?;
+            }
+        } else {
+            serializer.write_text(&fragment.text)?;
+        }
 
         if styles.is_inline_code() {
             serializer.end_elem(QualName::new(None, ns!(html), "code".into()))?;

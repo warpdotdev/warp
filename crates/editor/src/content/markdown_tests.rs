@@ -179,6 +179,40 @@ fn test_gfm_table_html_serialization() {
 }
 
 #[test]
+fn test_gfm_table_html_serialization_preserves_br_in_cell() {
+    App::test((), |mut app| async move {
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
+        let markdown = "\
+| header 1 | header 2 |\n\
+| --- | --- |\n\
+| line one<br>line two | value 2 |\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let html = app.read_model(&buffer, |buffer, ctx| {
+            let range = CharOffset::from(1)..buffer.max_charoffset();
+            buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+        });
+
+        let html = html.expect("table should export HTML");
+        // The in-cell break must serialize as a real <br> element, not a raw newline (which
+        // HTML collapses to a space, silently dropping the break).
+        assert!(
+            html.contains("<td align=\"left\">line one<br>line two</td>"),
+            "cell break should become a <br> element, got {html}"
+        );
+        assert!(
+            !html.contains("line one\nline two"),
+            "cell HTML must not contain a raw newline, got {html:?}"
+        );
+    });
+}
+
+#[test]
 fn test_apply_formatted_text_delta_append() {
     App::test((), |mut app| async move {
         let old_markdown = "hello world\n";
