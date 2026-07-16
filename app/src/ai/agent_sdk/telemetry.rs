@@ -139,6 +139,20 @@ pub(super) enum CliTelemetryEvent {
     FederateIssueToken,
     /// Executing `warp federate issue-gcp-token`
     FederateIssueGcpToken,
+    /// Executing `warp factory link`
+    FactoryLink,
+    /// Executing `warp factory unlink`
+    FactoryUnlink,
+    /// Executing `warp factory status`
+    FactoryStatus,
+    /// Executing `warp factory plan`
+    FactoryPlan,
+    /// Executing `warp factory apply`
+    FactoryApply,
+    /// Executing `warp factory init`
+    FactoryInit,
+    /// Executing `warp factory export`
+    FactoryExport,
     /// Executing `warp harness-support ping`
     HarnessSupportPing,
     /// Executing `warp harness-support report-artifact`
@@ -234,6 +248,13 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::SecretList => None,
             CliTelemetryEvent::FederateIssueToken => None,
             CliTelemetryEvent::FederateIssueGcpToken => None,
+            CliTelemetryEvent::FactoryLink => None,
+            CliTelemetryEvent::FactoryUnlink => None,
+            CliTelemetryEvent::FactoryStatus => None,
+            CliTelemetryEvent::FactoryPlan => None,
+            CliTelemetryEvent::FactoryApply => None,
+            CliTelemetryEvent::FactoryInit => None,
+            CliTelemetryEvent::FactoryExport => None,
             CliTelemetryEvent::HarnessSupportPing => None,
             CliTelemetryEvent::HarnessSupportReportArtifact { artifact_type } => {
                 Some(json!({ "artifact_type": artifact_type }))
@@ -352,6 +373,13 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::FederateIssueGcpToken => {
                 "CLI.Execute.Federate.IssueGcpToken"
             }
+            CliTelemetryEventDiscriminants::FactoryLink => "CLI.Execute.Factory.Link",
+            CliTelemetryEventDiscriminants::FactoryUnlink => "CLI.Execute.Factory.Unlink",
+            CliTelemetryEventDiscriminants::FactoryStatus => "CLI.Execute.Factory.Status",
+            CliTelemetryEventDiscriminants::FactoryPlan => "CLI.Execute.Factory.Plan",
+            CliTelemetryEventDiscriminants::FactoryApply => "CLI.Execute.Factory.Apply",
+            CliTelemetryEventDiscriminants::FactoryInit => "CLI.Execute.Factory.Init",
+            CliTelemetryEventDiscriminants::FactoryExport => "CLI.Execute.Factory.Export",
             CliTelemetryEventDiscriminants::HarnessSupportPing => "CLI.Execute.HarnessSupport.Ping",
             CliTelemetryEventDiscriminants::HarnessSupportReportArtifact => {
                 "CLI.Execute.HarnessSupport.ReportArtifact"
@@ -509,6 +537,27 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::FederateIssueGcpToken => {
                 "Issued a GCP federated identity token from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::FactoryLink => {
+                "Linked a factory to a config source from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::FactoryUnlink => {
+                "Unlinked a factory from its config source from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::FactoryStatus => {
+                "Got factory sync status from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::FactoryPlan => {
+                "Computed a factory sync plan from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::FactoryApply => {
+                "Triggered a factory sync from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::FactoryInit => {
+                "Scaffolded a factory config directory from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::FactoryExport => {
+                "Exported a factory's config files from the Warp CLI"
             }
             CliTelemetryEventDiscriminants::HarnessSupportPing => {
                 "Pinged harness-support from the Warp CLI"
