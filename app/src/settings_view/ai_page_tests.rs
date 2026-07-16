@@ -11,10 +11,10 @@ use warp_core::features::FeatureFlag;
 use warpui::App;
 
 #[cfg(not(target_family = "wasm"))]
-use super::take_codex_tokens_for_disconnect;
+use super::{codex_oauth_attempt_is_current, take_codex_tokens_for_disconnect};
 use super::{
     derive_agent_attribution_toggle_state, should_render_codex_subscription,
-    AgentAttributionToggleState, API_KEYS_SEARCH_TERMS,
+    subscription_controls_enabled, AgentAttributionToggleState, API_KEYS_SEARCH_TERMS,
 };
 use crate::workspaces::workspace::AdminEnablementSetting;
 
@@ -173,4 +173,21 @@ fn codex_connect_stores_and_disconnect_clears_tokens() {
             assert!(manager.codex_tokens().is_none());
         });
     });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn stale_codex_oauth_attempts_cannot_complete() {
+    assert!(codex_oauth_attempt_is_current(true, 7, 7));
+    assert!(!codex_oauth_attempt_is_current(false, 7, 7));
+    assert!(!codex_oauth_attempt_is_current(true, 8, 7));
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn subscription_controls_follow_effective_global_and_byo_state() {
+    assert!(subscription_controls_enabled(true, true, true));
+    assert!(!subscription_controls_enabled(false, true, true));
+    assert!(!subscription_controls_enabled(true, false, true));
+    assert!(!subscription_controls_enabled(true, true, false));
 }

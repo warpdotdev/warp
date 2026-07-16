@@ -110,6 +110,32 @@ fn callback_listener_falls_back_to_second_port() {
 }
 
 #[test]
+fn cancellation_interrupts_an_accepted_idle_callback_and_releases_the_port() {
+    let listener = TcpListener::bind((REDIRECT_HOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let idle_client = TcpStream::connect(address).unwrap();
+    let (server_stream, _) = listener.accept().unwrap();
+    drop(listener);
+
+    let cancel_handle = OauthCancelHandle::new();
+    let callback_cancel_handle = cancel_handle.clone();
+    let callback = std::thread::spawn(move || {
+        handle_callback_connection_with_cancel(
+            server_stream,
+            "expected-state",
+            Some(&callback_cancel_handle),
+        )
+    });
+
+    cancel_handle.cancel();
+    let error = callback.join().unwrap().unwrap_err();
+    assert!(error.to_string().contains("cancelled"));
+    drop(idle_client);
+
+    TcpListener::bind(address).expect("cancelled callback released its loopback port");
+}
+
+#[test]
 fn token_exchange_posts_form_to_local_server() {
     let response =
         r#"{"id_token":"id","access_token":"access","refresh_token":"refresh","expires_in":3600}"#;
@@ -190,6 +216,41 @@ fn refresh_token_revoke_posts_openai_json_shape() {
     assert_eq!(json["token_type_hint"], "refresh_token");
     assert_eq!(json["client_id"], CLIENT_ID);
     server.join().unwrap();
+}
+
+#[test]
+fn token_and_revoke_errors_expose_only_parsed_oauth_fields() {
+    const SENTINEL: &str = "never-log-this-secret";
+    let token_body = r#"{"error":"invalid_grant","error_description":"grant expired","internal":"never-log-this-secret"}"#;
+    let (token_url, _token_request_rx, token_server) =
+        spawn_http_server("400 Bad Request", token_body);
+    let token_error =
+        warpui_core::r#async::block_on(refresh_access_token_at("old-refresh", &token_url))
+            .unwrap_err()
+            .to_string();
+    assert!(token_error.contains("400"));
+    assert!(token_error.contains("invalid_grant: grant expired"));
+    assert!(!token_error.contains(SENTINEL));
+    assert!(!token_error.contains(token_body));
+    token_server.join().unwrap();
+
+    let revoke_body =
+        r#"{"error":"invalid_token","error_description":"already revoked","debug":"never-log-this-secret"}"#;
+    let (revoke_url, _revoke_request_rx, revoke_server) =
+        spawn_http_server("401 Unauthorized", revoke_body);
+    let revoke_error = warpui_core::r#async::block_on(revoke_token_at(
+        "refresh-value",
+        "refresh_token",
+        Some(CLIENT_ID),
+        &revoke_url,
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(revoke_error.contains("401"));
+    assert!(revoke_error.contains("invalid_token: already revoked"));
+    assert!(!revoke_error.contains(SENTINEL));
+    assert!(!revoke_error.contains(revoke_body));
+    revoke_server.join().unwrap();
 }
 
 #[test]

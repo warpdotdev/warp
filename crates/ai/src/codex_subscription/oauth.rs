@@ -7,6 +7,10 @@
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use anyhow::{bail, Context as _};
@@ -31,12 +35,35 @@ const CALLBACK_PATH: &str = "/auth/callback";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// A cloneable signal that cancels one loopback OAuth attempt.
+#[derive(Clone, Debug)]
+pub struct OauthCancelHandle {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl OauthCancelHandle {
+    fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
 /// One in-flight browser login, including its bound callback listener and
 /// per-attempt PKCE and CSRF secrets.
 pub struct OauthAttempt {
     listener: TcpListener,
     redirect_uri: String,
     pkce: PkceParams,
+    cancel_handle: OauthCancelHandle,
 }
 
 impl OauthAttempt {
@@ -48,6 +75,7 @@ impl OauthAttempt {
             listener,
             redirect_uri: redirect_uri(port),
             pkce: PkceParams::generate(),
+            cancel_handle: OauthCancelHandle::new(),
         })
     }
 
@@ -56,10 +84,20 @@ impl OauthAttempt {
         authorize_url(&self.pkce, &self.redirect_uri)
     }
 
+    pub fn cancel_handle(&self) -> OauthCancelHandle {
+        self.cancel_handle.clone()
+    }
+
     /// Waits for the callback, validates its CSRF state, then exchanges the
     /// authorization code. Consuming the attempt prevents secret reuse.
     pub async fn finish(self) -> anyhow::Result<TokenResponse> {
-        run_oauth_flow(self.listener, self.redirect_uri, self.pkce).await
+        run_oauth_flow(
+            self.listener,
+            self.redirect_uri,
+            self.pkce,
+            self.cancel_handle,
+        )
+        .await
     }
 }
 
@@ -159,6 +197,7 @@ async fn run_oauth_flow(
     listener: TcpListener,
     redirect_uri: String,
     pkce: PkceParams,
+    cancel_handle: OauthCancelHandle,
 ) -> anyhow::Result<TokenResponse> {
     let (tx, rx) = async_channel::bounded(1);
     let expected_state = pkce.state.clone();
@@ -166,13 +205,13 @@ async fn run_oauth_flow(
         .name("codex-oauth-callback".to_owned())
         .spawn(move || {
             let _ = warpui_core::r#async::block_on(tx.send(wait_for_callback(
-                &listener,
+                listener,
                 CALLBACK_TIMEOUT,
-                &expected_state,
+                expected_state,
+                &cancel_handle,
             )));
         })
         .context("failed to spawn the Codex OAuth callback server thread")?;
-
     let callback = rx
         .recv()
         .await
@@ -188,42 +227,88 @@ fn validate_callback_state(callback: &CallbackData, expected_state: &str) -> any
 }
 
 fn wait_for_callback(
-    listener: &TcpListener,
+    listener: TcpListener,
     timeout: Duration,
-    expected_state: &str,
+    expected_state: String,
+    cancel_handle: &OauthCancelHandle,
 ) -> anyhow::Result<CallbackData> {
     let deadline = Instant::now() + timeout;
     loop {
+        if cancel_handle.is_cancelled() {
+            bail!("the Codex authorization attempt was cancelled");
+        }
         if Instant::now() >= deadline {
             bail!("timed out waiting for the Codex authorization callback");
         }
         match listener.accept() {
-            Ok((stream, _)) => match handle_callback_connection(stream, expected_state)? {
-                Some(data) => return Ok(data),
-                None => continue,
-            },
+            Ok((stream, _)) => {
+                match handle_callback_connection_with_cancel(
+                    stream,
+                    &expected_state,
+                    Some(cancel_handle),
+                )? {
+                    Some(data) => return Ok(data),
+                    None => continue,
+                }
+            }
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
                 std::thread::sleep(POLL_INTERVAL);
             }
             Err(error) => {
-                return Err(anyhow::Error::new(error).context("Codex OAuth callback accept failed"));
+                return Err(
+                    anyhow::Error::new(error).context("Codex OAuth callback accept failed")
+                );
             }
         }
     }
 }
-
 fn handle_callback_connection(
-    mut stream: TcpStream,
+    stream: TcpStream,
     expected_state: &str,
 ) -> anyhow::Result<Option<CallbackData>> {
-    stream.set_nonblocking(false).ok();
-    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    handle_callback_connection_with_cancel(stream, expected_state, None)
+}
 
-    let mut buf = [0u8; 8192];
-    let n = stream
-        .read(&mut buf)
-        .context("failed to read the Codex OAuth callback request")?;
-    let request = String::from_utf8_lossy(&buf[..n]);
+fn handle_callback_connection_with_cancel(
+    mut stream: TcpStream,
+    expected_state: &str,
+    cancel_handle: Option<&OauthCancelHandle>,
+) -> anyhow::Result<Option<CallbackData>> {
+    stream.set_nonblocking(false).ok();
+    stream.set_read_timeout(Some(POLL_INTERVAL)).ok();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut request_bytes = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+    loop {
+        if cancel_handle.is_some_and(OauthCancelHandle::is_cancelled) {
+            bail!("the Codex authorization attempt was cancelled");
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out reading the Codex OAuth callback request");
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => {
+                request_bytes.extend_from_slice(&chunk[..count]);
+                if request_bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+                if request_bytes.len() >= 8192 {
+                    bail!("the Codex OAuth callback request was too large");
+                }
+            }
+            Err(error)
+                if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+            Err(error) => {
+                return Err(
+                    anyhow::Error::new(error)
+                        .context("failed to read the Codex OAuth callback request"),
+                );
+            }
+        }
+    }
+    let request = String::from_utf8_lossy(&request_bytes);
     let mut request_line = request
         .lines()
         .next()
@@ -366,11 +451,42 @@ async fn post_form_token_request_at<T: Serialize + ?Sized>(
     parse_token_response(response).await
 }
 
+#[derive(Deserialize)]
+struct OAuthErrorResponse {
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+fn oauth_error_detail(body: &str) -> Option<String> {
+    let error = serde_json::from_str::<OAuthErrorResponse>(body).ok()?;
+    let code = error.error.filter(|value| !value.trim().is_empty());
+    let description = error
+        .error_description
+        .filter(|value| !value.trim().is_empty());
+    match (code, description) {
+        (Some(code), Some(description)) => Some(format!("{code}: {description}")),
+        (Some(code), None) => Some(code),
+        (None, Some(description)) => Some(description),
+        (None, None) => None,
+    }
+}
+
+fn oauth_request_error(
+    operation: &str,
+    status: impl std::fmt::Display,
+    body: &str,
+) -> anyhow::Error {
+    match oauth_error_detail(body) {
+        Some(detail) => anyhow::anyhow!("Codex {operation} failed ({status}): {detail}"),
+        None => anyhow::anyhow!("Codex {operation} failed ({status})"),
+    }
+}
+
 async fn parse_token_response(response: http_client::Response) -> anyhow::Result<TokenResponse> {
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        bail!("Codex token request failed ({status}): {body}");
+        return Err(oauth_request_error("token request", status, &body));
     }
     response
         .json::<TokenResponse>()
@@ -416,7 +532,7 @@ async fn revoke_token_at(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        bail!("Codex token revocation failed ({status}): {body}");
+        return Err(oauth_request_error("token revocation", status, &body));
     }
     Ok(())
 }
