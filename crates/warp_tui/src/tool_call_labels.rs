@@ -119,7 +119,7 @@ pub(crate) fn tool_call_glyph(state: ToolCallDisplayState) -> &'static str {
         State::AwaitingApproval | State::Cancelled => "■",
         State::Running => "●",
         State::Succeeded => "✓",
-        State::Failed => "✗",
+        State::Failed => "×",
     }
 }
 
