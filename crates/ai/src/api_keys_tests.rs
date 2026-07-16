@@ -21,7 +21,7 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         #[cfg(not(target_family = "wasm"))]
         codex_refresh_allowed: false,
         #[cfg(not(target_family = "wasm"))]
-        codex_refresh_waiters: None,
+        codex_refresh_state: None,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         geap_credentials_state: GeapCredentialsState::Missing,
@@ -587,6 +587,27 @@ fn api_keys_for_request_includes_codex_credentials_when_enabled() {
 }
 
 #[test]
+fn pasted_openai_key_takes_precedence_over_codex_credentials() {
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(true);
+    let mut manager =
+        make_manager_with_codex(Some(codex_tokens("codex-access", Some(3600))));
+    manager.keys.openai = Some("sk-pasted".into());
+
+    let keys = manager.api_keys_for_request(true, false, None).unwrap();
+    assert_eq!(keys.openai, "sk-pasted");
+    assert!(keys.codex_oauth_credentials.is_none());
+
+    manager.keys.openai = Some("   ".into());
+    assert!(
+        manager
+            .api_keys_for_request(true, false, None)
+            .unwrap()
+            .codex_oauth_credentials
+            .is_some()
+    );
+}
+
+#[test]
 fn api_keys_for_request_omits_codex_credentials_when_feature_disabled() {
     let _feature = FeatureFlag::CodexSubscription.override_enabled(false);
     let manager = make_manager_with_codex(Some(codex_tokens("codex-access", Some(3600))));
@@ -624,8 +645,13 @@ fn has_codex_subscription_requires_token_and_account_id() {
 }
 
 #[test]
-fn manager_has_any_key_includes_codex_subscription() {
+fn manager_has_any_key_counts_codex_only_when_feature_enabled() {
     let manager = make_manager_with_codex(Some(codex_tokens("codex-access", Some(3600))));
+    {
+        let _feature = FeatureFlag::CodexSubscription.override_enabled(false);
+        assert!(!manager.has_any_key());
+    }
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(true);
     assert!(manager.has_any_key());
 }
 
@@ -919,17 +945,44 @@ fn codex_expired_refresh_eligibility_respects_feature_byo_and_expiry() {
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
+fn codex_expired_refresh_is_ineligible_when_feature_is_off() {
+    let _feature = FeatureFlag::CodexSubscription.override_enabled(false);
+    let mut expired = codex_tokens("stale", Some(0));
+    expired.expires_at = Some(SystemTime::now() - Duration::from_secs(60));
+    let manager = make_manager_with_codex(Some(expired));
+
+    assert_eq!(manager.codex_expired_refresh_token(true), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
 fn codex_single_flight_joins_and_wakes_all_waiters() {
     let mut manager = make_manager_with_codex(Some(codex_tokens("stale", Some(0))));
     let (first_sender, first_receiver) = oneshot::channel();
     let (second_sender, second_receiver) = oneshot::channel();
 
-    assert!(register_codex_refresh(&mut manager, vec![first_sender]));
-    assert!(!register_codex_refresh(&mut manager, vec![second_sender]));
-    assert_eq!(manager.codex_refresh_waiters.as_ref().unwrap().len(), 2);
+    assert!(register_codex_refresh(
+        &mut manager,
+        "codex-refresh",
+        vec![first_sender],
+    ));
+    assert!(!register_codex_refresh(
+        &mut manager,
+        "codex-refresh",
+        vec![second_sender],
+    ));
+    assert_eq!(
+        manager.codex_refresh_state.as_ref().unwrap().waiters.len(),
+        2
+    );
 
-    finish_codex_refresh(&mut manager, CodexRefreshOutcome::Refreshed);
-    assert!(manager.codex_refresh_waiters.is_none());
+    assert!(finish_codex_refresh(
+        &mut manager,
+        "codex-refresh",
+        CodexRefreshOutcome::Refreshed,
+    )
+    .is_none());
+    assert!(manager.codex_refresh_state.is_none());
     assert_eq!(
         warpui_core::r#async::block_on(first_receiver).unwrap(),
         CodexRefreshOutcome::Refreshed

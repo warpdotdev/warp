@@ -118,7 +118,7 @@ fn stale_refresh_success_cannot_restore_or_overwrite_tokens() {
                 let (waiter_sender, waiter_receiver) = oneshot::channel();
                 spawn_codex_refresh_with(
                     manager,
-                    request_refresh_token,
+                    request_refresh_token.clone(),
                     vec![waiter_sender],
                     async move {
                         response_receiver
@@ -131,7 +131,11 @@ fn stale_refresh_success_cannot_restore_or_overwrite_tokens() {
             });
             let second_waiter = manager.update(&mut app, |manager, _| {
                 let (waiter_sender, waiter_receiver) = oneshot::channel();
-                assert!(!register_codex_refresh(manager, vec![waiter_sender]));
+                assert!(!register_codex_refresh(
+                    manager,
+                    &request_refresh_token,
+                    vec![waiter_sender],
+                ));
                 waiter_receiver
             });
 
@@ -151,10 +155,98 @@ fn stale_refresh_success_cannot_restore_or_overwrite_tokens() {
             assert_eq!(second_waiter.await.unwrap(), CodexRefreshOutcome::Failed);
             manager.read(&app, |manager, _| {
                 assert_eq!(manager.codex_tokens(), replacement.as_ref());
-                assert!(manager.codex_refresh_waiters.is_none());
+                assert!(manager.codex_refresh_state.is_none());
             });
         });
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn replacement_token_waiters_are_dispatched_after_stale_flight_finishes() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+        let (stale_sender, stale_receiver) = oneshot::channel();
+        let (current_sender, current_receiver) = oneshot::channel();
+
+        let pending = manager.update(&mut app, |manager, ctx| {
+            manager.set_codex_tokens(
+                Some(CodexTokens {
+                    access_token: "stale-access".into(),
+                    refresh_token: Some("stale-refresh".into()),
+                    id_token: Some(id_token("account")),
+                    chatgpt_account_id: "account".into(),
+                    expires_at: None,
+                    connected_at: None,
+                }),
+                ctx,
+            );
+            assert!(register_codex_refresh(
+                manager,
+                "stale-refresh",
+                vec![stale_sender],
+            ));
+
+            manager.set_codex_tokens(
+                Some(CodexTokens {
+                    access_token: "current-access".into(),
+                    refresh_token: Some("current-refresh".into()),
+                    id_token: Some(id_token("account")),
+                    chatgpt_account_id: "account".into(),
+                    expires_at: None,
+                    connected_at: None,
+                }),
+                ctx,
+            );
+            assert!(!register_codex_refresh(
+                manager,
+                "current-refresh",
+                vec![current_sender],
+            ));
+            finish_codex_refresh(
+                manager,
+                "stale-refresh",
+                CodexRefreshOutcome::Failed,
+            )
+            .expect("current-token waiters must be dispatched to a new flight")
+        });
+
+        assert_eq!(stale_receiver.await.unwrap(), CodexRefreshOutcome::Failed);
+        assert_eq!(pending.refresh_token, "current-refresh");
+        manager.update(&mut app, |manager, _| {
+            assert!(register_codex_refresh(
+                manager,
+                &pending.refresh_token,
+                pending.waiters,
+            ));
+            assert!(
+                finish_codex_refresh(manager, "stale-refresh", CodexRefreshOutcome::Failed)
+                    .is_none()
+            );
+            assert_eq!(
+                manager
+                    .codex_refresh_state
+                    .as_ref()
+                    .map(|flight| flight.refresh_token.as_str()),
+                Some("current-refresh")
+            );
+            assert!(
+                finish_codex_refresh(
+                    manager,
+                    "current-refresh",
+                    CodexRefreshOutcome::Refreshed,
+                )
+                .is_none()
+            );
+        });
+        assert_eq!(
+            current_receiver.await.unwrap(),
+            CodexRefreshOutcome::Refreshed
+        );
+    });
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -201,7 +293,7 @@ fn current_refresh_success_still_applies_and_wakes_waiter() {
             assert_eq!(tokens.access_token, "fresh-access");
             assert_eq!(tokens.refresh_token.as_deref(), Some("rotated-refresh"));
             assert_eq!(tokens.chatgpt_account_id, "current-account");
-            assert!(manager.codex_refresh_waiters.is_none());
+            assert!(manager.codex_refresh_state.is_none());
         });
     });
 }

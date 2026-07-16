@@ -13,7 +13,9 @@ use warpui_core::r#async::Timer;
 use warpui_core::ModelContext;
 
 use self::oauth::{chatgpt_account_id_from_id_token, TokenResponse};
-use crate::api_keys::{ApiKeyManager, CodexRefreshOutcome, CodexTokens};
+use crate::api_keys::{
+    ApiKeyManager, CodexRefreshFlight, CodexRefreshOutcome, CodexTokens, PendingCodexRefresh,
+};
 
 /// Refresh this long before a known expiry to avoid racing token expiration.
 pub(crate) const REFRESH_LEAD_TIME: Duration = Duration::from_secs(5 * 60);
@@ -171,23 +173,70 @@ fn schedule_codex_token_refresh(
     );
 }
 
-/// Registers waiters and returns whether the caller owns the new refresh.
+/// Registers waiters by refresh-token identity and returns whether the caller
+/// owns a new refresh. Waiters for a newer token are parked until the active
+/// token's refresh completes.
 pub(crate) fn register_codex_refresh(
     manager: &mut ApiKeyManager,
+    refresh_token: &str,
     waiters: Vec<oneshot::Sender<CodexRefreshOutcome>>,
 ) -> bool {
-    if let Some(existing) = &mut manager.codex_refresh_waiters {
-        existing.extend(waiters);
-        false
+    let Some(flight) = &mut manager.codex_refresh_state else {
+        manager.codex_refresh_state = Some(CodexRefreshFlight {
+            refresh_token: refresh_token.to_owned(),
+            waiters,
+            pending: None,
+        });
+        return true;
+    };
+
+    if flight.refresh_token == refresh_token {
+        if let Some(pending) = flight.pending.take() {
+            flight.waiters.extend(pending.waiters);
+        }
+        flight.waiters.extend(waiters);
+    } else if let Some(pending) = &mut flight.pending {
+        pending.refresh_token = refresh_token.to_owned();
+        pending.waiters.extend(waiters);
     } else {
-        manager.codex_refresh_waiters = Some(waiters);
-        true
+        flight.pending = Some(PendingCodexRefresh {
+            refresh_token: refresh_token.to_owned(),
+            waiters,
+        });
     }
+    false
 }
 
-pub(crate) fn finish_codex_refresh(manager: &mut ApiKeyManager, outcome: CodexRefreshOutcome) {
-    for waiter in manager.codex_refresh_waiters.take().unwrap_or_default() {
+pub(crate) fn finish_codex_refresh(
+    manager: &mut ApiKeyManager,
+    refresh_token: &str,
+    outcome: CodexRefreshOutcome,
+) -> Option<PendingCodexRefresh> {
+    if manager
+        .codex_refresh_state
+        .as_ref()
+        .is_none_or(|flight| flight.refresh_token != refresh_token)
+    {
+        return None;
+    }
+
+    let flight = manager.codex_refresh_state.take().unwrap();
+    for waiter in flight.waiters {
         let _ = waiter.send(outcome);
+    }
+
+    let pending = flight.pending?;
+    let still_current = manager
+        .codex_tokens()
+        .and_then(|tokens| tokens.refresh_token.as_deref())
+        == Some(pending.refresh_token.as_str());
+    if still_current {
+        Some(pending)
+    } else {
+        for waiter in pending.waiters {
+            let _ = waiter.send(CodexRefreshOutcome::Failed);
+        }
+        None
     }
 }
 
@@ -216,7 +265,7 @@ fn spawn_codex_refresh_with<F>(
 ) where
     F: Future<Output = anyhow::Result<TokenResponse>> + Send + 'static,
 {
-    if !register_codex_refresh(manager, waiters) {
+    if !register_codex_refresh(manager, &requested_refresh_token, waiters) {
         return;
     }
     ctx.spawn(refresh, move |manager, result, ctx| {
@@ -253,7 +302,16 @@ fn spawn_codex_refresh_with<F>(
                 CodexRefreshOutcome::Failed
             }
         };
-        finish_codex_refresh(manager, outcome);
+        if let Some(pending) =
+            finish_codex_refresh(manager, &requested_refresh_token, outcome)
+        {
+            spawn_codex_refresh(
+                manager,
+                pending.refresh_token,
+                pending.waiters,
+                ctx,
+            );
+        }
     });
 }
 
