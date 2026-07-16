@@ -2,10 +2,15 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
+use warp_util::path::ShellFamily;
+use warpui::platform::OperatingSystem;
+
 use super::*;
 use crate::launch_configs::launch_config::PaneTemplateType;
 use crate::tab_configs::render_tab_config;
-use crate::tab_configs::tab_config::{generated_worktree_repo_dir, TabConfigPaneType};
+use crate::tab_configs::tab_config::{
+    generated_worktree_path, generated_worktree_repo_dir, TabConfigPaneType,
+};
 
 #[cfg(feature = "local_fs")]
 #[test]
@@ -46,9 +51,14 @@ fn test_is_tab_config_toml_rejects_tomls_outside_tab_config_dirs() {
 fn test_materialize_default_worktree_config_bakes_repo_and_pane_type_only() {
     let template = include_str!("../../resources/tab_configs/default_worktree.toml");
     let repo_path = "/tmp/example-repo";
-    let (toml_content, tab_config) =
-        materialize_default_worktree_config(template, "Worktree: example-repo", repo_path, "agent")
-            .expect("expected template materialization to succeed");
+    let (toml_content, tab_config) = materialize_default_worktree_config(
+        template,
+        "Worktree: example-repo",
+        repo_path,
+        "agent",
+        OperatingSystem::get().default_shell_family(),
+    )
+    .expect("expected template materialization to succeed");
 
     assert!(toml_content.contains("name = \"Worktree: example-repo\""));
     assert!(toml_content.contains(repo_path));
@@ -80,9 +90,14 @@ fn test_materialize_default_worktree_config_bakes_repo_and_pane_type_only() {
 fn test_materialized_default_worktree_config_renders_full_worktree_path() {
     let template = include_str!("../../resources/tab_configs/default_worktree.toml");
     let repo_path = "/tmp/example-repo";
-    let (_, tab_config) =
-        materialize_default_worktree_config(template, "Worktree: example-repo", repo_path, "agent")
-            .expect("expected template materialization to succeed");
+    let (_, tab_config) = materialize_default_worktree_config(
+        template,
+        "Worktree: example-repo",
+        repo_path,
+        "agent",
+        OperatingSystem::get().default_shell_family(),
+    )
+    .expect("expected template materialization to succeed");
 
     let (_, pane_template) = render_tab_config(&tab_config, &HashMap::new(), Some("my-feature"));
 
@@ -97,6 +112,47 @@ fn test_materialized_default_worktree_config_renders_full_worktree_path() {
             format!("git worktree add -b my-feature {expected_worktree_path}")
         );
         assert_eq!(commands[1].exec, format!("cd {expected_worktree_path}"));
+    } else {
+        panic!("expected terminal pane template");
+    }
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_materialized_default_worktree_config_shell_quotes_worktree_path() {
+    let template = include_str!("../../resources/tab_configs/default_worktree.toml");
+    let repo_path = "/tmp/example repo";
+    let (_, tab_config) = materialize_default_worktree_config(
+        template,
+        "Worktree: example repo",
+        repo_path,
+        "agent",
+        ShellFamily::Posix,
+    )
+    .expect("expected template materialization to succeed");
+
+    let (_, pane_template) = render_tab_config(&tab_config, &HashMap::new(), Some("my-feature"));
+
+    if let PaneTemplateType::PaneTemplate { cwd, commands, .. } = pane_template {
+        let expected_worktree_path = generated_worktree_path(Path::new(repo_path), "my-feature")
+            .display()
+            .to_string();
+        assert_eq!(cwd, Path::new(repo_path));
+        assert_eq!(
+            shell_words::split(&commands[0].exec).expect("worktree command should be valid shell"),
+            vec![
+                "git".to_string(),
+                "worktree".to_string(),
+                "add".to_string(),
+                "-b".to_string(),
+                "my-feature".to_string(),
+                expected_worktree_path.clone(),
+            ]
+        );
+        assert_eq!(
+            shell_words::split(&commands[1].exec).expect("cd command should be valid shell"),
+            vec!["cd".to_string(), expected_worktree_path]
+        );
     } else {
         panic!("expected terminal pane template");
     }

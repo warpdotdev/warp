@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 #[cfg(feature = "local_tty")]
 use settings::Setting as _;
+use warp_util::path::ShellFamily;
+use warpui::platform::OperatingSystem;
 #[cfg(feature = "local_tty")]
 use warpui::{AppContext, ModelContext};
 use warpui::{Entity, SingletonEntity};
@@ -165,6 +167,19 @@ impl AvailableShell {
 
     pub fn is_wsl(&self) -> bool {
         matches!(self.state.as_ref(), Config::Wsl { .. })
+    }
+
+    #[cfg(feature = "local_tty")]
+    fn shell_family(&self) -> ShellFamily {
+        match self.state.as_ref() {
+            Config::SystemDefault | Config::DockerSandbox { .. } => {
+                OperatingSystem::get().default_shell_family()
+            }
+            Config::KnownLocal(LocalConfig { shell_type, .. })
+            | Config::MSYS2(LocalConfig { shell_type, .. })
+            | Config::Custom(LocalConfig { shell_type, .. }) => (*shell_type).into(),
+            Config::Wsl { .. } => ShellFamily::Posix,
+        }
     }
 }
 
@@ -437,6 +452,10 @@ impl AvailableShells {
     pub fn get_from_shell_launch_data(&self, _config: &ShellLaunchData) -> Option<AvailableShell> {
         None
     }
+
+    pub fn user_preferred_shell_family(&self, _ctx: &warpui::AppContext) -> ShellFamily {
+        OperatingSystem::get().default_shell_family()
+    }
 }
 
 #[cfg(feature = "local_tty")]
@@ -594,6 +613,11 @@ impl AvailableShells {
                 .cloned()
                 .unwrap_or_default(),
         }
+    }
+
+    /// Returns the family of the available shell selected for new sessions, including fallback.
+    pub fn user_preferred_shell_family(&self, ctx: &AppContext) -> ShellFamily {
+        self.get_user_preferred_shell(ctx).shell_family()
     }
 
     /// Sets the user-preferred shell for new sessions. Saves the value back to user settings.
