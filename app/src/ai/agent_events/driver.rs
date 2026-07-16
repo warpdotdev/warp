@@ -23,12 +23,16 @@ pub(crate) const DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG: usize = 5;
 /// listener gives up instead of reconnecting. A small threshold (rather than 1)
 /// tolerates a one-off token blip while still bailing quickly once credentials
 /// are permanently invalid.
+// Only consumed by the (native-only) cloud-agent message bridge via
+// `bounded_run_ids`, so it is dead code on the wasm target.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) const DEFAULT_AUTH_ERROR_GIVE_UP_FAILURES: usize = 3;
 
 /// Total wall-clock time a bounded listener keeps retrying, measured from the
 /// first failure since the last successful open/event, before it gives up. Set
 /// larger than the proactive reconnect window so healthy streams are never
 /// affected; it only bounds sustained failure.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) const DEFAULT_AGENT_EVENT_MAX_RETRY_DURATION: Duration = Duration::from_secs(30 * 60);
 
 /// Selects which server-side filter shape an [`AgentEventSource`] should use
@@ -133,6 +137,9 @@ impl AgentEventDriverConfig {
     /// authentication failures or a bounded total retry window, so a listener
     /// whose task has ended (and whose credentials are now permanently
     /// rejected) shuts down instead of reconnecting indefinitely.
+    // Only called by the (native-only) cloud-agent message bridge, so it is dead
+    // code on the wasm target.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn bounded_run_ids(run_ids: Vec<String>, since_sequence: i64) -> Self {
         Self {
             auth_error_give_up_failures: Some(DEFAULT_AUTH_ERROR_GIVE_UP_FAILURES),
