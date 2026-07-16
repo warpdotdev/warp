@@ -973,9 +973,7 @@ impl TuiAIBlock {
                     app,
                 )
             }
-            TuiAIBlockSection::AgentMessage(message) => {
-                render_agent_message(&self.collapsible_states, message, app)
-            }
+            TuiAIBlockSection::AgentMessage(_) => return None,
         })
     }
     fn rich_text_sections(message_id: &MessageId, text: &AIAgentText) -> Vec<TuiRichTextSection> {
@@ -1279,9 +1277,12 @@ impl TuiAIBlock {
                         app,
                     )
                 }
-                TuiAIBlockSection::AgentMessage(message) => {
-                    render_agent_message(&self.collapsible_states, message, app)
-                }
+                TuiAIBlockSection::AgentMessage(message) => render_agent_message(
+                    &self.collapsible_states,
+                    message,
+                    self.conversation_id,
+                    app,
+                ),
             };
 
             // One row of bottom padding separates sections; the last section
@@ -1327,8 +1328,8 @@ fn last_row_content_width(element: &mut Box<dyn TuiElement>, width: u16, height:
 }
 
 /// The copy-able logical text for a section, or `None` for section kinds with no
-/// clean logical form (tool calls, reasoning, summaries, todo lists), which fall
-/// back to per-row grid text.
+/// clean logical form (tool calls, reasoning, summaries, todo lists, or agent
+/// messages), which fall back to per-row grid text.
 fn section_logical_text(section: &TuiAIBlockSection) -> Option<String> {
     match section {
         TuiAIBlockSection::Input(text) => Some(text.clone()),

@@ -24,8 +24,38 @@ use warp::tui_export::{
 use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
+use crate::orchestrated_agent_identity_styling::assign_agent_identity_indices;
 use crate::session_registry::TuiSessionId;
 use crate::terminal_session_view::TuiTerminalSessionView;
+
+/// Semantic role of one orchestration participant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TuiOrchestrationParticipantKind {
+    Orchestrator,
+    Child,
+    Unknown,
+}
+
+/// Plain-data participant presentation shared by orchestration surfaces.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TuiOrchestrationParticipantSnapshot {
+    pub(crate) kind: TuiOrchestrationParticipantKind,
+    pub(crate) conversation_id: Option<AIConversationId>,
+    pub(crate) display_name: String,
+    pub(crate) identity_index: Option<usize>,
+}
+
+impl TuiOrchestrationParticipantSnapshot {
+    /// Fallback for a sender that cannot be linked to the current tree.
+    fn unknown() -> Self {
+        Self {
+            kind: TuiOrchestrationParticipantKind::Unknown,
+            conversation_id: None,
+            display_name: "Unknown agent".to_string(),
+            identity_index: None,
+        }
+    }
+}
 
 /// The TUI's child-agent coordinator singleton. See the module docs.
 pub(crate) struct TuiOrchestrationModel {
@@ -57,6 +87,26 @@ pub(crate) struct MaterializedLocalOzChildSession {
     pub(crate) conversation_name: String,
 }
 
+/// Resolves the topmost loaded orchestration parent, rejecting cycles.
+fn orchestration_root(
+    history: &BlocklistAIHistoryModel,
+    conversation_id: AIConversationId,
+) -> Option<AIConversationId> {
+    history.conversation(&conversation_id)?;
+    let mut current = conversation_id;
+    let mut visited = HashSet::new();
+    while visited.insert(current) {
+        let conversation = history.conversation(&current)?;
+        let Some(parent_id) =
+            history.resolved_parent_conversation_id_for_conversation(conversation)
+        else {
+            return Some(current);
+        };
+        current = parent_id;
+    }
+    None
+}
+
 impl Entity for TuiOrchestrationModel {
     type Event = TuiOrchestrationEvent;
 }
@@ -64,6 +114,90 @@ impl Entity for TuiOrchestrationModel {
 impl SingletonEntity for TuiOrchestrationModel {}
 
 impl TuiOrchestrationModel {
+    /// Creates an unsubscribed model for participant-rendering tests.
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        Self {
+            child_session_by_conversation: HashMap::new(),
+            event_consumers_by_session: HashMap::new(),
+        }
+    }
+
+    /// Resolves a sender's role, label, conversation, and stable child identity.
+    pub(crate) fn participant_snapshot(
+        &self,
+        current_conversation_id: AIConversationId,
+        sender_agent_id: &str,
+        identity_palette_len: usize,
+        ctx: &AppContext,
+    ) -> TuiOrchestrationParticipantSnapshot {
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let Some(root_conversation_id) = orchestration_root(history, current_conversation_id)
+        else {
+            return TuiOrchestrationParticipantSnapshot::unknown();
+        };
+        let current_conversation = history.conversation(&current_conversation_id);
+        let root_conversation = history.conversation(&root_conversation_id);
+        let orchestrator_agent_id = root_conversation
+            .and_then(|conversation| conversation.orchestration_agent_id())
+            .or_else(|| {
+                current_conversation
+                    .and_then(|conversation| conversation.parent_agent_id())
+                    .map(str::to_owned)
+            });
+        let sender_conversation = history
+            .conversation_id_for_agent_id(sender_agent_id)
+            .and_then(|conversation_id| history.conversation(&conversation_id))
+            .or_else(|| {
+                history
+                    .all_live_conversations()
+                    .into_iter()
+                    .map(|(_, conversation)| conversation)
+                    .find(|conversation| {
+                        conversation.orchestration_agent_id().as_deref() == Some(sender_agent_id)
+                    })
+            });
+        let sender_is_orchestrator = orchestrator_agent_id.as_deref() == Some(sender_agent_id)
+            || sender_conversation
+                .is_some_and(|conversation| conversation.id() == root_conversation_id);
+        if sender_is_orchestrator {
+            return TuiOrchestrationParticipantSnapshot {
+                kind: TuiOrchestrationParticipantKind::Orchestrator,
+                conversation_id: Some(root_conversation_id),
+                display_name: "Orchestrator".to_string(),
+                identity_index: None,
+            };
+        }
+        let Some(sender_conversation) = sender_conversation else {
+            return TuiOrchestrationParticipantSnapshot::unknown();
+        };
+        let identity_index = sender_conversation
+            .parent_conversation_id()
+            .and_then(|parent_id| {
+                let siblings = history.child_conversations_of(parent_id);
+                let sender_index = siblings
+                    .iter()
+                    .position(|sibling| sibling.id() == sender_conversation.id())?;
+                let indices = assign_agent_identity_indices(
+                    siblings
+                        .iter()
+                        .map(|sibling| sibling.agent_name().unwrap_or("Agent")),
+                    identity_palette_len,
+                );
+                indices.get(sender_index).copied()
+            });
+        TuiOrchestrationParticipantSnapshot {
+            kind: TuiOrchestrationParticipantKind::Child,
+            conversation_id: Some(sender_conversation.id()),
+            display_name: sender_conversation
+                .agent_name()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("Agent")
+                .to_string(),
+            identity_index,
+        }
+    }
+
     /// Registers the singleton before sessions are created and wired to it.
     pub(crate) fn register(ctx: &mut AppContext) -> ModelHandle<Self> {
         ctx.add_singleton_model(|_| Self {

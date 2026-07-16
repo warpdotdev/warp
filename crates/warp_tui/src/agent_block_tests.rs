@@ -41,6 +41,7 @@ use crate::agent_block_sections::{
     completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
 };
 use crate::agent_message::agent_message_section_id;
+use crate::orchestration_model::TuiOrchestrationModel;
 use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
 use crate::tui_plan_view::TuiPlanViewAction;
 use crate::tui_shell_command_view::TuiShellCommandViewAction;
@@ -320,13 +321,7 @@ fn agent_block_renders_multiple_tool_calls_in_order() {
 fn orchestration_outputs_render_without_wait_for_events_tool_row() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        let received = ReceivedMessageDisplay {
-            message_id: "message-1".to_string(),
-            sender_agent_id: "researcher".to_string(),
-            addresses: vec!["lead".to_string()],
-            subject: "Investigation complete".to_string(),
-            message_body: "Found the issue".to_string(),
-        };
+        app.add_singleton_model(|_| TuiOrchestrationModel::new_for_test());
         let wait_action = AIAgentAction {
             id: AIAgentActionId::from("wait-action".to_string()),
             action: AIAgentActionType::WaitForEvents {
@@ -335,6 +330,13 @@ fn orchestration_outputs_render_without_wait_for_events_tool_row() {
             },
             task_id: TaskId::new("wait-task".to_string()),
             requires_result: false,
+        };
+        let received = ReceivedMessageDisplay {
+            message_id: "message-1".to_string(),
+            sender_agent_id: "researcher".to_string(),
+            addresses: vec!["lead".to_string()],
+            subject: "Investigation complete".to_string(),
+            message_body: "Found the issue".to_string(),
         };
         let block = test_agent_block(
             &mut app,
@@ -366,6 +368,10 @@ fn orchestration_outputs_render_without_wait_for_events_tool_row() {
                 block.sections(app_ctx),
                 vec![TuiAIBlockSection::AgentMessage(received)],
             );
+            let lines = render_block_lines(block, 80, app_ctx);
+            assert_eq!(lines.len(), 1);
+            assert!(lines[0].ends_with(" ▸"));
+            assert!(!lines[0].contains("lifecycle event"));
         });
     });
 }
@@ -805,6 +811,7 @@ fn agent_block_preserves_received_messages_and_hides_lifecycle_ids() {
 fn agent_message_defaults_collapsed_and_expands_through_block_state() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| TuiOrchestrationModel::new_for_test());
         let received = received_message("run-1", "progress", "Starting work");
         let message_id = agent_message_section_id(&received);
         let block = test_agent_block(
