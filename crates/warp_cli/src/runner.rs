@@ -30,6 +30,9 @@ pub enum RunnerOsArg {
 /// Target CPU architecture for a runner sandbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum RunnerArchArg {
+    /// Use the default architecture for the runner OS (x86-64 on Linux, aarch64 on macOS).
+    #[value(name = "auto")]
+    Auto,
     #[value(name = "x86-64")]
     X8664,
     #[value(name = "aarch64")]
@@ -39,13 +42,13 @@ pub enum RunnerArchArg {
 /// macOS version to use for a runner sandbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum RunnerMacosVersionArg {
-    #[value(name = "macos-14")]
+    #[value(name = "14")]
     Macos14,
-    #[value(name = "macos-15")]
+    #[value(name = "15")]
     Macos15,
-    #[value(name = "macos-26")]
+    #[value(name = "26")]
     Macos26,
-    #[value(name = "macos-27")]
+    #[value(name = "27")]
     Macos27,
 }
 
@@ -111,8 +114,8 @@ pub struct CreateRunnerArgs {
     #[arg(long = "os", value_enum, default_value = "linux")]
     pub os: RunnerOsArg,
 
-    /// Target CPU architecture for the runner.
-    #[arg(long = "arch", value_enum, default_value = "x86-64")]
+    /// Target CPU architecture for the runner. Defaults to the OS default (x86-64 on Linux, aarch64 on macOS).
+    #[arg(long = "arch", value_enum, default_value = "auto")]
     pub arch: RunnerArchArg,
 
     /// Docker image reference for the sandbox (Linux only).
@@ -170,12 +173,12 @@ pub struct UpdateRunnerArgs {
     #[arg(long = "macos-version", value_enum)]
     pub macos_version: Option<RunnerMacosVersionArg>,
 
-    /// Number of vCPUs for the instance shape. Requires --memory-gb.
-    #[arg(long = "vcpus", requires = "memory_gb")]
+    /// Number of vCPUs for the instance shape. Can be set independently of --memory-gb (the other value is preserved).
+    #[arg(long = "vcpus")]
     pub vcpus: Option<i32>,
 
-    /// Memory in GB for the instance shape. Requires --vcpus.
-    #[arg(long = "memory-gb", requires = "vcpus")]
+    /// Memory in GB for the instance shape. Can be set independently of --vcpus (the other value is preserved).
+    #[arg(long = "memory-gb")]
     pub memory_gb: Option<i32>,
 }
 

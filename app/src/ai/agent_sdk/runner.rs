@@ -284,7 +284,7 @@ fn build_create_input(args: CreateRunnerArgs, owner: GqlOwner) -> UpsertRunnerIn
             setup_commands,
             instance_shape,
             os: Some(os),
-            arch: Some(arch_to_gql(args.arch)),
+            arch: Some(resolve_arch(args.arch, args.os)),
             mac,
             linux,
         },
@@ -328,16 +328,14 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
         }
     };
 
-    let instance_shape = match (args.vcpus, args.memory_gb) {
-        (Some(vcpus), Some(memory_gb)) => Some(RunnerInstanceShapeInput { vcpus, memory_gb }),
-        _ => existing
-            .instance_shape
-            .as_ref()
-            .map(|shape| RunnerInstanceShapeInput {
-                vcpus: shape.vcpus,
-                memory_gb: shape.memory_gb,
-            }),
-    };
+    // vCPUs and memory can be updated independently; each unspecified dimension
+    // is preserved from the existing shape.
+    let existing_shape = existing
+        .instance_shape
+        .as_ref()
+        .map(|shape| (shape.vcpus, shape.memory_gb));
+    let instance_shape = merge_instance_shape(args.vcpus, args.memory_gb, existing_shape)?
+        .map(|(vcpus, memory_gb)| RunnerInstanceShapeInput { vcpus, memory_gb });
 
     let setup_commands = if args.setup_command.is_empty() {
         existing.setup_commands.clone()
@@ -356,10 +354,34 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
         setup_commands,
         instance_shape,
         os: Some(effective_os),
-        arch: Some(args.arch.map(arch_to_gql).unwrap_or(existing.arch)),
+        arch: Some(match args.arch {
+            Some(arch) => resolve_arch(arch, effective_os_arg),
+            None => existing.arch,
+        }),
         mac,
         linux,
     })
+}
+
+/// Merge instance-shape overrides with the existing shape (`(vcpus, memory_gb)`),
+/// allowing vCPUs and memory to be updated independently. Returns `None` when
+/// there is no shape to set, or an error when only one dimension is provided for
+/// a runner that has no existing shape to supply the other.
+fn merge_instance_shape(
+    new_vcpus: Option<i32>,
+    new_memory_gb: Option<i32>,
+    existing: Option<(i32, i32)>,
+) -> Result<Option<(i32, i32)>> {
+    if new_vcpus.is_none() && new_memory_gb.is_none() {
+        return Ok(existing);
+    }
+    let vcpus = new_vcpus.or(existing.map(|(v, _)| v)).ok_or_else(|| {
+        anyhow!("--vcpus is required when setting an instance shape for a runner that has none")
+    })?;
+    let memory_gb = new_memory_gb.or(existing.map(|(_, m)| m)).ok_or_else(|| {
+        anyhow!("--memory-gb is required when setting an instance shape for a runner that has none")
+    })?;
+    Ok(Some((vcpus, memory_gb)))
 }
 
 fn os_to_gql(os: RunnerOsArg) -> RunnerOs {
@@ -369,10 +391,17 @@ fn os_to_gql(os: RunnerOsArg) -> RunnerOs {
     }
 }
 
-fn arch_to_gql(arch: RunnerArchArg) -> RunnerArch {
+/// Resolve a [`RunnerArchArg`] into a concrete [`RunnerArch`], mapping `auto`
+/// to the default architecture for the given OS (x86-64 on Linux, aarch64 on
+/// macOS).
+fn resolve_arch(arch: RunnerArchArg, os: RunnerOsArg) -> RunnerArch {
     match arch {
         RunnerArchArg::X8664 => RunnerArch::X8664,
         RunnerArchArg::Aarch64 => RunnerArch::Aarch64,
+        RunnerArchArg::Auto => match os {
+            RunnerOsArg::Linux => RunnerArch::X8664,
+            RunnerOsArg::Macos => RunnerArch::Aarch64,
+        },
     }
 }
 
