@@ -1379,16 +1379,18 @@ impl EditorModel {
                 // Handle the error to convert saved selection offsets to editor anchors gracefully
                 // as the restored buffer state might not match exactly to the saved snapshot.
                 let Some(end) = buffer.anchor_before(range.end).ok() else {
-                    report_error!(
-                        "error restoring snapshot: selection end is past text max range",
-                        extra: { "selection_end" => %range.end, "max_range" => %text_added_offset }
+                    log::warn!(
+                        "error restoring snapshot: selection end is past text max range (selection_end={}, max_range={})",
+                        range.end,
+                        text_added_offset
                     );
                     return None;
                 };
                 let Some(start) = buffer.anchor_before(range.start).ok() else {
-                    report_error!(
-                        "error restoring snapshot: selection start is past text max range",
-                        extra: { "selection_start" => %range.start, "max_range" => %text_added_offset }
+                    log::warn!(
+                        "error restoring snapshot: selection start is past text max range (selection_start={}, max_range={})",
+                        range.start,
+                        text_added_offset
                     );
                     return None;
                 };

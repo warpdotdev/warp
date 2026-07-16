@@ -1793,7 +1793,7 @@ impl CodeReviewView {
 
     fn handle_edit_comment(&mut self, comment_id: &CommentId, ctx: &mut ViewContext<Self>) {
         let Some(comment) = self.get_comment_by_id(*comment_id, ctx) else {
-            report_error!("Couldn't find code review comment by ID");
+            log::warn!("Couldn't find code review comment by ID");
             return;
         };
 
@@ -1816,9 +1816,9 @@ impl CodeReviewView {
                 };
 
                 let Some(editor_state) = &file_state.editor_state.as_ref() else {
-                    report_error!(
-                        "CodeReviewView could not fetch editor for file",
-                        extra: { "file_path" => ?file_state.file_diff.file_path }
+                    log::warn!(
+                        "CodeReviewView could not fetch editor for file: file_path={:?}",
+                        file_state.file_diff.file_path
                     );
                     return;
                 };
@@ -3598,14 +3598,12 @@ impl CodeReviewView {
 
     fn reposition_comments_in_file(&mut self, diff_mode: &DiffMode, ctx: &mut ViewContext<Self>) {
         let Some(model) = &self.active_comment_model else {
-            report_error!(anyhow::anyhow!(
-                "Failed to relocate PR comments: CodeReviewView diff state not loaded",
-            ));
+            log::warn!("Failed to relocate PR comments: CodeReviewView diff state not loaded");
             return;
         };
 
         let Some(repo_path) = self.repo_path().cloned() else {
-            report_error!("Failed to relocate PR comments: CodeReviewView has no repo path");
+            log::warn!("Failed to relocate PR comments: CodeReviewView has no repo path");
             return;
         };
 
@@ -4298,7 +4296,7 @@ impl CodeReviewView {
                 ctx.notify();
             }
             ReviewSubmissionResult::Error => {
-                report_error!("Failed to submit review comments");
+                log::warn!("Failed to submit review comments");
                 let error_message = "Could not submit comments to the agent".to_string();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     let toast = DismissibleToast::error(error_message);
@@ -5911,9 +5909,9 @@ impl CodeReviewView {
                 let base = match self.get_diff_base(ctx) {
                     Ok(base) => base,
                     Err(err) => {
-                        report_error!(err.context(
-                            "CodeReviewView could not find diff base when attaching diff as context"
-                        ));
+                        log::warn!(
+                            "CodeReviewView could not find diff base when attaching diff as context: {err:#}"
+                        );
                         return;
                     }
                 };

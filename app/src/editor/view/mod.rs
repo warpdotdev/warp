@@ -1196,7 +1196,7 @@ impl NewCursorDirection {
                     }
                 }
                 Err(err) => {
-                    report_error!(err.context("Error calling map#up"));
+                    log::warn!("Error calling map#up: {err:#}");
                     None
                 }
             },
@@ -1209,7 +1209,7 @@ impl NewCursorDirection {
                     }
                 }
                 Err(err) => {
-                    report_error!(err.context("Error calling map#down"));
+                    log::warn!("Error calling map#down: {err:#}");
                     None
                 }
             },
@@ -6834,7 +6834,7 @@ impl EditorView {
                                 result.point_and_clamp_direction.clamp_direction;
                         }
                         Err(err) => {
-                            report_error!(err.context("Failed to call DisplayMap#up"));
+                            log::warn!("Failed to call DisplayMap#up: {err:#}");
                         }
                     }
                 }
@@ -6983,7 +6983,7 @@ impl EditorView {
                                 result.point_and_clamp_direction.clamp_direction;
                         }
                         Err(err) => {
-                            report_error!(err.context("Failed to call DisplayMap#down"))
+                            log::warn!("Failed to call DisplayMap#down: {err:#}")
                         }
                     }
                 }

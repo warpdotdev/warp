@@ -59,9 +59,6 @@ cfg_if::cfg_if! {
     }
 }
 #[cfg(feature = "local_fs")]
-use warp_errors::report_error;
-
-#[cfg(feature = "local_fs")]
 use super::DiffOperation;
 use super::{
     BackendOrigin, CommitChainMode, DiffHunk, DiffLine, DiffLineType, DiffMetadata,
@@ -807,9 +804,8 @@ impl LocalDiffStateModel {
                         if let Err(e) =
                             run_git_command(&repo_path, &["checkout", branch, "--", old_path]).await
                         {
-                            report_error!(
-                                e.context("Failed to restore old file from branch"),
-                                extra: { "old_path" => %old_path, "branch" => %branch }
+                            log::warn!(
+                                "Failed to restore old file from branch (old_path={old_path}, branch={branch}): {e:#}"
                             );
                         }
                     }
@@ -869,7 +865,7 @@ impl LocalDiffStateModel {
                     me.refresh_diff_metadata_for_current_repo(false, ctx);
                 }
                 Err(err) => {
-                    report_error!(err.context("Failed to restore files"));
+                    log::warn!("Failed to restore files: {err:#}");
                 }
             },
         );
@@ -1208,7 +1204,7 @@ impl LocalDiffStateModel {
                             me.file_invalidation.merge_base = Some(merge_base);
                         }
                         Err(e) => {
-                            report_error!(e.context("Failed to compute merge base"));
+                            log::warn!("Failed to compute merge base: {e:#}");
                         }
                     }
                     me.flush_pending_invalidations(ctx);
