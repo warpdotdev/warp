@@ -736,6 +736,78 @@ fn owned_third_party_task_without_metadata_shows_continue_in_cloud_tombstone() {
     });
 }
 
+/// Simulates the end-to-end fix for API-triggered Claude Code runs. When the task was started
+/// via the Oz REST API (so `task.creator.uid` is a service-account UID that does NOT match the
+/// logged-in user's Firebase UID) and no local Oz conversation was ever created, server
+/// conversation metadata is initially absent from `BlocklistAIHistoryModel`. The background
+/// fetch triggered by `maybe_insert_tombstone_for_non_running_shared_ambient_task` (via
+/// `fetch_server_conversation_metadata_if_needed`) populates the metadata, which is stored in
+/// `all_conversations_metadata`. After that, `resolve_cloud_conversation_continuation_ui_state`
+/// finds the metadata, sees the current user is the space owner, and returns the Continue CTA.
+#[test]
+fn api_triggered_third_party_run_shows_continue_cta_after_metadata_fetch() {
+    App::test((), |mut app| async move {
+        let _agent_management_guard = FeatureFlag::AgentManagementView.override_enabled(false);
+        // Auth: current user is logged in as TEST_USER_UID.
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        app.add_singleton_model(AgentConversationsModel::new);
+
+        let terminal_view_id = EntityId::new();
+        let task_id = ambient_task_id(1);
+
+        // The task was created by a service account whose UID does NOT match the current user.
+        // This is the API-triggered case where `task_creator_access` returns `Unknown`.
+        let task = ambient_agent_task(
+            task_id,
+            CONVERSATION_TOKEN,
+            AmbientAgentTaskState::Succeeded,
+        )
+        .with_creator("some-api-service-account-uid")
+        .with_harness(Harness::Claude);
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(task);
+        });
+
+        // Verify the initial state: no server metadata → returns an error (no CTA).
+        app.update(|ctx| {
+            assert_eq!(
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx),
+                Err(CloudConversationContinuationError::MissingServerConversationMetadata),
+                "should fail before metadata is fetched"
+            );
+        });
+
+        // Simulate what `fetch_server_conversation_metadata_if_needed` does when the server
+        // returns metadata showing the current user as the space owner. This represents the
+        // state AFTER the background fetch has completed and populated the model.
+        let metadata = server_conversation_metadata(
+            AIAgentHarness::ClaudeCode,
+            ConversationPermissionFixture::CurrentUserOwner,
+            Some(task_id),
+            None,
+        );
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_server_metadata_for_test(
+                ServerConversationToken::new(CONVERSATION_TOKEN.to_string()),
+                metadata,
+            );
+        });
+
+        // After metadata arrives the resolver finds the current user as owner → Continue CTA.
+        app.update(|ctx| {
+            assert_eq!(
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx),
+                Ok(CloudConversationContinuationUiState::Tombstone {
+                    cta: Some(TombstoneCta::ContinueInCloud { task_id }),
+                }),
+                "should show Continue CTA once metadata is populated"
+            );
+        });
+    });
+}
+
 #[test]
 fn active_task_execution_returns_error() {
     App::test((), |mut app| async move {
