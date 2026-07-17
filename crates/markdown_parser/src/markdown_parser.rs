@@ -1016,7 +1016,11 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::BackslashEscape(ch) | InlineToken::HtmlEntity(ch) => {
                 state.push_text(ch);
             }
-            InlineToken::Delimiter { kind, count } => {
+            InlineToken::Delimiter {
+                kind,
+                count,
+                matched,
+            } => {
                 // Flat-collapse nested `<kbd>` (issue #13733): once we're inside a `<kbd>`, a
                 // further `<kbd>` open is dropped entirely (no delimiter, no literal text) and only
                 // deepens the nesting counter. The matching inner `</kbd>` is dropped in the
@@ -1038,7 +1042,13 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
                 let delimiter =
                     Delimiter::new(node_index, kind, count, preceding_char, following_char);
-                state.push_closed_node(FormattedTextFragment::plain_text(delimiter.to_text()));
+                // Fall back to the authored source slice (preserving casing, e.g. `<KBD>`) when the
+                // delimiter was matched case-insensitively; otherwise the canonical spelling matches
+                // the source exactly.
+                let literal = matched
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| delimiter.to_text());
+                state.push_closed_node(FormattedTextFragment::plain_text(literal));
                 state.delimiters.push(delimiter);
             }
             InlineToken::LinkEnd => {
@@ -1047,16 +1057,16 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
             }
-            InlineToken::KbdEnd => {
+            InlineToken::KbdEnd(matched) => {
                 // Mirror the open-side flat-collapse (issue #13733): an inner `</kbd>` closing a
                 // dropped inner `<kbd>` is itself dropped, leaving only the outermost pair to form
                 // the keycap. A `</kbd>` with no open (`kbd_depth == 0`) still falls through to
-                // `parse_kbd`, which emits it as literal text.
+                // `parse_kbd`, which emits it as literal text using the authored casing.
                 if state.kbd_depth > 1 {
                     state.kbd_depth -= 1;
                 } else {
                     state.kbd_depth = 0;
-                    input = parse_kbd(&mut state, remaining);
+                    input = parse_kbd(&mut state, matched, remaining);
                 }
             }
         }
@@ -1344,8 +1354,10 @@ fn parse_underline<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
     remaining
 }
 
-/// Parses `<kbd>`-styled text using the same logic as [`parse_underline`].
-fn parse_kbd<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
+/// Parses `<kbd>`-styled text using the same logic as [`parse_underline`]. `matched` is the exact
+/// source slice of the closing tag (e.g. `</KBD>`), used verbatim when the close degrades to
+/// literal text so the authored casing is preserved.
+fn parse_kbd<'a>(state: &mut InlineState, matched: &'a str, remaining: &'a str) -> &'a str {
     let Some((kbd_start_index, kbd_start)) = state
         .delimiters
         .iter()
@@ -1353,15 +1365,15 @@ fn parse_kbd<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
         .rev()
         .find(|(_, delimiter)| delimiter.kind == DelimiterKind::KbdStart)
     else {
-        // If there's no kbd start, treat this as a literal `</kbd>`.
-        state.push_text("</kbd>");
+        // If there's no kbd start, treat this as a literal `</kbd>` (authored casing preserved).
+        state.push_text(matched);
         return remaining;
     };
 
     if !kbd_start.active {
         // If the start is inactive, remove it - this prevents nested kbd elements.
         state.delimiters.remove(kbd_start_index);
-        state.push_text("</kbd>");
+        state.push_text(matched);
         return remaining;
     }
 
@@ -1690,6 +1702,7 @@ fn parse_inline_token_link_start<'a, E: ContextError<&'a str> + ParseError<&'a s
         map(tag("["), |_| InlineToken::Delimiter {
             kind: DelimiterKind::LinkStart,
             count: 1,
+            matched: None,
         }),
     )(input)
 }
@@ -1710,6 +1723,7 @@ fn parse_inline_token_underline_start<'a, E: ContextError<&'a str> + ParseError<
         map(tag("<u>"), |_| InlineToken::Delimiter {
             kind: DelimiterKind::UnderlineStart,
             count: 1,
+            matched: None,
         }),
     )(input)
 }
@@ -1730,9 +1744,11 @@ fn parse_inline_token_kbd_start<'a, E: ContextError<&'a str> + ParseError<&'a st
 ) -> IResult<&'a str, InlineToken<'a>, E> {
     context(
         "kbd_start",
-        map(tag_no_case("<kbd>"), |_| InlineToken::Delimiter {
+        map(tag_no_case("<kbd>"), |matched| InlineToken::Delimiter {
             kind: DelimiterKind::KbdStart,
             count: 1,
+            // Preserve the authored casing (e.g. `<KBD>`) for the literal-text fallback path.
+            matched: Some(matched),
         }),
     )(input)
 }
@@ -1741,10 +1757,7 @@ fn parse_inline_token_kbd_start<'a, E: ContextError<&'a str> + ParseError<&'a st
 fn parse_inline_token_kbd_end<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, InlineToken<'a>, E> {
-    context(
-        "kbd_end",
-        map(tag_no_case("</kbd>"), |_| InlineToken::KbdEnd),
-    )(input)
+    context("kbd_end", map(tag_no_case("</kbd>"), InlineToken::KbdEnd))(input)
 }
 
 /// Helper to parse a run of delimiters.
@@ -1753,7 +1766,11 @@ fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 ) -> impl FnMut(&'a str) -> IResult<&'a str, InlineToken<'a>, E> {
     map(
         fold_many1(tag(kind.as_str()), || 0, |counter, _| counter + 1),
-        move |count| InlineToken::Delimiter { kind, count },
+        move |count| InlineToken::Delimiter {
+            kind,
+            count,
+            matched: None,
+        },
     )
 }
 
@@ -1775,8 +1792,16 @@ fn parse_code_span<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InlineToken<'a> {
-    /// A run of `count` delimiter characters of `kind`.
-    Delimiter { kind: DelimiterKind, count: usize },
+    /// A run of `count` delimiter characters of `kind`. `matched` holds the exact source slice
+    /// when it can differ from the delimiter's canonical spelling (i.e. a case-insensitively
+    /// matched `<kbd>`); it is `None` for delimiters matched with an exact `tag`, whose source
+    /// always equals `kind.as_str()`. Used to echo the authored casing if the tag degrades to
+    /// literal text.
+    Delimiter {
+        kind: DelimiterKind,
+        count: usize,
+        matched: Option<&'a str>,
+    },
     /// A run of non-delimiter text.
     Text(&'a str),
     /// A backslash-escaped character.
@@ -1793,8 +1818,9 @@ enum InlineToken<'a> {
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
     UnderlineEnd,
-    /// A closing </kbd>, which triggers kbd parsing.
-    KbdEnd,
+    /// A closing </kbd>, which triggers kbd parsing. Carries the exact source slice so the authored
+    /// casing is preserved if the close degrades to literal text (`tag_no_case` matches any casing).
+    KbdEnd(&'a str),
 }
 
 /// An entry in the [delimiter stack](https://spec.commonmark.org/0.30/#delimiter-stack)

@@ -2168,6 +2168,36 @@ fn test_parse_unterminated_kbd_is_literal() {
     );
 }
 
+/// An unmatched, mixed-case `<KBD>` open must fall back to the AUTHORED spelling as literal text,
+/// not a synthesized lowercase `<kbd>` (issue #13733). `tag_no_case` matches case-insensitively but
+/// must not rewrite the source casing when the tag degrades to literal text.
+#[test]
+fn test_parse_unterminated_mixed_case_kbd_preserves_spelling() {
+    assert_eq!(
+        parse_all("dangling <KBD>Esc here", parse_inline),
+        vec![FormattedTextFragment::plain_text("dangling <KBD>Esc here")]
+    );
+}
+
+/// A stray, mixed-case `</KBD>` close with no opener must fall back to the AUTHORED spelling as
+/// literal text, not a synthesized lowercase `</kbd>` (issue #13733).
+#[test]
+fn test_parse_unmatched_mixed_case_kbd_close_preserves_spelling() {
+    assert_eq!(
+        parse_all("no opener </KBD> here", parse_inline),
+        vec![FormattedTextFragment::plain_text("no opener </KBD> here")]
+    );
+}
+
+/// The well-formed case-insensitive path still produces a keycap: `<KBD>x</KBD>` → kbd run.
+#[test]
+fn test_parse_well_formed_mixed_case_kbd_still_keycaps() {
+    assert_eq!(
+        parse_all("<KBD>x</KBD>", parse_inline),
+        vec![FormattedTextFragment::kbd("x")]
+    );
+}
+
 #[test]
 fn test_unordered_list_indentation_level_relative() {
     // Test that both 2-space and 4-space relative indentation produce the same structure
