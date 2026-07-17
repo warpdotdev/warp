@@ -1982,6 +1982,23 @@ fn test_parse_empty_underline() {
 }
 
 #[test]
+fn test_parse_unclosed_underline_round_trips() {
+    // Regression test for #13134: an unclosed `<u>` followed by another `<u>`
+    // used to be matched as an emphasis opener/closer pair, deleting both
+    // markers and the text between them. `<u>` is only ever closed by an
+    // explicit `</u>`, so an unclosed `<u>` must round-trip to literal text,
+    // exactly like an unclosed `*`.
+    for source in ["<u><u>", "<u>a<u>", "a <u>word<u> b"] {
+        let parsed = parse_markdown(source).unwrap_or_else(|_| panic!("{source:?} should parse"));
+        assert_eq!(
+            parsed.raw_text(),
+            format!("{source}\n"),
+            "{source:?} must round-trip without dropping text"
+        );
+    }
+}
+
+#[test]
 fn test_unordered_list_indentation_level_relative() {
     // Test that both 2-space and 4-space relative indentation produce the same structure
     let source_2space = "- top level\n  - sublevel\n    - subsublevel";
