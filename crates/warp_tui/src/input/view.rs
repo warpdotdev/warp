@@ -170,6 +170,12 @@ pub struct TuiInputView {
     /// construction always provides this; isolated input tests omit it.
     transcript: Option<ViewHandle<TuiTranscriptView>>,
     keyboard_enhancement_supported: bool,
+    /// The most recently submitted user message, saved at submission time.
+    ///
+    /// Pressing `↑` in an empty input recalls this text so the user can
+    /// re-edit and re-submit their last prompt — matching the shell-history
+    /// affordance described in the Figma spec (`↑ to edit`).
+    last_submitted_text: Option<String>,
 }
 
 impl Entity for TuiInputView {
@@ -247,6 +253,7 @@ impl TuiInputView {
             focused: false,
             transcript,
             keyboard_enhancement_supported: false,
+            last_submitted_text: None,
         }
     }
 
@@ -488,6 +495,15 @@ impl TypedActionView for TuiInputView {
                 {
                     self.exit_shell_mode(ctx);
                     TuiEditorInteractionOutcome::FollowCursor
+                // When the input is empty, ↑ recalls the last submitted message
+                // for re-editing — the shell-history affordance shown in the
+                // Figma footer as "↑ to edit". Non-empty buffers get the normal
+                // cursor-up behavior unchanged.
+                } else if matches!(*command, TuiEditorCommand::MoveUp) && self.is_empty(ctx) {
+                    if let Some(recalled) = self.last_submitted_text.clone() {
+                        self.set_text(&recalled, ctx);
+                    }
+                    TuiEditorInteractionOutcome::FollowCursor
                 } else {
                     self.editor_state.apply_command(
                         &self.model,
@@ -620,6 +636,9 @@ impl TuiInputView {
     /// owner decides whether the submission is accepted and calls [`Self::clear`].
     fn submit(&mut self, ctx: &mut ViewContext<Self>) {
         let text = self.plain_text(ctx);
+        if !text.trim().is_empty() {
+            self.last_submitted_text = Some(text.clone());
+        }
         ctx.emit(TuiInputViewEvent::Submitted(text));
     }
 

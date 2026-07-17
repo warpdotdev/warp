@@ -1707,6 +1707,115 @@ fn bang_mid_text_inserts_literally() {
     });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Up-to-recall (↑ to edit)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pressing ↑ in an empty buffer after a submission recalls the last submitted
+/// text so the user can re-edit and re-submit it.
+#[test]
+fn move_up_in_empty_buffer_recalls_last_submitted_text() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            // Type and submit a message.
+            type_str(&view, ctx, "hello world");
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+            // Simulate the session view clearing the input after submission.
+            view.update(ctx, |v, vctx| v.clear(vctx));
+            assert!(view.as_ref(ctx).is_empty(ctx));
+
+            // ↑ in an empty buffer should restore the last submitted text.
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp)],
+            );
+            assert_eq!(text(&view, ctx), "hello world");
+        });
+    });
+}
+
+/// Pressing ↑ with text already in the buffer moves the cursor up (normal
+/// editor behavior) rather than recalling the last submitted text.
+#[test]
+fn move_up_in_nonempty_buffer_moves_cursor_not_recalls() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            // Submit a message so there is something to potentially recall.
+            type_str(&view, ctx, "previous message");
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+            view.update(ctx, |v, vctx| v.clear(vctx));
+
+            // Type a new multi-line message.
+            type_str(&view, ctx, "line one");
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::InsertNewline)],
+            );
+            type_str(&view, ctx, "line two");
+
+            // Cursor is on line 2; ↑ should move it to line 1, not recall.
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp)],
+            );
+            assert_eq!(text(&view, ctx), "line one\nline two");
+            // Cursor should now be on line 0.
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((8, 0)));
+        });
+    });
+}
+
+/// Pressing ↑ in an empty buffer with no prior submission is a no-op (does
+/// not panic and leaves the buffer empty).
+#[test]
+fn move_up_in_empty_buffer_with_no_prior_submission_is_noop() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            assert!(view.as_ref(ctx).is_empty(ctx));
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp)],
+            );
+            assert!(view.as_ref(ctx).is_empty(ctx));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+        });
+    });
+}
+
+/// Pressing ↑ in an empty buffer after a whitespace-only submission does not
+/// recall the blank entry; only non-whitespace-only submissions are stored.
+#[test]
+fn whitespace_only_submission_is_not_recalled() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            // Submit a real message first.
+            type_str(&view, ctx, "hello world");
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+            view.update(ctx, |v, vctx| v.clear(vctx));
+            // Submit a whitespace-only message.
+            type_str(&view, ctx, "   ");
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+            view.update(ctx, |v, vctx| v.clear(vctx));
+
+            // ↑ should recall "hello world", not the blank submission.
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp)],
+            );
+            assert_eq!(text(&view, ctx), "hello world");
+        });
+    });
+}
+
 /// Submit emits without clearing; the owner clears via [`TuiInputView::clear`]
 /// once a submission is accepted.
 #[test]
