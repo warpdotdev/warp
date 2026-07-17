@@ -569,11 +569,31 @@ impl LocalRepoMetadataModel {
 
         // Process moved files
         for (to_path, from_path) in &event.moved {
-            if let Some(repo_path) = self.find_repository_for_watcher_entry_path(to_path) {
-                let repo_update = repo_updates.entry(repo_path).or_default();
+            let dest_repo = self.find_repository_for_watcher_entry_path(to_path);
+            let source_repo =
+                self.find_repository_for_path_string(from_path.to_string_lossy().as_ref());
+
+            // Destination repo: the file arrived here. A same-repo move records
+            // both sides (the `moved` entry drives an add of `to_path` and a
+            // removal of `from_path`).
+            if let Some(ref dest) = dest_repo {
+                let repo_update = repo_updates.entry(dest.clone()).or_default();
                 repo_update
                     .moved
                     .insert(to_path.to_path_buf(), from_path.to_path_buf());
+            }
+
+            // Source repo, when it differs from the destination (including a
+            // move *out* of every tracked repo): the file left this repo, so
+            // record it as a removal there. Without this, moving a file (e.g. a
+            // `.gitignore`) out of a repo would leave the source tree stale —
+            // and the ignore-rule detector, which inspects moved-from paths,
+            // would never run for the source repo.
+            if let Some(source) = source_repo {
+                if dest_repo.as_ref() != Some(&source) {
+                    let repo_update = repo_updates.entry(source).or_default();
+                    repo_update.deleted.push(from_path.to_path_buf());
+                }
             }
         }
 
@@ -585,6 +605,17 @@ impl LocalRepoMetadataModel {
         // Phase 1 (background thread): compute lightweight mutations via filesystem I/O.
         // Phase 2 (main thread callback): apply mutations directly to the tree — no clone needed.
         for (repo_path, repo_scoped_update) in repo_updates {
+            // A change to the repo's ignore rules (a `.gitignore` file)
+            // invalidates the cached `state.gitignores`, so classifying this
+            // batch incrementally against the stale set would mis-tag entries.
+            // Rebuild the whole tree from disk instead (reloading the gitignore
+            // set), matching a fresh index; fall through to the incremental path
+            // only if the repo can't be rebuilt that way.
+            if Self::update_touches_ignore_rules(&repo_scoped_update)
+                && self.reindex_repository_for_ignore_change(&repo_path, ctx)
+            {
+                continue;
+            }
             if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(&repo_path) {
                 let repo_path_clone = repo_path.clone();
                 let gitignores_clone = state.gitignores.clone();
@@ -659,6 +690,60 @@ impl LocalRepoMetadataModel {
                 );
             }
         }
+    }
+
+    /// Returns whether `update` changes a repository's ignore rules — i.e. any
+    /// added/modified, deleted, or moved path is a `.gitignore` file. Such a
+    /// change invalidates the cached gitignore set (`state.gitignores`), so the
+    /// tree must be recomputed from disk rather than incrementally patched.
+    ///
+    /// Note: this intentionally does not cover `.git/info/exclude` or the global
+    /// excludes file — the repository watcher's `.git/` allowlist does not
+    /// deliver those events, so they cannot be observed here.
+    #[cfg(feature = "local_fs")]
+    fn update_touches_ignore_rules(update: &RepoUpdate) -> bool {
+        update
+            .added
+            .iter()
+            .chain(update.deleted.iter())
+            .chain(update.moved.keys())
+            .chain(update.moved.values())
+            .any(|path| path_is_gitignore(path))
+    }
+
+    /// Rebuilds a repository's file tree from scratch after its ignore rules
+    /// changed, reloading `state.gitignores` from disk and re-tagging every
+    /// entry. Returns `true` when a rebuild was started, or `false` when the
+    /// repo cannot be rebuilt this way (not indexed, a lazy standalone path, or
+    /// no backing repository handle) and the caller should fall back to the
+    /// incremental path.
+    ///
+    /// Removing the cached state makes [`Self::index_directory`] treat the repo
+    /// as new and rebuild it (it early-returns for an already-indexed repo).
+    /// This runs synchronously through the point where `index_directory` marks
+    /// the repo `Pending`, so consumers never observe a missing repository
+    /// between the two calls; the rebuild also refreshes the watcher's descend
+    /// filter via `add_repository_internal`.
+    #[cfg(feature = "local_fs")]
+    fn reindex_repository_for_ignore_change(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if self.lazy_loaded_paths.contains_key(repo_path) {
+            return false;
+        }
+        let Some(IndexedRepoState::Indexed(state)) = self.repositories.get(repo_path) else {
+            return false;
+        };
+        let Some(repository) = state.repository().cloned() else {
+            return false;
+        };
+        self.remove_repository_state(repo_path);
+        if let Err(e) = self.index_directory(repository, ctx) {
+            log::warn!("Failed to re-index {repo_path} after ignore-rule change: {e:?}");
+        }
+        true
     }
 
     #[cfg(feature = "local_fs")]
@@ -1744,6 +1829,13 @@ impl LocalRepoMetadataModel {
 
 impl warpui_core::Entity for LocalRepoMetadataModel {
     type Event = RepositoryMetadataEvent;
+}
+
+/// Returns whether `path` is a `.gitignore` file (matched by file name).
+fn path_is_gitignore(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == ".gitignore")
 }
 
 /// Helper function to recursively collect contents (files and optionally directories) from an Entry tree.

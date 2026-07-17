@@ -363,11 +363,25 @@ pub struct FileTreeState {
     pub gitignores: Vec<Gitignore>,
 
     /// Handle to the backing repository (None for lazily-loaded standalone paths).
-    #[expect(unused)]
+    ///
+    /// Only read via [`FileTreeState::repository`] on the filesystem-backed
+    /// (`local_fs`) path, so it is dead code on targets without that feature
+    /// (e.g. wasm).
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     repository: Option<ModelHandle<Repository>>,
 }
 
 impl FileTreeState {
+    /// Returns the handle to the backing repository, if any.
+    ///
+    /// `None` for lazily-loaded standalone paths and remote-model states. Used
+    /// to rebuild the tree from scratch when the repo's ignore rules change
+    /// (only on the `local_fs` watcher path, hence unused without that feature).
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+    pub(crate) fn repository(&self) -> Option<&ModelHandle<Repository>> {
+        self.repository.as_ref()
+    }
+
     /// Creates a new FileTreeState.
     pub fn new(
         entry: Entry,
