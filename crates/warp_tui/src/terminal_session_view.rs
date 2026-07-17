@@ -75,8 +75,8 @@ use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
-    hide_agent_requested_command_from_top_level, inline_process_owns_input,
-    terminal_use_conversation_to_resume, terminal_use_interrupt_action, TerminalUseInterruptAction,
+    hide_agent_requested_command_from_top_level, terminal_use_conversation_to_resume,
+    terminal_use_interrupt_action, tui_input_target, TerminalUseInterruptAction, TuiInputTarget,
 };
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
@@ -337,13 +337,11 @@ pub(crate) fn init(app: &mut AppContext) {
 }
 
 impl TuiTerminalSessionView {
-    /// Returns whether the foreground process should receive keyboard input
-    /// instead of Warp's editor. This is true for alt-screen applications and
-    /// for inline long-running commands currently controlled by the user, and
-    /// drives the session's focus, rendering, and event-routing transitions.
-    fn process_owns_input(&self) -> bool {
+    /// Selects the sole input destination for the current terminal lifecycle
+    /// state. The result drives focus, rendering, and event routing together.
+    fn input_target(&self) -> TuiInputTarget {
         let terminal_model = self.terminal_model.lock();
-        terminal_model.is_alt_screen_active() || inline_process_owns_input(&terminal_model)
+        tui_input_target(&terminal_model)
     }
 
     fn update_process_input_focus(&mut self, ctx: &mut ViewContext<Self>) {
@@ -351,12 +349,15 @@ impl TuiTerminalSessionView {
     }
 
     fn focus_current_owner(&self, ctx: &mut ViewContext<Self>) {
-        if self.process_owns_input() {
-            ctx.focus_self();
-        } else if let Some(blocker) = self.active_blocking_child(ctx) {
-            ctx.focus(&blocker);
-        } else {
-            ctx.focus(&self.input_view);
+        match self.input_target() {
+            TuiInputTarget::Disabled | TuiInputTarget::Pty => ctx.focus_self(),
+            TuiInputTarget::AgentEditor => {
+                if let Some(blocker) = self.active_blocking_child(ctx) {
+                    ctx.focus(&blocker);
+                } else {
+                    ctx.focus(&self.input_view);
+                }
+            }
         }
     }
 
@@ -487,9 +488,10 @@ impl TuiTerminalSessionView {
             .as_ref(ctx)
             .active_target()
             .map(|target| target.control_state);
-        let Some(action) =
-            terminal_use_interrupt_action(control_state.as_ref(), self.process_owns_input())
-        else {
+        let Some(action) = terminal_use_interrupt_action(
+            control_state.as_ref(),
+            self.input_target().pty_owns_input(),
+        ) else {
             return false;
         };
         match action {
@@ -922,6 +924,10 @@ impl TuiTerminalSessionView {
                 view.update_process_input_focus(ctx);
                 ctx.notify();
             }
+            ModelEvent::BootstrapPrecmdDone => {
+                view.update_process_input_focus(ctx);
+                ctx.notify();
+            }
             ModelEvent::BlockMetadataReceived(_)
             | ModelEvent::BlockWorkingDirectoryUpdated(_)
             | ModelEvent::BackgroundBlockStarted
@@ -1041,7 +1047,6 @@ impl TuiTerminalSessionView {
             |_, _| {},
         );
         ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
-
         Self {
             transcript,
             input_view,
@@ -1716,6 +1721,11 @@ impl TuiTerminalSessionView {
     /// Routes a submission to shell execution or the agent conversation based
     /// on the input mode.
     fn handle_submitted(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        // A stale editor frame must not submit into a shell that is still
+        // bootstrapping or has handed input to a foreground process.
+        if !self.input_target().agent_editor_owns_input() {
+            return;
+        }
         if !matches!(
             self.conversation_restore_state,
             ConversationRestoreState::Idle
@@ -2290,11 +2300,11 @@ impl TuiView for TuiTerminalSessionView {
         }
         // While a full-screen (alt-screen) app is active, hand the whole pane to
         // it: render its grid and forward input, instead of the block UI.
-        let (alt_screen_active, inline_process_owns_input) = {
+        let (alt_screen_active, input_target) = {
             let terminal_model = self.terminal_model.lock();
             (
                 terminal_model.is_alt_screen_active(),
-                inline_process_owns_input(&terminal_model),
+                tui_input_target(&terminal_model),
             )
         };
         if alt_screen_active {
@@ -2306,7 +2316,8 @@ impl TuiView for TuiTerminalSessionView {
             .finish();
         }
 
-        let inline_menu = (!inline_process_owns_input)
+        let inline_menu = input_target
+            .agent_editor_owns_input()
             .then(|| {
                 active_inline_menu(
                     &self.inline_menus,
@@ -2358,7 +2369,7 @@ impl TuiView for TuiTerminalSessionView {
             .and_then(|conversation_id| {
                 BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
             })
-            .filter(|_| !blocker_active && !inline_process_owns_input);
+            .filter(|_| !blocker_active && input_target.agent_editor_owns_input());
         if let Some(conversation) = selected_conversation {
             if conversation.status().is_in_progress() {
                 let warping_elapsed = conversation
@@ -2399,7 +2410,7 @@ impl TuiView for TuiTerminalSessionView {
                 }
             }
         }
-        if !blocker_active && !inline_process_owns_input {
+        if !blocker_active && input_target.agent_editor_owns_input() {
             if let Some(menu) = inline_menu {
                 content = content.child(
                     TuiConstrainedBox::new(menu)
@@ -2432,7 +2443,7 @@ impl TuiView for TuiTerminalSessionView {
         let content = content.finish();
         let terminal_content =
             TuiTerminalContentElement::new(self.terminal_resize_tx.clone(), content);
-        let terminal_content = if inline_process_owns_input {
+        let terminal_content = if input_target.pty_owns_input() {
             terminal_content.with_pty_input(self.terminal_model.clone())
         } else {
             terminal_content
