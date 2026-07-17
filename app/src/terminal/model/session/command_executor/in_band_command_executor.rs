@@ -10,7 +10,6 @@ use async_trait::async_trait;
 use parking_lot::{Mutex, MutexGuard};
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
-use warp_errors::report_error;
 use warp_terminal::model::Point;
 use warp_util::on_cancel::OnCancelFutureExt;
 use warpui::r#async::block_on;
@@ -226,9 +225,11 @@ impl InBandCommandExecutor {
                                 }
                             };
                             if let Err(error) = output_tx.try_send(command_output) {
-                                report_error!(anyhow::Error::new(error).context(
-                                    "Error occurred when sending generator command output"
-                                ));
+                                // Matches the sibling send paths above: a closed/full output
+                                // channel is a gracefully-handled condition, not a Sentry issue.
+                                log::warn!(
+                                    "Error occurred when sending generator command output: {error}"
+                                );
                             }
                         }
                     }
