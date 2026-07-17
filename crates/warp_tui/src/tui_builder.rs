@@ -17,6 +17,7 @@ use warpui_core::elements::tui::{
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
 use warpui_core::AppContext;
 
+use crate::orchestrated_agent_identity_styling::{agent_identity_palette, AgentIdentity};
 use crate::terminal_background::probed_colors;
 
 /// Theme-derived styles and components for the TUI, mirroring the GUI's
@@ -221,6 +222,25 @@ impl TuiUiBuilder {
         TuiStyle::default().fg(cell_color(self.warping_base_fill()))
     }
 
+    /// The magenta-tinted background behind the orchestration permission
+    /// card, pre-blended over the probed base background.
+    pub(crate) fn orchestration_surface_background(&self) -> Color {
+        let magenta = ThemeFill::from(self.warp_theme.terminal_colors().normal.magenta);
+        cell_color(self.base_background().blend(&magenta.with_opacity(10)))
+    }
+
+    /// Stronger magenta tint for the orchestration permission title row:
+    /// the surface overlay applied twice, matching the design's stacked
+    /// header overlays.
+    pub(crate) fn orchestration_header_background(&self) -> Color {
+        let magenta = ThemeFill::from(self.warp_theme.terminal_colors().normal.magenta);
+        cell_color(
+            self.base_background()
+                .blend(&magenta.with_opacity(10))
+                .blend(&magenta.with_opacity(10)),
+        )
+    }
+
     /// Bold magenta text for a selected option-selector row.
     pub(crate) fn option_selector_selected_style(&self) -> TuiStyle {
         TuiStyle::default()
@@ -228,6 +248,17 @@ impl TuiUiBuilder {
                 self.warp_theme.terminal_colors().normal.magenta,
             )))
             .add_modifier(Modifier::BOLD)
+    }
+
+    /// Bold primary text for selected configuration metadata.
+    pub(crate) fn orchestration_selected_value_style(&self) -> TuiStyle {
+        self.primary_text_style().add_modifier(Modifier::BOLD)
+    }
+
+    /// The deterministic agent identity palette for this theme. See
+    /// [`crate::orchestrated_agent_identity_styling`].
+    pub(crate) fn agent_identity_palette(&self) -> Vec<AgentIdentity> {
+        agent_identity_palette(self.warp_theme.terminal_colors())
     }
 
     /// Collapsible-header style while the pointer hovers it.

@@ -4,8 +4,6 @@ use serde::{Serialize, Serializer};
 use warpui::platform::Cursor;
 use warpui::ViewContext;
 
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::{LinkOpenMethod, TelemetryEvent};
 use crate::terminal::model::grid::grid_handler::Link;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{WithinBlock, WithinModel};
@@ -503,13 +501,6 @@ impl super::TerminalView {
         ctx.focus(&self.input);
         ctx.notify();
 
-        send_telemetry_from_ctx!(
-            TelemetryEvent::OpenLink {
-                link: link.clone(),
-                open_with: LinkOpenMethod::ToolTip
-            },
-            ctx
-        );
         match link {
             #[cfg(feature = "local_fs")]
             GridHighlightedLink::File(link) => {
