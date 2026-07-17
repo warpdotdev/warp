@@ -79,7 +79,8 @@ impl SkillProvider {
     pub fn icon(&self) -> Icon {
         match self {
             SkillProvider::Claude => Icon::ClaudeLogo,
-            SkillProvider::Codex | SkillProvider::Omp => Icon::OpenAILogo,
+            SkillProvider::Codex => Icon::OpenAILogo,
+            SkillProvider::Omp => Icon::PiLogo,
             SkillProvider::Gemini => Icon::GeminiLogo,
             SkillProvider::Droid => Icon::DroidLogo,
             SkillProvider::OpenCode => Icon::OpenCodeLogo,
