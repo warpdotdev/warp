@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ai::agent::action_result::StopRecordingResult;
 use computer_use::RecordingHandle;
 use futures::executor::block_on;
@@ -8,7 +10,7 @@ fn active_controller(recording_id: &str, conversation_id: AIConversationId) -> R
     let mut controller = RecordingController::new();
     controller.try_begin_start(conversation_id).unwrap();
     let (handle, _) = RecordingHandle::new_test(1, 1);
-    controller.finish_start(recording_id.to_string(), conversation_id, handle);
+    controller.finish_start(recording_id.to_string(), conversation_id, handle, 15);
     controller
 }
 
@@ -124,13 +126,116 @@ fn matching_conversation_cancels_start_reservation() {
 }
 
 #[test]
-fn records_actions_only_for_the_owning_conversation() {
+fn begin_and_commit_record_finish_offset_and_labels() {
+    let owner = AIConversationId::new();
+    let mut controller = active_controller("recording", owner);
+
+    // `begin_action_group` reserves a pending group and returns the capture
+    // start instant; `commit_action_group` records the finish offset measured
+    // after the action sequence (here 500 ms) returns.
+    assert!(controller
+        .begin_action_group(owner, vec!["ctrl+a".to_string()])
+        .is_some());
+    controller.commit_action_group(owner, Duration::from_millis(500));
+
+    let FinalizationClaim::Claimed { recording, .. } =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("active recording should be claimed");
+    };
+    assert_eq!(recording.actions.len(), 1);
+    let entry = &recording.actions[0];
+    assert_eq!(entry.labels, ["ctrl+a"]);
+    assert_eq!(entry.finish_offset, Duration::from_millis(500));
+    // The finish is after the start, capturing the whole multi-action sequence.
+    assert!(entry.finish_offset > entry.offset);
+}
+
+#[test]
+fn commit_clamps_finish_to_start() {
+    let owner = AIConversationId::new();
+    let mut controller = active_controller("recording", owner);
+
+    controller.begin_action_group(owner, vec!["a".to_string()]);
+    // A finish before the start is clamped up to the start so the segment
+    // builder's one-frame minimum can apply downstream.
+    controller.commit_action_group(owner, Duration::ZERO);
+
+    let FinalizationClaim::Claimed { recording, .. } =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("active recording should be claimed");
+    };
+    assert_eq!(recording.actions.len(), 1);
+    assert!(recording.actions[0].finish_offset >= recording.actions[0].offset);
+}
+
+#[test]
+fn pointer_only_group_commits_with_empty_labels() {
+    let owner = AIConversationId::new();
+    let mut controller = active_controller("recording", owner);
+
+    controller.begin_action_group(owner, vec![]);
+    controller.commit_action_group(owner, Duration::from_millis(200));
+
+    let FinalizationClaim::Claimed { recording, .. } =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("active recording should be claimed");
+    };
+    assert_eq!(recording.actions.len(), 1);
+    assert!(recording.actions[0].labels.is_empty());
+}
+
+#[test]
+fn discard_drops_pending_group_without_committing() {
+    let owner = AIConversationId::new();
+    let mut controller = active_controller("recording", owner);
+
+    controller.begin_action_group(owner, vec!["a".to_string()]);
+    // A failed or cancelled `UseComputer` call discards the pending group.
+    controller.discard_action_group(owner);
+
+    let FinalizationClaim::Claimed { recording, .. } =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("active recording should be claimed");
+    };
+    assert!(recording.actions.is_empty());
+    assert!(recording.pending_group.is_none());
+}
+
+#[test]
+fn commit_without_begin_is_noop() {
+    let owner = AIConversationId::new();
+    let mut controller = active_controller("recording", owner);
+
+    controller.commit_action_group(owner, Duration::from_millis(500));
+
+    let FinalizationClaim::Claimed { recording, .. } =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("active recording should be claimed");
+    };
+    assert!(recording.actions.is_empty());
+}
+
+#[test]
+fn begin_and_commit_are_scoped_to_the_owning_conversation() {
     let owner = AIConversationId::new();
     let other = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
-    controller.record_action(other, vec!["other".to_string()]);
-    controller.record_action(owner, vec!["owner".to_string()]);
+    assert!(controller
+        .begin_action_group(owner, vec!["owner".to_string()])
+        .is_some());
+    // Another conversation cannot begin (returns None) and cannot commit; the
+    // owner's pending group is untouched.
+    assert!(controller
+        .begin_action_group(other, vec!["other".to_string()])
+        .is_none());
+    controller.commit_action_group(other, Duration::from_millis(999));
+    controller.commit_action_group(owner, Duration::from_millis(300));
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -139,4 +244,29 @@ fn records_actions_only_for_the_owning_conversation() {
     };
     assert_eq!(recording.actions.len(), 1);
     assert_eq!(recording.actions[0].labels, ["owner"]);
+    assert_eq!(
+        recording.actions[0].finish_offset,
+        Duration::from_millis(300)
+    );
+}
+
+#[test]
+fn commit_after_finalization_is_noop() {
+    let owner = AIConversationId::new();
+    let mut controller = active_controller("recording", owner);
+
+    assert!(controller
+        .begin_action_group(owner, vec!["a".to_string()])
+        .is_some());
+    // The recording is finalized while the action is in flight; the pending
+    // group leaves with the claimed recording.
+    let FinalizationClaim::Claimed { recording, .. } =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("active recording should be claimed");
+    };
+    // A late commit lands on a controller that is now Finalizing, so it commits
+    // nothing rather than recording on the wrong (finalized) recording.
+    controller.commit_action_group(owner, Duration::from_millis(500));
+    assert!(recording.actions.is_empty());
 }

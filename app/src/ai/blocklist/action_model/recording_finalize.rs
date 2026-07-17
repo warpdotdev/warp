@@ -103,33 +103,55 @@ async fn finalize_recording(
         drop(recording);
         return StopRecordingResult::Cancelled;
     }
+    let ActiveRecording {
+        handle,
+        actions,
+        frame_rate,
+        ..
+    } = recording;
+    // A recording with no committed meaningful action group is an explicit
+    // finalization error rather than a published artifact: it is not uploaded,
+    // and dropping the handle kill-on-drops ffmpeg and removes the partial
+    // capture. This keeps the smart cut from silently publishing a video with
+    // no action timeline.
+    if actions.is_empty() {
+        drop(handle);
+        return StopRecordingResult::Error(
+            "Recording contained no committed actions; no video artifact was published."
+                .to_string(),
+        );
+    }
     let recorder = computer_use::create_recorder();
-    let actions = recording.actions;
-    let output = match recorder.stop(recording.handle).await {
+    let output = match recorder.stop(handle).await {
         Ok(output) => output,
         Err(error) => return StopRecordingResult::Error(error.to_string()),
     };
 
     let local_path = output.path.clone();
 
-    // Burn keyboard action pills into the video before upload. Best-effort: on
-    // any failure the original capture is uploaded unannotated (a no-labels
-    // video beats no video). The overlay file, when produced, is a sibling of
-    // the mp4.
+    // Apply the post-stop smart cut (keep real action windows at 1x, drop
+    // blocked/thinking gaps) and burn the remapped overlay pills into the video
+    // before upload. Best-effort: on any failure the original 1x capture is
+    // uploaded unannotated (a no-cut video beats no video). The cut/overlay
+    // file, when produced, is a sibling of the mp4.
     let mut upload_path = local_path.clone();
     let mut overlay_path: Option<std::path::PathBuf> = None;
-    if !actions.is_empty() {
-        match computer_use::burn_in_action_log(&local_path, &actions, (output.width, output.height))
-            .await
-        {
-            Ok(path) if path != local_path => {
-                overlay_path = Some(path.clone());
-                upload_path = path;
-            }
-            Ok(_) => {}
-            Err(error) => {
-                log::warn!("Recording overlay burn-in failed; uploading original: {error}");
-            }
+    match computer_use::burn_in_action_log(
+        &local_path,
+        &actions,
+        (output.width, output.height),
+        output.duration,
+        frame_rate,
+    )
+    .await
+    {
+        Ok(path) if path != local_path => {
+            overlay_path = Some(path.clone());
+            upload_path = path;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("Recording cut/overlay burn-in failed; uploading original: {error}");
         }
     }
 

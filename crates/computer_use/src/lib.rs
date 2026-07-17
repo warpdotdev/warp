@@ -23,7 +23,7 @@ use async_trait::async_trait;
 // module definition.
 #[cfg(noop)]
 use noop as imp;
-pub use overlay::{ActionLogEntry, overlay_labels_for};
+pub use overlay::{ActionLogEntry, is_meaningful_action_group, overlay_labels_for};
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
@@ -258,14 +258,16 @@ pub async fn burn_in_action_log(
     input: &Path,
     entries: &[ActionLogEntry],
     dimensions: (u32, u32),
+    source_duration: Duration,
+    frame_rate: u32,
 ) -> Result<PathBuf, RecordingError> {
     #[cfg(all(linux, not(noop)))]
     {
-        imp::burn_in_action_log(input, entries, dimensions).await
+        imp::burn_in_action_log(input, entries, dimensions, source_duration, frame_rate).await
     }
     #[cfg(not(all(linux, not(noop))))]
     {
-        let _ = (entries, dimensions);
+        let _ = (entries, dimensions, source_duration, frame_rate);
         Ok(input.to_path_buf())
     }
 }
