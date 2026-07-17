@@ -1596,6 +1596,7 @@ fn dispatch_start_agent_conversation(
             title,
             auth_secret_name,
             runner_id,
+            agent_identity_uid,
         } => {
             launch_remote_child(
                 group,
@@ -1611,6 +1612,7 @@ fn dispatch_start_agent_conversation(
                     title,
                     auth_secret_name,
                     runner_id,
+                    agent_identity_uid,
                 },
                 ctx,
             );
@@ -1927,6 +1929,9 @@ struct RemoteLaunchFields {
     /// Runner UID selecting the child's compute config. Empty means "no
     /// override" — resolved at dispatch via the environment's default runner.
     runner_id: String,
+    /// UID of the named agent (service account) the remote child should
+    /// execute as; forwarded to `SpawnAgentRequest.agent_identity_uid`.
+    agent_identity_uid: Option<String>,
 }
 
 /// Sets up a hidden ambient-agent pane for a Remote child agent: creates the
@@ -1959,6 +1964,7 @@ fn launch_remote_child(
         title,
         auth_secret_name,
         runner_id,
+        agent_identity_uid,
     } = fields;
 
     let request_id = request.id;
@@ -2101,7 +2107,7 @@ fn launch_remote_child(
         referenced_attachments: vec![],
         conversation_id: None,
         initial_snapshot_token: None,
-        agent_identity_uid: None,
+        agent_identity_uid: agent_identity_uid.filter(|uid| !uid.trim().is_empty()),
         snapshot_disabled: should_disable_snapshot(ctx).then_some(true),
         orchestration_handoff: None,
     };

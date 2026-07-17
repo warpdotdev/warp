@@ -16,6 +16,7 @@ pub mod input;
 pub mod root_view;
 pub mod session;
 mod telemetry;
+mod tui_ask_question_view;
 mod tui_builder;
 mod ui;
 
@@ -23,8 +24,6 @@ mod conversation_menu;
 mod conversation_selection;
 mod editor_element;
 mod editor_interaction;
-// The option-selector slice consumes this reusable editor and removes the allow.
-#[allow(dead_code)]
 mod editor_view;
 mod exit_confirmation;
 mod inline_menu;
@@ -33,6 +32,9 @@ mod input_suggestions_mode;
 mod keybindings;
 mod mcp_menu;
 mod model_menu;
+mod option_selector;
+mod orchestrated_agent_identity_styling;
+mod orchestration_block;
 mod resume;
 mod skills_menu;
 mod slash_commands;

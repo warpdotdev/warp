@@ -452,14 +452,7 @@ impl CommandSearchView {
                 self.state.list_state.scroll_to(*index);
                 ctx.notify();
             }
-            SearchBarEvent::QueryFilterChanged { new_filter } => {
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::CommandSearchFilterChanged {
-                        new_filter: *new_filter
-                    },
-                    ctx
-                );
-            }
+            SearchBarEvent::QueryFilterChanged { .. } => {}
             SearchBarEvent::SelectionUpdateInZeroState { .. } => {}
             SearchBarEvent::EnterInZeroState { .. } => {}
         }

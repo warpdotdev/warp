@@ -29,6 +29,8 @@ use crate::editor_interaction::{editor_binding_specs, TuiEditorBindingTarget, Tu
 use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
 use crate::input::view::TuiInputAction;
 use crate::input::TuiInputView;
+use crate::option_selector::TuiOptionSelector;
+use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::root_view::RootTuiView;
 use crate::terminal_session_view::TuiTerminalSessionView;
 use crate::transcript_view::TuiTranscriptView;
@@ -78,6 +80,8 @@ pub(crate) fn init(app: &mut AppContext) {
         id!("TuiEditorView"),
         TuiEditorViewAction::Command,
     );
+    crate::orchestration_block::init(app);
+    crate::tui_ask_question_view::init(app);
 
     register_binding_validators(app);
 }
@@ -121,9 +125,11 @@ fn register_binding_validators(app: &mut AppContext) {
     app.register_tui_binding_validator::<TuiInputView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiEditorView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTranscriptView>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiOrchestrationBlock>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiOptionSelector>(is_tui_owned_binding);
 }
 
-fn is_tui_owned_binding(binding: BindingLens) -> IsBindingValid {
+pub(crate) fn is_tui_owned_binding(binding: BindingLens) -> IsBindingValid {
     // Non-keystroke triggers (palette-only `Empty`, `Standard`, `Custom`)
     // can never fire from TUI keyboard input, so they are exempt.
     if !matches!(binding.trigger, Trigger::Keystrokes(_)) {

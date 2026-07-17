@@ -1,5 +1,13 @@
 //! Public app APIs used by the `warp_tui` frontend.
 
+pub use ::ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
+pub use ::ai::agent::action_result::AskUserQuestionAnswerItem;
+pub use ::ai::agent::{
+    AskUserQuestionAction, AskUserQuestionEffect, AskUserQuestionPhase, AskUserQuestionSession,
+    QuestionDraft,
+};
+pub use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
+pub use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 pub use repo_metadata::repositories::RepoDetectionSource;
 pub use warp_cli::agent::Harness;
 use warp_completer::completer::{CompletionContext as _, TopLevelCommandCaseSensitivity};
@@ -56,16 +64,25 @@ pub use crate::ai::blocklist::history_model::{
 };
 pub use crate::ai::blocklist::view_util::format_credits;
 pub use crate::ai::blocklist::{
-    block_context_from_terminal_model, AIActionStatus, BlocklistAIActionEvent,
-    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
-    InputConfig, InputModePolicy, InputModePolicyHandle, InputType, InputTypeAutoDetectionSource,
-    PolicyConfigUpdate, RequestFileEditsExecutor, ShellCommandExecutor, ShellCommandExecutorEvent,
+    block_context_from_terminal_model, AIActionStatus, AskUserQuestionExecutor,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIInputModel, InputConfig, InputModePolicy, InputModePolicyHandle, InputType,
+    InputTypeAutoDetectionSource, PolicyConfigUpdate, RequestFileEditsExecutor, RunAgentsExecutor,
+    RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
+    ShellCommandExecutorEvent,
+};
+pub use crate::ai::connected_self_hosted_workers::{
+    ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
 };
 #[cfg(feature = "local_fs")]
 pub use crate::ai::conversation_export::{
     export_conversation_markdown, ConversationFileExport, ConversationFileExportError,
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+pub use crate::ai::harness_availability::{
+    AuthSecretEntry, AuthSecretFetchState, HarnessAvailability, HarnessAvailabilityEvent,
+    HarnessAvailabilityModel, HarnessModelInfo,
+};
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::ai::orchestration::{
     accept_disabled_reason_with_auth, api_key_snapshot, auth_secret_selection_required,

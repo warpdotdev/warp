@@ -80,6 +80,7 @@ fn start_agent_copy_uses_remote_labels_for_remote_children() {
         title: String::new(),
         auth_secret_name: None,
         runner_id: String::new(),
+        agent_identity_uid: None,
     };
 
     assert_eq!(start_agent_success_suffix(&execution_mode), " remotely.");

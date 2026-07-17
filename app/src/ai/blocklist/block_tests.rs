@@ -380,6 +380,7 @@ fn agent_cfg() -> RunAgentsAgentRunConfig {
         name: "child".to_string(),
         prompt: "do X".to_string(),
         title: "Child".to_string(),
+        agent_identity_uid: String::new(),
     }
 }
 
@@ -415,6 +416,7 @@ fn remote_arm_propagates_skills_into_skill_references() {
         title,
         auth_secret_name,
         runner_id: _,
+        agent_identity_uid,
     } = mode
     else {
         panic!("expected Remote start-agent mode");
@@ -427,6 +429,43 @@ fn remote_arm_propagates_skills_into_skill_references() {
     assert!(computer_use_enabled);
     assert_eq!(title, "Child");
     assert_eq!(auth_secret_name, None);
+    assert_eq!(agent_identity_uid, None);
+}
+
+#[test]
+fn remote_arm_propagates_agent_identity_uid() {
+    let mut cfg = agent_cfg();
+    cfg.agent_identity_uid = "sa-uid-1".to_string();
+    let mode = run_agents_to_start_agent_mode(
+        &RunAgentsExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            worker_host: "warp".to_string(),
+            computer_use_enabled: false,
+        },
+        "oz",
+        "auto",
+        &[],
+        None,
+        &cfg,
+    )
+    .expect("Remote+oz must convert");
+    let StartAgentExecutionMode::Remote {
+        agent_identity_uid, ..
+    } = mode
+    else {
+        panic!("expected Remote start-agent mode");
+    };
+    assert_eq!(agent_identity_uid.as_deref(), Some("sa-uid-1"));
+}
+
+#[test]
+fn local_arm_rejects_agent_identity_uid() {
+    let mut cfg = agent_cfg();
+    cfg.agent_identity_uid = "sa-uid-1".to_string();
+    let err =
+        run_agents_to_start_agent_mode(&RunAgentsExecutionMode::Local, "", "", &[], None, &cfg)
+            .expect_err("Local + agent_identity_uid must be rejected");
+    assert!(err.contains("agent_identity_uid requires remote execution"));
 }
 
 #[test]

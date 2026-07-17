@@ -21,7 +21,7 @@ use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScene,
-    TuiScreenPosition, TuiSize,
+    TuiScreenPosition, TuiSize, TuiText,
 };
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
@@ -1333,6 +1333,33 @@ fn laid_out_element(
     let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
     (element, TuiRect::new(0, 0, size.width, size.height))
 }
+struct FocusTarget;
+
+impl Entity for FocusTarget {
+    type Event = ();
+}
+
+impl TuiView for FocusTarget {
+    fn ui_name() -> &'static str {
+        "FocusTarget"
+    }
+
+    fn render(&self, _ctx: &AppContext) -> Box<dyn TuiElement> {
+        TuiText::new("").finish()
+    }
+}
+
+fn printable_key(character: char) -> TuiEvent {
+    TuiEvent::KeyDown {
+        keystroke: Keystroke {
+            key: character.to_string(),
+            ..Default::default()
+        },
+        chars: character.to_string(),
+        details: KeyEventDetails::default(),
+        is_composing: false,
+    }
+}
 
 /// Paints `element` and returns its retained scene.
 fn paint_event_scene(element: &mut dyn TuiElement, area: TuiRect) -> Rc<TuiScene> {
@@ -1348,6 +1375,42 @@ fn paint_event_scene(element: &mut dyn TuiElement, area: TuiRect) -> Rc<TuiScene
         );
     }
     Rc::new(paint_ctx.scene.clone())
+}
+fn dispatch_element_event(
+    view: &ViewHandle<TuiInputView>,
+    ctx: &AppContext,
+    event: &TuiEvent,
+) -> bool {
+    let (mut element, area) = laid_out_element(view, ctx);
+    let scene = paint_event_scene(&mut element, area);
+    let mut rendered_views = EntityIdMap::default();
+    let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+    event_ctx.set_origin_view(Some(view.id()));
+    element.dispatch_event(event, &mut event_ctx, ctx)
+}
+
+#[test]
+fn printable_input_is_accepted_only_while_focused() {
+    App::test((), |mut app| async move {
+        let view = app.update(build_view);
+
+        assert!(app.read(|ctx| view.is_focused(ctx)));
+        assert!(app.read(|ctx| dispatch_element_event(&view, ctx, &printable_key('a'))));
+        assert_eq!(
+            app.read(|ctx| cursor_and_height(&view, ctx).0),
+            Some((0, 0))
+        );
+
+        let focus_target = view.update(&mut app, |_, ctx| ctx.add_tui_view(|_| FocusTarget));
+        focus_target.update(&mut app, |_, ctx| ctx.focus_self());
+
+        assert!(!app.read(|ctx| view.is_focused(ctx)));
+        assert!(!app.read(|ctx| dispatch_element_event(&view, ctx, &printable_key('b'))));
+        assert_eq!(app.read(|ctx| cursor_and_height(&view, ctx).0), None);
+
+        view.update(&mut app, |_, ctx| ctx.focus_self());
+        assert!(app.read(|ctx| dispatch_element_event(&view, ctx, &printable_key('c'))));
+    });
 }
 
 /// Drives the full mouse path for `event`: lay out the element, map the event to

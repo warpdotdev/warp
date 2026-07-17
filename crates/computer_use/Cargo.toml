@@ -46,6 +46,13 @@ objc2-core-foundation.workspace = true
 objc2-core-graphics = { workspace = true, features = ["libc"] }
 tempfile.workspace = true
 warpui_core.workspace = true
+# The avfoundation video recorder (`mac/recording.rs`) shells out to a supervised
+# ffmpeg subprocess, mirroring `linux/recording.rs`: tokio `process`/`time` drive
+# the spawn + finalize timeouts, `nix` sends SIGINT to finalize the container,
+# and `uuid` names the ephemeral recording file.
+nix = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["process", "time"] }
+uuid.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 ashpd.workspace = true

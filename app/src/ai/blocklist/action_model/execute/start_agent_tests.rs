@@ -1040,6 +1040,7 @@ fn execute_returns_error_when_remote_opencode_harness_is_requested() {
                 title: String::new(),
                 auth_secret_name: None,
                 runner_id: String::new(),
+                agent_identity_uid: None,
             },
         );
 

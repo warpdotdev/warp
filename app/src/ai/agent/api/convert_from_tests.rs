@@ -539,6 +539,7 @@ fn converts_remote_start_agent_with_environment_id() {
             title: String::new(),
             auth_secret_name: None,
             runner_id: String::new(),
+            agent_identity_uid: None,
         }
     );
     assert_eq!(lifecycle_subscription, None);
@@ -582,6 +583,7 @@ fn converts_remote_start_agent_v2_with_skill_references() {
             title: "Remote child".to_string(),
             auth_secret_name: None,
             runner_id: String::new(),
+            agent_identity_uid: None,
         }
     );
     assert_eq!(lifecycle_subscription, None);

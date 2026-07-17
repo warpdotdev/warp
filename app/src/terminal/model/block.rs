@@ -15,7 +15,6 @@ use enum_iterator::all;
 use hex;
 use instant::Instant;
 pub use interaction_mode::*;
-use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 pub use serialized_block::*;
@@ -48,8 +47,8 @@ use crate::server::ids::SyncId;
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::event::{
-    BlockCompletedEvent, BlockLatencyData, BlockMetadataReceivedEvent, BlockType,
-    BlockWorkingDirectoryUpdatedEvent, Event, UserBlockCompleted,
+    BlockCompletedEvent, BlockMetadataReceivedEvent, BlockType, BlockWorkingDirectoryUpdatedEvent,
+    Event, UserBlockCompleted,
 };
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{
@@ -143,13 +142,6 @@ const BACKGROUND_OUTPUT_RENDER_DELAY_MS: u64 = 100;
 /// how many rows to take for much narrower terminals, to ensure we have enough content
 /// for block summaries given to AI.
 const MIN_TERMINAL_WIDTH_FOR_TRUNCATION_CALCULATIONS: usize = 150;
-
-lazy_static! {
-    /// A set of commands that perform minimal work that we use as a baseline to measure the latency of blocks.
-    /// Note that while the empty command doesn't invoke pre-exec, it still does get a newline from
-    /// the shell, and runs precmd.
-    static ref BASELINE_COMMANDS: HashSet<&'static str> = HashSet::from(["", "pwd", "whoami", "cd"]);
-}
 
 /// Blocklist Env Var metadata associated with this block.
 #[derive(Debug, Clone)]
@@ -1605,7 +1597,6 @@ impl Block {
         self.event_proxy
             .send_terminal_event(Event::BlockCompleted(BlockCompletedEvent {
                 block_type,
-                block_latency_data: self.block_latency_data(),
                 num_secrets_obfuscated: self.num_secrets_obfuscated(),
                 block_index: self.block_index,
                 block_id: self.id.clone(),
@@ -1616,24 +1607,6 @@ impl Block {
 
     pub fn num_secrets_obfuscated(&self) -> usize {
         self.header_grid.num_secrets_obfuscated() + self.output_grid.num_secrets_obfuscated()
-    }
-
-    fn block_latency_data(&self) -> Option<BlockLatencyData> {
-        // We only want to record block latency data for normal execution
-        // outside of the bootstrap sequence.
-        if self.bootstrap_stage.is_done() && !self.is_background() && !self.is_static() {
-            let command = self.header_grid.command_to_string_with_max_rows(Some(1));
-            BASELINE_COMMANDS.get(command.as_str()).and_then(|command| {
-                self.header_grid
-                    .command_start_time()
-                    .map(|started_at| BlockLatencyData {
-                        command,
-                        started_at,
-                    })
-            })
-        } else {
-            None
-        }
     }
 
     /// Gets optimized content summary for a single block using terminal-width-aware truncation,

@@ -24,6 +24,7 @@ use warpui_core::{
 };
 
 use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
+use super::orchestration_block::TuiOrchestrationBlock;
 use super::terminal_block::should_render_terminal_block;
 use super::tui_block_list_viewport_source::{
     AgentBlockRegistry, CLISubagentBlockRegistry, TuiBlockListViewportSource,
@@ -58,6 +59,9 @@ pub(crate) const TRANSCRIPT_BLOCK_SPACING: BlockSpacing = BlockSpacing {
 pub(super) enum TuiTranscriptViewEvent {
     SelectionStarted,
     SelectionEnded(String),
+    /// An agent block's blocking child changed state; the session surface
+    /// re-derives the active blocker (input replacement).
+    BlockingStateChanged,
 }
 
 /// Selection actions originating from the transcript's element tree.
@@ -402,6 +406,10 @@ impl TuiTranscriptView {
                     .mark_rich_content_dirty(view_id);
                 ctx.notify();
             }
+            TuiAIBlockEvent::BlockingStateChanged => {
+                ctx.emit(TuiTranscriptViewEvent::BlockingStateChanged);
+                ctx.notify();
+            }
         });
         self.agent_blocks.borrow_mut().insert(view_id, view);
         let item = RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false);
@@ -566,6 +574,19 @@ impl TuiTranscriptView {
                 .remove_rich_content(view_id);
         }
         ctx.notify();
+    }
+
+    /// The front-of-queue blocking interaction across this transcript's
+    /// agent blocks, if any. A pure query over the shared action queue; the
+    /// session surface derives input visibility and focus from it.
+    pub(super) fn active_blocking_child(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TuiOrchestrationBlock>> {
+        self.agent_blocks
+            .borrow()
+            .values()
+            .find_map(|block| block.as_ref(ctx).active_blocking_child(ctx))
     }
 
     /// Clears persistent selection owned by the transcript.

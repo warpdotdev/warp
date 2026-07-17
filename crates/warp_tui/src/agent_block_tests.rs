@@ -434,6 +434,7 @@ fn shell_command_disclosure_invalidates_agent_block_layout() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
+                TuiAIBlockEvent::BlockingStateChanged => {}
             });
         });
 
@@ -526,6 +527,7 @@ fn plan_collapse_invalidates_agent_block_layout() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
+                TuiAIBlockEvent::BlockingStateChanged => {}
             });
         });
 
@@ -603,6 +605,86 @@ fn keyboard_toggle_targets_latest_exposed_plan_in_message_order() {
                 render_tui_view_lines(second.as_ref(ctx), 40, 8, ctx),
                 vec!["○ Create plan ▸"]
             );
+        });
+    });
+}
+#[test]
+fn ask_user_question_action_registers_a_stateful_child_view() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action = ask_user_question_action("ask-1", "Which one?");
+        let action_id = action.id.clone();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", action)]),
+            },
+        );
+        app.read(|ctx| {
+            assert!(matches!(
+                block.as_ref(ctx).action_views.get(&action_id),
+                Some(TuiToolCallView::AskQuestion(_))
+            ));
+        });
+    });
+}
+
+#[test]
+fn streamed_ask_user_question_payload_replaces_the_initial_empty_child_view() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action_id = AIAgentActionId::from("ask-1".to_owned());
+        let initial_action = AIAgentAction {
+            id: action_id.clone(),
+            task_id: TaskId::new("task-1".to_owned()),
+            action: AIAgentActionType::AskUserQuestion {
+                questions: Vec::new(),
+            },
+            requires_result: true,
+        };
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", initial_action)]),
+            },
+        );
+        let initial_view_id = app.read(|ctx| {
+            let Some(TuiToolCallView::AskQuestion(view)) =
+                block.as_ref(ctx).action_views.get(&action_id)
+            else {
+                panic!("initial ask-question child view");
+            };
+            assert!(view.as_ref(ctx).matches_action(&action_id, &[]));
+            view.id()
+        });
+
+        block.update(&mut app, |block, ctx| {
+            block.replace_model(
+                block.conversation_id,
+                Rc::new(FakeAgentBlockModel {
+                    inputs: Vec::new(),
+                    status: complete_output_messages(vec![action_message(
+                        "message-1",
+                        ask_user_question_action("ask-1", "Which one?"),
+                    )]),
+                }),
+            );
+            let action_model = block.action_model.clone();
+            block.sync_action_views(&action_model, ctx);
+        });
+
+        app.read(|ctx| {
+            let Some(TuiToolCallView::AskQuestion(view)) =
+                block.as_ref(ctx).action_views.get(&action_id)
+            else {
+                panic!("updated ask-question child view");
+            };
+            assert_ne!(view.id(), initial_view_id);
+            assert!(view
+                .as_ref(ctx)
+                .matches_action(&action_id, &ask_user_question_items("Which one?")));
         });
     });
 }
@@ -787,6 +869,7 @@ fn code_children_reconcile_across_streamed_section_boundaries() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
+                TuiAIBlockEvent::BlockingStateChanged => {}
             });
         });
 
@@ -1491,6 +1574,31 @@ fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<Tui
     })
 }
 
+fn ask_user_question_action(id: &str, question: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::AskUserQuestion {
+            questions: ask_user_question_items(question),
+        },
+        requires_result: true,
+    }
+}
+
+fn ask_user_question_items(question: &str) -> Vec<ai::agent::action::AskUserQuestionItem> {
+    vec![ai::agent::action::AskUserQuestionItem {
+        question_id: "q1".to_owned(),
+        question: question.to_owned(),
+        question_type: ai::agent::action::AskUserQuestionType::MultipleChoice {
+            is_multiselect: false,
+            options: vec![ai::agent::action::AskUserQuestionOption {
+                label: "A".to_owned(),
+                recommended: false,
+            }],
+            supports_other: false,
+        },
+    }]
+}
 impl AIBlockModel for FakeAgentBlockModel {
     type View = TuiAIBlock;
 

@@ -259,6 +259,11 @@ pub struct RunAgentsAgentRunConfig {
     pub name: String,
     pub prompt: String,
     pub title: String,
+    /// Optional UID of the named agent (service account) this child run
+    /// should execute as. Empty means the child runs as the caller. Only
+    /// meaningful for factory agents dispatching sibling factory agents;
+    /// requires remote execution and is enforced server-side at dispatch.
+    pub agent_identity_uid: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -290,6 +295,9 @@ pub enum StartAgentExecutionMode {
         /// "no override" — resolved at dispatch via the environment's
         /// default runner then system defaults.
         runner_id: String,
+        /// UID of the named agent (service account) the remote child run
+        /// should execute as. `None` means the child runs as the caller.
+        agent_identity_uid: Option<String>,
     },
 }
 
@@ -321,6 +329,7 @@ impl StartAgentExecutionMode {
             title: String::new(),
             auth_secret_name: None,
             runner_id: String::new(),
+            agent_identity_uid: None,
         }
     }
 }
