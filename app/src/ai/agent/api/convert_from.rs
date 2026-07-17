@@ -164,6 +164,7 @@ fn convert_run_agents(
                 name: config.name,
                 prompt: config.prompt,
                 title: config.title,
+                agent_identity_uid: config.agent_identity_uid,
             })
             .collect(),
         plan_id,
@@ -198,6 +199,9 @@ fn convert_start_agent_v2_execution_mode(
                 // Auth secret is plumbed client-side via `RunAgentsRequest`;
                 // StartAgentV2 from the server never carries it.
                 auth_secret_name: None,
+                // Agent identity is plumbed client-side via `RunAgentsRequest`;
+                // StartAgentV2 from the server never carries it.
+                agent_identity_uid: None,
             }
         }
         Some(api::start_agent_v2::execution_mode::Mode::Local(local)) => {
@@ -772,7 +776,7 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                 create_standard_action(request_computer_use.into())
             }
             api::message::tool_call::Tool::StartRecording(start_recording) => {
-                create_standard_action(start_recording.into())
+                create_standard_action(start_recording.try_into()?)
             }
             api::message::tool_call::Tool::StopRecording(stop_recording) => {
                 create_standard_action(stop_recording.into())

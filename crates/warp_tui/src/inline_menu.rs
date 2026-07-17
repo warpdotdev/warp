@@ -3,7 +3,9 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use string_offset::CharOffset;
-use warp::tui_export::{AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId};
+use warp::tui_export::{
+    AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId, TuiMcpAction,
+};
 use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InlineMenuSelection};
 use warpui_core::elements::tui::{
     TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
@@ -15,6 +17,7 @@ use warpui_core::{AppContext, ModelHandle};
 
 use crate::conversation_menu::TuiConversationMenuModel;
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
+use crate::mcp_menu::TuiMcpMenuModel;
 use crate::model_menu::TuiModelMenuModel;
 use crate::skills_menu::TuiSkillMenuModel;
 use crate::slash_commands::TuiSlashCommandModel;
@@ -46,6 +49,44 @@ pub(crate) fn active_inline_menu(
         .iter()
         .find(|menu| menu.mode() == mode && menu.is_open(ctx))
         .cloned()
+}
+
+impl TuiInlineMenuHandle for ModelHandle<TuiMcpMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::Mcp
+    }
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open(ctx)
+    }
+
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.update(ctx, |model, ctx| model.accept_selected(ctx))
+            .map(TuiInlineMenuAccepted::Mcp)
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot(ctx)
+    }
 }
 
 pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
@@ -220,6 +261,7 @@ pub(crate) enum TuiInlineMenuAccepted {
     SlashCommand(AcceptSlashCommandOrSavedPrompt),
     Conversation(AgentConversationEntryId),
     Model(LLMId),
+    Mcp(TuiMcpAction),
 }
 
 /// Type-erased operations shared by TUI inline-menu model handles.
@@ -228,6 +270,8 @@ pub(crate) trait TuiInlineMenuHandle {
     fn mode(&self) -> TuiInputSuggestionsMode;
     /// Returns whether this menu is open.
     fn is_open(&self, ctx: &AppContext) -> bool;
+    /// Opens the menu when it supports explicit opening.
+    fn open(&self, _ctx: &mut AppContext) {}
     /// Returns the input range highlighted by this menu.
     fn input_highlight_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>>;
     /// Returns the input argument hint shown by this menu.
@@ -255,6 +299,9 @@ impl TuiInlineMenu {
     }
     pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
         self.0.is_open(ctx)
+    }
+    pub(crate) fn open(&self, ctx: &mut AppContext) {
+        self.0.open(ctx);
     }
 
     pub(crate) fn mode(&self) -> TuiInputSuggestionsMode {
@@ -337,6 +384,9 @@ impl TuiInlineMenuHandle for ModelHandle<TuiConversationMenuModel> {
     }
     fn is_open(&self, ctx: &AppContext) -> bool {
         self.as_ref(ctx).is_open(ctx)
+    }
+    fn open(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.open(ctx));
     }
 
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
@@ -568,7 +618,7 @@ fn build_inline_menu(
     let mut column = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
     if let Some(header) = &snapshot.header {
         if let Some(title) = &header.title {
-            column = column.child(menu_status_row(title, builder));
+            column = column.child(menu_header_row(title, builder));
         }
         if !header.tabs.is_empty() {
             let labels = header
@@ -583,7 +633,7 @@ fn build_inline_menu(
                 })
                 .collect::<Vec<_>>()
                 .join("  ");
-            column = column.child(menu_status_row(&labels, builder));
+            column = column.child(menu_header_row(&labels, builder));
         }
     }
 
@@ -624,6 +674,13 @@ fn build_inline_menu(
     }
 
     column.finish()
+}
+
+fn menu_header_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+    TuiText::new(label)
+        .with_style(builder.dim_text_style())
+        .truncate()
+        .finish()
 }
 
 /// Clamps stale scroll offsets and moves the viewport only as far as needed to

@@ -4,6 +4,7 @@ use lazy_static::lazy_static;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::OperatingSystem;
 
+use super::indexing::Point;
 use super::mouse::{MouseAction, MouseButton, MouseState};
 use super::TermMode;
 
@@ -301,12 +302,12 @@ fn ctrl_letter_to_c0(keystroke: &Keystroke) -> Option<Vec<u8>> {
 
 /// C0 bytes for named control keys that carry no `chars` and that the
 /// escape-sequence encoder leaves unmapped without the kitty protocol. The key
-/// strings match the crossterm→key-event conversion (tab is `"\t"`).
+/// strings match the crossterm→key-event conversion.
 fn named_control_key_to_c0(key: &str) -> Option<Vec<u8>> {
     match key {
         "enter" => Some(vec![C0::CR]),
         "escape" => Some(vec![C0::ESC]),
-        "\t" => Some(vec![C0::HT]),
+        "tab" => Some(vec![C0::HT]),
         "backspace" => Some(vec![C0::DEL]),
         _ => None,
     }
@@ -349,6 +350,37 @@ impl<T: ModeProvider> ToEscapeSequence<T> for MouseState {
         .repeat(repeats);
         Some(msg.into_bytes())
     }
+}
+
+/// Encodes alt-screen wheel movement as mouse reports or SS3 arrow keys.
+pub fn alt_screen_scroll_to_pty_bytes<T: ModeProvider>(
+    lines_to_scroll: i32,
+    point: Point,
+    report_mouse: bool,
+    mode_provider: &T,
+) -> Option<Vec<u8>> {
+    if lines_to_scroll == 0 {
+        return None;
+    }
+    if report_mouse {
+        return MouseState::new(
+            MouseButton::Wheel,
+            MouseAction::Scrolled {
+                delta: lines_to_scroll,
+            },
+            Default::default(),
+        )
+        .set_point(point)
+        .to_escape_sequence(mode_provider);
+    }
+
+    let arrow = if lines_to_scroll > 0 {
+        EscCodes::ARROW_UP
+    } else {
+        EscCodes::ARROW_DOWN
+    };
+    let sequence = EscCodes::build_escape_sequence_with_c1(C1::SS3, &[arrow]);
+    Some(sequence.repeat(lines_to_scroll.unsigned_abs() as usize))
 }
 
 pub trait ToModifierEscapeByte {

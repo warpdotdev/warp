@@ -64,6 +64,14 @@ fn arrow_keys_map_to_direction_names() {
 }
 
 #[test]
+fn tab_maps_to_the_canonical_keybinding_name() {
+    assert_eq!(keystroke(KeyCode::Tab, KeyModifiers::empty()).key, "tab");
+    let back_tab = keystroke(KeyCode::BackTab, KeyModifiers::SHIFT);
+    assert_eq!(back_tab.key, "tab");
+    assert!(back_tab.shift);
+}
+
+#[test]
 fn ctrl_modifier_is_carried_into_keystroke() {
     let keystroke = keystroke(KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert!(keystroke.ctrl, "ctrl modifier should be set");

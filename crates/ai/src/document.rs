@@ -1,4 +1,5 @@
 use uuid::Uuid;
+pub const DEFAULT_PLANNING_DOCUMENT_TITLE: &str = "Planning document";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct AIDocumentId(Uuid);

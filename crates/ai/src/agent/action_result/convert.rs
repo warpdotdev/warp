@@ -1357,6 +1357,7 @@ impl From<RunAgentsLaunchedExecutionMode>
                     environment_id,
                     worker_host,
                     computer_use_enabled,
+                    runner_id: Default::default(),
                 },
             ),
         }

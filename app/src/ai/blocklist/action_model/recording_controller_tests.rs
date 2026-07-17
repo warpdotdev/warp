@@ -122,3 +122,21 @@ fn matching_conversation_cancels_start_reservation() {
         .is_none());
     assert!(controller.try_begin_start(AIConversationId::new()).is_ok());
 }
+
+#[test]
+fn records_actions_only_for_the_owning_conversation() {
+    let owner = AIConversationId::new();
+    let other = AIConversationId::new();
+    let mut controller = active_controller("recording", owner);
+
+    controller.record_action(other, vec!["other".to_string()]);
+    controller.record_action(owner, vec!["owner".to_string()]);
+
+    let FinalizationClaim::Claimed { recording, .. } =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("active recording should be claimed");
+    };
+    assert_eq!(recording.actions.len(), 1);
+    assert_eq!(recording.actions[0].labels, ["owner"]);
+}

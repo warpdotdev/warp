@@ -45,7 +45,7 @@ const WHEEL_STEP: isize = 2;
 /// owning view translates them into its own typed actions and applies them to
 /// the editor model (mirroring how the GUI's element dispatches into its view).
 #[derive(Debug, Clone)]
-pub(crate) enum TuiEditorAction {
+pub enum TuiEditorAction {
     /// Insert a printable character (only emitted when the element is
     /// [`editable`](TuiEditorElement::editable)).
     InsertChar(char),
@@ -109,6 +109,11 @@ pub(crate) struct TuiEditorElement {
 
     // ── Config ──────────────────────────────────────────────────────────────
     editable: bool,
+    /// Whether the owning view is focused, snapshotted at construction like
+    /// the GUI editor element's `view_snapshot.is_focused`. Editable elements
+    /// only consume typed text while focused, so several editable elements
+    /// can be rendered at once without contending for keystrokes.
+    is_focused: bool,
     /// Maximum visible rows for a scroll-windowed consumer; the first visible
     /// row comes from the render state's char-cell scroll offset. `None`
     /// renders full height.
@@ -179,6 +184,7 @@ impl TuiEditorElement {
             sel_char_range,
             hidden_line_ranges,
             editable: false,
+            is_focused: false,
             viewport_rows: None,
             line_number_gutter: false,
             hide_trailing_empty_line: false,
@@ -202,6 +208,14 @@ impl TuiEditorElement {
     /// editing input, not a mode).
     pub(crate) fn editable(mut self) -> Self {
         self.editable = true;
+        self
+    }
+
+    /// Records the owning view's focus state (tracked by the view via
+    /// `on_focus`/`on_blur`, like the GUI's `EditorView::focused`). Editable
+    /// consumers must pass this: typed text is only consumed while focused.
+    pub(crate) fn with_view_focused(mut self, is_focused: bool) -> Self {
+        self.is_focused = is_focused;
         self
     }
 
@@ -298,10 +312,18 @@ impl TuiEditorElement {
             0
         };
         let content_width = full_width.saturating_sub(self.gutter_cols);
+        let width_changed = char_cell.terminal_width() != content_width;
         char_cell.set_terminal_width(content_width);
 
         let chars: Vec<char> = self.text.chars().collect();
         let cursor_offset = CharOffset::from(self.cursor_offset.as_usize().saturating_sub(1));
+        if let Some(viewport_rows) = self.viewport_rows {
+            if width_changed {
+                char_cell.follow_cursor(cursor_offset, viewport_rows, &hidden);
+            } else {
+                char_cell.clamp_scroll_offset(cursor_offset, viewport_rows, &hidden);
+            }
+        }
         // The first visible row is model-side scroll state; unwindowed
         // consumers always render from the top.
         let first_visible_row = if self.viewport_rows.is_some() {
@@ -385,8 +407,10 @@ impl TuiEditorElement {
         if let Some(cursor) = cursor {
             self.cursor_col = cursor.col + self.gutter_cols;
             self.cursor_row_in_view = cursor.row.saturating_sub(first_visible_row) as u16;
-            self.cursor_visible =
-                self.editable && cursor.row >= first_visible_row && cursor.row < visible_end.max(1);
+            self.cursor_visible = self.editable
+                && self.is_focused
+                && cursor.row >= first_visible_row
+                && cursor.row < visible_end.max(1);
         } else {
             self.cursor_col = 0;
             self.cursor_row_in_view = 0;
@@ -750,7 +774,12 @@ impl TuiElement for TuiEditorElement {
             return true;
         }
 
-        if self.editable {
+        // Raw text only flows into the focused view's editor: with several
+        // editable elements rendered at once (e.g. a prompt input plus a
+        // search field), only the focused one may consume typed characters,
+        // mirroring the GUI editor element's `is_focused` gate
+        // (`typed_characters` in `app/src/editor/view/element.rs`).
+        if self.editable && self.is_focused {
             match event {
                 TuiEvent::KeyDown {
                     keystroke, chars, ..

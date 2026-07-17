@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use ignore::gitignore::Gitignore;
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::FutureExt as _;
-use warpui_core::App;
+use warpui_core::{App, ModelHandle};
 #[cfg(feature = "local_fs")]
 use watcher::BulkFilesystemWatcherEvent;
 
@@ -23,8 +24,8 @@ use crate::entry::{
 };
 use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
 use crate::local_model::{
-    FileTreeMutation, GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate,
-    RepositoryMetadataEvent, RootWatchMode,
+    BuildTaskKey, BuildTaskKind, FileTreeMutation, GetContentsArgs, IndexedRepoState,
+    LocalRepoMetadataModel, RepoUpdate, RepositoryMetadataEvent, RootWatchMode,
 };
 use crate::repositories::DetectedRepositories;
 use crate::watcher::DirectoryWatcher;
@@ -38,6 +39,9 @@ impl LocalRepoMetadataModel {
             repositories: HashMap::new(),
             standing_results: HashMap::new(),
             lazy_loaded_paths: Default::default(),
+            build_tasks: Default::default(),
+            #[cfg(feature = "local_fs")]
+            watcher_update_tasks: Default::default(),
             #[cfg(feature = "local_fs")]
             watcher: Default::default(),
             emit_incremental_updates: false,
@@ -65,6 +69,38 @@ fn empty_repo_state(repo_path: &StandardizedPath) -> FileTreeState {
         loaded: true,
     });
     FileTreeState::new(root, Vec::new(), None)
+}
+
+fn build_task_key(
+    owner_repo_path: &StandardizedPath,
+    target_path: &StandardizedPath,
+) -> BuildTaskKey {
+    BuildTaskKey::new(owner_repo_path.clone(), target_path.clone())
+}
+
+async fn await_build_tasks_for_repo(
+    app: &mut App,
+    model_handle: &ModelHandle<LocalRepoMetadataModel>,
+    repo_path: &StandardizedPath,
+) {
+    loop {
+        let future_ids = model_handle.read(&*app, |model, _ctx| {
+            model
+                .build_tasks
+                .iter()
+                .filter(|(key, _)| &key.owner_repo_path == repo_path)
+                .map(|(_, task)| task.handle.future_id())
+                .collect::<Vec<_>>()
+        });
+        if future_ids.is_empty() {
+            break;
+        }
+        for future_id in future_ids {
+            model_handle
+                .update(app, |_, ctx| ctx.await_spawned_future(future_id))
+                .await;
+        }
+    }
 }
 
 #[test]
@@ -217,6 +253,291 @@ fn repository_indexed_waits_for_pending_repo_removal() {
             model.repository_state(&repo_path).is_none()
         });
         assert!(result);
+    });
+}
+
+#[test]
+fn remove_repository_aborts_and_drops_build_tasks() {
+    let repo_path = StandardizedPath::try_new("/pending_removed_repo").unwrap();
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (_release_tx, release_rx) = oneshot::channel::<()>();
+        let future_id = model_handle.update(&mut app, |model, ctx| {
+            model
+                .repositories
+                .insert(repo_path.clone(), IndexedRepoState::pending());
+            let handle = ctx.spawn(
+                async move {
+                    let _ = release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let future_id = handle.future_id();
+            model.track_build_task(
+                build_task_key(&repo_path, &repo_path),
+                BuildTaskKind::Index,
+                handle,
+            );
+            future_id
+        });
+
+        model_handle.read(&app, |model, _ctx| {
+            assert!(model
+                .build_tasks
+                .contains_key(&build_task_key(&repo_path, &repo_path)));
+        });
+
+        model_handle.update(&mut app, |model, ctx| {
+            model
+                .remove_repository(&repo_path, ctx)
+                .expect("repository should be removed");
+        });
+
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(future_id))
+            .await;
+
+        model_handle.read(&app, |model, _ctx| {
+            assert!(!model
+                .build_tasks
+                .contains_key(&build_task_key(&repo_path, &repo_path)));
+        });
+    });
+}
+
+#[test]
+fn remove_repository_keeps_nested_repo_build_tasks() {
+    let parent_repo_path = StandardizedPath::try_new("/parent_repo").unwrap();
+    let nested_repo_path = StandardizedPath::try_new("/parent_repo/nested_repo").unwrap();
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (_release_tx, release_rx) = oneshot::channel::<()>();
+        let nested_future_id = model_handle.update(&mut app, |model, ctx| {
+            model.repositories.insert(
+                parent_repo_path.clone(),
+                IndexedRepoState::Indexed(empty_repo_state(&parent_repo_path)),
+            );
+            model
+                .repositories
+                .insert(nested_repo_path.clone(), IndexedRepoState::pending());
+
+            let handle = ctx.spawn(
+                async move {
+                    let _ = release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let future_id = handle.future_id();
+            model.track_build_task(
+                build_task_key(&nested_repo_path, &nested_repo_path),
+                BuildTaskKind::Index,
+                handle,
+            );
+            future_id
+        });
+
+        model_handle.update(&mut app, |model, ctx| {
+            model
+                .remove_repository(&parent_repo_path, ctx)
+                .expect("parent repository should be removed");
+        });
+
+        let nested_handle = model_handle.update(&mut app, |model, _ctx| {
+            assert!(model.repository_state(&parent_repo_path).is_none());
+            assert!(matches!(
+                model.repository_state(&nested_repo_path),
+                Some(IndexedRepoState::Pending(_))
+            ));
+            let task = model
+                .build_tasks
+                .remove(&build_task_key(&nested_repo_path, &nested_repo_path))
+                .expect("nested repo build task should not be aborted by parent teardown");
+            task.handle
+        });
+
+        nested_handle.abort();
+        model_handle
+            .update(&mut app, |_, ctx| {
+                ctx.await_spawned_future(nested_future_id)
+            })
+            .await;
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn remove_repository_aborts_and_drops_watcher_update_tasks() {
+    let repo_path = StandardizedPath::try_new("/watcher_update_removed_repo").unwrap();
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (_first_release_tx, first_release_rx) = oneshot::channel::<()>();
+        let (_second_release_tx, second_release_rx) = oneshot::channel::<()>();
+        let (first_future_id, second_future_id) = model_handle.update(&mut app, |model, ctx| {
+            model.repositories.insert(
+                repo_path.clone(),
+                IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+            );
+
+            let first_handle = ctx.spawn(
+                async move {
+                    let _ = first_release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let first_future_id = first_handle.future_id();
+            model.track_watcher_update_task(repo_path.clone(), first_handle);
+
+            let second_handle = ctx.spawn(
+                async move {
+                    let _ = second_release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let second_future_id = second_handle.future_id();
+            model.track_watcher_update_task(repo_path.clone(), second_handle);
+
+            (first_future_id, second_future_id)
+        });
+
+        model_handle.read(&app, |model, _ctx| {
+            assert_eq!(
+                model
+                    .watcher_update_tasks
+                    .get(&repo_path)
+                    .expect("watcher tasks should be tracked")
+                    .len(),
+                2
+            );
+        });
+
+        model_handle.update(&mut app, |model, ctx| {
+            model
+                .remove_repository(&repo_path, ctx)
+                .expect("repository should be removed");
+        });
+
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(first_future_id))
+            .await;
+        model_handle
+            .update(&mut app, |_, ctx| {
+                ctx.await_spawned_future(second_future_id)
+            })
+            .await;
+
+        model_handle.read(&app, |model, _ctx| {
+            assert!(!model.watcher_update_tasks.contains_key(&repo_path));
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn remove_repository_keeps_nested_repo_watcher_update_tasks() {
+    let parent_repo_path = StandardizedPath::try_new("/parent_watcher_repo").unwrap();
+    let nested_repo_path = StandardizedPath::try_new("/parent_watcher_repo/nested_repo").unwrap();
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (_release_tx, release_rx) = oneshot::channel::<()>();
+        let nested_future_id = model_handle.update(&mut app, |model, ctx| {
+            model.repositories.insert(
+                parent_repo_path.clone(),
+                IndexedRepoState::Indexed(empty_repo_state(&parent_repo_path)),
+            );
+
+            let handle = ctx.spawn(
+                async move {
+                    let _ = release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let future_id = handle.future_id();
+            model.track_watcher_update_task(nested_repo_path.clone(), handle);
+            future_id
+        });
+
+        model_handle.update(&mut app, |model, ctx| {
+            model
+                .remove_repository(&parent_repo_path, ctx)
+                .expect("parent repository should be removed");
+        });
+
+        let nested_handle = model_handle.update(&mut app, |model, _ctx| {
+            assert!(model.repository_state(&parent_repo_path).is_none());
+            let tasks = model
+                .watcher_update_tasks
+                .remove(&nested_repo_path)
+                .expect("nested repo watcher task should not be aborted by parent teardown");
+            tasks
+                .into_values()
+                .next()
+                .expect("nested repo watcher task should still be tracked")
+        });
+
+        nested_handle.abort();
+        model_handle
+            .update(&mut app, |_, ctx| {
+                ctx.await_spawned_future(nested_future_id)
+            })
+            .await;
+    });
+}
+
+#[test]
+fn stale_build_future_id_does_not_finish_newer_task() {
+    let repo_path = StandardizedPath::try_new("/repo_with_replaced_build").unwrap();
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (_old_release_tx, old_release_rx) = oneshot::channel::<()>();
+        let (_new_release_tx, new_release_rx) = oneshot::channel::<()>();
+        let (old_future_id, new_future_id) = model_handle.update(&mut app, |model, ctx| {
+            let old_handle = ctx.spawn(
+                async move {
+                    let _ = old_release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let old_future_id = old_handle.future_id();
+            let task_key = build_task_key(&repo_path, &repo_path);
+            model.track_build_task(task_key.clone(), BuildTaskKind::Index, old_handle);
+            model.abort_builds_for_repo(&repo_path);
+
+            let new_handle = ctx.spawn(
+                async move {
+                    let _ = new_release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let new_future_id = new_handle.future_id();
+            model.track_build_task(task_key.clone(), BuildTaskKind::Index, new_handle);
+
+            assert!(model
+                .finish_build_task(&task_key, Some(old_future_id))
+                .is_none());
+            let task = model
+                .build_tasks
+                .get(&task_key)
+                .expect("newer task should remain tracked");
+            assert_eq!(task.handle.future_id(), new_future_id);
+
+            let task = model
+                .finish_build_task(&task_key, Some(new_future_id))
+                .expect("newer task should finish");
+            task.handle.abort();
+            (old_future_id, new_future_id)
+        });
+
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(old_future_id))
+            .await;
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(new_future_id))
+            .await;
     });
 }
 
@@ -427,6 +748,7 @@ fn test_lazy_loaded_path_registrations_are_refcounted() {
                     .index_lazy_loaded_path(&shared_dir_for_index, ctx)
                     .unwrap();
             });
+            await_build_tasks_for_repo(&mut app, &model_handle, &shared_dir_for_index).await;
 
             model_handle.read(&app, |model, _ctx| {
                 assert!(model.is_lazy_loaded_path(
@@ -484,6 +806,7 @@ fn test_lazy_loaded_path_does_not_build_standing_rule_results_below_shallow_tree
             model_handle.update(&mut app, |model, ctx| {
                 model.index_lazy_loaded_path(&workspace_path, ctx).unwrap();
             });
+            await_build_tasks_for_repo(&mut app, &model_handle, &workspace_path).await;
 
             model_handle.read(&app, |model, _ctx| {
                 let results = model
@@ -527,6 +850,7 @@ fn test_lazy_loaded_path_discovers_force_included_skills_and_emits_watcher_delta
             model_handle.update(&mut app, |model, ctx| {
                 model.index_lazy_loaded_path(&workspace_path, ctx).unwrap();
             });
+            await_build_tasks_for_repo(&mut app, &model_handle, &workspace_path).await;
 
             model_handle.read(&app, |model, _ctx| {
                 let Some(IndexedRepoState::Indexed(state)) =
@@ -618,6 +942,7 @@ fn test_index_directory_path_upgrades_lazy_loaded_non_git_path() {
                     .index_lazy_loaded_path(&repo_root_for_index, ctx)
                     .unwrap();
             });
+            await_build_tasks_for_repo(&mut app, &model_handle, &repo_root_for_index).await;
 
             model_handle.read(&app, |model, _ctx| {
                 assert!(model.is_lazy_loaded_path(&repo_root_for_index));
@@ -674,6 +999,91 @@ fn test_index_directory_path_upgrades_lazy_loaded_non_git_path() {
             });
         });
     });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
+    VirtualFS::test(
+        "pending_lazy_loaded_non_git_path_upgrade",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/src/nested")
+                .with_files(vec![Stub::FileWithContent(
+                    "repo/src/nested/main.rs",
+                    "fn main() {}\n",
+                )]);
+
+            let repo_root = dirs.tests().join("repo");
+            let source_file = repo_root.join("src/nested/main.rs");
+
+            App::test((), |mut app| async move {
+                app.add_singleton_model(DirectoryWatcher::new_for_testing);
+                let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+
+                let repo_root_for_index =
+                    StandardizedPath::from_local_canonicalized(&repo_root).unwrap();
+                let (_release_tx, release_rx) = oneshot::channel::<()>();
+                let lazy_future_id = model_handle.update(&mut app, |model, ctx| {
+                    model
+                        .lazy_loaded_paths
+                        .insert(repo_root_for_index.clone(), 1);
+                    model.replace_repository_state(
+                        repo_root_for_index.clone(),
+                        IndexedRepoState::pending(),
+                    );
+                    let handle = ctx.spawn(
+                        async move {
+                            let _ = release_rx.await;
+                        },
+                        |_, _, _| {},
+                    );
+                    let future_id = handle.future_id();
+                    model.track_build_task(
+                        build_task_key(&repo_root_for_index, &repo_root_for_index),
+                        BuildTaskKind::Index,
+                        handle,
+                    );
+                    future_id
+                });
+
+                model_handle.read(&app, |model, _ctx| {
+                    assert!(model.is_lazy_loaded_path(&repo_root_for_index));
+                    assert!(matches!(
+                        model.repository_state(&repo_root_for_index),
+                        Some(IndexedRepoState::Pending(_))
+                    ));
+                    assert!(model
+                        .build_tasks
+                        .contains_key(&build_task_key(&repo_root_for_index, &repo_root_for_index)));
+                });
+
+                model_handle.update(&mut app, |model, ctx| {
+                    model
+                        .index_directory_path(&repo_root_for_index, ctx)
+                        .unwrap();
+                });
+                model_handle
+                    .update(&mut app, |_, ctx| ctx.await_spawned_future(lazy_future_id))
+                    .await;
+                await_build_tasks_for_repo(&mut app, &model_handle, &repo_root_for_index).await;
+
+                model_handle.read(&app, |model, _ctx| {
+                    assert!(!model.is_lazy_loaded_path(&repo_root_for_index));
+                    let Some(IndexedRepoState::Indexed(state)) =
+                        model.repository_state(&repo_root_for_index)
+                    else {
+                        panic!("expected fully indexed directory after pending lazy upgrade");
+                    };
+                    assert!(state
+                        .entry
+                        .contains(&StandardizedPath::try_from_local(&source_file).unwrap()));
+                    assert!(!model
+                        .build_tasks
+                        .contains_key(&build_task_key(&repo_root_for_index, &repo_root_for_index)));
+                });
+            });
+        },
+    );
 }
 
 #[test]
@@ -2179,6 +2589,7 @@ fn index_lazy_loaded_path_tracks_only_root() {
                     .index_lazy_loaded_path(&root, ctx)
                     .expect("should index lazy path");
             });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
 
             model_handle.read(&app, |model, _ctx| {
                 assert!(model.is_lazy_loaded_path(&root));
@@ -2218,10 +2629,15 @@ fn load_directory_tracks_expanded_subdir_for_lazy_root() {
                 model
                     .index_lazy_loaded_path(&root, ctx)
                     .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            model_handle.update(&mut app, |model, ctx| {
                 model
                     .load_directory(&root, &sub, ctx)
                     .expect("should load subdir");
             });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
 
             model_handle.read(&app, |model, _ctx| {
                 let repo_watch = model
@@ -2238,6 +2654,362 @@ fn load_directory_tracks_expanded_subdir_for_lazy_root() {
                     // Other platforms: a single recursive watch on the root.
                     assert_eq!(repo_watch.root_mode, RootWatchMode::Recursive);
                 }
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn load_directory_completion_resolves_after_tree_update() {
+    VirtualFS::test("lazy_load_completion_updates_tree", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner")
+            .with_files(vec![Stub::FileWithContent(
+                "workspace/sub/inner/file.txt",
+                "x",
+            )]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+        let nested =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub/inner"))
+                .unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            let completion = model_handle.update(&mut app, |model, ctx| {
+                model
+                    .load_directory_with_completion(&root, &sub, ctx)
+                    .expect("should start loading subdir")
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+            completion.await.expect("load should complete");
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(state.entry.contains(&nested));
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn load_directory_with_completion_coalesces_duplicate_inflight_load() {
+    VirtualFS::test("lazy_load_duplicate_completion", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner")
+            .with_files(vec![Stub::FileWithContent(
+                "workspace/sub/inner/file.txt",
+                "x",
+            )]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            let (first_completion, second_completion) =
+                model_handle.update(&mut app, |model, ctx| {
+                    let completion = model
+                        .load_directory_with_completion(&root, &sub, ctx)
+                        .expect("first load should start");
+                    let duplicate_completion = model
+                        .load_directory_with_completion(&root, &sub, ctx)
+                        .expect("duplicate load should wait for the in-flight task");
+                    let task = model
+                        .build_tasks
+                        .get(&build_task_key(&root, &sub))
+                        .expect("directory load should be tracked");
+                    assert_eq!(task.completion_waiters.len(), 1);
+                    (completion, duplicate_completion)
+                });
+
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+            first_completion.await.expect("first load should complete");
+            second_completion
+                .await
+                .expect("duplicate load should complete");
+
+            model_handle.read(&app, |model, _ctx| {
+                assert!(!model.build_tasks.contains_key(&build_task_key(&root, &sub)));
+            });
+        });
+    });
+}
+
+#[test]
+fn directory_load_coalescing_is_scoped_by_owner_and_kind() {
+    let parent_repo_path = StandardizedPath::try_new("/parent_repo").unwrap();
+    let nested_repo_path = StandardizedPath::try_new("/parent_repo/nested_repo").unwrap();
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (_index_release_tx, index_release_rx) = oneshot::channel::<()>();
+        let (_load_release_tx, load_release_rx) = oneshot::channel::<()>();
+        let (index_future_id, load_future_id) = model_handle.update(&mut app, |model, ctx| {
+            let nested_index_key = build_task_key(&nested_repo_path, &nested_repo_path);
+            let parent_load_key = build_task_key(&parent_repo_path, &nested_repo_path);
+
+            let index_handle = ctx.spawn(
+                async move {
+                    let _ = index_release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let index_future_id = index_handle.future_id();
+            model.track_build_task(nested_index_key.clone(), BuildTaskKind::Index, index_handle);
+
+            assert!(
+                model.subscribe_to_build_task(&parent_load_key).is_none(),
+                "a parent directory load must not subscribe to a nested repo index task"
+            );
+            assert!(
+                model.subscribe_to_build_task(&nested_index_key).is_none(),
+                "directory-load waiters must not subscribe to index tasks"
+            );
+
+            let load_handle = ctx.spawn(
+                async move {
+                    let _ = load_release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let load_future_id = load_handle.future_id();
+            model.track_build_task(
+                parent_load_key.clone(),
+                BuildTaskKind::DirectoryLoad,
+                load_handle,
+            );
+
+            assert!(
+                model.subscribe_to_build_task(&parent_load_key).is_some(),
+                "matching directory-load tasks should still coalesce"
+            );
+            assert_eq!(
+                model
+                    .build_tasks
+                    .get(&parent_load_key)
+                    .expect("parent load task should be tracked")
+                    .completion_waiters
+                    .len(),
+                1
+            );
+
+            let index_task = model
+                .build_tasks
+                .remove(&nested_index_key)
+                .expect("nested index task should be tracked");
+            let load_task = model
+                .build_tasks
+                .remove(&parent_load_key)
+                .expect("parent load task should be tracked");
+            index_task.handle.abort();
+            load_task.handle.abort();
+
+            (index_future_id, load_future_id)
+        });
+
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(index_future_id))
+            .await;
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(load_future_id))
+            .await;
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn load_directory_completion_skips_removed_tree_entry() {
+    VirtualFS::test("lazy_load_removed_subdir", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner")
+            .with_files(vec![Stub::FileWithContent(
+                "workspace/sub/inner/file.txt",
+                "x",
+            )]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(state.entry.contains(&sub));
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .load_directory(&root, &sub, ctx)
+                    .expect("should start loading subdir");
+                let Some(IndexedRepoState::Indexed(state)) = model.repositories.get_mut(&root)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                state.entry.remove(&sub);
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(!state.entry.contains(&sub));
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn load_directory_completion_skips_replaced_tree_entry() {
+    VirtualFS::test("lazy_load_replaced_subdir", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner")
+            .with_files(vec![Stub::FileWithContent(
+                "workspace/sub/inner/file.txt",
+                "x",
+            )]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+        let nested =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub/inner"))
+                .unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            let completion = model_handle.update(&mut app, |model, ctx| {
+                let completion = model
+                    .load_directory_with_completion(&root, &sub, ctx)
+                    .expect("should start loading subdir");
+                let Some(IndexedRepoState::Indexed(state)) = model.repositories.get_mut(&root)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                state.entry.remove(&sub);
+                state.entry.insert_entry_at_path(
+                    Arc::new(sub.clone()),
+                    Entry::File(FileMetadata::from_standardized(sub.clone(), false)),
+                );
+                completion
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+            assert!(matches!(
+                completion.await,
+                Err(RepoMetadataError::InvalidPath(_))
+            ));
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(matches!(
+                    state.entry.get(&sub),
+                    Some(FileTreeEntryState::File(_))
+                ));
+                assert!(!state.entry.contains(&nested));
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn load_directory_completion_skips_recreated_unloaded_tree_entry() {
+    VirtualFS::test("lazy_load_recreated_subdir", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner")
+            .with_files(vec![Stub::FileWithContent(
+                "workspace/sub/inner/file.txt",
+                "x",
+            )]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+        let nested =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub/inner"))
+                .unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            let completion = model_handle.update(&mut app, |model, ctx| {
+                let completion = model
+                    .load_directory_with_completion(&root, &sub, ctx)
+                    .expect("should start loading subdir");
+                let Some(IndexedRepoState::Indexed(state)) = model.repositories.get_mut(&root)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                state.entry.remove(&sub);
+                state.entry.insert_entry_at_path(
+                    Arc::new(sub.clone()),
+                    Entry::Directory(DirectoryEntry {
+                        path: sub.clone(),
+                        children: Vec::new(),
+                        ignored: false,
+                        loaded: false,
+                    }),
+                );
+                completion
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+            assert!(matches!(
+                completion.await,
+                Err(RepoMetadataError::InvalidPath(_))
+            ));
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(matches!(
+                    state.entry.get(&sub),
+                    Some(FileTreeEntryState::Directory(directory)) if !directory.loaded
+                ));
+                assert!(!state.entry.contains(&nested));
             });
         });
     });
@@ -2321,7 +3093,7 @@ fn incremental_force_included_dir_under_ignored_parent_matches_initial_index() {
                 let mut gitignores = gitignores.clone();
                 let mut budget = 100_000usize;
                 let mut standing_results = crate::StandingQueryResults::default();
-                let root = Entry::build_tree_with_standing_queries(
+                let root = block_on(Entry::build_tree_with_standing_queries(
                     &repo_local,
                     &mut files,
                     &mut gitignores,
@@ -2336,7 +3108,7 @@ fn incremental_force_included_dir_under_ignored_parent_matches_initial_index() {
                     false,
                     &mut standing_results,
                     &definitions,
-                )
+                ))
                 .expect("initial index build should succeed");
 
                 let skills_canonical =
@@ -2592,6 +3364,7 @@ fn load_directory_watches_expanded_gitignored_dir_for_git_repo() {
                     .load_directory(&repo_path, &node_modules, ctx)
                     .expect("should load gitignored dir");
             });
+            await_build_tasks_for_repo(&mut app, &model_handle, &repo_path).await;
 
             model_handle.read(&app, |model, _ctx| {
                 let repo_watch = model
@@ -2680,9 +3453,17 @@ fn remove_lazy_loaded_path_clears_tracked_watches() {
                 model
                     .index_lazy_loaded_path(&root, ctx)
                     .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            model_handle.update(&mut app, |model, ctx| {
                 model
                     .load_directory(&root, &sub, ctx)
                     .expect("should load subdir");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            model_handle.update(&mut app, |model, ctx| {
                 model.remove_lazy_loaded_path(&root, ctx);
             });
 
@@ -2719,13 +3500,22 @@ fn deleted_subdir_drops_its_tracked_watch() {
                 model
                     .index_lazy_loaded_path(&root, ctx)
                     .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            model_handle.update(&mut app, |model, ctx| {
                 model
                     .load_directory(&root, &sub, ctx)
                     .expect("should load subdir");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            model_handle.update(&mut app, |model, ctx| {
                 model
                     .load_directory(&root, &inner, ctx)
                     .expect("should load nested subdir");
             });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
 
             // Only a non-recursive (Linux) root tracks per-directory watches.
             if !cfg!(target_os = "linux") {

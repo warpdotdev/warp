@@ -61,11 +61,6 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub(crate) fn warp_home_config_dir() -> Option<PathBuf> {
-    warp_core::paths::warp_home_config_dir()
-}
-
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_home_skills_dir() -> Option<PathBuf> {
     warp_core::paths::warp_home_skills_dir()
 }
@@ -73,6 +68,13 @@ pub(crate) fn warp_home_skills_dir() -> Option<PathBuf> {
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_home_mcp_config_file_path() -> Option<PathBuf> {
     warp_core::paths::warp_home_mcp_config_file_path()
+}
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(crate) fn active_mcp_config_file_path() -> Option<PathBuf> {
+    match settings::settings_mode() {
+        settings::SettingsMode::Gui => warp_home_mcp_config_file_path(),
+        settings::SettingsMode::Tui => Some(warp_core::paths::tui_mcp_config_file_path()),
+    }
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -91,7 +93,7 @@ pub(crate) fn warp_managed_skill_dirs() -> Vec<PathBuf> {
 pub(crate) fn warp_managed_mcp_config_path() -> Option<WarpMcpConfigPath> {
     Some(WarpMcpConfigPath {
         root_path: home_dir()?,
-        config_path: warp_home_mcp_config_file_path()?,
+        config_path: active_mcp_config_file_path()?,
     })
 }
 
@@ -322,25 +324,27 @@ impl WarpManagedPathsWatcher {
                     );
                 }
             }
-            if let (Some(warp_home_config_dir), Some(warp_home_mcp_config_path)) =
-                (warp_home_config_dir(), warp_home_mcp_config_file_path())
-            {
-                if warp_home_config_dir.exists()
-                    && !warp_home_config_dir.starts_with(&data_dir)
-                    && (!should_register_config_local_dir
-                        || !warp_home_config_dir.starts_with(&config_local_dir))
+            if let Some(active_mcp_config_path) = active_mcp_config_file_path() {
+                if let Some(active_mcp_config_dir) =
+                    active_mcp_config_path.parent().map(Path::to_path_buf)
                 {
-                    // Watch the config directory non-recursively,
-                    // and ignore events for files other than the MCP config file.
-                    let emit = Arc::new(move |path: &Path| path == warp_home_mcp_config_path);
-                    Self::register_path(
-                        ctx,
-                        &watcher,
-                        warp_home_config_dir,
-                        WatchFilter::with_filter(Arc::new(|_: &Path| true), emit),
-                        RecursiveMode::NonRecursive,
-                        "Warp home MCP config directory",
-                    );
+                    if active_mcp_config_dir.exists()
+                        && !active_mcp_config_dir.starts_with(&data_dir)
+                        && (!should_register_config_local_dir
+                            || !active_mcp_config_dir.starts_with(&config_local_dir))
+                    {
+                        // Watch the config directory non-recursively,
+                        // and ignore events for files other than the MCP config file.
+                        let emit = Arc::new(move |path: &Path| path == active_mcp_config_path);
+                        Self::register_path(
+                            ctx,
+                            &watcher,
+                            active_mcp_config_dir,
+                            WatchFilter::with_filter(Arc::new(|_: &Path| true), emit),
+                            RecursiveMode::NonRecursive,
+                            "Warp MCP config directory",
+                        );
+                    }
                 }
             }
         }

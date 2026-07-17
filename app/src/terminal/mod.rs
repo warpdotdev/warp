@@ -19,7 +19,7 @@ use warpui::{AppContext, WindowId};
 mod block_list_settings;
 
 mod alias;
-mod alt_screen;
+pub(crate) mod alt_screen;
 pub mod alt_screen_reporting;
 mod audible_bell;
 pub use audible_bell::AudibleBell;

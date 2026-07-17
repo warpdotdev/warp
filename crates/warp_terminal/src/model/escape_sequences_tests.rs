@@ -175,6 +175,29 @@ fn test_mouse_actions_to_escape_sequence() {
 }
 
 #[test]
+fn test_alt_screen_scroll_to_pty_bytes() {
+    let terminal_model = TerminalModelMock::new();
+    let point = Point::new(3, 2);
+
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(2, point, false, &terminal_model),
+        Some(b"\x1bOA\x1bOA".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(-2, point, false, &terminal_model),
+        Some(b"\x1bOB\x1bOB".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(1, point, true, &terminal_model),
+        Some(b"\x1b[<64;3;4M".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(0, point, true, &terminal_model),
+        None
+    );
+}
+
+#[test]
 fn test_cursor_movement_keystroke_without_modifier_to_escape_sequence() {
     // Expected mapping taken from the xterm spec
     // [here](https://www.xfree86.org/current/ctlseqs.html).
@@ -511,7 +534,7 @@ fn test_to_pty_bytes_layers_fallbacks_over_the_encoder() {
         .to_pty_bytes(&mock)
     };
     // A key with no `chars` and no encoder mapping, built the way the
-    // crossterm→key-event conversion supplies named keys (tab is "\t").
+    // crossterm→key-event conversion supplies named keys.
     let named = |key: &str| Keystroke {
         ctrl: false,
         alt: false,
@@ -558,7 +581,7 @@ fn test_to_pty_bytes_layers_fallbacks_over_the_encoder() {
     // 4. Named control keys with no `chars` -> their C0 bytes.
     assert_eq!(pty_bytes(&named("enter"), None), Some(vec![C0::CR]));
     assert_eq!(pty_bytes(&named("escape"), None), Some(vec![C0::ESC]));
-    assert_eq!(pty_bytes(&named("\t"), None), Some(vec![C0::HT]));
+    assert_eq!(pty_bytes(&named("tab"), None), Some(vec![C0::HT]));
 
     // Nothing to send.
     assert_eq!(pty_bytes(&named("insert"), None), None);

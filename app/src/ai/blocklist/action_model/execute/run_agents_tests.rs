@@ -236,6 +236,7 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
                 name: "child".to_string(),
                 prompt: "Help".to_string(),
                 title: String::new(),
+                agent_identity_uid: String::new(),
             }],
             plan_id: String::new(),
             harness_auth_secret_name: None,
@@ -258,6 +259,7 @@ fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
         name: "child".to_string(),
         prompt: "Investigate the failure".to_string(),
         title: String::new(),
+        agent_identity_uid: String::new(),
     };
 
     let mode = run_agents_to_start_agent_mode(

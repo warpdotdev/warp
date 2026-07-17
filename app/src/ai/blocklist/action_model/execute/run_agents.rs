@@ -617,8 +617,8 @@ fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &Orchestr
     // The approved plan config is the source of truth for these run-wide fields,
     // so callers pass a mutable request and continue with the normalized value.
     let mut config_state = OrchestrationConfigState::from_run_agents_fields(
-        &request.model_id,
-        &request.harness_type,
+        Some(&request.model_id),
+        Some(&request.harness_type),
         &request.execution_mode,
     );
     config_state.override_from_approved_config(config);
@@ -680,6 +680,15 @@ pub fn run_agents_to_start_agent_mode(
 ) -> Result<StartAgentExecutionMode, String> {
     match run_execution_mode {
         RunAgentsExecutionMode::Local => {
+            // Named-agent identity requires the public-API dispatch path, which
+            // only remote children use. Mirrors server-side validation.
+            if !cfg.agent_identity_uid.trim().is_empty() {
+                return Err(
+                    "agent_identity_uid requires remote execution; local child agents cannot \
+                     run as a different named agent."
+                        .to_string(),
+                );
+            }
             let trimmed = run_harness_type.trim();
             // Propagate run-wide model selection for local launches.
             let trimmed_model_id = run_model_id.trim();
@@ -722,6 +731,8 @@ pub fn run_agents_to_start_agent_mode(
                 title: cfg.title.clone(),
                 auth_secret_name: run_auth_secret_name
                     .map(str::to_string)
+                    .filter(|s| !s.trim().is_empty()),
+                agent_identity_uid: Some(cfg.agent_identity_uid.clone())
                     .filter(|s| !s.trim().is_empty()),
             })
         }

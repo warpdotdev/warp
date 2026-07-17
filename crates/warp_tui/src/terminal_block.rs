@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    Block, BlockGrid, BlockId, BlockList, GridHandler, TerminalColorList, TerminalModel,
+    Block, BlockGrid, BlockId, BlockList, GridHandler, TermMode, TerminalColorList, TerminalModel,
 };
 use warp_terminal::model::ansi::{Color, NamedColor};
 use warp_terminal::model::grid::cell::{Cell, Flags};
@@ -15,6 +15,8 @@ use warpui_core::elements::tui::{
     TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
 };
 use warpui_core::AppContext;
+
+use crate::terminal_use::user_controls_running_command;
 
 /// Selects which rows of a terminal block an element paints.
 enum TerminalBlockRows {
@@ -80,6 +82,45 @@ impl TerminalBlockElement {
     }
 }
 
+fn terminal_block_cursor(
+    block: &Block,
+    visible_rows: &Range<usize>,
+    size: TuiSize,
+) -> Option<(u16, u16)> {
+    if !user_controls_running_command(block) || !block.is_mode_set(TermMode::SHOW_CURSOR) {
+        return None;
+    }
+    let (grid, grid_start_row) = if block.is_command_grid_active() {
+        if block.should_hide_command_grid() {
+            return None;
+        }
+        (
+            block.prompt_and_command_grid(),
+            block
+                .prompt_and_command_grid_offset()
+                .as_f64()
+                .ceil()
+                .max(0.0) as usize,
+        )
+    } else {
+        if block.should_hide_output_grid() {
+            return None;
+        }
+        (
+            block.output_grid(),
+            block.output_grid_offset().as_f64().ceil().max(0.0) as usize,
+        )
+    };
+    let (column, grid_row) = grid.visible_cursor_display_position()?;
+    let block_row = grid_start_row.saturating_add(grid_row);
+    if !visible_rows.contains(&block_row) {
+        return None;
+    }
+    let column = u16::try_from(column).ok()?;
+    let row = u16::try_from(block_row.saturating_sub(visible_rows.start)).ok()?;
+    (column < size.width && row < size.height).then_some((column, row))
+}
+
 impl TuiElement for TerminalBlockElement {
     fn layout(
         &mut self,
@@ -127,6 +168,7 @@ impl TuiElement for TerminalBlockElement {
             TerminalBlockRows::Visible { rows, width } => (rows.clone(), (*width).min(size.width)),
             TerminalBlockRows::Content => (block_content_rows(block), size.width),
         };
+        let cursor = terminal_block_cursor(block, &rows, size);
         render_block_rows(
             block,
             rows,
@@ -135,6 +177,10 @@ impl TuiElement for TerminalBlockElement {
             surface,
             &colors,
         );
+        drop(model);
+        if let Some((col, row)) = cursor {
+            ctx.set_terminal_cursor(ctx.scene_point(origin.offset(i32::from(col), i32::from(row))));
+        }
     }
 
     fn size(&self) -> Option<TuiSize> {

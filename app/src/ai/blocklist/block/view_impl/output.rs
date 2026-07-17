@@ -12,6 +12,7 @@ use std::sync::Arc;
 use ai::agent::action::{
     RequestComputerUseRequest, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
+use ai::agent::document_action_presentation::DocumentActionPresentation;
 use ai::agent::file_locations::group_file_contexts_for_display;
 use ai::skills::{ParsedSkill, SkillReference};
 use indexmap::IndexMap;
@@ -60,10 +61,9 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome,
-    CreateDocumentsResult, EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult,
-    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult,
-    StartRecordingResult, StopRecordingResult, SubagentCall, SubagentType,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome, MessageId,
+    ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult, SearchCodebaseFailureReason,
+    SearchCodebaseResult, StartRecordingResult, StopRecordingResult, SubagentCall, SubagentType,
     SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -746,26 +746,15 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             }
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
-                            action: AIAgentActionType::CreateDocuments { .. },
+                            action:
+                                action @ (AIAgentActionType::CreateDocuments(_)
+                                | AIAgentActionType::EditDocuments(_)),
                             id,
                             ..
                         }) => {
                             should_render_footer = false;
-                            if let Some(create_document) =
-                                maybe_render_create_document(props, id, app)
-                            {
-                                output_items.add_child(create_document);
-                            }
-                        }
-                        AIAgentOutputMessageType::Action(AIAgentAction {
-                            action: AIAgentActionType::EditDocuments { .. },
-                            id,
-                            ..
-                        }) => {
-                            should_render_footer = false;
-                            if let Some(edit_document) = maybe_render_edit_document(props, id, app)
-                            {
-                                output_items.add_child(edit_document);
+                            if let Some(document) = maybe_render_document(props, id, action, app) {
+                                output_items.add_child(document);
                             }
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
@@ -2034,9 +2023,10 @@ fn parsed_skill_for_common_locations(
         .flatten()
 }
 
-fn maybe_render_edit_document(
+fn maybe_render_document(
     props: Props,
     id: &AIAgentActionId,
+    action: &AIAgentActionType,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
     let status = props.action_model.as_ref(app).get_action_status(id);
@@ -2046,64 +2036,16 @@ fn maybe_render_edit_document(
         todo!("Implement granular permissions for AI documents.");
     }
 
-    let agent_action_results = props
+    let result = props
         .action_model
         .as_ref(app)
         .get_action_result(id)
-        .map(|action_result| action_result.as_ref());
-
-    let Some(AIAgentActionResult {
-        result:
-            AIAgentActionResultType::EditDocuments(EditDocumentsResult::Success { updated_documents }),
-        ..
-    }) = agent_action_results
-    else {
-        return None;
-    };
-
-    let document = updated_documents.first()?;
+        .map(|result| &result.result);
+    let presentation = DocumentActionPresentation::resolve(action, result)?;
+    let document = presentation.documents.first()?;
     let action = CreateOrEditDocumentAction::new(
-        document.document_id,
-        document.document_version,
-        props.state_handles.ai_document_handle.clone(),
-        app,
-    )?;
-    Some(action.render(app))
-}
-
-fn maybe_render_create_document(
-    props: Props,
-    id: &AIAgentActionId,
-    app: &AppContext,
-) -> Option<Box<dyn Element>> {
-    let status = props.action_model.as_ref(app).get_action_status(id);
-
-    // Document operations are always auto-executed for now
-    if status.as_ref().is_some_and(|status| status.is_blocked()) {
-        todo!("Implement granular permissions for AI documents.");
-    }
-
-    let agent_action_results = props
-        .action_model
-        .as_ref(app)
-        .get_action_result(id)
-        .map(|action_result| action_result.as_ref());
-
-    let Some(AIAgentActionResult {
-        result:
-            AIAgentActionResultType::CreateDocuments(CreateDocumentsResult::Success {
-                created_documents,
-            }),
-        ..
-    }) = agent_action_results
-    else {
-        return None;
-    };
-
-    let document = created_documents.first()?;
-    let action = CreateOrEditDocumentAction::new(
-        document.document_id,
-        document.document_version,
+        document.document_id?,
+        document.document_version?,
         props.state_handles.ai_document_handle.clone(),
         app,
     )?;

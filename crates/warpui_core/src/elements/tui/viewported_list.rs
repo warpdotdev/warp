@@ -259,6 +259,25 @@ pub trait TuiViewportedElement {
         None
     }
 
+    /// Optional *logical* text for a resolved selection span.
+    ///
+    /// Returning `Some` lets copy source text from the content's logical model
+    /// instead of the rendered cell grid, so soft-wrapped visual rows are
+    /// rejoined into their original line (no newline inserted at a wrap point,
+    /// no rendered wrap/quote indentation captured) and the full selected range
+    /// is returned even when it exceeds what the viewport rendered. Returning
+    /// `None` (the default) makes the caller fall back to per-row grid-text
+    /// extraction, which is the right behavior for content that has no clean
+    /// logical form (diagrams, images, tables).
+    fn selection_logical_text(
+        &self,
+        _selection: TuiSelectionSpan,
+        _available_width: u16,
+        _app: &AppContext,
+    ) -> Option<String> {
+        None
+    }
+
     /// Drains row resizes produced during the latest layout.
     fn take_selection_row_resizes(&self) -> Vec<TuiRowResize> {
         Vec::new()
@@ -698,6 +717,16 @@ where
         };
         if selection.start.row >= end_row_exclusive {
             return None;
+        }
+        // Prefer the content's logical text so soft-wrapped rows rejoin without
+        // inserted newlines or rendered wrap indentation, and the full selected
+        // range is captured. Content that has no logical form returns `None`,
+        // and we fall back to per-row grid extraction below.
+        if let Some(logical) = self
+            .content
+            .selection_logical_text(selection, size.width, app)
+        {
+            return Some(logical);
         }
         let mut lines = Vec::new();
         let mut chunk_start = selection.start.row;

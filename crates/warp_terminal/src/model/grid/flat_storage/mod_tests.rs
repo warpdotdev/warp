@@ -275,3 +275,80 @@ fn test_clear_after_truncate_front_then_resize_and_push_does_not_panic() {
         .expect("should materialize a row after clearing and resizing storage");
     assert_eq!(row[0].c, 'n');
 }
+
+#[test]
+fn test_wide_char_hyperlink_spacer_survives_roundtrip() {
+    use crate::model::ansi::control_sequence_parameters::Hyperlink;
+    use crate::model::grid::HyperlinkRegistry;
+
+    let mut registry = HyperlinkRegistry::new();
+    let id = registry
+        .intern(Hyperlink {
+            id: None,
+            uri: "https://example.com".to_string(),
+        })
+        .expect("registry should have capacity for one hyperlink");
+
+    let mut wide = Cell::default();
+    wide.c = '😀';
+    wide.flags.insert(Flags::WIDE_CHAR);
+    wide.set_hyperlink_id(Some(id));
+
+    let mut spacer = Cell::default();
+    spacer.flags.insert(Flags::WIDE_CHAR_SPACER);
+    spacer.set_hyperlink_id(Some(id));
+
+    let row = Row::from_vec(vec![wide, spacer, Cell::default()], 3);
+
+    let mut storage = FlatStorage::new(5, None, Some(2));
+    storage.push_rows([&row]);
+
+    let flat = storage
+        .rows_from(0)
+        .next()
+        .expect("should materialize the pushed row");
+    assert_eq!(flat[0].c, '😀');
+    assert!(flat[0].flags().contains(Flags::WIDE_CHAR));
+    assert_eq!(flat[0].hyperlink_id(), Some(id));
+    // Both halves of the wide glyph must stay hoverable after
+    // rematerialization, not just the leading cell.
+    assert!(flat[1].flags().contains(Flags::WIDE_CHAR_SPACER));
+    assert_eq!(flat[1].hyperlink_id(), Some(id));
+}
+
+#[test]
+fn test_blank_cells_before_hyperlink_are_not_clickable() {
+    use crate::model::ansi::control_sequence_parameters::Hyperlink;
+    use crate::model::grid::HyperlinkRegistry;
+
+    let mut registry = HyperlinkRegistry::new();
+    let id = registry
+        .intern(Hyperlink {
+            id: None,
+            uri: "https://example.com".to_string(),
+        })
+        .expect("registry should have capacity for one hyperlink");
+
+    let mut linked = Cell::default();
+    linked.c = 'a';
+    linked.set_hyperlink_id(Some(id));
+
+    // Two blank cells precede the linked cell. They are backfilled when the
+    // row is flattened, and must not inherit the hyperlink id.
+    let row = Row::from_vec(
+        vec![Cell::default(), Cell::default(), linked, Cell::default()],
+        4,
+    );
+
+    let mut storage = FlatStorage::new(5, None, Some(2));
+    storage.push_rows([&row]);
+
+    let flat = storage
+        .rows_from(0)
+        .next()
+        .expect("should materialize the pushed row");
+    assert_eq!(flat[0].hyperlink_id(), None);
+    assert_eq!(flat[1].hyperlink_id(), None);
+    assert_eq!(flat[2].c, 'a');
+    assert_eq!(flat[2].hyperlink_id(), Some(id));
+}

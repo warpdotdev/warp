@@ -1234,9 +1234,9 @@ impl AgentConversationsModel {
         }
     }
 
-    /// Returns true if we have tasks or local conversations in this view
-    pub fn has_items(&self) -> bool {
-        !self.tasks.is_empty() || !self.conversations.is_empty()
+    /// Returns whether the unfiltered conversation list contains any entries.
+    pub fn has_items(&self, app: &AppContext) -> bool {
+        !self.unfiltered_entries(app).is_empty()
     }
 
     /// Returns an iterator over all ambient agent tasks.
@@ -1270,12 +1270,37 @@ impl AgentConversationsModel {
         filters: &AgentManagementFilters,
         app: &AppContext,
     ) -> Vec<AgentConversationEntry> {
+        self.unfiltered_entries(app)
+            .into_iter()
+            .filter(|entry| entry.matches_filters(filters, app))
+            .sorted_by(|a, b| b.display.last_updated.cmp(&a.display.last_updated))
+            .collect()
+    }
+
+    /// Returns normalized entries before user-selected filters are applied.
+    fn unfiltered_entries(&self, app: &AppContext) -> Vec<AgentConversationEntry> {
         let history_model = BlocklistAIHistoryModel::as_ref(app);
         let mut entries = Vec::new();
+        // Local conversation IDs represented by a task — either shown as a
+        // task entry or hidden along with a child task — and therefore not
+        // emitted as standalone conversation entries by the loops below.
         let mut attached_conversation_ids = HashSet::new();
         let mut emitted_conversation_ids = HashSet::new();
 
         for task in self.tasks.values() {
+            // Child agents (cloud runs carry `parent_run_id`) are represented
+            // under their parent's status card and must not appear as standalone
+            // entries — this mirrors the local navigation path's exclusion via
+            // `AIConversation::should_exclude_from_navigation`. Any local
+            // conversation shadowed by a child task is hidden along with it.
+            if task.parent_run_id.is_some() {
+                if let Some(conversation_id) =
+                    entry::conversation_id_shadowed_by_task(task, history_model)
+                {
+                    attached_conversation_ids.insert(conversation_id);
+                }
+                continue;
+            }
             let entry = entry::entry_for_task(task, history_model, app);
             if let Some(conversation_id) = entry.identity.local_conversation_id {
                 attached_conversation_ids.insert(conversation_id);
@@ -1310,10 +1335,6 @@ impl AgentConversationsModel {
         }
 
         entries
-            .into_iter()
-            .filter(|entry| entry.matches_filters(filters, app))
-            .sorted_by(|a, b| b.display.last_updated.cmp(&a.display.last_updated))
-            .collect()
     }
 
     pub fn get_entry_by_id(

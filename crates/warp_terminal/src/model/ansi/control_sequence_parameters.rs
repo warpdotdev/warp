@@ -708,6 +708,255 @@ impl TryFrom<&[u8]> for PromptKind {
     }
 }
 
+/// Maximum byte length of a URI carried by an OSC 8 hyperlink. Terminal output
+/// is untrusted, so the URI is checked against this cap before its `String` is
+/// allocated. Matches VTE's OSC 8 URI cap.
+pub const MAX_URI_BYTES: usize = 2083;
+
+/// Maximum byte length of the OSC 8 `id` param value. Oversized ids are dropped
+/// (the URI is still kept and remains clickable).
+pub const MAX_ID_BYTES: usize = 256;
+
+/// A hyperlink declared via the OSC 8 escape sequence.
+///
+/// Format: `OSC 8 ; params ; URI ST`, where `params` is a colon-separated
+/// list of `key=value` pairs and the URI is the destination. An empty URI
+/// closes the active hyperlink. Currently only the `id` parameter is defined
+/// by the spec; it lets terminals visually group runs of cells that belong
+/// to the same logical link (we parse it but treat it as a hint only).
+///
+/// Reference: <https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda>
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Hyperlink {
+    /// Optional identifier declared by the emitter. Parsed and stored, but
+    /// not used for cross-run grouping in the current implementation.
+    pub id: Option<String>,
+    /// The URI the link points to.
+    pub uri: String,
+}
+
+#[derive(Debug, Error)]
+pub enum HyperlinkParseError {
+    #[error("hyperlink URI is not valid UTF-8")]
+    InvalidUtf8,
+    #[error("hyperlink URI exceeds the {MAX_URI_BYTES} byte cap (got {len})")]
+    UriTooLong { len: usize },
+}
+
+impl Hyperlink {
+    /// Parse the params from an OSC 8 sequence into a `Hyperlink`.
+    ///
+    /// `params` is the slice of fields *after* the leading `b"8"` identifier
+    /// — i.e. for `OSC 8 ; id=foo ; https://example.com ST`, callers should
+    /// pass `&[b"id=foo", b"https://example.com"]`.
+    ///
+    /// The vte parser splits OSC bytes on `;`, so a URI containing `;` arrives
+    /// split across multiple slice elements. The contract is therefore: the
+    /// URI is **always** the `b";"`-rejoin of `params[1..]`. Implementations
+    /// that follow the simpler "two fields after the identifier" mental shortcut
+    /// silently drop URIs containing `;` (matrix params, `jsessionid`, percent-
+    /// encoded payloads); see the `uri_with_semicolons_is_rejoined` test below.
+    ///
+    /// Returns `Ok(None)` for the closing form (empty URI) and `Ok(Some(_))`
+    /// for an opening form. Unknown `key=value` params are ignored. The
+    /// `MAX_URI_BYTES` cap is checked on the raw bytes before allocating
+    /// the URI `String`.
+    pub fn parse_osc_params(params: &[&[u8]]) -> Result<Option<Self>, HyperlinkParseError> {
+        // Close-form shapes: empty slice, single empty field, or two empty fields.
+        if params.is_empty() {
+            return Ok(None);
+        }
+        let params_field = params[0];
+        let uri_parts = &params[1..];
+
+        // Compute the URI's total byte length without allocating, so the
+        // length cap rejects oversized inputs before we grow a String.
+        let uri_len = if uri_parts.is_empty() {
+            0
+        } else {
+            uri_parts.iter().map(|part| part.len()).sum::<usize>()
+                + uri_parts.len().saturating_sub(1) // semicolons rejoined between parts
+        };
+
+        if uri_len == 0 {
+            return Ok(None);
+        }
+        if uri_len > MAX_URI_BYTES {
+            return Err(HyperlinkParseError::UriTooLong { len: uri_len });
+        }
+
+        // Rejoin URI parts with `;` (the vte parser split them).
+        let mut uri_bytes = Vec::with_capacity(uri_len);
+        for (i, part) in uri_parts.iter().enumerate() {
+            if i > 0 {
+                uri_bytes.push(b';');
+            }
+            uri_bytes.extend_from_slice(part);
+        }
+        let uri = String::from_utf8(uri_bytes).map_err(|_| HyperlinkParseError::InvalidUtf8)?;
+
+        // Per the OSC 8 spec, unknown or malformed params are silently
+        // ignored — the link itself stays clickable. We only read `id`.
+        let mut id: Option<String> = None;
+        for pair in params_field.split(|byte| *byte == b':') {
+            let Some(eq_idx) = pair.iter().position(|byte| *byte == b'=') else {
+                continue;
+            };
+            let key = &pair[..eq_idx];
+            let value = &pair[eq_idx + 1..];
+            // An empty `id=` is equivalent to omitting the param. Oversized or
+            // non-UTF-8 ids are dropped rather than rejecting the whole link.
+            if key == b"id" && !value.is_empty() && value.len() <= MAX_ID_BYTES {
+                if let Ok(value) = str::from_utf8(value) {
+                    id = Some(value.to_owned());
+                }
+            }
+        }
+
+        Ok(Some(Hyperlink { id, uri }))
+    }
+}
+
+#[cfg(test)]
+mod hyperlink_parse_tests {
+    use super::*;
+
+    #[test]
+    fn open_with_no_params() {
+        let parsed = Hyperlink::parse_osc_params(&[b"", b"https://example.com"]).unwrap();
+        assert_eq!(
+            parsed,
+            Some(Hyperlink {
+                id: None,
+                uri: "https://example.com".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn open_with_id_param() {
+        let parsed = Hyperlink::parse_osc_params(&[b"id=foo", b"https://example.com"]).unwrap();
+        assert_eq!(parsed.unwrap().id.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn close_canonical() {
+        // Canonical close: `OSC 8 ; ; ST` -> two empty fields after identifier.
+        let parsed = Hyperlink::parse_osc_params(&[b"", b""]).unwrap();
+        assert_eq!(parsed, None);
+    }
+
+    #[test]
+    fn close_single_empty_field() {
+        // Some emitters write `OSC 8 ; ST` -> one empty field.
+        let parsed = Hyperlink::parse_osc_params(&[b""]).unwrap();
+        assert_eq!(parsed, None);
+    }
+
+    #[test]
+    fn close_zero_fields() {
+        // Defensive: empty params slice (caller didn't strip a leading b"8").
+        let parsed = Hyperlink::parse_osc_params(&[]).unwrap();
+        assert_eq!(parsed, None);
+    }
+
+    #[test]
+    fn unknown_keys_in_params_are_ignored() {
+        let parsed =
+            Hyperlink::parse_osc_params(&[b"unknown=val:id=bar", b"https://example.com"]).unwrap();
+        let hyperlink = parsed.unwrap();
+        assert_eq!(hyperlink.id.as_deref(), Some("bar"));
+        assert_eq!(hyperlink.uri, "https://example.com");
+    }
+
+    #[test]
+    fn multiple_params_separated_by_colons() {
+        let parsed =
+            Hyperlink::parse_osc_params(&[b"id=foo:hover=true:other=ignored", b"https://x"])
+                .unwrap();
+        assert_eq!(parsed.unwrap().id.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn param_without_equals_is_ignored_link_still_parses() {
+        // The OSC 8 spec says unknown/malformed params are silently ignored;
+        // the link itself must remain usable.
+        let parsed = Hyperlink::parse_osc_params(&[b"badparam", b"https://example.com"]).unwrap();
+        let hyperlink = parsed.unwrap();
+        assert_eq!(hyperlink.id, None);
+        assert_eq!(hyperlink.uri, "https://example.com");
+    }
+
+    #[test]
+    fn empty_id_is_treated_as_omitted() {
+        // `id=` with no value is equivalent to omitting the id param.
+        let parsed = Hyperlink::parse_osc_params(&[b"id=", b"https://example.com"]).unwrap();
+        assert_eq!(parsed.unwrap().id, None);
+    }
+
+    /// Anti-regression: vte splits OSC params on `;`, so a URI with literal
+    /// `;` arrives across multiple slice elements. The parser must rejoin them.
+    /// Failing this test is the cardinal indicator of a "two-field shortcut"
+    /// implementation that silently drops valid URIs.
+    #[test]
+    fn uri_with_semicolons_is_rejoined() {
+        let parsed = Hyperlink::parse_osc_params(&[
+            b"",
+            b"https://example.com/a?x=1",
+            b"y=2",
+            b"jsessionid=abc",
+        ])
+        .unwrap();
+        let hyperlink = parsed.unwrap();
+        assert_eq!(
+            hyperlink.uri,
+            "https://example.com/a?x=1;y=2;jsessionid=abc"
+        );
+    }
+
+    #[test]
+    fn non_utf8_uri_is_rejected() {
+        // Invalid UTF-8 byte sequence in the URI part.
+        let result = Hyperlink::parse_osc_params(&[b"", &[0xff, 0xfe, 0xfd]]);
+        assert!(matches!(result, Err(HyperlinkParseError::InvalidUtf8)));
+    }
+
+    #[test]
+    fn over_length_uri_is_rejected_without_allocation() {
+        // Allocate the input as a borrowed slice — the function must reject
+        // before allocating its own String of comparable size.
+        let big = vec![b'x'; MAX_URI_BYTES + 1];
+        let result = Hyperlink::parse_osc_params(&[b"", big.as_slice()]);
+        match result {
+            Err(HyperlinkParseError::UriTooLong { len }) => {
+                assert_eq!(len, MAX_URI_BYTES + 1);
+            }
+            other => panic!("expected UriTooLong, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn over_length_id_is_dropped_uri_kept() {
+        // An attacker-controlled `id` larger than the cap should be dropped
+        // before allocation, leaving the link with no id but a valid URI.
+        let big_id = format!("id={}", "x".repeat(MAX_ID_BYTES + 1));
+        let parsed =
+            Hyperlink::parse_osc_params(&[big_id.as_bytes(), b"https://example.com"]).unwrap();
+        let link = parsed.unwrap();
+        assert_eq!(link.id, None);
+        assert_eq!(link.uri, "https://example.com");
+    }
+
+    #[test]
+    fn empty_segments_in_params_are_skipped() {
+        // Defensive: a stray colon in the params field shouldn't flag the entry as malformed.
+        let parsed =
+            Hyperlink::parse_osc_params(&[b"id=foo::id=bar", b"https://example.com"]).unwrap();
+        // The last `id=` wins.
+        assert_eq!(parsed.unwrap().id.as_deref(), Some("bar"));
+    }
+}
+
 pub mod color_index {
     pub const BLACK: usize = 0;
     pub const RED: usize = 1;

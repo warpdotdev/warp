@@ -138,6 +138,7 @@ impl OrchestrationConfig {
                 api::orchestration_config::Remote {
                     environment_id: environment_id.clone(),
                     worker_host: worker_host.clone(),
+                    runner_id: Default::default(),
                 },
             )),
         };

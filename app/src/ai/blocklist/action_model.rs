@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use chrono::Local;
 pub(crate) use execute::{
     apply_edits, coerce_integer_args, FileReadResult, MalformedFinalLineProxyEvent,
@@ -58,7 +59,6 @@ use crate::ai::agent::{
     CancellationOutcome, CancellationReason, CreateDocumentsResult, EditDocumentsResult,
     RequestCommandOutputResult,
 };
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
@@ -1033,7 +1033,9 @@ impl BlocklistAIActionModel {
         self.handle_action_result(conversation_id, Arc::new(action_result), None, ctx);
     }
 
-    pub(super) fn cancel_action_with_id(
+    /// Cancels a running or pending action by id with the given reason.
+    /// Public because both frontends' permission cards route Reject here.
+    pub fn cancel_action_with_id(
         &mut self,
         conversation_id: AIConversationId,
         action_id: &AIAgentActionId,
