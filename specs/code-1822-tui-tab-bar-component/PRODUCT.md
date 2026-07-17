@@ -28,18 +28,18 @@ The orchestration designs establish the view states; the view remains domain-neu
 1. A caller can provide:
    - An optional main tab.
    - An ordered list of secondary tabs.
-   - A stable, globally unique string key and label for every tab.
+   - A stable string key and label for every tab, unique across the configured main and secondary tabs.
    - Optional styled leading text for every tab.
    - The selected tab key, if any.
    - Whether the bar is focused.
    - The current secondary-page anchor.
    - Whether an off-page selected secondary tab should be revealed.
-   - Focused, unfocused, selected, background, leading-label, and chrome styles.
+   - Background, leading-label, chrome, normal-tab, focused-selected, and unfocused-selected styles.
    - An optional maximum label width in terminal display cells.
 2. The view renders exactly one terminal row and never wraps tabs.
 3. The view builds complete row alternatives from generic flex, text, container, and hoverable elements, then uses a size-constraint switch to select the alternative for the assigned width.
 4. The main tab, when present, stays at the leading edge and does not participate in secondary paging.
-5. The caller controls any product label surrounding the tabs. The view supplies one consistent divider and previous/next arrows.
+5. The caller controls the optional product label before the tabs. The view supplies one consistent divider and previous/next arrows.
 6. An empty secondary list is valid.
 7. Duplicate keys across the main and secondary tabs are invalid; creating or reconfiguring the view returns a typed configuration error.
 
@@ -60,8 +60,8 @@ The orchestration designs establish the view states; the view remains domain-neu
 
 ### Label width and truncation
 17. Width calculations use terminal display cells rather than Unicode scalar count or byte length.
-18. When a maximum label width is supplied, every label is constrained to that many display cells, including the ellipsis.
-19. A maximum label width is invalid when a truncated label cannot show at least one complete grapheme followed by `...`; creating or reconfiguring the view returns a typed configuration error.
+18. When a maximum label width is supplied, every main and secondary label is constrained to that many display cells, including the ellipsis.
+19. A maximum label width is invalid when it cannot show the complete label or, for a truncated label, at least one non-zero-width grapheme followed by `...`; creating or reconfiguring the view returns a typed configuration error.
 20. A label exceeding its maximum is truncated with `...`.
 21. Wide and combining Unicode characters never split into invalid text or corrupt following cell alignment.
 22. The last visible secondary tab may be truncated below its configured maximum to preserve an applicable overflow control, but it moves to the next page when there is room for only ellipsis dots and no label content.
