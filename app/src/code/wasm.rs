@@ -178,7 +178,7 @@ impl CodeView {
         false
     }
 
-    pub fn active_tab_has_unsaved_changes(&self, _ctx: &AppContext) -> bool {
+    pub fn active_tab_shows_unsaved_indicator(&self, _ctx: &AppContext) -> bool {
         false
     }
 

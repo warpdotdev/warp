@@ -98,6 +98,11 @@ impl LocalCodeEditorView {
     /// Stub: the WASM editor tracks no auto-save marker, so this is a no-op.
     pub fn mark_next_save_as_auto_save(&mut self) {}
 
+    /// Stub: the WASM editor has no backing file, so nothing can be auto-saved.
+    pub fn can_auto_save(&self, _app: &AppContext) -> bool {
+        false
+    }
+
     /// Returns the unified file location (local or remote).
     /// The WASM stub has no backing file, so this always returns `None`.
     pub fn file_location(&self) -> Option<&BufferFileLocation> {

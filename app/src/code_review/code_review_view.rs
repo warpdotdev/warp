@@ -4951,10 +4951,16 @@ impl CodeReviewView {
         }
 
         // When auto-save is enabled, edits are persisted automatically, so the
-        // per-file unsaved dot would just flicker on and off as the user types.
+        // per-file unsaved dot would just flicker on and off as the user
+        // types. Changes auto-save can't persist (e.g. a disconnected remote
+        // repo) still show the dot.
         let auto_save_enabled = *CodeSettings::as_ref(app).auto_save;
         left_section.add_child(match file.editor_state.as_ref() {
-            Some(editor_state) if !auto_save_enabled && editor_state.has_unsaved_changes(app) => {
+            Some(editor_state)
+                if editor_state.has_unsaved_changes(app)
+                    && (!auto_save_enabled
+                        || !editor_state.editor().as_ref(app).can_auto_save(app)) =>
+            {
                 let save_keystroke = Keystroke::parse("cmdorctrl-s").unwrap_or_default();
                 let save_shortcut = save_keystroke.displayed();
                 let tooltip_text =

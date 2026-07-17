@@ -1745,6 +1745,13 @@ impl LocalCodeEditorView {
             .is_none()
     }
 
+    /// Whether auto-save can actually persist this editor's changes: it needs
+    /// a backing file and, for remote files, a still-connected host. Untitled
+    /// buffers (no `file_id`) and disconnected remotes return `false`.
+    pub fn can_auto_save(&self, app: &AppContext) -> bool {
+        self.file_id().is_some() && !self.is_remote_disconnected(app)
+    }
+
     /// Save the file to the local file system (or remotely via the remote server).
     /// This will only return an error immediately if there is a failure in the sync part of the call.
     /// Other errors could be returned asynchronously via the FileModelEvent::FailedToSave event.
