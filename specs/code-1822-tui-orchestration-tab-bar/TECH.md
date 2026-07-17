@@ -63,7 +63,7 @@ Add orchestration-tab actions and a keymap-context flag to `TuiTerminalSessionVi
 
 Register `Left`, `Right`, `Tab`, `Shift+Tab`, `Shift+Left`, `Shift+Right`, and `Shift+Down` only under the tab-focused context. Keep the existing session-level `Ctrl+C` binding unchanged; the focused footer omits kill copy in this PR.
 
-The input's `MoveFocusUp` event directly enters tab focus. `SelectPrevious` and `SelectNext` ask `TuiTabBarView` for a target from its semantic tab order; first/last child navigation resolves through the view's secondary order. The session view delegates semantic selection to `TuiOrchestrationModel`. The session and model never read a visible range.
+The input's `MoveFocusUp` event directly enters tab focus. `SelectPrevious` and `SelectNext` ask `TuiTabBarView` for a target from its semantic tab order; navigation remains relative to the active conversation even when the user has explicitly paged the active tab out of view. First/last child navigation resolves through the view's secondary order. The session view delegates semantic selection to `TuiOrchestrationModel`. The session and model never read a visible range.
 
 Track whether the session view itself currently owns tab-bar focus. A switch performs two coordinated operations:
 1. Ask `TuiOrchestrationModel` to select/focus the target retained session.
@@ -109,7 +109,7 @@ Reuse `agent_identity_palette` and `assign_agent_identity_indices`. Assign ident
 Extend `orchestration_model_tests.rs`, `session_registry_tests.rs`, `terminal_session_view_tests.rs`, and `input/view_tests.rs`:
 - Exact reuse of GUI pin/status/error/active/done-recency/spawn ordering after filtering non-navigable sessions — PRODUCT (4, 9-12).
 - The same root and tabs from orchestrator and child sessions; newly materialized and removed sessions — PRODUCT (1-5, 47-49).
-- Shared active-tree page state, explicit-page persistence, active reveal, and first/last-visible keyboard origin — PRODUCT (26-27, 39-42).
+- Shared active-tree page state, explicit-page persistence, active reveal, and semantic keyboard navigation while the active tab is off-page — PRODUCT (26-27, 39-42).
 - Wrapped-row and selection-aware `Shift+Up` behavior; `Shift+Down` restoration — PRODUCT (13-18).
 - Wrapped adjacent navigation, child-only first/last jumps, and tab focus preserved across full-session projection — PRODUCT (19-25).
 - Focused and unfocused mouse switches, no-op active clicks, overflow clicks that neither select nor move focus, and blocker precedence — PRODUCT (28-32, 38, 45-46).

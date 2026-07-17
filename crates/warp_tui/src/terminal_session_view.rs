@@ -40,7 +40,7 @@ use warp::tui_export::{
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
-use warp_errors::report_error;
+use warp_errors::{report_error, ReportErrorLogMode};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -939,7 +939,7 @@ impl TuiTerminalSessionView {
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
         });
         let orchestration_tab_bar =
-            ctx.add_typed_action_tui_view(|_| TuiTabBarView::new(TuiTabBarConfig::new(Vec::new())));
+            ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
 
         ctx.subscribe_to_view(&transcript, |view, _, event, ctx| match event {
             TuiTranscriptViewEvent::SelectionStarted => {
@@ -1040,7 +1040,7 @@ impl TuiTerminalSessionView {
         );
         ctx.subscribe_to_model(&conversation_selection, |view, _, _, ctx| {
             view.refresh_exit_summary(ctx);
-            ctx.notify();
+            view.handle_orchestration_tab_change(ctx);
         });
 
         // The zero state's "What's new" section: fetch the changelog once at
@@ -1431,8 +1431,16 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         let config = self.orchestration_tab_bar_config(snapshot, builder);
-        self.orchestration_tab_bar
+        let result = self
+            .orchestration_tab_bar
             .update(ctx, |tab_bar, ctx| tab_bar.set_config(config, ctx));
+        if let Err(error) = result {
+            report_error!(
+                anyhow::Error::new(error)
+                    .context("Failed to update orchestration tab bar configuration"),
+                ReportErrorLogMode::OncePerRun
+            );
+        }
     }
 
     /// Footer shown while orchestration tabs own keyboard focus.

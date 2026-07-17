@@ -66,10 +66,7 @@ The Warp TUI shows a tab bar for an orchestration tree so users can see and swit
 23. `Shift+Right` switches to the last child-agent conversation.
 24. The orchestrator is excluded from the `Shift+Left` and `Shift+Right` destinations.
 25. A keyboard-driven session switch keeps the tab bar focused in the target session so repeated navigation continues without another `Shift+Up`.
-26. If an explicitly selected overflow page does not contain the active tab:
-   - `Right` switches to the first visible child tab on that page.
-   - `Left` switches to the last visible child tab on that page.
-   - `Tab` behaves like `Right`, and `Shift+Tab` behaves like `Left`.
+26. Keyboard navigation always starts from the active conversation in the complete canonical order, even when an explicitly selected overflow page does not contain the active tab. `Tab` behaves like `Right`, and `Shift+Tab` behaves like `Left`.
 27. Once keyboard navigation switches conversations, the newly active tab becomes the navigation origin and is kept visible.
 
 ### Mouse navigation
@@ -91,7 +88,7 @@ The Warp TUI shows a tab bar for an orchestration tree so users can see and swit
    - It does not change keyboard focus. In particular, clicking an arrow while the input is focused leaves the input focused.
 39. The selected page is shared across all sessions in the same orchestration tree. Switching conversations does not reset it.
 40. The active tab is automatically revealed after session selection or dynamic reordering unless the user explicitly paged away with an overflow arrow. Selecting another tab already on the visible page does not shift or re-anchor that page.
-41. After an explicit overflow click, the chosen page remains visible even if the active tab is on another page. The next keyboard selection follows (26).
+41. After an explicit overflow click, the chosen page remains visible even if the active tab is on another page. The next keyboard selection follows the active conversation's canonical neighbor per (26), not the visible page edge.
 42. Selecting a tab clears the explicit paged-away state and keeps the selected tab visible.
 43. Terminal resizing recomputes which complete or truncated tabs fit, preserves a valid page when possible, and never clips an overflow arrow or writes outside the row.
 44. At very narrow widths, the bar prioritizes the `Agents:` label, orchestrator tab, divider, and an applicable overflow control before child labels. It remains a single row.

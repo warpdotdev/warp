@@ -264,7 +264,7 @@ impl TuiUiBuilder {
         let selected_foreground =
             cell_color(self.warp_theme.font_color(selected_fill.into_solid()));
         TuiTabBarStyles {
-            bar: self.primary_text_style().bg(background),
+            background: Some(background),
             leading: self.orchestration_tab_bar_label_style(),
             chrome: self.orchestration_tab_bar_chrome_style(),
             tab: self.muted_text_style().bg(background),
