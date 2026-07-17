@@ -21,17 +21,23 @@ Consequences:
 - **`log::error!` does NOT create a Sentry issue** — it's only a breadcrumb. If a failure should be tracked in Sentry, use `report_error!`. Only `report_error!` and panics create Sentry events.
 - Breadcrumbs (Info and above) are uploaded, so they must never contain secrets or PII — see "Sensitive data: safe_* macros" below.
 
-## Choosing: log vs. `report_error!`
+## Choosing: `report_error!` vs. `log::error!` vs. `log::warn!`
 
-- Use **`report_error!`** when a failure should become a Sentry issue an engineer may act on.
-- Use **`log::*`** for everything else: lifecycle/state info, expected or handled conditions, and diagnostic dumps or informational "loud logs" (e.g. listing valid options after a lookup miss). If a function's name/doc says it *logs* (or it emits a header line plus one entry per item), it should use `log::*`, not `report_error!`.
-- Don't signal the same failure twice. Report it once, at the sink where it stops propagating; `log::*` breadcrumbs on the way there are useful context (see "Report once, at the sink").
+Pick based on **whose fault the failure is** and **what it means for the user**, not on how bad it feels. Remember only `report_error!` reaches Sentry (see above) — the two `log` levels are local/breadcrumb-only, so choosing between them is about log severity, not about paging anyone.
+
+- **`report_error!` — actionable; an engineer should fix something.** Use it when the failure means our code is wrong: an invariant was violated, an assumption that should always hold didn't, or execution reached a state that shouldn't be possible. Also use it when the cause isn't our bug but the user-facing impact is severe enough that we need to build a workaround. This is the only form that becomes a Sentry issue, so reserve it for failures worth an engineer's attention.
+- **`log::error!` — a genuine failure that is not our code's fault.** The operation we intended couldn't be completed, but the cause is external (the environment or an external system), not a bug we can fix. It's a real failure, so it's error severity — but there's nothing to act on, so it does not page us.
+- **`log::warn!` — non-ideal but largely expected.** The app can still proceed with the functionality generally intact, perhaps with a degraded experience. Recoverable/handled conditions, fallbacks, retries, and skipped work belong here.
+
+For everything else — lifecycle/state info, expected or handled conditions, and diagnostic "loud logs" (e.g. listing valid options after a lookup miss) — use plain `log::*` at the level that fits (see "Log levels"). If a function's name/doc says it *logs* (or it emits a header line plus one entry per item), it should use `log::*`, not `report_error!`.
+
+Don't signal the same failure twice. Report it once, at the sink where it stops propagating; `log::*` breadcrumbs on the way there are useful context (see "Report once, at the sink").
 
 ## Log levels
 
 The default filter is `Info`, so `debug!`/`trace!` are off unless `RUST_LOG` enables them.
-- **`error!`** — a real failure the code handled locally. Remember this is only a breadcrumb; if it warrants a Sentry issue, use `report_error!` instead (or as well, at the sink).
-- **`warn!`** — unexpected but recoverable/handled: degraded paths, retries, fallbacks, skipped work.
+- **`error!`** — a genuine failure whose cause is **external, not a bug in our code**: the environment or an external system prevented the operation we intended. Nothing for us to fix, so it's not `report_error!`; still a real failure, so it's error severity. Only a breadcrumb — if it turns out to be actionable, use `report_error!` instead.
+- **`warn!`** — non-ideal but largely expected: the app proceeds with the functionality generally intact (possibly degraded). Recoverable/handled paths, retries, fallbacks, skipped work.
 - **`info!`** — coarse lifecycle/state milestones (startup, connection up/down, feature enabled). On by default and uploaded as breadcrumbs, so keep it low-volume and free of per-item spam.
 - **`debug!`** — verbose diagnostics for local development; off by default; never sent to Sentry.
 - **`trace!`** — very fine-grained / hot-path detail; off by default; never sent to Sentry.
@@ -60,7 +66,9 @@ safe_error!(
 
 # Reporting errors with `report_error!`
 
-`report_error!` is the explicit way to send an error to Sentry as a structured event. At runtime it checks `err.is_actionable()`:
+`report_error!` is the explicit way to send an error to Sentry as a structured event. Reserve it for **actionable** failures — an invariant or always-true assumption was violated, or the code reached a state it shouldn't, i.e. a bug we should FIX — or for cases where the cause isn't our bug but the user-facing impact is severe enough to warrant a workaround. A failure that's merely an external error (nothing to fix) or an expected/degraded condition belongs at `log::error!` / `log::warn!` instead (see "Choosing" above).
+
+At runtime it checks `err.is_actionable()`:
 - **actionable** → captured to Sentry AND logged at `Error` level.
 - **not actionable** (e.g. registered network errors: reqwest connect/5xx/429, tokio `JoinError` cancelled) → logged at `Warn` level only, never sent to Sentry.
 
