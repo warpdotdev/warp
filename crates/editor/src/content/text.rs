@@ -582,6 +582,8 @@ impl Display for BufferText {
                     BufferTextStyle::Underline => "u",
                     BufferTextStyle::InlineCode => "c",
                     BufferTextStyle::StrikeThrough => "s",
+                    BufferTextStyle::Subscript => "sub",
+                    BufferTextStyle::Superscript => "sup",
                 };
 
                 let end = match dir {
@@ -1048,6 +1050,8 @@ pub enum BufferTextStyle {
     Underline,
     InlineCode,
     StrikeThrough,
+    Subscript,
+    Superscript,
 }
 
 impl BufferTextStyle {
@@ -1068,13 +1072,15 @@ impl BufferTextStyle {
     }
 
     pub fn random<R: Rng>(rng: &mut R) -> Self {
-        let r = rng.gen_range(0..5);
+        let r = rng.gen_range(0..7);
         match r {
             0 => Self::Weight(CustomWeight::Bold),
             1 => Self::Italic,
             2 => Self::Underline,
             3 => Self::InlineCode,
             4 => Self::StrikeThrough,
+            5 => Self::Subscript,
+            6 => Self::Superscript,
             _ => unreachable!(),
         }
     }
@@ -1113,6 +1119,16 @@ impl TextStylesWithMetadata {
         self
     }
 
+    pub fn subscript(mut self) -> Self {
+        self.vertical_align = Some(VerticalAlign::Sub);
+        self
+    }
+
+    pub fn superscript(mut self) -> Self {
+        self.vertical_align = Some(VerticalAlign::Sup);
+        self
+    }
+
     pub fn link(mut self, link: String) -> Self {
         self.link = Some(link);
         self
@@ -1137,8 +1153,22 @@ impl TextStylesWithMetadata {
             BufferTextStyle::Underline => Some(&mut self.underline),
             BufferTextStyle::InlineCode => Some(&mut self.inline_code),
             BufferTextStyle::StrikeThrough => Some(&mut self.strikethrough),
-            BufferTextStyle::Weight(_) => None,
+            // Vertical alignment isn't a `bool` toggle (it's an `Option<VerticalAlign>`), so it
+            // can't be mutated through this accessor; callers apply it via `set_vertical_align`.
+            BufferTextStyle::Weight(_)
+            | BufferTextStyle::Subscript
+            | BufferTextStyle::Superscript => None,
         }
+    }
+
+    /// Applies or clears the vertical alignment implied by a sub/superscript marker.
+    pub fn set_vertical_align(&mut self, style: &BufferTextStyle, active: bool) {
+        let align = match style {
+            BufferTextStyle::Subscript => VerticalAlign::Sub,
+            BufferTextStyle::Superscript => VerticalAlign::Sup,
+            _ => return,
+        };
+        self.vertical_align = active.then_some(align);
     }
 
     pub fn colliding_style(&self, style: &BufferTextStyle) -> bool {
@@ -1148,6 +1178,8 @@ impl TextStylesWithMetadata {
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
             BufferTextStyle::Weight(_) => self.weight.is_some(),
+            BufferTextStyle::Subscript => self.is_subscript(),
+            BufferTextStyle::Superscript => self.is_superscript(),
         }
     }
 
@@ -1158,6 +1190,8 @@ impl TextStylesWithMetadata {
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
             BufferTextStyle::Weight(weight) => self.weight == Some(*weight),
+            BufferTextStyle::Subscript => self.is_subscript(),
+            BufferTextStyle::Superscript => self.is_superscript(),
         }
     }
 
@@ -1244,9 +1278,7 @@ impl TextStylesWithMetadata {
             strikethrough: text_styles.strikethrough,
             link,
             color,
-            // The editor's compact `TextStyles` doesn't track vertical alignment (there's no
-            // buffer-level toggle for sub/superscript), so it can't carry one here.
-            vertical_align: None,
+            vertical_align: text_styles.vertical_align,
         }
     }
 
@@ -1349,6 +1381,10 @@ pub struct TextStyles {
     placeholder: bool,
     link: bool,
     colored: bool,
+    /// Subscript and superscript are mutually exclusive, so a single `Option<VerticalAlign>` (rather
+    /// than two independent flags) makes the "both set" state unrepresentable — mirroring the storage
+    /// in `FormattedTextStyles`/`TextStylesWithMetadata` so the conversions stay lossless.
+    vertical_align: Option<VerticalAlign>,
 }
 
 impl TextStyles {
@@ -1359,6 +1395,8 @@ impl TextStyles {
             underline: true,
             inline_code: true,
             strikethrough: true,
+            // Sub and sup are mutually exclusive, so `all()` can only carry one; pick subscript.
+            vertical_align: Some(VerticalAlign::Sub),
             ..Default::default()
         }
     }
@@ -1388,8 +1426,38 @@ impl TextStyles {
         self
     }
 
+    pub fn subscript(mut self) -> Self {
+        self.vertical_align = Some(VerticalAlign::Sub);
+        self
+    }
+
+    pub fn superscript(mut self) -> Self {
+        self.vertical_align = Some(VerticalAlign::Sup);
+        self
+    }
+
+    pub fn is_subscript(&self) -> bool {
+        self.vertical_align == Some(VerticalAlign::Sub)
+    }
+
+    pub fn is_superscript(&self) -> bool {
+        self.vertical_align == Some(VerticalAlign::Sup)
+    }
+
     pub fn set_weight(&mut self, weight: Weight) {
         self.weight = weight.to_custom_weight();
+    }
+
+    /// Applies or clears the vertical alignment implied by a sub/superscript marker. Mirrors the
+    /// `Weight` marker handling: `style_mut` returns `None` for these (they aren't plain toggles),
+    /// so callers reach for this instead.
+    pub fn set_vertical_align(&mut self, style: &BufferTextStyle, active: bool) {
+        let align = match style {
+            BufferTextStyle::Subscript => VerticalAlign::Sub,
+            BufferTextStyle::Superscript => VerticalAlign::Sup,
+            _ => return,
+        };
+        self.vertical_align = active.then_some(align);
     }
 
     pub fn style_mut(&mut self, style: &BufferTextStyle) -> Option<&mut bool> {
@@ -1398,7 +1466,11 @@ impl TextStyles {
             BufferTextStyle::Underline => Some(&mut self.underline),
             BufferTextStyle::InlineCode => Some(&mut self.inline_code),
             BufferTextStyle::StrikeThrough => Some(&mut self.strikethrough),
-            BufferTextStyle::Weight(_) => None,
+            // Vertical alignment is an `Option<VerticalAlign>`, not a `bool` toggle, so it's applied
+            // through `set_vertical_align` rather than this accessor — same as `Weight`.
+            BufferTextStyle::Weight(_)
+            | BufferTextStyle::Subscript
+            | BufferTextStyle::Superscript => None,
         }
     }
 
@@ -1408,6 +1480,8 @@ impl TextStyles {
             BufferTextStyle::Underline => self.underline,
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
+            BufferTextStyle::Subscript => self.is_subscript(),
+            BufferTextStyle::Superscript => self.is_superscript(),
             BufferTextStyle::Weight(_) => self.weight.is_some(),
         }
     }
@@ -1418,6 +1492,8 @@ impl TextStyles {
             BufferTextStyle::Underline => self.underline,
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
+            BufferTextStyle::Subscript => self.is_subscript(),
+            BufferTextStyle::Superscript => self.is_superscript(),
             BufferTextStyle::Weight(weight) => Some(*weight) == self.weight,
         }
     }
@@ -1470,6 +1546,7 @@ impl TextStyles {
             underline: self.underline,
             inline_code: self.inline_code,
             strikethrough: self.strikethrough,
+            vertical_align: self.vertical_align,
             placeholder: false,
             link: false,
             colored: false,
@@ -1488,6 +1565,7 @@ impl From<TextStylesWithMetadata> for TextStyles {
             strikethrough: styles.strikethrough,
             link: styles.link.is_some(),
             colored: styles.color.is_some(),
+            vertical_align: styles.vertical_align,
         }
     }
 }
@@ -1503,6 +1581,14 @@ impl BitXor for TextStyles {
         } else {
             rhs.weight
         };
+        // Mirror the `weight` Option handling: equal presence cancels, otherwise the set side wins.
+        let vertical_align = if self.vertical_align.is_some() == rhs.vertical_align.is_some() {
+            None
+        } else if self.vertical_align.is_some() {
+            self.vertical_align
+        } else {
+            rhs.vertical_align
+        };
         Self {
             weight,
             italic: self.italic ^ rhs.italic,
@@ -1512,6 +1598,7 @@ impl BitXor for TextStyles {
             strikethrough: self.strikethrough ^ rhs.strikethrough,
             link: self.link ^ rhs.link,
             colored: self.colored ^ rhs.colored,
+            vertical_align,
         }
     }
 }
@@ -1526,6 +1613,14 @@ impl BitXorAssign for TextStyles {
             rhs.weight
         };
         self.weight = weight;
+        // Mirror the `weight` Option handling: equal presence cancels, otherwise the set side wins.
+        self.vertical_align = if self.vertical_align.is_some() == rhs.vertical_align.is_some() {
+            None
+        } else if self.vertical_align.is_some() {
+            self.vertical_align
+        } else {
+            rhs.vertical_align
+        };
         self.italic ^= rhs.italic;
         self.underline ^= rhs.underline;
         self.placeholder ^= rhs.placeholder;
@@ -1578,6 +1673,8 @@ pub struct StyleSummary {
     underline_counter: i32,
     inline_code_counter: i32,
     strikethrough_counter: i32,
+    subscript_counter: i32,
+    superscript_counter: i32,
     link_counter: i32,
     syntax_color_counter: i32,
     /// We need to keep track the total link marker count so we could index into a specific link marker
@@ -1597,6 +1694,8 @@ impl AddAssign<&StyleSummary> for StyleSummary {
         self.syntax_color_counter += other.syntax_color_counter;
         self.total_color_marker += other.total_color_marker;
         self.strikethrough_counter += other.strikethrough_counter;
+        self.subscript_counter += other.subscript_counter;
+        self.superscript_counter += other.superscript_counter;
         self.underline_counter += other.underline_counter;
     }
 }
@@ -1609,6 +1708,8 @@ impl StyleSummary {
             BufferTextStyle::Underline => self.underline_counter,
             BufferTextStyle::InlineCode => self.inline_code_counter,
             BufferTextStyle::StrikeThrough => self.strikethrough_counter,
+            BufferTextStyle::Subscript => self.subscript_counter,
+            BufferTextStyle::Superscript => self.superscript_counter,
         }
     }
 
@@ -1631,6 +1732,8 @@ impl StyleSummary {
             BufferTextStyle::Underline => &mut self.underline_counter,
             BufferTextStyle::InlineCode => &mut self.inline_code_counter,
             BufferTextStyle::StrikeThrough => &mut self.strikethrough_counter,
+            BufferTextStyle::Subscript => &mut self.subscript_counter,
+            BufferTextStyle::Superscript => &mut self.superscript_counter,
         }
     }
 
@@ -1638,6 +1741,15 @@ impl StyleSummary {
     pub fn text_styles(&self) -> TextStyles {
         let weight = if self.weight_counter > 0 {
             self.weight
+        } else {
+            None
+        };
+        // Sub and sup are mutually exclusive, so at most one counter is active; superscript wins the
+        // (unreachable) tie only so the reconstruction is total.
+        let vertical_align = if self.superscript_counter > 0 {
+            Some(VerticalAlign::Sup)
+        } else if self.subscript_counter > 0 {
+            Some(VerticalAlign::Sub)
         } else {
             None
         };
@@ -1649,6 +1761,7 @@ impl StyleSummary {
             inline_code: self.inline_code_counter > 0,
             colored: self.syntax_color_counter > 0,
             strikethrough: self.strikethrough_counter > 0,
+            vertical_align,
             placeholder: false,
         }
     }
@@ -1665,6 +1778,8 @@ impl From<TextStyles> for StyleSummary {
             inline_code_counter: styles.inline_code.into(),
             syntax_color_counter: styles.colored.into(),
             strikethrough_counter: styles.strikethrough.into(),
+            subscript_counter: styles.is_subscript().into(),
+            superscript_counter: styles.is_superscript().into(),
             total_color_marker: 0,
             total_link_marker: 0,
         }

@@ -559,3 +559,49 @@ fn test_image_with_content_html_serialization() {
         assert!(html.contains("Some text"));
     });
 }
+
+/// `<sub>`/`<sup>` vertical alignment must survive the piece-table marker round-trip that the
+/// file/tab Markdown viewer renders from (issue #13734). The parser consumes the tags and sets
+/// `vertical_align` on `FormattedTextStyles`, but the viewer re-derives styles from
+/// `BufferText::Marker` entries — so unless the alignment is carried by a `BufferTextStyle`
+/// marker it is silently dropped between "parsed" and "rendered", leaving sub/superscript text at
+/// the plain baseline. This test drives the production path via `range_text_styles`, which reads
+/// styles back out of the marker-decorated buffer.
+#[test]
+fn test_sub_sup_survive_buffer_marker_roundtrip() {
+    App::test((), |mut app| async move {
+        let markdown = "H<sub>2</sub>O and x<sup>2</sup>\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        // Scan single-character ranges across the buffer and collect the alignment reported for
+        // each, reading back through the same marker path the viewer uses.
+        let (found_sub, found_sup) = app.read_model(&buffer, |buffer, _| {
+            let max = buffer.max_charoffset();
+            let mut found_sub = false;
+            let mut found_sup = false;
+            let mut offset = CharOffset::from(1);
+            while offset < max {
+                let next = offset + CharOffset::from(1);
+                let styles = buffer.range_text_styles(offset..next);
+                found_sub |= styles.is_subscript();
+                found_sup |= styles.is_superscript();
+                offset = next;
+            }
+            (found_sub, found_sup)
+        });
+
+        assert!(
+            found_sub,
+            "expected a subscript run to survive the buffer marker round-trip"
+        );
+        assert!(
+            found_sup,
+            "expected a superscript run to survive the buffer marker round-trip"
+        );
+    });
+}

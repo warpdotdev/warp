@@ -1014,11 +1014,11 @@ fn test_random() {
     assert!(buffer.len().as_usize() <= 50);
     assert_eq!(
         buffer.text().as_str(),
-        "d3\nSOf\ngZjvGHqkBxl2583x69F13\n\n8wlTivQFFQ9cY"
+        "d3\nSOf\ngZjvGHqkBxl2583x69FU3\n\n8wlTivQFFQ9cY"
     );
     assert_eq!(
         buffer.content.debug(),
-        "<text>d3\\nSOf\\ngZjvGHqkBxl25<c_s>83x69F<i_s>13\\n\\n8wlTivQFFQ9cY<i_e><c_e>"
+        "<text>d3\\nSOf\\ngZjvGHqkBxl25<sub_s>83x69F<sup_s>U<s_s>3\\n\\n8wlTivQFFQ9cY<s_e><sup_e>"
     );
 }
 

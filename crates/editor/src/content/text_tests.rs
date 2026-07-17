@@ -17,6 +17,9 @@ fn test_text_style_xor() {
             BufferTextStyle::Weight(weight) => {
                 with_style.set_weight(Weight::from_custom_weight(Some(weight)));
             }
+            BufferTextStyle::Subscript | BufferTextStyle::Superscript => {
+                with_style.set_vertical_align(&style, true);
+            }
             style => {
                 if let Some(style_mut) = with_style.style_mut(&style) {
                     *style_mut = true;

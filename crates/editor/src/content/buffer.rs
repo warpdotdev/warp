@@ -2658,6 +2658,12 @@ impl Buffer {
             if let BufferText::Marker { marker_type, .. } = item {
                 if let Some(mut_style) = range_styles.style_mut(marker_type) {
                     *mut_style = false;
+                } else if matches!(
+                    marker_type,
+                    BufferTextStyle::Subscript | BufferTextStyle::Superscript
+                ) {
+                    // Vertical alignment isn't a `bool` toggle; clear it when it transitions.
+                    range_styles.set_vertical_align(marker_type, false);
                 } else {
                     range_styles.set_weight(Weight::Normal);
                 }
@@ -5840,6 +5846,9 @@ impl Iterator for StyledBufferBlocks<'_> {
                         } else if let Some(custom_weight) = marker_type.custom_weight() {
                             let custom_weight = if is_start { Some(custom_weight) } else { None };
                             styles.set_weight(custom_weight);
+                        } else {
+                            // Sub/superscript live in `vertical_align`, not a bool toggle.
+                            styles.set_vertical_align(marker_type, is_start);
                         }
                     });
                 }
