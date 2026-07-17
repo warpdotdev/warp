@@ -448,40 +448,7 @@ mod format_terminal_state_tests {
         assert_eq!(label, "Spawn agents cancelled");
         assert!(matches!(kind, StatusKind::Cancelled));
     }
-
-    fn launched_result_remote(
-        runner_id: &str,
-        agents: Vec<RunAgentsAgentOutcome>,
-    ) -> RunAgentsResult {
-        RunAgentsResult::Launched {
-            model_id: "auto".to_string(),
-            harness_type: "oz".to_string(),
-            execution_mode: RunAgentsLaunchedExecutionMode::Remote {
-                environment_id: "env-1".to_string(),
-                worker_host: "warp".to_string(),
-                computer_use_enabled: false,
-                runner_id: runner_id.to_string(),
-            },
-            agents,
-        }
-    }
-
-    #[test]
-    fn launched_with_runner_shows_runner_in_label() {
-        let result = launched_result_remote("runner-1", vec![launched("child", "a-1")]);
-        let (label, kind) = format_terminal_state(&result);
-        assert_eq!(label, "Spawned 1 agent on runner runner-1");
-        assert!(matches!(kind, StatusKind::Success));
-    }
-
-    #[test]
-    fn launched_without_runner_omits_runner_suffix() {
-        let result = launched_result_remote("", vec![launched("a", "a-1"), launched("b", "a-2")]);
-        let (label, _) = format_terminal_state(&result);
-        assert_eq!(label, "Spawned 2 agents");
-    }
 }
-
 mod override_from_approved_config_tests {
     use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
 

@@ -418,6 +418,10 @@ impl OrchestrationConfigBlockView {
                         &self.pickers,
                         ctx,
                     );
+                    // Runner picker is excluded from the shared sync (its
+                    // options are fetched async and cached on the view), so
+                    // re-apply its selection from the refreshed config.
+                    self.resync_runner_selection(ctx);
                 }
                 ctx.notify();
             }
@@ -712,6 +716,24 @@ impl OrchestrationConfigBlockView {
 
     #[cfg(target_family = "wasm")]
     fn fetch_runners(&mut self, _ctx: &mut ViewContext<Self>) {}
+
+    /// Re-applies the runner picker's selection from the current
+    /// `runner_id` using the view-cached runner list. The runner picker
+    /// is excluded from the shared picker sync, so this runs after the
+    /// config's `runner_id` may have changed (e.g. a model refresh).
+    fn resync_runner_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        let current = match &self
+            .orchestration_edit_state
+            .orchestration_config_state
+            .execution_mode
+        {
+            RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
+            RunAgentsExecutionMode::Local => String::new(),
+        };
+        if let Some(handle) = self.pickers.runner_picker.clone() {
+            oc::populate_runner_picker(&handle, &self.runners, &current, self.runners_loading, ctx);
+        }
+    }
 }
 
 impl Entity for OrchestrationConfigBlockView {
