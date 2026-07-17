@@ -5851,9 +5851,9 @@ impl TerminalView {
                                         agent_view_visibility: agent_view_visibility.into(),
                                     },
                                 ) {
-                                    report_error!(anyhow::Error::new(e).context(
-                                        "Error sending UpdateBlockAgentViewVisibility event"
-                                    ));
+                                    log::warn!(
+                                        "Error sending UpdateBlockAgentViewVisibility event: {e:#}"
+                                    );
                                 }
                             }
                         }
@@ -5886,9 +5886,9 @@ impl TerminalView {
                                         agent_view_visibility: agent_view_visibility.into(),
                                     },
                                 ) {
-                                    report_error!(anyhow::Error::new(e).context(
-                                        "Error sending UpdateBlockAgentViewVisibility event"
-                                    ));
+                                    log::warn!(
+                                        "Error sending UpdateBlockAgentViewVisibility event: {e:#}"
+                                    );
                                 }
                             }
                         }
@@ -7369,7 +7369,7 @@ impl TerminalView {
 
         // Determine DiffMode from the base branch.
         if self.current_repo_path.is_none() {
-            report_error!("Cannot insert PR comments: not in a git repository");
+            log::warn!("Cannot insert PR comments: not in a git repository");
             return;
         }
 
@@ -9909,9 +9909,7 @@ impl TerminalView {
                 AliasExpansionSettings::handle(ctx).update(ctx, |settings, ctx| {
                     if let Err(e) = settings.alias_expansion_enabled.set_value(true, ctx) {
                         should_dismiss_banner = false;
-                        report_error!(
-                            e.context("Failed to enable alias expansion setting from banner")
-                        );
+                        log::warn!("Failed to enable alias expansion setting from banner: {e:#}");
                     }
                 });
                 if should_dismiss_banner {
@@ -10238,8 +10236,7 @@ impl TerminalView {
                         agent_view_visibility: agent_view_visibility.into(),
                     })
                 {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Error sending UpdateBlockAgentViewVisibility event"));
+                    log::warn!("Error sending UpdateBlockAgentViewVisibility event: {e:#}");
                 }
             }
         }
@@ -10416,9 +10413,7 @@ impl TerminalView {
                             if let Err(e) = ai_settings
                                 .codebase_index_speedbump_banner_dismissed_for_repo_paths
                                 .set_value(dismissed_repo_paths, ctx) {
-                                    report_error!(e.context(
-                                        "Failed to persist 'Codebase indexing speedbump banner dismissed' setting"
-                                    ));
+                                    log::warn!("Failed to persist 'Codebase indexing speedbump banner dismissed' setting: {e:#}");
                                 }
                         });
                     }
@@ -10440,9 +10435,7 @@ impl TerminalView {
                         .codebase_index_speedbump_banner_globally_dismissed
                         .set_value(true, ctx)
                     {
-                        report_error!(e.context(
-                            "Failed to persist 'Codebase indexing speedbump banner globally dismissed' setting"
-                        ));
+                        log::warn!("Failed to persist 'Codebase indexing speedbump banner globally dismissed' setting: {e:#}");
                     }
                 });
                 if let Some(banner_state) = self
@@ -12424,8 +12417,9 @@ impl TerminalView {
                             },
                             move |_, res, _| {
                                 if let Err(err) = res {
-                                    report_error!(anyhow::Error::new(err)
-                                        .context("Error sending UpdateFinishedCommand event"));
+                                    log::warn!(
+                                        "Error sending UpdateFinishedCommand event: {err:#}"
+                                    );
                                 }
                             },
                         );
@@ -14492,9 +14486,7 @@ impl TerminalView {
                 .agent_mode_setup_banner_shown_for_repo_paths
                 .set_value(shown_repo_paths, ctx)
             {
-                report_error!(
-                    e.context("Failed to persist 'Agent Mode setup banner shown' setting")
-                );
+                log::warn!("Failed to persist 'Agent Mode setup banner shown' setting: {e:#}");
             }
         });
     }
@@ -25002,7 +24994,7 @@ impl TerminalView {
                 };
                 SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
                     if let Err(e) = session_settings.notifications.set_value(new_settings, ctx) {
-                        report_error!(e.context("Error persisting notifications setting"));
+                        log::warn!("Error persisting notifications setting: {e:#}");
                     }
                 });
 
@@ -25060,7 +25052,7 @@ impl TerminalView {
                 };
                 SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
                     if let Err(e) = session_settings.notifications.set_value(new_settings, ctx) {
-                        report_error!(e.context("Error persisting notifications setting"));
+                        log::warn!("Error persisting notifications setting: {e:#}");
                     }
                 });
 
