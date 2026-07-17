@@ -359,6 +359,21 @@ impl TableCellOffsetMap {
                 }
 
                 if segment.is_empty() {
+                    // An empty segment is a break with no visible text on this side of it
+                    // (a leading `<br>`, a trailing `<br>`, or one of a `<br><br>` run).
+                    // At this point `source_idx` sits just past the `<br>` token that produced
+                    // the preceding break — i.e. at the source boundary *before* the next
+                    // `<br>` token. Record a zero-length range there so every `<br>` owns a
+                    // distinct source boundary; without it, the `rendered_to_source` gap lookup
+                    // collapses consecutive or edge breaks onto a neighbouring fragment.
+                    let boundary = CharOffset::from(source_idx);
+                    fragment_ranges.push(TableCellFragmentRange {
+                        rendered_start: rendered_offset,
+                        rendered_end: rendered_offset,
+                        source_end: boundary,
+                        visible_source_start: boundary,
+                        visible_source_end: boundary,
+                    });
                     continue;
                 }
 

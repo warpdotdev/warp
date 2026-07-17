@@ -341,6 +341,115 @@ fn test_table_cell_offset_map_maps_br_at_style_boundary() {
 }
 
 #[test]
+fn test_table_cell_offset_map_trailing_br_keeps_break_boundary() {
+    // `a<br>` renders as "a\n": a visible "a" followed by a hard break. Selecting only the
+    // visible "a" is rendered range 0..1, whose end (rendered offset 1) is the break. That
+    // break must map to source offset 1 — the boundary immediately BEFORE the `<br>` token —
+    // so the selection resolves to source "a", not "a<br>".
+    let source = "a<br>";
+    let inline = parse_inline_markdown(source);
+    let rendered_text: String = inline.iter().map(|f| f.text.as_str()).collect();
+    assert_eq!(rendered_text, "a\n");
+
+    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+    assert_eq!(map.source_length(), CharOffset::from(5));
+    assert_eq!(map.rendered_length(), CharOffset::from(2));
+
+    // The break at rendered offset 1 sits at the source boundary before `<br>` (offset 1),
+    // not at source_length (5).
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(1)),
+        CharOffset::from(1),
+        "the trailing break must map to the boundary before <br>, not source_length",
+    );
+}
+
+#[test]
+fn test_table_cell_offset_map_consecutive_br_map_to_own_tokens() {
+    // `a<br><br>b` renders as "a\n\nb". The two hard breaks are at rendered offsets 1 and 2.
+    // Each must map to ITS OWN `<br>` token's boundary: the first break to source 1 (before
+    // the first `<br>`), the second to source 5 (before the second `<br>`). The bug collapses
+    // both to source 1.
+    let source = "a<br><br>b";
+    let inline = parse_inline_markdown(source);
+    let rendered_text: String = inline.iter().map(|f| f.text.as_str()).collect();
+    assert_eq!(rendered_text, "a\n\nb");
+
+    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+    assert_eq!(map.source_length(), CharOffset::from(10));
+    assert_eq!(map.rendered_length(), CharOffset::from(4));
+
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(1)),
+        CharOffset::from(1),
+        "first break maps to the boundary before the first <br>",
+    );
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(2)),
+        CharOffset::from(5),
+        "second break maps to the boundary before the second <br>, not the first",
+    );
+    // Rendered 'b' still resolves correctly after both breaks.
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(3)),
+        CharOffset::from(9),
+    );
+    assert_eq!(
+        map.source_to_rendered(CharOffset::from(9)),
+        CharOffset::from(3),
+    );
+}
+
+#[test]
+fn test_table_cell_offset_map_leading_br_keeps_break_boundary() {
+    // `<br>a` renders as "\na": a leading hard break then visible "a". The break is at
+    // rendered offset 0 and must map to source offset 0 (the start of the `<br>` token),
+    // and rendered 'a' (offset 1) to source 4 (after `<br>`).
+    let source = "<br>a";
+    let inline = parse_inline_markdown(source);
+    let rendered_text: String = inline.iter().map(|f| f.text.as_str()).collect();
+    assert_eq!(rendered_text, "\na");
+
+    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+    assert_eq!(map.source_length(), CharOffset::from(5));
+    assert_eq!(map.rendered_length(), CharOffset::from(2));
+
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(0)),
+        CharOffset::from(0),
+        "leading break maps to the start of the <br> token",
+    );
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(1)),
+        CharOffset::from(4),
+    );
+    assert_eq!(
+        map.source_to_rendered(CharOffset::from(4)),
+        CharOffset::from(1),
+    );
+}
+
+#[test]
+fn test_table_cell_offset_map_lone_br() {
+    // A cell whose entire content is `<br>` renders as "\n": a single hard break, no visible
+    // text. The break at rendered offset 0 must map to source offset 0 (start of the token).
+    let source = "<br>";
+    let inline = parse_inline_markdown(source);
+    let rendered_text: String = inline.iter().map(|f| f.text.as_str()).collect();
+    assert_eq!(rendered_text, "\n");
+
+    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+    assert_eq!(map.source_length(), CharOffset::from(4));
+    assert_eq!(map.rendered_length(), CharOffset::from(1));
+
+    assert_eq!(
+        map.rendered_to_source(CharOffset::from(0)),
+        CharOffset::from(0),
+        "the lone break maps to the start of the <br> token, not source_length",
+    );
+}
+
+#[test]
 fn test_table_cell_offset_map_handles_nested_styles() {
     let source = "**a *b* c**";
     let inline = parse_inline_markdown(source);
