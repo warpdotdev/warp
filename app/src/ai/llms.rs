@@ -728,10 +728,9 @@ struct AvailableLLMsUpdate {
 pub struct LLMPreferences {
     models_by_feature: ModelsByFeature,
     last_update: Option<AvailableLLMsUpdate>,
-    // Stores temporary model overrides for a given terminal view.
-    // NOTE: We only store an override if the model selected by the user is different
-    // from the base LLM for the active profile. This means that if the user selects the
-    // profile's default model and changes their profile, the model will update to that profile's default.
+    // Stores model overrides for a given terminal view. User selections are
+    // normalized against the GUI profile default, while explicit child-run
+    // selections remain pinned even when they currently equal the fallback.
     base_llm_for_terminal_view: HashMap<EntityId, LLMId>,
     /// Synthetic `LLMInfo` entries built from the user's `ApiKeyManager.custom_endpoints` so
     /// custom models surface in the model picker and resolve through `info_for_id` lookups.
@@ -1505,23 +1504,30 @@ impl LLMPreferences {
         }
     }
 
-    /// Sets an explicit runtime override without normalizing it against the
-    /// execution profile. Orchestrated child runs use this because a requested
-    /// model equal to the profile default must still override the TUI's
-    /// file-backed model setting.
+    /// Pins an explicit child-run model independently of profile or TUI
+    /// defaults. Persist the pin whenever it changes, but notify active-model
+    /// subscribers only when the surface's effective selection changes.
     pub(crate) fn set_agent_mode_llm_override(
         &mut self,
         terminal_view_id: EntityId,
         model_id: LLMId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self
+        let previous_effective_model_id = self
+            .get_active_base_model(ctx, Some(terminal_view_id))
+            .id
+            .clone();
+        let stored_selection_changed = self
             .base_llm_for_terminal_view
             .insert(terminal_view_id, model_id.clone())
-            != Some(model_id)
-        {
+            != Some(model_id);
+        if stored_selection_changed {
             self.trigger_snapshot_save(ctx);
-            ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+            if self.get_active_base_model(ctx, Some(terminal_view_id)).id
+                != previous_effective_model_id
+            {
+                ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+            }
         }
     }
 
