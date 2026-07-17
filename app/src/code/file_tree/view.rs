@@ -218,9 +218,8 @@ struct PendingEdit {
 /// Per-root directory state for the file tree.
 /// Contains all state that varies per root directory.
 struct RootDirectory {
-    /// File tree entry for this root. This may be backed by a repository root
-    /// or by a lazily-loaded standalone path.
-    entry: FileTreeEntry,
+    /// File tree entry for this root.
+    entry: Arc<FileTreeEntry>,
     /// Set of expanded folder paths within this root
     expanded_folders: HashSet<StandardizedPath>,
     /// Flattened list of items for rendering
@@ -1597,8 +1596,8 @@ impl FileTreeView {
         }
     }
 
-    fn create_empty_entry(path: &StandardizedPath) -> FileTreeEntry {
-        FileTreeEntry::new_for_directory(Arc::new(path.clone()))
+    fn create_empty_entry(path: &StandardizedPath) -> Arc<FileTreeEntry> {
+        Arc::new(FileTreeEntry::new_for_directory(Arc::new(path.clone())))
     }
 
     /// Rebuilds the flattened items list for a single root directory only,

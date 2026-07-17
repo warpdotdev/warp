@@ -195,7 +195,7 @@ impl FileTreeView {
 
                 if let Some(root_dir) = self.root_directories.get_mut(&file_tree_id.root) {
                     // Ensure the file tree has the new item we've just created.
-                    Self::insert_entry(&mut root_dir.entry, new_entry);
+                    Self::insert_entry(Arc::make_mut(&mut root_dir.entry), new_entry);
                 }
 
                 self.open_in_new_pane(&file_tree_id, ctx);
@@ -228,7 +228,7 @@ impl FileTreeView {
 
                 // Update the in-memory model immediately so the UI reflects the change without delay.
                 if let Some(root_dir) = self.root_directories.get_mut(&file_tree_id.root) {
-                    root_dir.entry.rename_path(&old_std_path, &new_std_path);
+                    Arc::make_mut(&mut root_dir.entry).rename_path(&old_std_path, &new_std_path);
                 }
 
                 // Emit event to notify workspace that a file was renamed
