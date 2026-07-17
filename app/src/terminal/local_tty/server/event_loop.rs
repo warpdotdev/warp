@@ -204,9 +204,9 @@ impl EventLoop {
                                     },
                                     Option::<RawFd>::None,
                                 ) {
-                                    report_error!(err.context(
-                                        "Failed to notify host process about terminated children"
-                                    ));
+                                    log::warn!(
+                                        "Failed to notify host process about terminated children: {err:#}"
+                                    );
                                 }
                             }
                         }
@@ -262,7 +262,11 @@ impl EventLoop {
                             Ok(pty_spawn_info.result)
                         }
                         Err(err) => {
-                            report_error!(&err);
+                            // The host falls back to spawning the shell directly
+                            // (see `PtySpawner::spawn_pty`); a totally-broken
+                            // spawn is still reported at that sink, so keep only
+                            // a breadcrumb here.
+                            log::warn!("Failed to spawn shell in terminal server: {err:#}");
                             Err(err)
                         }
                     };
@@ -278,9 +282,7 @@ impl EventLoop {
                         },
                         leader_fd,
                     ) {
-                        report_error!(err.context(
-                            "Encountered unexpected error sending message to host process"
-                        ));
+                        log::warn!("Error sending message to host process: {err:#}");
                         log::info!("Shutting down terminal server...");
                         return None;
                     };
@@ -309,9 +311,7 @@ impl EventLoop {
                         api::Message::KillChildResponse { error_msg },
                         Option::<RawFd>::None,
                     ) {
-                        report_error!(err.context(
-                            "Encountered unexpected error sending message to host process"
-                        ));
+                        log::warn!("Error sending message to host process: {err:#}");
                         log::info!("Shutting down terminal server...");
                         return None;
                     };

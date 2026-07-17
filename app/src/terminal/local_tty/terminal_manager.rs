@@ -484,7 +484,10 @@ impl<S> TerminalManager<S> {
                 );
             }
         } else {
-            report_error!("No event loop handle to join when dropping terminal manager.")
+            // No handle is expected when the shell never started (e.g. PTY
+            // spawn failed before the event loop was created), so this is a
+            // benign teardown state rather than a Sentry-worthy error.
+            log::warn!("No event loop handle to join when dropping terminal manager.");
         }
 
         self.inactive_pty_reads_rx.close();

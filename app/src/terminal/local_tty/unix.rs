@@ -776,7 +776,9 @@ fn spawn_docker_sandbox(
     // itself is created + attached in a single step via `sbx run` when
     // the PTY process spawns below.
     if let Err(e) = prepare_docker_sandbox(&docker_starter) {
-        report_error!(&e);
+        // Reported at the spawn sink (see `on_shell_determined`); keep only a
+        // local breadcrumb here so the failure isn't double-counted in Sentry.
+        log::warn!("Docker sandbox setup failed: {e:#}");
         return Err(Error::msg(format!("Docker sandbox setup failed: {e}")));
     }
 
