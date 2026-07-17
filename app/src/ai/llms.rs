@@ -1507,6 +1507,7 @@ impl LLMPreferences {
     /// Pins an explicit child-run model independently of profile or TUI
     /// defaults. Persist the pin whenever it changes, but notify active-model
     /// subscribers only when the surface's effective selection changes.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn set_agent_mode_llm_override(
         &mut self,
         terminal_view_id: EntityId,

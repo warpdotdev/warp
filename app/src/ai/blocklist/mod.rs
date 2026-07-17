@@ -72,10 +72,12 @@ pub use action_model::{
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};
 pub use block::{keyboard_navigable_buttons, toggleable_items};
-pub use child_agent_launch::{apply_child_agent_model_override, inherit_child_agent_settings};
+pub use child_agent_launch::inherit_child_agent_settings;
 #[cfg(not(target_family = "wasm"))]
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
-pub use child_agent_launch::{prepare_local_oz_child_launch, PreparedLocalOzChildLaunch};
+pub use child_agent_launch::{
+    apply_child_agent_model_override, prepare_local_oz_child_launch, PreparedLocalOzChildLaunch,
+};
 #[cfg(not(feature = "tui"))]
 pub(crate) use context_model::block_context_from_terminal_model;
 #[cfg(feature = "tui")]

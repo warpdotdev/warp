@@ -10,7 +10,9 @@ use {
     crate::server::server_api::ServerApiProvider,
 };
 
-use crate::ai::llms::{LLMId, LLMPreferences};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::llms::LLMId;
+use crate::ai::llms::LLMPreferences;
 use crate::AIExecutionProfilesModel;
 
 /// Server-side state prepared before a frontend creates the child's surface.
@@ -78,6 +80,7 @@ pub fn inherit_child_agent_settings(
 
 /// Applies a non-empty run-wide model override after parent settings have
 /// been inherited.
+#[cfg(not(target_family = "wasm"))]
 pub fn apply_child_agent_model_override(
     child_surface_id: EntityId,
     model_id: Option<&str>,

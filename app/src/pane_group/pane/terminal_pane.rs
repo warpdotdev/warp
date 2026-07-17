@@ -29,13 +29,11 @@ use crate::ai::ambient_agents::task::{normalize_orchestrator_agent_name, Harness
 use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId};
 use crate::ai::blocklist::agent_view::{AgentViewControllerEvent, AgentViewEntryOrigin};
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::blocklist::prepare_local_oz_child_launch;
 #[cfg(feature = "local_fs")]
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
-use crate::ai::blocklist::{
-    apply_child_agent_model_override, BlocklistAIHistoryModel, StartAgentRequest,
-};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::blocklist::{apply_child_agent_model_override, prepare_local_oz_child_launch};
+use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequest};
 use crate::ai::conversation_utils;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::skills::SkillManager;
