@@ -36,7 +36,8 @@ fn orchestration_fixture(app: &mut App) -> OrchestrationFixture {
     root.update(app, |_, ctx| {
         ctx.subscribe_to_model(&sessions, |_, _, _, ctx| ctx.notify());
     });
-    app.update(TuiOrchestrationModel::register);
+    let orchestration = app.update(TuiOrchestrationModel::register);
+    app.update(|ctx| TuiSessions::wire_orchestration(&sessions, &orchestration, ctx));
     OrchestrationFixture {
         sessions,
         window_id,
@@ -50,8 +51,8 @@ fn add_dispatching_session(
     focus: bool,
 ) -> TuiSessionId {
     let (session, manager) = add_test_terminal_session(app, fixture.window_id);
-    let session_id = app.update_model(&fixture.sessions, |sessions, ctx| {
-        sessions.add_session(session, manager, focus, ctx)
+    let session_id = app.update(|ctx| {
+        TuiSessions::register_session(&fixture.sessions, session, manager, focus, ctx)
     });
     add_active_test_conversation(app, session_id.surface_id());
     session_id
@@ -191,6 +192,7 @@ fn remote_children_fail_cleanly() {
                 harness_type: "oz".to_string(),
                 title: "Researcher".to_string(),
                 auth_secret_name: None,
+                agent_identity_uid: None,
             },
         );
         assert_error_containing(outcome, "Cloud child agents aren't supported");

@@ -7,10 +7,14 @@
 use warp::tui_export::{ServerConversationToken, TerminalManagerTrait};
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
-use warpui_core::{Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
+use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
+use crate::orchestration_model::{
+    MaterializedLocalOzChildSession, TuiOrchestrationEvent, TuiOrchestrationModel,
+};
 use crate::resume::TuiExitSummaryHandle;
-use crate::terminal_session_view::TuiTerminalSessionView;
+use crate::session::create_local_terminal_session;
+use crate::terminal_session_view::{TuiTerminalSessionEvent, TuiTerminalSessionView};
 
 /// Identifies a TUI terminal session.
 ///
@@ -44,8 +48,6 @@ impl TuiSession {
 /// Events emitted as the session set or focus changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TuiSessionsEvent {
-    /// A session was registered, possibly in the background.
-    SessionAdded(TuiSessionId),
     /// A session was removed from the container.
     SessionRemoved(TuiSessionId),
     /// The focused session changed to this id.
@@ -71,6 +73,114 @@ impl Entity for TuiSessions {
 impl SingletonEntity for TuiSessions {}
 
 impl TuiSessions {
+    /// Wires a session view to orchestration before registering it.
+    pub(crate) fn register_session(
+        sessions: &ModelHandle<Self>,
+        view: ViewHandle<TuiTerminalSessionView>,
+        manager: ModelHandle<Box<dyn TerminalManagerTrait>>,
+        focus: bool,
+        ctx: &mut AppContext,
+    ) -> TuiSessionId {
+        let id = TuiSessionId(view.id());
+        if ctx.has_singleton_model::<TuiOrchestrationModel>() {
+            let orchestration = TuiOrchestrationModel::handle(ctx);
+            ctx.subscribe_to_view(&view, move |_, event, ctx| match event {
+                TuiTerminalSessionEvent::StartAgentConversation {
+                    request,
+                    working_directory,
+                } => {
+                    orchestration.update(ctx, |orchestration, ctx| {
+                        orchestration.dispatch_create_agent(
+                            id,
+                            (**request).clone(),
+                            working_directory.clone(),
+                            ctx,
+                        );
+                    });
+                }
+                TuiTerminalSessionEvent::CleanupFailedChildLaunch { conversation_id } => {
+                    orchestration.update(ctx, |orchestration, ctx| {
+                        orchestration.cleanup_failed_child(conversation_id, ctx);
+                    });
+                }
+                TuiTerminalSessionEvent::ExecuteCommand(_)
+                | TuiTerminalSessionEvent::InterruptPty
+                | TuiTerminalSessionEvent::WriteAgentInput { .. }
+                | TuiTerminalSessionEvent::WriteUserInput(_)
+                | TuiTerminalSessionEvent::Resize(_) => {}
+            });
+        }
+        sessions.update(ctx, |sessions, ctx| {
+            debug_assert!(
+                sessions.session(id).is_none(),
+                "a session must not be registered twice"
+            );
+            sessions.sessions.push(TuiSession {
+                id,
+                view,
+                _manager: manager,
+            });
+            if focus {
+                sessions.focus_session(id, ctx);
+            }
+            ctx.notify();
+            id
+        })
+    }
+
+    /// Subscribes the session owner to orchestration lifecycle requests.
+    pub(crate) fn wire_orchestration(
+        sessions: &ModelHandle<Self>,
+        orchestration: &ModelHandle<TuiOrchestrationModel>,
+        ctx: &mut AppContext,
+    ) {
+        let sessions = sessions.clone();
+        let orchestration_for_events = orchestration.clone();
+        ctx.subscribe_to_model(orchestration, move |_, event, ctx| match event {
+            TuiOrchestrationEvent::CreateLocalOzChildSession {
+                parent_session_id,
+                request,
+                model_id,
+                working_directory,
+                task_id,
+                conversation_name,
+            } => {
+                let window_id = sessions
+                    .as_ref(ctx)
+                    .session(*parent_session_id)
+                    .expect("the dispatching parent session must remain registered")
+                    .view()
+                    .window_id(ctx);
+                let (session_id, session_view) = create_local_terminal_session(
+                    &sessions,
+                    window_id,
+                    false,
+                    working_directory.clone(),
+                    ctx,
+                );
+                orchestration_for_events.update(ctx, |orchestration, ctx| {
+                    orchestration.register_local_oz_child_session(
+                        MaterializedLocalOzChildSession {
+                            parent_session_id: *parent_session_id,
+                            session_id,
+                            session_view,
+                            request: (**request).clone(),
+                            model_id: model_id.clone(),
+                            task_id: *task_id,
+                            conversation_name: conversation_name.clone(),
+                        },
+                        ctx,
+                    );
+                });
+            }
+            TuiOrchestrationEvent::RemoveChildSession(session_id) => {
+                sessions.update(ctx, |sessions, ctx| {
+                    sessions.remove_session(*session_id, ctx);
+                });
+            }
+        });
+    }
+
     /// Creates the app's session container.
     pub(crate) fn new(
         driver: TuiDriverHandle,
@@ -101,32 +211,6 @@ impl TuiSessions {
         }
     }
 
-    /// Registers an eagerly-created session view and optionally focuses it.
-    pub(crate) fn add_session(
-        &mut self,
-        view: ViewHandle<TuiTerminalSessionView>,
-        manager: ModelHandle<Box<dyn TerminalManagerTrait>>,
-        focus: bool,
-        ctx: &mut ModelContext<Self>,
-    ) -> TuiSessionId {
-        let id = TuiSessionId(view.id());
-        debug_assert!(
-            self.session(id).is_none(),
-            "a session must not be registered twice"
-        );
-        self.sessions.push(TuiSession {
-            id,
-            view,
-            _manager: manager,
-        });
-        ctx.emit(TuiSessionsEvent::SessionAdded(id));
-        if focus {
-            self.focus_session(id, ctx);
-        }
-        ctx.notify();
-        id
-    }
-
     /// Returns the process-level context used to create session views.
     pub(crate) fn surface_context(&self) -> (TuiExitSummaryHandle, bool) {
         (
@@ -141,6 +225,11 @@ impl TuiSessions {
         self.sessions.retain(|session| session.id != id);
         if self.sessions.len() == before {
             return;
+        }
+        if ctx.has_singleton_model::<TuiOrchestrationModel>() {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |orchestration, ctx| {
+                orchestration.handle_session_removed(id, ctx);
+            });
         }
         ctx.emit(TuiSessionsEvent::SessionRemoved(id));
         if self.focused_session_id == Some(id) {

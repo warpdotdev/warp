@@ -128,12 +128,12 @@ fn init(
                 ctx.add_singleton_model(|_| TuiSessions::new(driver, exit_summary, resume_token));
             root.update(ctx, |_, ctx| {
                 ctx.subscribe_to_model(&sessions, |_, _, event, ctx| match event {
-                    TuiSessionsEvent::SessionAdded(_) => {}
                     TuiSessionsEvent::SessionRemoved(_) => ctx.notify(),
                     TuiSessionsEvent::FocusChanged(_) => ctx.notify(),
                 });
             });
-            TuiOrchestrationModel::register(ctx);
+            let orchestration = TuiOrchestrationModel::register(ctx);
+            TuiSessions::wire_orchestration(&sessions, &orchestration, ctx);
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
                 // Already authenticated at mount: create the first session now.
                 create_terminal_session_after_login(&sessions, &root, ctx);
@@ -171,13 +171,8 @@ fn create_terminal_session_after_login(
 
     let resume_token = sessions.update(ctx, |sessions, _| sessions.take_resume_token());
     let window_id = root.window_id(ctx);
-    let (_, surface) = create_local_terminal_session(
-        sessions,
-        window_id,
-        true,
-        std::env::current_dir().ok(),
-        ctx,
-    );
+    let (_, surface) =
+        create_local_terminal_session(sessions, window_id, true, std::env::current_dir().ok(), ctx);
     if let Some(token) = resume_token {
         surface.update(ctx, |view, ctx| {
             view.restore_conversation(
@@ -233,9 +228,8 @@ pub(crate) fn create_local_terminal_session(
     );
 
     let surface = manager.surface.clone();
-    let session_id = sessions.update(ctx, |sessions, ctx| {
-        sessions.add_session(manager.surface, manager.manager, focus, ctx)
-    });
+    let session_id =
+        TuiSessions::register_session(sessions, manager.surface, manager.manager, focus, ctx);
     (session_id, surface)
 }
 

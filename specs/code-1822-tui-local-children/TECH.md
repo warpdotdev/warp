@@ -23,39 +23,41 @@ converts executor events into semantic session events
 - `CreateAgent` emits `StartAgentConversation` with the request and a snapshot of the parent's
   current working directory.
 - `CleanupFailedChildLaunch` emits the corresponding cleanup event.
-`TuiOrchestrationModel::register` runs before the first session is created. It
-subscribes to `TuiSessions` and, for every `SessionAdded`, subscribes to that
-session view through `AppContext`; `SessionRemoved` tears down session-owned
-streamer consumers (`crates/warp_tui/src/orchestration_model.rs (47-112)`).
-Because every session, including a background child session, is registered in
-`TuiSessions`, children are also wired to launch descendants.
+`TuiSessions::register_session` owns the `AppContext` subscription to each
+session view and forwards orchestration attempts into `TuiOrchestrationModel`.
+`TuiSessions::wire_orchestration` subscribes the session owner to child-session
+creation and removal intents from the orchestration model. Because every
+session, including a background child session, passes through the same
+registration boundary, children are also wired to launch descendants
+(`crates/warp_tui/src/session_registry.rs (77-181)`).
 ### Native child launch
-`TuiOrchestrationModel` separates task creation from TUI surface creation
-(`crates/warp_tui/src/orchestration_model.rs (114-238)`):
+`TuiOrchestrationModel` separates task creation from TUI-owned surface creation
+(`crates/warp_tui/src/orchestration_model.rs (83-209)`):
 1. `begin_local_oz_child_launch` starts shared server-task preparation.
-2. `create_local_oz_child_session` creates an unfocused terminal session using the parent's
-   captured working directory.
-3. The child inherits the parent's execution profile and effective base model, then receives the
+2. The orchestration model emits `CreateLocalOzChildSession` after preparation succeeds.
+3. `TuiSessions` creates an unfocused terminal session using the parent's captured working
+   directory, then calls `register_local_oz_child_session`.
+4. The child inherits the parent's execution profile and effective base model, then receives the
    requested run-wide model override.
-4. `BlocklistAIHistoryModel::start_new_child_conversation` establishes lineage on the child
+5. `BlocklistAIHistoryModel::start_new_child_conversation` establishes lineage on the child
    surface. The task id is stamped before `record_new_conversation_request_complete` resolves the
    pending `StartAgentExecutor` slot.
-5. The coordinator registers event consumers for the parent and child conversations.
-6. `TuiTerminalSessionView::start_orchestrated_child` attaches the task id to the child controller
-   and sends the first prompt (`crates/warp_tui/src/terminal_session_view.rs (1034-1049)`).
+6. The coordinator registers event consumers for the parent and child conversations.
+7. `TuiTerminalSessionView::start_orchestrated_child` attaches the task id to the child controller
+   and sends the first prompt (`crates/warp_tui/src/terminal_session_view.rs (1092-1104)`).
 `create_local_terminal_session` is the single session factory for both the
 focused bootstrap session and background children. Callers pass the window from
 their existing view context rather than storing it in `TuiSessions`; child
 orchestration derives it from the requesting parent session. The factory's
 explicit startup-directory parameter preserves the parent's current directory
-for child shells (`crates/warp_tui/src/session.rs (152-217)`).
+for child shells (`crates/warp_tui/src/session.rs (190-243)`).
 ### Model selection
 TUI `agents.model` remains the default model for ordinary TUI surfaces.
 Explicit per-surface overrides are resolved first so a child `model_id` always
 wins, including when it equals the execution profile default
 (`app/src/ai/llms.rs (844-878, 1504-1526)`).
 ### Streamer and session ownership
-The coordinator stores only frontend-specific runtime ownership
+The coordinator stores only orchestration runtime bookkeeping
 (`crates/warp_tui/src/orchestration_model.rs (31-39)`):
 - `child_session_by_conversation` maps a child conversation to its background session.
 - `event_consumers_by_session` records which conversation streams each live session consumes.
@@ -65,13 +67,14 @@ conversation also removes its id from `children_by_parent`
 ### Unsupported modes and failed launch cleanup
 Local CLI-harness and remote requests resolve as explicit per-child failures
 instead of waiting for the spawn timeout
-(`crates/warp_tui/src/orchestration_model.rs (114-159, 239-296)`).
+(`crates/warp_tui/src/orchestration_model.rs (83-156, 211-255)`).
 The failure path creates an errored child conversation on a synthetic surface
 and echoes its id to `StartAgentExecutor`. The resulting cleanup event:
 - deletes the child conversation and persisted state,
 - removes it from the parent-child topology,
-- removes any mapped background session, and
-- unregisters consumers when the session is removed.
+- emits a removal intent for any mapped background session,
+- lets `TuiSessions` remove that owned session, and
+- unregisters consumers when `TuiSessions` reports the removal.
 This leaves no dead child conversation, session, or streamer registration.
 ### Transcript rendering
 `crates/warp_tui/src/agent_block.rs (775-888)`:
