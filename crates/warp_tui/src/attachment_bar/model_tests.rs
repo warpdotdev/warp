@@ -6,7 +6,7 @@ use futures_lite::future::block_on;
 use warpui_core::clipboard::{ClipboardContent, ImageData};
 
 use super::{
-    AttachmentModeTransition, attachment_mode_transition, parse_image_paths,
+    AttachmentModeTransition, MAX_IMAGE_SIZE_BYTES, attachment_mode_transition, parse_image_paths,
     process_clipboard_content, process_paths, reconciled_selected_index,
 };
 
@@ -110,6 +110,20 @@ fn processing_is_all_or_nothing() {
     std::fs::write(&invalid, b"not an image").unwrap();
 
     assert!(block_on(process_paths(vec![valid, invalid])).is_err());
+}
+
+#[test]
+fn rejects_oversized_image_before_reading_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let oversized = directory.path().join("oversized.png");
+    let file = std::fs::File::create(&oversized).unwrap();
+    file.set_len(u64::try_from(MAX_IMAGE_SIZE_BYTES).unwrap() + 1)
+        .unwrap();
+
+    assert_eq!(
+        block_on(process_paths(vec![oversized.clone()])).unwrap_err(),
+        format!("Image is too large: {}.", oversized.display())
+    );
 }
 
 #[test]

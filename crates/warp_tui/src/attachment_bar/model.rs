@@ -6,8 +6,8 @@ use warp::editor::CodeEditorModel;
 use warp::tui_export::{
     ActiveSession, BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIInputModel,
     ImageContext, InputType, InputTypeAutoDetectionSource, LLMPreferences,
-    MAX_IMAGE_COUNT_FOR_QUERY, MIME_SNIFF_BYTES, PendingAttachmentSummary, ProcessImageResult,
-    infer_mime_type, is_supported_image_mime_type, process_image_for_agent,
+    MAX_IMAGE_COUNT_FOR_QUERY, MAX_IMAGE_SIZE_BYTES, MIME_SNIFF_BYTES, PendingAttachmentSummary,
+    ProcessImageResult, infer_mime_type, is_supported_image_mime_type, process_image_for_agent,
 };
 use warp_core::features::FeatureFlag;
 use warp_editor::model::CoreEditorModel;
@@ -429,6 +429,9 @@ async fn process_paths(paths: Vec<PathBuf>) -> Result<Vec<ImageContext>, String>
             .map_err(|_| format!("Could not read image {}.", path.display()))?;
         if !metadata.is_file() {
             return Err(format!("Image path is not a file: {}.", path.display()));
+        }
+        if metadata.len() > u64::try_from(MAX_IMAGE_SIZE_BYTES).unwrap_or(u64::MAX) {
+            return Err(format!("Image is too large: {}.", path.display()));
         }
         let bytes = async_fs::read(&path)
             .await
