@@ -20,6 +20,7 @@ fn toggle_to_local_sanitizes_disabled_codex() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     );
 
@@ -42,6 +43,7 @@ fn toggle_to_local_preserves_claude() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     );
 
@@ -70,6 +72,21 @@ fn resolve_from_config_preserves_local_claude() {
         state.execution_mode,
         RunAgentsExecutionMode::Local
     ));
+}
+
+#[test]
+fn runner_id_round_trips_through_config() {
+    let config = OrchestrationConfig {
+        model_id: "auto".to_string(),
+        harness_type: "oz".to_string(),
+        execution_mode: OrchestrationExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            worker_host: "warp".to_string(),
+            runner_id: "runner-7".to_string(),
+        },
+    };
+    let state = OrchestrationConfigState::from_orchestration_config(&config);
+    assert_eq!(state.to_orchestration_config(), config);
 }
 
 #[test]

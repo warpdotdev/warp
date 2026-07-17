@@ -12,7 +12,7 @@ use warpui::{AppContext, SingletonEntity};
 use super::config_state::{AuthSecretSelection, OrchestrationConfigState};
 use super::providers::{
     get_base_model_choices, resolve_default_host_slug, resolve_recent_host_slug,
-    ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
+    ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_RUNNER_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
 };
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
@@ -570,6 +570,42 @@ fn build_environment_snapshot(envs: Vec<(String, String)>, current: &str) -> Opt
         rows.push(OptionRow::new(env_id, env_name));
     }
     OptionSnapshot::ready(rows, selected_id)
+}
+
+// ── Runner ──────────────────────────────────────────────────────────
+
+/// Builds the runner options: a "Use environment default" clear row plus
+/// the supplied runners (already sorted by name). Runners are not cached
+/// client-side like environments, so the caller fetches them via
+/// `FactoryClient::get_runners` and passes them in along with the current
+/// load state; while `loading` is true the snapshot reports
+/// [`OptionSourceStatus::Loading`] so the picker can show a spinner.
+pub fn build_runner_snapshot(
+    runners: Vec<(String, String)>,
+    current: &str,
+    loading: bool,
+) -> OptionSnapshot {
+    let mut rows = vec![OptionRow::new(
+        String::new(),
+        ORCHESTRATION_RUNNER_NONE_LABEL,
+    )];
+    let mut selected_id = current.is_empty().then(String::new);
+    for (runner_id, runner_name) in runners {
+        if runner_id == current {
+            selected_id = Some(runner_id.clone());
+        }
+        rows.push(OptionRow::new(runner_id, runner_name));
+    }
+    OptionSnapshot {
+        rows,
+        selected_id,
+        status: if loading {
+            OptionSourceStatus::Loading
+        } else {
+            OptionSourceStatus::Ready
+        },
+        footer: None,
+    }
 }
 
 #[cfg(test)]

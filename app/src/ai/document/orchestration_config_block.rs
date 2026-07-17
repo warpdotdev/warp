@@ -43,6 +43,8 @@ use crate::ai::harness_availability::{
 };
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
 use crate::BlocklistAIHistoryModel;
@@ -87,6 +89,9 @@ pub enum OrchestrationConfigBlockAction {
         environment_id: String,
     },
     CreateEnvironmentRequested,
+    RunnerChanged {
+        runner_id: String,
+    },
     WorkerHostChanged {
         worker_host: String,
     },
@@ -112,6 +117,9 @@ impl OrchestrationControlAction for OrchestrationConfigBlockAction {
     }
     fn create_environment_requested() -> Self {
         Self::CreateEnvironmentRequested
+    }
+    fn runner_changed(runner_id: String) -> Self {
+        Self::RunnerChanged { runner_id }
     }
     fn auth_secret_changed(auth_secret_name: Option<String>) -> Self {
         Self::AuthSecretChanged { auth_secret_name }
@@ -148,6 +156,10 @@ pub struct OrchestrationConfigBlockView {
     /// mode) suppresses the modal on restore while still firing for
     /// live-session enablement.
     user_has_interacted: bool,
+    /// Runners fetched via `getRunners` for the Runner picker: (uid, name).
+    runners: Vec<(String, String)>,
+    /// True while the `getRunners` fetch is in flight.
+    runners_loading: bool,
 }
 
 impl OrchestrationConfigBlockView {
@@ -309,6 +321,8 @@ impl OrchestrationConfigBlockView {
             suppress_refresh: false,
             has_auto_opened_create_modal: false,
             user_has_interacted: false,
+            runners: Vec::new(),
+            runners_loading: false,
         };
         if view.is_approved {
             view.ensure_pickers(ctx);
@@ -522,6 +536,25 @@ impl OrchestrationConfigBlockView {
         env_handle.update(ctx, |d, c| d.set_use_overlay_layer(true, c));
         self.pickers.environment_picker = Some(env_handle);
 
+        let initial_runner = match &self
+            .orchestration_edit_state
+            .orchestration_config_state
+            .execution_mode
+        {
+            RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
+            RunAgentsExecutionMode::Local => String::new(),
+        };
+        let runner_handle = oc::create_runner_picker(
+            &initial_runner,
+            &self.runners,
+            self.runners_loading,
+            &styles,
+            ctx,
+        );
+        runner_handle.update(ctx, |d, c| d.set_use_overlay_layer(true, c));
+        self.pickers.runner_picker = Some(runner_handle);
+        self.fetch_runners(ctx);
+
         let initial_host = match &self
             .orchestration_edit_state
             .orchestration_config_state
@@ -634,6 +667,51 @@ impl OrchestrationConfigBlockView {
             model.set_orchestration_config_for_plan(conversation_id, plan_id, config, status, ctx);
         });
     }
+
+    /// Fetches available runners via `getRunners` and repopulates the
+    /// Runner picker once they resolve. No-op on wasm (no `FactoryClient`).
+    #[cfg(not(target_family = "wasm"))]
+    fn fetch_runners(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.runners_loading || !self.runners.is_empty() {
+            return;
+        }
+        self.runners_loading = true;
+        let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+        ctx.spawn(
+            async move { client.get_runners(None).await },
+            |me, result, ctx| {
+                me.runners_loading = false;
+                match result {
+                    Ok(runners) => {
+                        let mut list: Vec<(String, String)> = runners
+                            .into_iter()
+                            .map(|r| (r.uid.inner().to_string(), r.config.name))
+                            .collect();
+                        list.sort_by(|a, b| a.1.cmp(&b.1));
+                        me.runners = list;
+                    }
+                    Err(err) => {
+                        log::warn!("Failed to fetch runners for plan-card runner picker: {err}");
+                    }
+                }
+                let current = match &me
+                    .orchestration_edit_state
+                    .orchestration_config_state
+                    .execution_mode
+                {
+                    RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
+                    RunAgentsExecutionMode::Local => String::new(),
+                };
+                if let Some(handle) = me.pickers.runner_picker.clone() {
+                    oc::populate_runner_picker(&handle, &me.runners, &current, false, ctx);
+                }
+                ctx.notify();
+            },
+        );
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn fetch_runners(&mut self, _ctx: &mut ViewContext<Self>) {}
 }
 
 impl Entity for OrchestrationConfigBlockView {
@@ -917,6 +995,13 @@ impl TypedActionView for OrchestrationConfigBlockView {
             }
             OrchestrationConfigBlockAction::CreateEnvironmentRequested => {
                 self.open_create_environment_modal(ctx);
+            }
+            OrchestrationConfigBlockAction::RunnerChanged { runner_id } => {
+                self.orchestration_edit_state
+                    .orchestration_config_state
+                    .set_runner_id(runner_id.clone());
+                self.apply_field_change(ctx);
+                ctx.notify();
             }
             OrchestrationConfigBlockAction::WorkerHostChanged { worker_host } => {
                 self.orchestration_edit_state

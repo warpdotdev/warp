@@ -6,7 +6,9 @@
 use std::rc::Rc;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
-use ai::agent::action_result::{RunAgentsAgentOutcomeKind, RunAgentsResult};
+use ai::agent::action_result::{
+    RunAgentsAgentOutcomeKind, RunAgentsLaunchedExecutionMode, RunAgentsResult,
+};
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::skills::SkillReference;
 use pathfinder_geometry::vector::vec2f;
@@ -60,6 +62,8 @@ use crate::ai::harness_availability::{
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
+#[cfg(not(target_family = "wasm"))]
+use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
@@ -175,6 +179,9 @@ impl OrchestrationControlAction for RunAgentsCardViewAction {
     fn create_environment_requested() -> Self {
         Self::CreateEnvironmentRequested
     }
+    fn runner_changed(runner_id: String) -> Self {
+        Self::RunnerChanged { runner_id }
+    }
     fn auth_secret_changed(auth_secret_name: Option<String>) -> Self {
         Self::AuthSecretChanged { auth_secret_name }
     }
@@ -210,6 +217,9 @@ pub enum RunAgentsCardViewAction {
         environment_id: String,
     },
     CreateEnvironmentRequested,
+    RunnerChanged {
+        runner_id: String,
+    },
     WorkerHostChanged {
         worker_host: String,
     },
@@ -256,6 +266,11 @@ pub struct RunAgentsCardView {
     /// One-shot guard: cancelling the auto-popped modal must not re-pop.
     /// Reset on harness / execution-mode change.
     has_auto_opened_create_modal: bool,
+    /// Runners fetched via `getRunners` for the Runner picker: (uid, name).
+    /// Runners aren't cached client-side, so we fetch them lazily.
+    runners: Vec<(String, String)>,
+    /// True while the `getRunners` fetch is in flight.
+    runners_loading: bool,
 }
 
 /// Resolves UI-only interactive defaults on edit state that has
@@ -537,6 +552,8 @@ impl RunAgentsCardView {
             entered_event_emitted: false,
             decision_event_emitted: false,
             has_auto_opened_create_modal: false,
+            runners: Vec::new(),
+            runners_loading: false,
         };
 
         view.ensure_pickers(ctx);
@@ -884,6 +901,31 @@ impl RunAgentsCardView {
         }
 
         let state = &self.orchestration_edit_state.orchestration_config_state;
+        if self.handles.pickers.runner_picker.is_none() {
+            let initial_runner = match &state.execution_mode {
+                RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
+                RunAgentsExecutionMode::Local => String::new(),
+            };
+            let handle = oc::create_runner_picker(
+                &initial_runner,
+                &self.runners,
+                self.runners_loading,
+                &styles,
+                ctx,
+            );
+            handle.update(ctx, |d, _| {
+                d.set_orientation(FilterableDropdownOrientation::Up)
+            });
+            ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
+                if let FilterableDropdownEvent::Close = event {
+                    me.refocus_after_picker_close(ctx);
+                }
+            });
+            self.handles.pickers.runner_picker = Some(handle);
+            self.fetch_runners(ctx);
+        }
+
+        let state = &self.orchestration_edit_state.orchestration_config_state;
         if self.handles.pickers.host_picker.is_none() {
             let initial_host = match &state.execution_mode {
                 RunAgentsExecutionMode::Remote { worker_host, .. } => worker_host.as_str(),
@@ -958,6 +1000,53 @@ impl RunAgentsCardView {
 
         self.sync_picker_selections(ctx);
     }
+
+    /// Fetches available runners via `getRunners` and repopulates the
+    /// Runner picker once they resolve. Runners are not cached
+    /// client-side (unlike environments), so this lazy fetch backs the
+    /// picker. No-op on wasm (no `FactoryClient` there).
+    #[cfg(not(target_family = "wasm"))]
+    fn fetch_runners(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.runners_loading || !self.runners.is_empty() {
+            return;
+        }
+        self.runners_loading = true;
+        let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+        ctx.spawn(
+            async move { client.get_runners(None).await },
+            |me, result, ctx| {
+                me.runners_loading = false;
+                match result {
+                    Ok(runners) => {
+                        let mut list: Vec<(String, String)> = runners
+                            .into_iter()
+                            .map(|r| (r.uid.inner().to_string(), r.config.name))
+                            .collect();
+                        list.sort_by(|a, b| a.1.cmp(&b.1));
+                        me.runners = list;
+                    }
+                    Err(err) => {
+                        log::warn!("Failed to fetch runners for orchestration picker: {err}");
+                    }
+                }
+                let current = match &me
+                    .orchestration_edit_state
+                    .orchestration_config_state
+                    .execution_mode
+                {
+                    RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
+                    RunAgentsExecutionMode::Local => String::new(),
+                };
+                if let Some(handle) = me.handles.pickers.runner_picker.clone() {
+                    oc::populate_runner_picker(&handle, &me.runners, &current, false, ctx);
+                }
+                ctx.notify();
+            },
+        );
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn fetch_runners(&mut self, _ctx: &mut ViewContext<Self>) {}
 
     /// Opens the dropdown menu above the trigger to avoid overlapping
     /// the input box. Only used by the confirmation card — the plan
@@ -1243,6 +1332,13 @@ impl TypedActionView for RunAgentsCardView {
             RunAgentsCardViewAction::CreateEnvironmentRequested => {
                 self.open_create_environment_modal(ctx);
             }
+            RunAgentsCardViewAction::RunnerChanged { runner_id } => {
+                self.orchestration_edit_state
+                    .orchestration_config_state
+                    .set_runner_id(runner_id.clone());
+                self.refresh_accept_button_state(ctx);
+                ctx.notify();
+            }
             RunAgentsCardViewAction::WorkerHostChanged { worker_host } => {
                 self.orchestration_edit_state
                     .orchestration_config_state
@@ -1355,6 +1451,7 @@ fn diverged_orch_fields_against_config(
         OrchestrationExecutionMode::Remote {
             environment_id: cfg_env,
             worker_host: cfg_host,
+            ..
         },
     ) = (&state.execution_mode, &config.execution_mode)
     {
@@ -1503,17 +1600,33 @@ fn render_terminal_state(
 
 pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, StatusKind) {
     match result {
-        RunAgentsResult::Launched { agents, .. } => {
+        RunAgentsResult::Launched {
+            agents,
+            execution_mode,
+            ..
+        } => {
             let total = agents.len();
             let launched = agents
                 .iter()
                 .filter(|a| matches!(a.kind, RunAgentsAgentOutcomeKind::Launched { .. }))
                 .count();
+            // Surface the launched runner (if any) so the terminal state
+            // reflects the compute the batch committed to. Empty runner_id
+            // means "environment default", which renders as today.
+            let runner_suffix = match execution_mode {
+                RunAgentsLaunchedExecutionMode::Remote { runner_id, .. }
+                    if !runner_id.is_empty() =>
+                {
+                    format!(" on runner {runner_id}")
+                }
+                RunAgentsLaunchedExecutionMode::Remote { .. }
+                | RunAgentsLaunchedExecutionMode::Local => String::new(),
+            };
             if launched == total {
                 let label = if total == 1 {
-                    "Spawned 1 agent".to_string()
+                    format!("Spawned 1 agent{runner_suffix}")
                 } else {
-                    format!("Spawned {total} agents")
+                    format!("Spawned {total} agents{runner_suffix}")
                 };
                 (label, StatusKind::Success)
             } else if launched == 0 {

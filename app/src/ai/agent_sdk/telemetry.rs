@@ -564,7 +564,7 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
                 EnablementState::Flag(FeatureFlag::APIKeyManagement)
             }
             Self::RunnerList | Self::RunnerCreate | Self::RunnerUpdate | Self::RunnerDelete => {
-                EnablementState::Flag(FeatureFlag::CloudAgentRunnerCLICommands)
+                EnablementState::Flag(FeatureFlag::CloudAgentRunners)
             }
             Self::RunMessageWatch
             | Self::RunMessageSend

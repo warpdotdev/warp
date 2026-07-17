@@ -37,9 +37,9 @@ pub use crate::ai::orchestration::{
     OrchestrationConfigState, OrchestrationEditState, ORCHESTRATION_WARP_WORKER_HOST,
 };
 use crate::ai::orchestration::{
-    api_key_snapshot, environment_snapshot, harness_snapshot, host_snapshot, model_snapshot,
-    persist_auth_secret_selection, OptionBadge, OptionFooter, OptionRow, OptionSnapshot,
-    OptionSourceStatus, AUTH_SECRET_INHERIT_LABEL,
+    api_key_snapshot, build_runner_snapshot, environment_snapshot, harness_snapshot, host_snapshot,
+    model_snapshot, persist_auth_secret_selection, OptionBadge, OptionFooter, OptionRow,
+    OptionSnapshot, OptionSourceStatus, AUTH_SECRET_INHERIT_LABEL,
 };
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -77,6 +77,9 @@ pub trait OrchestrationControlAction: DropdownItemAction + Clone {
     fn harness_changed(harness_type: String) -> Self;
     fn environment_changed(environment_id: String) -> Self;
     fn create_environment_requested() -> Self;
+    /// Runner UID selected in the Runner dropdown; empty clears the
+    /// override ("Use environment default").
+    fn runner_changed(runner_id: String) -> Self;
     /// `None` means Inherit; `Some(name)` means a named managed secret.
     fn auth_secret_changed(name: Option<String>) -> Self;
     /// User picked the "New API key…" item; opens the workspace create modal.
@@ -92,6 +95,9 @@ pub struct OrchestrationPickerHandles<A: OrchestrationControlAction> {
     pub model_picker: Option<ViewHandle<FilterableDropdown<A>>>,
     pub harness_picker: Option<ViewHandle<Dropdown<A>>>,
     pub environment_picker: Option<ViewHandle<FilterableDropdown<A>>>,
+    /// Runner picker for the Cloud variant (gated on `CloudAgentRunners`).
+    /// `None` until built; runners are fetched via `FactoryClient::get_runners`.
+    pub runner_picker: Option<ViewHandle<FilterableDropdown<A>>>,
     pub host_picker: Option<ViewHandle<HostPicker>>,
     /// Picker for the managed auth secret used by non-Oz cloud children.
     /// `None` when the picker hasn't been built yet (e.g. harness is Oz or
@@ -108,6 +114,7 @@ impl<A: OrchestrationControlAction> Default for OrchestrationPickerHandles<A> {
             model_picker: None,
             harness_picker: None,
             environment_picker: None,
+            runner_picker: None,
             host_picker: None,
             auth_secret_picker: None,
             local_toggle: MouseStateHandle::default(),
@@ -222,6 +229,7 @@ fn snapshot_execution_mode(is_local: bool) -> RunAgentsExecutionMode {
             environment_id: String::new(),
             worker_host: String::new(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         }
     }
 }
@@ -402,6 +410,7 @@ pub fn populate_environment_picker<A: OrchestrationControlAction, V: View>(
             environment_id: initial_env_id.to_string(),
             worker_host: String::new(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     );
     dropdown_handle.update(ctx, |dropdown, ctx_dropdown| {
@@ -413,6 +422,62 @@ pub fn populate_environment_picker<A: OrchestrationControlAction, V: View>(
             .map(|row| {
                 MenuItem::Item(MenuItemFields::new(&row.label).with_on_select_action(
                     DropdownAction::select_action_and_close(A::environment_changed(row.id)),
+                ))
+            })
+            .collect();
+        dropdown.set_rich_items(items, ctx_dropdown);
+        if let Some(label) = &selected_label {
+            dropdown.set_selected_by_name(label, ctx_dropdown);
+        }
+    });
+}
+
+/// Creates the Runner picker dropdown with the shared orchestration
+/// chrome, then populates it from the supplied runners list. Runners are
+/// not cached client-side (unlike environments), so the owning view
+/// fetches them via `FactoryClient::get_runners` and passes them in;
+/// `loading` renders the picker in its loading state until they arrive.
+pub fn create_runner_picker<A: OrchestrationControlAction, V: View>(
+    initial_runner_id: &str,
+    runners: &[(String, String)],
+    loading: bool,
+    styles: &UiComponentStyles,
+    ctx: &mut ViewContext<V>,
+) -> ViewHandle<FilterableDropdown<A>> {
+    let styles = *styles;
+    let dropdown_handle = ctx.add_typed_action_view(move |ctx_dropdown| {
+        let mut dropdown = FilterableDropdown::<A>::new(ctx_dropdown);
+        dropdown.set_use_overlay_layer(false, ctx_dropdown);
+        dropdown.set_match_menu_width_to_top_bar(true, ctx_dropdown);
+        dropdown.set_main_axis_size(MainAxisSize::Max, ctx_dropdown);
+        dropdown.set_button_variant(ButtonVariant::Secondary);
+        dropdown.set_style(styles);
+        dropdown.set_top_bar_height(ORCHESTRATION_PICKER_HEIGHT, ctx_dropdown);
+        dropdown.set_top_bar_max_width(f32::INFINITY);
+        dropdown
+    });
+    populate_runner_picker(&dropdown_handle, runners, initial_runner_id, loading, ctx);
+    dropdown_handle
+}
+
+/// Populates the runner picker from [`build_runner_snapshot`] ("Use
+/// environment default" plus the supplied runners).
+pub fn populate_runner_picker<A: OrchestrationControlAction, V: View>(
+    dropdown_handle: &ViewHandle<FilterableDropdown<A>>,
+    runners: &[(String, String)],
+    current_runner_id: &str,
+    loading: bool,
+    ctx: &mut ViewContext<V>,
+) {
+    let snapshot = build_runner_snapshot(runners.to_vec(), current_runner_id, loading);
+    let selected_label = selected_row_label(&snapshot);
+    dropdown_handle.update(ctx, |dropdown, ctx_dropdown| {
+        let items = snapshot
+            .rows
+            .into_iter()
+            .map(|row| {
+                MenuItem::Item(MenuItemFields::new(&row.label).with_on_select_action(
+                    DropdownAction::select_action_and_close(A::runner_changed(row.id)),
                 ))
             })
             .collect();
@@ -487,6 +552,7 @@ pub fn populate_host_picker<V: View>(
             environment_id: String::new(),
             worker_host: initial_host.to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     );
     let snapshot = host_snapshot(&state, ctx);
@@ -1116,6 +1182,16 @@ pub fn render_picker_row_with_layout<A: OrchestrationControlAction>(
                     .as_ref()
                     .map(|p| ChildView::new(p).finish()),
             );
+            if warp_core::features::FeatureFlag::CloudAgentRunners.is_enabled() {
+                add(
+                    &mut column,
+                    "Runner",
+                    handles
+                        .runner_picker
+                        .as_ref()
+                        .map(|p| ChildView::new(p).finish()),
+                );
+            }
         }
         add(
             &mut column,
@@ -1163,6 +1239,16 @@ pub fn render_picker_row_with_layout<A: OrchestrationControlAction>(
                     .as_ref()
                     .map(|p| ChildView::new(p).finish()),
             );
+            if warp_core::features::FeatureFlag::CloudAgentRunners.is_enabled() {
+                add_picker(
+                    &mut row,
+                    "Runner",
+                    handles
+                        .runner_picker
+                        .as_ref()
+                        .map(|p| ChildView::new(p).finish()),
+                );
+            }
         }
         add_picker(
             &mut row,

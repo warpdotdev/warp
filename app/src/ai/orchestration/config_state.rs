@@ -106,10 +106,12 @@ impl OrchestrationConfigState {
             OrchestrationExecutionMode::Remote {
                 environment_id,
                 worker_host,
+                runner_id,
             } => RunAgentsExecutionMode::Remote {
                 environment_id: environment_id.clone(),
                 worker_host: worker_host.clone(),
                 computer_use_enabled: false,
+                runner_id: runner_id.clone(),
             },
         };
         let mut state = Self {
@@ -136,6 +138,7 @@ impl OrchestrationConfigState {
                     environment_id: String::new(),
                     worker_host: ORCHESTRATION_WARP_WORKER_HOST.to_string(),
                     computer_use_enabled: false,
+                    runner_id: String::new(),
                 };
             }
         } else {
@@ -159,6 +162,12 @@ impl OrchestrationConfigState {
         } = &mut self.execution_mode
         {
             *wh = worker_host;
+        }
+    }
+
+    pub fn set_runner_id(&mut self, runner_id: String) {
+        if let RunAgentsExecutionMode::Remote { runner_id: id, .. } = &mut self.execution_mode {
+            *id = runner_id;
         }
     }
 
@@ -242,10 +251,12 @@ impl OrchestrationConfigState {
             RunAgentsExecutionMode::Remote {
                 environment_id,
                 worker_host,
+                runner_id,
                 ..
             } => OrchestrationExecutionMode::Remote {
                 environment_id: environment_id.clone(),
                 worker_host: worker_host.clone(),
+                runner_id: runner_id.clone(),
             },
         };
         OrchestrationConfig {

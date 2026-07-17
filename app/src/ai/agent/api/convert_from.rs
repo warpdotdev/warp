@@ -129,6 +129,7 @@ fn convert_run_agents_execution_mode(
             environment_id: remote.environment_id,
             worker_host: remote.worker_host,
             computer_use_enabled: remote.computer_use_enabled,
+            runner_id: remote.runner_id,
         },
         Some(api::run_agents::ExecutionMode::Local(_)) | None => RunAgentsExecutionMode::Local,
     }
@@ -198,6 +199,9 @@ fn convert_start_agent_v2_execution_mode(
                 // Auth secret is plumbed client-side via `RunAgentsRequest`;
                 // StartAgentV2 from the server never carries it.
                 auth_secret_name: None,
+                // StartAgentV2 (server→child) does not carry a runner
+                // override; runner selection flows through RunAgents.
+                runner_id: String::new(),
             }
         }
         Some(api::start_agent_v2::execution_mode::Mode::Local(local)) => {

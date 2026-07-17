@@ -1381,6 +1381,9 @@ pub enum RunAgentsLaunchedExecutionMode {
         environment_id: String,
         worker_host: String,
         computer_use_enabled: bool,
+        /// Resolved runner UID the batch committed to; empty when none.
+        #[serde(default)]
+        runner_id: String,
     },
 }
 

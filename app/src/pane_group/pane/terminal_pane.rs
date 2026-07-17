@@ -1595,6 +1595,7 @@ fn dispatch_start_agent_conversation(
             harness_type,
             title,
             auth_secret_name,
+            runner_id,
         } => {
             launch_remote_child(
                 group,
@@ -1609,6 +1610,7 @@ fn dispatch_start_agent_conversation(
                     harness_type,
                     title,
                     auth_secret_name,
+                    runner_id,
                 },
                 ctx,
             );
@@ -1922,6 +1924,9 @@ struct RemoteLaunchFields {
     /// harness credentials. Resolved to `AgentConfigSnapshot.harness_auth_secrets`
     /// when applicable.
     auth_secret_name: Option<String>,
+    /// Runner UID selecting the child's compute config. Empty means "no
+    /// override" — resolved at dispatch via the environment's default runner.
+    runner_id: String,
 }
 
 /// Sets up a hidden ambient-agent pane for a Remote child agent: creates the
@@ -1953,6 +1958,7 @@ fn launch_remote_child(
         harness_type,
         title,
         auth_secret_name,
+        runner_id,
     } = fields;
 
     let request_id = request.id;
@@ -2077,6 +2083,7 @@ fn launch_remote_child(
         config: Some(AgentConfigSnapshot {
             name: agent_name,
             environment_id,
+            runner_id: (!runner_id.is_empty()).then_some(runner_id),
             model_id: (!model_id.is_empty()).then_some(model_id),
             worker_host: (!worker_host.is_empty()).then_some(worker_host),
             computer_use_enabled,
