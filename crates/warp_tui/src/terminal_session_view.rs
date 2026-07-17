@@ -938,8 +938,7 @@ impl TuiTerminalSessionView {
             )
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
         });
-        let orchestration_tab_bar =
-            ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
+        let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
 
         ctx.subscribe_to_view(&transcript, |view, _, event, ctx| match event {
             TuiTranscriptViewEvent::SelectionStarted => {
