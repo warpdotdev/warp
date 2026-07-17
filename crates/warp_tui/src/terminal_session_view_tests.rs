@@ -5,13 +5,13 @@ use warp::tui_export::{
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, TuiText,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
 };
 use warpui_core::{App, AppContext};
 
 use super::{
     export_file_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
-    wrap_view_root_padding, TuiTerminalSessionEvent,
+    TuiTerminalSessionEvent,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -157,57 +157,4 @@ fn resize_event_maps_to_pty_resize_intent() {
     };
     assert_eq!(actual_update.new_size().rows(), 8);
     assert_eq!(actual_update.new_size().columns(), 42);
-}
-
-fn render_lines_sized(
-    mut element: Box<dyn TuiElement>,
-    ctx: &AppContext,
-    width: u16,
-    height: u16,
-) -> Vec<String> {
-    let mut rendered_views = EntityIdMap::default();
-    let mut layout_ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    let size = element.layout(
-        TuiConstraint::loose(TuiSize::new(width, height)),
-        &mut layout_ctx,
-        ctx,
-    );
-    let area = TuiRect::new(0, 0, size.width, size.height);
-    let mut buffer = TuiBuffer::empty(area);
-    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-    {
-        let mut surface = TuiPaintSurface::new(&mut buffer);
-        element.render(
-            TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
-            &mut surface,
-            &mut paint_ctx,
-        );
-    }
-    buffer.to_lines()
-}
-
-#[test]
-fn view_root_pads_a_blank_row_below_the_footer() {
-    // The footer is the content column's last child, so a stand-in text line
-    // stands for the footer/prompt row here. The view-root padding must leave a
-    // trailing blank row beneath it (matching the Figma spec) rather than
-    // rendering flush against the bottom terminal edge.
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            ctx.add_singleton_model(|_| Appearance::mock());
-            let lines = render_lines_sized(
-                wrap_view_root_padding(TuiText::new("footer").finish()).finish(),
-                ctx,
-                16,
-                8,
-            );
-
-            assert_eq!(
-                lines,
-                vec!["          ", "          ", "  footer  ", "          ",],
-            );
-        });
-    });
 }

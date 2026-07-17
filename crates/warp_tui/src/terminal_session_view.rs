@@ -2314,19 +2314,12 @@ impl TuiView for TuiTerminalSessionView {
         // the PTY's columns match the width block content actually renders at
         // (the GUI wraps its view root, but its padding is sub-cell; here it is
         // 4 whole columns).
-        wrap_view_root_padding(terminal_content.finish()).finish()
+        TuiContainer::new(terminal_content.finish())
+            .with_padding_x(2)
+            .with_padding_top(2)
+            .with_padding_bottom(1)
+            .finish()
     }
-}
-
-/// Wraps the terminal-content root in the view's outer padding: horizontal
-/// padding on both sides, two blank rows above, and one blank row below. The
-/// bottom row matches the Figma spec (≈1 cell row of whitespace) so the
-/// footer/prompt never renders flush against the bottom terminal edge.
-fn wrap_view_root_padding(child: Box<dyn TuiElement>) -> TuiContainer {
-    TuiContainer::new(child)
-        .with_padding_x(2)
-        .with_padding_top(2)
-        .with_padding_bottom(1)
 }
 
 impl TypedActionView for TuiTerminalSessionView {
