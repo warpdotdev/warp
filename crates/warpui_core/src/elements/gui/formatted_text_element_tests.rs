@@ -518,6 +518,11 @@ fn test_keycap_border_is_visible_against_chip_background() {
         "keycap border must contrast with the chip background to be visible"
     );
     assert!(border.width >= 1, "keycap border must be at least 1px wide");
+    // The keycap has a heavier bottom edge for the "raised key" cue.
+    assert!(
+        border.bottom_width.is_some(),
+        "keycap border must carry a bottom-edge cue"
+    );
 }
 
 /// The keycap outline is applied only to `<kbd>` runs, so an inline-code chip stays borderless and

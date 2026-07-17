@@ -201,6 +201,9 @@ impl<'a> TextLayout<'a> {
             } else {
                 inline_code_style.background
             };
+            // The keycap also gets a heavier bottom edge for a "raised key" cue; the inline-code
+            // chip does not (issue #13733).
+            let bottom_width = text_styles.is_kbd().then_some(1);
             styling = styling
                 .with_foreground_color(inline_code_style.font_color)
                 .with_background_color(inline_code_style.background)
@@ -210,6 +213,7 @@ impl<'a> TextLayout<'a> {
                     width: 1,
                     // Use the set 1.2 line height ratio for inline code backgrounds.
                     line_height_ratio_override: Some(120),
+                    bottom_width,
                 });
         }
 

@@ -1086,6 +1086,17 @@ fn test_kbd_keycap_style_differs_from_inline_code() {
                 kbd_border.color, code_border.color,
                 "kbd keycap must be visually distinguishable from an inline-code chip"
             );
+
+            // The keycap gets a heavier bottom edge (the "raised key" cue); the inline-code chip
+            // does not.
+            assert!(
+                kbd_border.bottom_width.is_some(),
+                "kbd keycap should have a heavier bottom edge"
+            );
+            assert!(
+                code_border.bottom_width.is_none(),
+                "inline code chip should not have a bottom edge cue"
+            );
         });
     });
 }

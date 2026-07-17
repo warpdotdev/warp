@@ -1537,6 +1537,8 @@ fn keycap_border(foreground_color: ColorU) -> TextBorder {
         radius: 4,
         width: 1,
         line_height_ratio_override: Some(120),
+        // Heavier bottom edge for the "raised key" cue.
+        bottom_width: Some(1),
     }
 }
 
