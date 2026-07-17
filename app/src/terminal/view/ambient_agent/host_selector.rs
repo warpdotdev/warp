@@ -43,8 +43,6 @@ const MENU_HEADER_LABEL: &str = "Execution host";
 
 const DEFAULT_BADGE: &str = "Default";
 
-const CONNECTED_BADGE: &str = "Connected";
-
 const DISCONNECTED_BADGE: &str = "Disconnected";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -327,10 +325,10 @@ fn build_menu_items(
     connected_hosts.sort();
     connected_hosts.dedup();
     for host in &connected_hosts {
-        items.push(item_for(
-            Host::SelfHosted { slug: host.clone() },
-            Some(CONNECTED_BADGE),
-        ));
+        // No badge: every self-hosted host listed here is connected (they appear
+        // precisely because they're connected), so a "Connected" badge would be
+        // redundant. Only the default and disconnected states are badged.
+        items.push(item_for(Host::SelfHosted { slug: host.clone() }, None));
     }
     if let Host::SelfHosted { slug } = selected {
         let is_default = default_slug == Some(slug.as_str());
