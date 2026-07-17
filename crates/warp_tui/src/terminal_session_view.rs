@@ -108,6 +108,8 @@ const ORCHESTRATION_TAB_LABEL_MAX_COLUMNS: u16 = 20;
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
+/// The EOF byte (ctrl-d) forwarded to a running foreground command's PTY.
+const CTRL_D_EOF_BYTE: u8 = 0x04;
 const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
 const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
 
@@ -246,6 +248,9 @@ pub(crate) enum TuiTerminalSessionAction {
     ToggleUsageDisplay,
     /// Raw user bytes to forward to the foreground PTY process.
     ForwardUserPtyBytes(Vec<u8>),
+    /// Ctrl-d: forward EOF to a running foreground command, else exit the TUI
+    /// immediately when the prompt is empty, else delete the next character.
+    Eof,
     /// Toggle the latest exposed inline plan.
     TogglePlan,
     /// Return keyboard focus from tabs to the session's default interaction target.
@@ -326,6 +331,12 @@ pub(crate) fn init(app: &mut AppContext) {
         FixedBinding::new(
             TAKE_CONTROL_KEY_BINDING,
             TuiTerminalSessionAction::Interrupt,
+            id!(TuiTerminalSessionView::ui_name()),
+        )
+        .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new(
+            "ctrl-d",
+            TuiTerminalSessionAction::Eof,
             id!(TuiTerminalSessionView::ui_name()),
         )
         .with_group(TUI_BINDING_GROUP),
@@ -1883,6 +1894,41 @@ impl TuiTerminalSessionView {
         ctx.notify();
     }
 
+    /// Handles a ctrl-d press. Unlike ctrl-c, ctrl-d exits immediately (no
+    /// press-again confirmation) — but only when nothing is running: if a
+    /// foreground command is active it receives EOF instead, and when the
+    /// prompt has text ctrl-d keeps its editing role of deleting the next
+    /// character.
+    fn handle_eof(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.has_active_long_running_command() {
+            ctx.emit(TuiTerminalSessionEvent::WriteUserInput(Cow::Owned(vec![
+                CTRL_D_EOF_BYTE,
+            ])));
+            return;
+        }
+        if self.input_view.as_ref(ctx).is_empty(ctx) {
+            ctx.terminate_app(TerminationMode::ForceTerminate, None);
+        } else {
+            self.input_view
+                .update(ctx, |input, ctx| input.delete_forward(ctx));
+        }
+    }
+
+    /// Whether a foreground command is currently running in this session — an
+    /// alt-screen or user-controlled inline command (which own keyboard input),
+    /// or any active long-running command block (e.g. one the agent is
+    /// monitoring). Ctrl-d routes EOF to such a command instead of exiting.
+    fn has_active_long_running_command(&self) -> bool {
+        if self.process_owns_input() {
+            return true;
+        }
+        let terminal_model = self.terminal_model.lock();
+        terminal_model
+            .block_list()
+            .active_block()
+            .is_active_and_long_running()
+    }
+
     /// Cancels the surface's running conversation (in-flight stream or pending
     /// tool actions), returning whether there was one to cancel.
     fn cancel_active_conversation(&mut self, ctx: &mut ViewContext<Self>) -> bool {
@@ -2477,6 +2523,10 @@ impl TuiTerminalSessionView {
                 self.mcp_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
+            TuiSlashCommand::Exit => {
+                record_static_slash_command_accepted(command.name, true, ctx);
+                ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            }
             TuiSlashCommand::CreateNewProject => {
                 let Some(query) = argument
                     .map(|argument| argument.trim())
@@ -2874,6 +2924,7 @@ impl TypedActionView for TuiTerminalSessionView {
     fn handle_action(&mut self, action: &TuiTerminalSessionAction, ctx: &mut ViewContext<Self>) {
         match action {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
+            TuiTerminalSessionAction::Eof => self.handle_eof(ctx),
             TuiTerminalSessionAction::CancelRestore => {
                 self.cancel_conversation_restore(ctx);
             }

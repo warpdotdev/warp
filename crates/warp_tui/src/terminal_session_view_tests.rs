@@ -21,7 +21,7 @@ use super::{
 use crate::autoupdate::TuiAutoupdater;
 use crate::keybindings::{
     CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
-    PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
+    PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME, TUI_BINDING_GROUP,
 };
 use crate::orchestration_model::TuiOrchestrationModel;
 use crate::root_view::RootTuiView;
@@ -210,6 +210,46 @@ fn plan_toggle_uses_contextual_ctrl_p_and_ctrl_shift_p() {
             assert!(ctrl_p_move_up.in_context(&input_without_plan));
             assert!(!ctrl_p_move_up.in_context(&input_with_plan));
             assert!(ctrl_p_move_up.in_context(&enhanced_input_with_plan));
+        });
+    });
+}
+
+#[test]
+fn ctrl_d_is_owned_by_the_session_surface_not_input_delete_forward() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let ctrl_d = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-d").unwrap()]);
+
+            // The prompt input no longer binds ctrl-d to delete-forward (the
+            // session surface owns it); only the `delete` key deletes forward.
+            let input_delete_forward_binds_ctrl_d = ctx
+                .editable_bindings()
+                .any(|b| b.name == "tui:input:delete_forward" && *b.trigger == ctrl_d);
+            assert!(
+                !input_delete_forward_binds_ctrl_d,
+                "input delete-forward must not bind ctrl-d"
+            );
+
+            // The generic editor keeps ctrl-d as delete-forward.
+            let editor_delete_forward_binds_ctrl_d = ctx
+                .editable_bindings()
+                .any(|b| b.name == "tui:editor:delete_forward" && *b.trigger == ctrl_d);
+            assert!(
+                editor_delete_forward_binds_ctrl_d,
+                "editor delete-forward should still bind ctrl-d"
+            );
+
+            // The session surface binds ctrl-d as a fixed (non-editable) binding
+            // for exit / EOF: fixed bindings expose an empty name and carry the
+            // TUI group.
+            let session_binds_ctrl_d = ctx.get_key_bindings().any(|b| {
+                *b.trigger == ctrl_d && b.name.is_empty() && b.group == Some(TUI_BINDING_GROUP)
+            });
+            assert!(
+                session_binds_ctrl_d,
+                "the session surface should bind ctrl-d for exit / EOF"
+            );
         });
     });
 }

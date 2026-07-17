@@ -56,6 +56,7 @@ fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
         ),
         (&*commands::EXPORT_TO_FILE, TuiSlashCommand::ExportToFile),
         (&commands::MCP, TuiSlashCommand::Mcp),
+        (&commands::EXIT, TuiSlashCommand::Exit),
     ] {
         assert_eq!(
             TuiSlashCommand::from_static_command(command),
@@ -81,6 +82,27 @@ fn model_command_is_supported_in_tui_without_becoming_a_prompt_command() {
     assert!(slash_command_is_supported_in_tui(&commands::MODEL));
     assert!(!slash_command_is_submitted_as_prompt(&commands::MODEL));
     assert!(commands::MODEL.argument.is_none());
+}
+
+#[test]
+fn exit_command_executes_immediately_and_takes_no_argument() {
+    use super::{slash_command_selection_behavior, SlashCommandSelectionBehavior};
+
+    assert_eq!(
+        TuiSlashCommand::from_static_command(&commands::EXIT),
+        Some(TuiSlashCommand::Exit)
+    );
+    assert!(slash_command_is_supported_in_tui(&commands::EXIT));
+    // No argument, and it is never reiterated into the conversation as a prompt.
+    assert!(commands::EXIT.argument.is_none());
+    assert!(!slash_command_is_submitted_as_prompt(&commands::EXIT));
+    // With no argument, accepting the command from the menu runs it immediately.
+    assert_eq!(
+        slash_command_selection_behavior(&commands::EXIT),
+        SlashCommandSelectionBehavior::Execute
+    );
+    // Available in every session context (gated to the TUI at registry level).
+    assert_eq!(commands::EXIT.availability, Availability::ALWAYS);
 }
 
 #[test]

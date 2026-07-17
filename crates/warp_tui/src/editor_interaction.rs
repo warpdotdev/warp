@@ -136,9 +136,19 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
         description: "Delete the previous character",
         keys: &["backspace", "shift-backspace", "ctrl-h"],
     },
+    // `ctrl-d` is intentionally omitted from the input's delete-forward: in the
+    // prompt it is handled by the session surface (exit when empty / forward EOF
+    // to a running command). The generic editor keeps `ctrl-d` as delete-forward.
     EditorBindingSpec {
         command: TuiEditorCommand::DeleteForward,
         input_name: Some("tui:input:delete_forward"),
+        editor_name: None,
+        description: "Delete the next character",
+        keys: &["delete"],
+    },
+    EditorBindingSpec {
+        command: TuiEditorCommand::DeleteForward,
+        input_name: None,
         editor_name: Some("tui:editor:delete_forward"),
         description: "Delete the next character",
         keys: &["delete", "ctrl-d"],

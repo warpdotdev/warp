@@ -307,6 +307,22 @@ impl TuiInputView {
         ctx.notify();
     }
 
+    /// Deletes the character in front of the cursor. `ctrl-d` in the prompt is
+    /// owned by the session surface (which exits or forwards EOF); it calls
+    /// this so `ctrl-d` still deletes forward when the prompt has text.
+    pub(crate) fn delete_forward(&mut self, ctx: &mut ViewContext<Self>) {
+        let outcome = self.editor_state.apply_command(
+            &self.model,
+            TuiEditorCommand::DeleteForward,
+            self.editor_behavior,
+            ctx,
+        );
+        if outcome == TuiEditorInteractionOutcome::FollowCursor {
+            self.follow_cursor(ctx);
+        }
+        ctx.notify();
+    }
+
     /// Builds this frame's core editor element: editable, scroll-windowed, and
     /// dispatching [`TuiEditorAction`]s back as [`TuiInputAction`]s. `render`
     /// boxes it (behind the shell-mode `!` gutter when active); tests construct

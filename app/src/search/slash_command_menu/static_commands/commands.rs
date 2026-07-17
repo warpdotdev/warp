@@ -46,6 +46,15 @@ pub const MCP: StaticCommand = StaticCommand {
     argument: None,
 };
 
+pub const EXIT: StaticCommand = StaticCommand {
+    name: "/exit",
+    description: "Exit Warp",
+    icon_path: "bundled/svg/log-out-01.svg",
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static CREATE_ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/create-environment",
     description: "Create an Oz environment (Docker image + repos) via guided setup",
@@ -651,6 +660,7 @@ fn all_commands() -> Vec<StaticCommand> {
     }
     if settings::settings_mode() == settings::SettingsMode::Tui {
         commands.push(MCP);
+        commands.push(EXIT);
     }
 
     if FeatureFlag::CreatingSharedSessions.is_enabled()

@@ -141,6 +141,7 @@ pub enum TuiSlashCommand {
     ExportToClipboard,
     ExportToFile,
     Mcp,
+    Exit,
 }
 
 impl TuiSlashCommand {
@@ -158,6 +159,7 @@ impl TuiSlashCommand {
             name if name == commands::EXPORT_TO_CLIPBOARD.name => Some(Self::ExportToClipboard),
             name if name == commands::EXPORT_TO_FILE.name => Some(Self::ExportToFile),
             name if name == commands::MCP.name => Some(Self::Mcp),
+            name if name == commands::EXIT.name => Some(Self::Exit),
             _ => None,
         }
     }
