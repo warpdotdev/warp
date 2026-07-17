@@ -45,17 +45,14 @@ impl StartRecordingExecutor {
             frame_rate,
             max_duration,
             max_size_bytes,
+            summary,
+            description,
             playback_speed_multiplier,
             window,
-            ..
-        } = &action.action
+        } = action.action.clone()
         else {
             return ActionExecution::InvalidAction;
         };
-        let frame_rate = *frame_rate;
-        let max_duration = *max_duration;
-        let max_size_bytes = *max_size_bytes;
-        let playback_speed_multiplier = *playback_speed_multiplier;
         // Only honor a window target when background computer use is enabled; otherwise fall back
         // to whole-screen capture, keeping behavior byte-identical to the pre-existing path.
         let target = if FeatureFlag::BackgroundComputerUse.is_enabled() {
@@ -97,7 +94,6 @@ impl StartRecordingExecutor {
                     max_duration: max_duration.unwrap_or(defaults.max_duration),
                     max_size_bytes: max_size_bytes.unwrap_or(defaults.max_size_bytes),
                     playback_speed_multiplier,
-                    target,
                 };
                 recorder.start(config).await
             },
@@ -109,7 +105,13 @@ impl StartRecordingExecutor {
                     let height_px = handle.height() as i32;
                     let controller = RecordingController::handle(ctx);
                     controller.update(ctx, |controller, _| {
-                        controller.finish_start(recording_id.clone(), conversation_id, handle);
+                        controller.finish_start(
+                            recording_id.clone(),
+                            conversation_id,
+                            handle,
+                            summary,
+                            description,
+                        );
                     });
                     #[cfg(not(target_family = "wasm"))]
                     controller.update(ctx, |_controller, ctx| {

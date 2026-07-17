@@ -137,7 +137,8 @@ async fn finalize_recording(
         path: upload_path,
         run_id: None,
         conversation_id: server_conversation_token,
-        description: None,
+        title: recording.summary.clone(),
+        description: recording.description.clone(),
     };
     let upload_result = async {
         let association = uploader.resolve_upload_association(&request).await?;

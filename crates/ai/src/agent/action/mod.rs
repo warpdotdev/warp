@@ -140,7 +140,8 @@ pub enum AIAgentActionType {
     /// AI requested to start recording a video of the computer-use session.
     /// Capture configuration (frame rate, limits, speed) is server-owned and
     /// arrives on the tool call; the client applies it. `frame_rate` of 0 means
-    /// unset. `summary` is an agent-authored, human-facing title.
+    /// unset. `summary` is a short agent-authored title shown in badges.
+    /// `description` is an optional longer description shown in detail views.
     /// `playback_speed_multiplier` is the integer speed factor from the proto
     /// (e.g. 4 = 4×). `None` or a value ≤ 1 means real-time (use client default).
     StartRecording {
@@ -148,6 +149,7 @@ pub enum AIAgentActionType {
         max_duration: Option<Duration>,
         max_size_bytes: Option<u64>,
         summary: Option<String>,
+        description: Option<String>,
         playback_speed_multiplier: Option<u32>,
         /// The surface to record. `None` records the whole screen; a `Window`
         /// target records just that window via native ffmpeg `x11grab

@@ -42,6 +42,10 @@ pub(crate) struct ActiveRecording {
     pub(crate) started_at: Instant,
     /// Action groups to burn into the video, in dispatch order.
     pub(crate) actions: Vec<computer_use::ActionLogEntry>,
+    /// Short agent-authored title shown in badges (from StartRecording.summary).
+    pub(crate) summary: Option<String>,
+    /// Optional longer description shown in detail views (from StartRecording.description).
+    pub(crate) description: Option<String>,
 }
 
 enum RecordingState {
@@ -116,6 +120,8 @@ impl RecordingController {
         recording_id: String,
         conversation_id: AIConversationId,
         handle: computer_use::RecordingHandle,
+        summary: Option<String>,
+        description: Option<String>,
     ) {
         if matches!(
             self.state,
@@ -129,6 +135,8 @@ impl RecordingController {
                 handle,
                 started_at: Instant::now(),
                 actions: Vec::new(),
+                summary,
+                description,
             });
         }
     }

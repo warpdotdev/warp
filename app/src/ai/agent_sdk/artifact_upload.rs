@@ -28,6 +28,8 @@ pub(crate) struct FileArtifactUploadRequest {
     pub(crate) path: PathBuf,
     pub(crate) run_id: Option<AmbientAgentTaskId>,
     pub(crate) conversation_id: Option<ServerConversationToken>,
+    /// Short badge-visible title for the artifact (e.g. a recording title).
+    pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
 }
 
@@ -44,6 +46,7 @@ impl TryFrom<UploadArtifactArgs> for FileArtifactUploadRequest {
             path: value.path,
             run_id,
             conversation_id: value.conversation_id.map(ServerConversationToken::new),
+            title: None,
             description: value.description,
         })
     }
@@ -108,12 +111,12 @@ impl FileArtifactUploader {
         association: ResolvedUploadAssociation,
     ) -> Result<CompletedFileArtifactUpload> {
         let FileArtifactUploadRequest {
-            path, description, ..
+            path, title, description, ..
         } = request;
 
         let artifact = self.prepare_upload_artifact(path).await?;
         let create_response = self
-            .create_upload_target(association, description, &artifact)
+            .create_upload_target(association, title, description, &artifact)
             .await?;
 
         let checksum = self
@@ -138,6 +141,7 @@ impl FileArtifactUploader {
     async fn create_upload_target(
         &self,
         association: ResolvedUploadAssociation,
+        title: Option<String>,
         description: Option<String>,
         artifact: &PreparedUploadArtifact,
     ) -> Result<CreateFileArtifactUploadResponse> {
@@ -149,6 +153,7 @@ impl FileArtifactUploader {
                     .map(|token| token.as_str().to_string()),
                 run_id: association.run_id.as_ref().map(ToString::to_string),
                 filepath: artifact.filepath.clone(),
+                title,
                 description,
                 mime_type: Some(artifact.mime_type.clone()),
                 size_bytes: artifact.graphql_size_bytes(),
