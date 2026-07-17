@@ -16,7 +16,7 @@ use conpty_api::ConptyApiError;
 use environment::get_shell_environment_variables;
 pub use environment::get_user_and_system_env_variable;
 use thiserror::Error;
-use warp_errors::report_error;
+use warp_errors::{report_error, report_if_error};
 use warpui::{AppContext, SingletonEntity};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
@@ -509,9 +509,11 @@ impl EventedPty for Pty {
     }
 
     fn on_resize(&mut self, size: &crate::terminal::SizeInfo) {
-        if let Err(err) = unsafe { self.conpty_api.resize(self.pty_handle, size.to_coord()) } {
-            log::warn!("Failed to resize pseudoconsole: {err:#}");
-        }
+        report_if_error!(unsafe {
+            self.conpty_api
+                .resize(self.pty_handle, size.to_coord())
+                .context("Failed to resize pseudoconsole")
+        });
     }
 
     fn kill(mut self) -> anyhow::Result<()> {

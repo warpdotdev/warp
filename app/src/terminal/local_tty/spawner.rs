@@ -1,4 +1,6 @@
 use anyhow::Result;
+#[cfg(unix)]
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, SingletonEntity};
 #[cfg(unix)]
 use {
@@ -199,7 +201,9 @@ impl PtySpawner {
                          too long.",
                     ));
                 }
-                log::warn!("Failed to spawn pty via terminal server; falling back to spawning locally: {err:#}");
+                report_error!(err.context(
+                    "Failed to spawn pty via terminal server; falling back to spawning locally...",
+                ));
                 is_fallback = true;
             } else {
                 send_telemetry_from_app_ctx!(
@@ -298,7 +302,7 @@ fn is_e2big(err: &anyhow::Error) -> bool {
 /// env var / secret configurations (E2BIG on Linux, socket overflow on macOS).
 #[cfg(unix)]
 fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
-    log::warn!("Shell spawn env var diagnostics (names and sizes only, no values):");
+    log::error!("Shell spawn env var diagnostics (names and sizes only, no values):");
 
     // Log the additional env vars supplied via PtyOptions.
     let mut extra: Vec<(&OsString, usize)> = extra_env_vars
@@ -306,9 +310,9 @@ fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
         .map(|(k, v)| (k, k.len() + v.len() + 2))
         .collect();
     extra.sort_by_key(|(_, size)| Reverse(*size));
-    log::warn!("PtyOptions env_vars entries={}", extra_env_vars.len());
+    log::error!("PtyOptions env_vars entries={}", extra_env_vars.len());
     for (key, size) in extra.iter().take(20) {
-        log::warn!("PtyOptions env var entry key={key:?} bytes={size}");
+        log::error!("PtyOptions env var entry key={key:?} bytes={size}");
     }
 
     // Log the largest vars from the inherited process environment.
@@ -320,11 +324,11 @@ fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
         .collect();
     inherited.sort_by_key(|(_, size)| Reverse(*size));
     let total: usize = inherited.iter().map(|(_, s)| s).sum();
-    log::warn!(
+    log::error!(
         "Inherited process env summary vars={} bytes={total}",
         inherited.len()
     );
     for (key, size) in inherited.iter().take(20) {
-        log::warn!("Inherited process env entry key={key:?} bytes={size}");
+        log::error!("Inherited process env entry key={key:?} bytes={size}");
     }
 }
