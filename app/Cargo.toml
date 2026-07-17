@@ -376,6 +376,7 @@ warp_web_event_bus.workspace = true
 cvt = "0.1.1"
 signal-hook = "0.3.17"
 signal-hook-mio = { version = "0.2.4", features = ["support-v1_0"] }
+signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
 nix = { workspace = true, features = [
     "fs",
     "hostname",

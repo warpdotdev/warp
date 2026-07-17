@@ -885,7 +885,7 @@ impl AgentDriver {
                 //
                 // The server injects WARP_SANDBOX_DEADLINE (Unix timestamp, seconds since
                 // epoch) into the container environment at sandbox creation time for both
-                // Docker Sandbox and Namespace workers. The sandbox deadline is set to
+                // Docker Sandbox and Namespace. The sandbox deadline is set to
                 // MaxInstanceRuntime + SandboxShutdownWarningWindow (5 min); this timer
                 // fires SandboxShutdownWarningWindow before that hard kill, giving the
                 // normal AgentDriver teardown path — recording upload, snapshot upload —
@@ -927,92 +927,50 @@ impl AgentDriver {
                             }
                         });
 
-                    // Unix: primary timer + SIGTERM backup both active.
+                    // Timer future: fires at deadline minus warning window; pending
+                    // (never fires) for local and self-hosted runs without a deadline.
+                    let timer_fut = maybe_wait
+                        .map(|w| Either::Left(Timer::after(w)))
+                        .unwrap_or_else(|| Either::Right(future::pending::<()>()));
+
+                    // SIGTERM backup future: wakes immediately on signal receipt via an
+                    // async stream (no polling). Dropped after tokio::select! completes,
+                    // which automatically deregisters the signal handler. Pending forever
+                    // on non-Unix platforms where SIGTERM is not applicable.
                     #[cfg(unix)]
-                    let result = {
-                        use std::sync::atomic::{AtomicBool, Ordering};
-
-                        let sigterm_flag = std::sync::Arc::new(AtomicBool::new(false));
-                        // Register the backup SIGTERM handler. Failures are non-fatal;
-                        // we capture sig_id to restore the default disposition after
-                        // run_internal resolves.
-                        let sigterm_sig_id = signal_hook::flag::register(
-                            signal_hook::consts::SIGTERM,
-                            std::sync::Arc::clone(&sigterm_flag),
-                        )
-                        .ok();
-                        let flag = std::sync::Arc::clone(&sigterm_flag);
-                        // Poll the flag every 100ms — async sleep, zero CPU cost.
-                        let sigterm_future = async move {
-                            loop {
-                                if flag.load(Ordering::Acquire) {
-                                    break;
-                                }
-                                Timer::after(Duration::from_millis(100)).await;
+                    let sigterm_fut = {
+                        use futures::StreamExt as _;
+                        match signal_hook_tokio::Signals::new([signal_hook::consts::SIGTERM]) {
+                            Ok(signals) => {
+                                let mut signals = signals;
+                                Either::Left(async move { signals.next().await; })
                             }
-                        };
-
-                        let result = if let Some(wait) = maybe_wait {
-                            futures::select! {
-                                r = Self::run_internal(task, foreground.clone()).fuse() => r,
-                                _ = Timer::after(wait).fuse() => {
-                                    log::info!(
-                                        "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); \
-                                         aborting run_internal to allow recording finalization"
-                                    );
-                                    Ok(())
-                                }
-                                _ = sigterm_future.fuse() => {
-                                    // Backup path — should not fire in normal operation.
-                                    // The primary timer provides 5 minutes of cleanup time;
-                                    // SIGTERM only arrives ~10-20s before SIGKILL.
-                                    log::warn!(
-                                        "SIGTERM received before pre-deadline timer fired; \
-                                         aborting run_internal to attempt recording finalization \
-                                         (backup path, limited grace period)"
-                                    );
-                                    Ok(())
-                                }
-                            }
-                        } else {
-                            futures::select! {
-                                r = Self::run_internal(task, foreground.clone()).fuse() => r,
-                                _ = sigterm_future.fuse() => {
-                                    log::warn!(
-                                        "SIGTERM received (WARP_SANDBOX_DEADLINE not set); \
-                                         aborting run_internal to attempt recording finalization"
-                                    );
-                                    Ok(())
-                                }
-                            }
-                        };
-
-                        // Restore the default SIGTERM disposition so any subsequent
-                        // SIGTERM during cleanup causes the process to terminate normally.
-                        if let Some(sig_id) = sigterm_sig_id {
-                            signal_hook::low_level::unregister(sig_id);
+                            Err(_) => Either::Right(future::pending::<()>()),
                         }
-                        result
                     };
-
-                    // Non-Unix (WASM, Windows): primary timer only, no SIGTERM handling.
                     #[cfg(not(unix))]
-                    let result = if let Some(wait) = maybe_wait {
-                        futures::select! {
-                            r = Self::run_internal(task, foreground.clone()).fuse() => r,
-                            _ = Timer::after(wait).fuse() => {
-                                log::info!(
-                                    "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); \
-                                     aborting run_internal to allow recording finalization"
-                                );
-                                Ok(())
-                            }
-                        }
-                    } else {
-                        Self::run_internal(task, foreground.clone()).await
-                    };
+                    let sigterm_fut = future::pending::<()>();
 
-                    result
+                    tokio::select! {
+                        r = Self::run_internal(task, foreground.clone()) => r,
+                        _ = timer_fut => {
+                            log::info!(
+                                "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); \
+                                 aborting run_internal to allow recording finalization"
+                            );
+                            Ok(())
+                        }
+                        _ = sigterm_fut => {
+                            // Backup path — should not fire in normal operation.
+                            // The primary timer provides 5 minutes of cleanup time;
+                            // SIGTERM only arrives ~10-20s before SIGKILL.
+                            log::warn!(
+                                "SIGTERM received; aborting run_internal to allow \
+                                 recording finalization (backup path, limited grace period)"
+                            );
+                            Ok(())
+                        }
+                    }
                 };
 
                 // Stop accepting CLI session status updates now that the run
