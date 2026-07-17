@@ -7,17 +7,21 @@
 //! focus, and page-anchor state.
 
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fmt;
+use unicode_segmentation::UnicodeSegmentation;
 
 use warpui_core::elements::tui::{
-    text_width, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
-    TuiParentElement, TuiSizeConstraintCondition, TuiSizeConstraintSwitch, TuiStyle, TuiText,
+    text_width, Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex,
+    TuiHoverable, TuiParentElement, TuiSizeConstraintCondition, TuiSizeConstraintSwitch, TuiStyle,
+    TuiText,
 };
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, TuiView, TypedActionView, ViewContext};
 const DIVIDER: &str = "|";
 const DIVIDER_PADDING_LEFT: u16 = 1;
 const DIVIDER_PADDING_RIGHT: u16 = 2;
-const ELLIPSIS_COLUMNS: u16 = 3;
+const ELLIPSIS: &str = "...";
 
 /// Stable tab data rendered by [`TuiTabBarView`].
 #[derive(Clone)]
@@ -27,6 +31,7 @@ pub struct TuiTab {
     leading: Option<TuiTabLeading>,
 }
 
+/// Styled text rendered before a tab label.
 #[derive(Clone)]
 struct TuiTabLeading {
     text: String,
@@ -53,9 +58,10 @@ impl TuiTab {
     }
 }
 
+/// Caller-supplied styles for the tab bar and its semantic states.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TuiTabBarStyles {
-    pub bar: TuiStyle,
+    pub background: Option<Color>,
     pub leading: TuiStyle,
     pub chrome: TuiStyle,
     pub tab: TuiStyle,
@@ -63,6 +69,7 @@ pub struct TuiTabBarStyles {
     pub selected_unfocused: TuiStyle,
 }
 
+/// Caller-owned semantic state and presentation options for a tab bar.
 #[derive(Clone)]
 pub struct TuiTabBarConfig {
     pub leading: Option<String>,
@@ -97,24 +104,60 @@ impl TuiTabBarConfig {
     }
 }
 
+/// Invalid caller-supplied tab-bar configuration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TuiTabBarConfigError {
+    /// A stable key was assigned to more than one main or secondary tab.
+    DuplicateKey(String),
+    /// The label cap cannot show the complete label or one grapheme plus `...`.
+    LabelWidthTooSmall {
+        key: String,
+        configured: u16,
+        required: u16,
+    },
+}
+
+impl fmt::Display for TuiTabBarConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateKey(key) => write!(formatter, "duplicate TUI tab-bar key `{key}`"),
+            Self::LabelWidthTooSmall {
+                key,
+                configured,
+                required,
+            } => write!(
+                formatter,
+                "TUI tab-bar label width {configured} for tab `{key}` leaves no room for visible \
+                 content; at least {required} columns are required"
+            ),
+        }
+    }
+}
+
+impl Error for TuiTabBarConfigError {}
+
+/// Semantic interactions emitted by [`TuiTabBarView`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TuiTabBarEvent {
     SelectTab(String),
     PageChanged(String),
 }
 
+/// Direction used to resolve an adjacent semantic tab.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TuiTabBarNavigationDirection {
     Previous,
     Next,
 }
 
+/// Edge used to resolve a tab from the secondary collection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TuiTabBarSecondaryEdge {
     First,
     Last,
 }
 
+/// Internal actions dispatched by tab and overflow hit targets.
 #[derive(Clone, Debug)]
 #[doc(hidden)]
 pub enum TuiTabBarAction {
@@ -131,34 +174,42 @@ pub struct TuiTabBarView {
 }
 
 impl TuiTabBarView {
-    /// Creates a retained view and initializes mouse state for every tab key.
-    pub fn new(config: TuiTabBarConfig) -> Self {
-        let mut view = Self {
+    /// Creates a retained view and initializes mouse state for every unique tab key.
+    ///
+    /// Returns an error before constructing the view when keys are duplicated
+    /// or a configured label cap cannot preserve visible label content.
+    pub fn new(config: TuiTabBarConfig) -> Result<Self, TuiTabBarConfigError> {
+        let live_keys = validated_live_keys(&config)?;
+        let mouse_states = live_keys
+            .into_iter()
+            .map(|key| (key, MouseStateHandle::default()))
+            .collect();
+        Ok(Self {
             config,
-            mouse_states: HashMap::new(),
+            mouse_states,
             previous_overflow_mouse_state: MouseStateHandle::default(),
             next_overflow_mouse_state: MouseStateHandle::default(),
-        };
-        view.reconcile_mouse_states();
-        view
+        })
     }
 
     /// Replaces caller-owned semantic inputs while preserving mouse state for live keys.
-    pub fn set_config(&mut self, config: TuiTabBarConfig, ctx: &mut ViewContext<Self>) {
+    ///
+    /// Invalid configuration returns an error without replacing the current
+    /// configuration or notifying the view.
+    pub fn set_config(
+        &mut self,
+        config: TuiTabBarConfig,
+        ctx: &mut ViewContext<Self>,
+    ) -> Result<(), TuiTabBarConfigError> {
+        let live_keys = validated_live_keys(&config)?;
         self.config = config;
-        self.reconcile_mouse_states();
+        self.reconcile_mouse_states(live_keys);
         ctx.notify();
+        Ok(())
     }
 
     /// Reuses mouse handles for live keys and drops handles for removed tabs.
-    fn reconcile_mouse_states(&mut self) {
-        let live_keys = self
-            .config
-            .main_tab
-            .iter()
-            .chain(self.config.tabs.iter())
-            .map(|tab| tab.key.clone())
-            .collect::<HashSet<_>>();
+    fn reconcile_mouse_states(&mut self, live_keys: HashSet<String>) {
         self.mouse_states.retain(|key, _| live_keys.contains(key));
         for key in live_keys {
             self.mouse_states.entry(key).or_default();
@@ -193,6 +244,26 @@ impl TuiTabBarView {
         }
         .map(|tab| tab.key.clone())
     }
+}
+
+/// Validates tab identities and label widths, returning the live key set.
+fn validated_live_keys(config: &TuiTabBarConfig) -> Result<HashSet<String>, TuiTabBarConfigError> {
+    let mut live_keys = HashSet::new();
+    for tab in config.main_tab.iter().chain(config.tabs.iter()) {
+        if !live_keys.insert(tab.key.clone()) {
+            return Err(TuiTabBarConfigError::DuplicateKey(tab.key.clone()));
+        }
+        let required = minimum_visible_label_width(tab);
+        let configured = configured_label_width(tab, config);
+        if configured < required {
+            return Err(TuiTabBarConfigError::LabelWidthTooSmall {
+                key: tab.key.clone(),
+                configured,
+                required,
+            });
+        }
+    }
+    Ok(live_keys)
 }
 
 impl Entity for TuiTabBarView {
@@ -332,7 +403,7 @@ fn render_page(
     row = row.flex_child(secondary.finish());
 
     let content = row.finish();
-    let content = match config.styles.bar.bg {
+    let content = match config.styles.background {
         Some(background) => TuiContainer::new(content)
             .with_background(background)
             .finish(),
@@ -648,20 +719,21 @@ fn minimum_tab_width(tab: &TuiTab, config: &TuiTabBarConfig) -> u16 {
 
 /// Minimum label width that shows content rather than only ellipsis dots.
 fn minimum_label_width(tab: &TuiTab, config: &TuiTabBarConfig) -> u16 {
-    let configured_width = configured_label_width(tab, config);
-    if configured_width <= ELLIPSIS_COLUMNS {
-        return configured_width;
+    minimum_visible_label_width(tab).min(configured_label_width(tab, config))
+}
+
+/// Minimum label width that shows the full label or one grapheme plus ellipsis.
+fn minimum_visible_label_width(tab: &TuiTab) -> u16 {
+    let label_width = text_width(&tab.label);
+    let ellipsis_width = text_width(ELLIPSIS);
+    if label_width <= ellipsis_width {
+        return label_width;
     }
-    let first_glyph_width = tab
-        .label
-        .chars()
-        .map(|character| {
-            let mut buffer = [0; 4];
-            text_width(character.encode_utf8(&mut buffer))
-        })
+    let first_grapheme_width = UnicodeSegmentation::graphemes(tab.label.as_str(), true)
+        .map(text_width)
         .find(|width| *width > 0)
         .unwrap_or(1);
-    configured_width.min(ELLIPSIS_COLUMNS.saturating_add(first_glyph_width))
+    label_width.min(ellipsis_width.saturating_add(first_grapheme_width))
 }
 
 /// Counts non-label cells: horizontal padding, leading text, and its separator.

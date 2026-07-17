@@ -8,3 +8,8 @@ fn truncates_by_display_columns_without_splitting_graphemes() {
     assert_eq!(truncate_with_ellipsis("e\u{301}clair", 5), "e\u{301}c...");
     assert_eq!(text_width("界界..."), 7);
 }
+
+#[test]
+fn text_width_matches_ratatui_for_recent_unicode() {
+    assert_eq!(text_width("\u{1fae9}"), 2);
+}

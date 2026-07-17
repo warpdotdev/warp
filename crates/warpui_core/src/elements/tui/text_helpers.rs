@@ -1,11 +1,10 @@
 //! Terminal-string measurement and truncation helpers shared by TUI elements.
-
+use ratatui::text::Line;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 /// Returns terminal display-cell width, saturating at `u16::MAX`.
 pub fn text_width(text: &str) -> u16 {
-    u16::try_from(UnicodeWidthStr::width(text)).unwrap_or(u16::MAX)
+    u16::try_from(Line::from(text).width()).unwrap_or(u16::MAX)
 }
 
 /// Truncates terminal text at grapheme boundaries, using as much of `...` as fits.

@@ -25,7 +25,7 @@ The switch contains no tab, paging, or application semantics. It is exported fro
 ### Retained tab-bar view
 `crates/warp_tui/src/tab_bar.rs` defines:
 - `TuiTab`: stable string key, label, and optional styled leading text.
-- `TuiTabBarStyles`: caller-supplied bar, leading-label, chrome, normal-tab, focused-selected, and unfocused-selected styles.
+- `TuiTabBarStyles`: caller-supplied background, leading-label, chrome, normal-tab, focused-selected, and unfocused-selected styles.
 - `TuiTabBarConfig`: optional product label and main tab, ordered secondary tabs, selected key, focus presentation, page anchor, selected-tab reveal policy, optional maximum label cells, spacing, and styles.
 - `TuiTabBarEvent`: semantic `SelectTab` and `PageChanged` outcomes.
 - `TuiTabBarNavigationDirection` and `TuiTabBarSecondaryEdge`: semantic keyboard target requests.
@@ -40,6 +40,7 @@ The view is registered as a typed-action TUI view. Click handlers on generic `Tu
 - The latest caller-supplied `TuiTabBarConfig`.
 
 `set_config` replaces semantic inputs, prunes removed mouse handles, creates handles for new keys, and notifies the view. Application selection, focus, and page anchors remain caller-owned.
+Creation and reconfiguration return `TuiTabBarConfigError` for duplicate keys across the main and secondary tabs. They also return an error for a maximum label width that cannot render either the full label or one complete grapheme followed by `...`; an invalid update leaves the current valid configuration unchanged.
 
 ### Responsive row composition
 `TuiTabBarView::render` prebuilds one row alternative for each distinct visible-tab count. `TuiSizeConstraintSwitch` selects the row during layout. Each row is composed only from:
@@ -51,13 +52,13 @@ The view is registered as a typed-action TUI view. Click handlers on generic `Tu
 - `TuiHoverable` for hover and click behavior.
 
 The static threshold calculation:
-1. Measures known text and padding in terminal display cells.
+1. Measures known text and padding in terminal display cells with Ratatui's own width calculation.
 2. Reserves the optional caller label, fixed main tab, and divider.
 3. Resolves the requested secondary page anchor, falling back to the first page.
 4. Computes the minimum row width for each possible visible-tab count from both the requested anchor and, when reveal is enabled, the selected tab.
 5. Reserves a previous control only when the page starts after the first secondary tab.
 6. Reserves a next control only when the page ends before the last secondary tab.
-7. Gives the final visible tab the remaining flex width only when that width can show at least one label glyph plus the ellipsis; otherwise the tab becomes the next-page anchor.
+7. Gives the final visible tab the remaining flex width only when that width can show at least one complete label grapheme plus the ellipsis; otherwise the tab becomes the next-page anchor.
 For each width alternative, the requested anchor wins while the selected tab remains visible. An off-page selected tab moves to the deterministic page containing it only when reveal is enabled. The view derives a non-overlapping page sequence from the first secondary tab: next-page anchors begin after the final visible tab, and previous-page anchors target the preceding sequence entry rather than subtracting the current page size. This preserves stable in-page selection and whole-page navigation without exposing layout geometry to the caller.
 
 `crates/warpui_core/src/elements/tui/text_helpers.rs` continues to provide shared display-cell measurement and string truncation for non-element formatting such as `crates/warp_tui/src/tui_column_layout.rs`.

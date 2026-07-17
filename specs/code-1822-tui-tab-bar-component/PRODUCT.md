@@ -28,7 +28,7 @@ The orchestration designs establish the view states; the view remains domain-neu
 1. A caller can provide:
    - An optional main tab.
    - An ordered list of secondary tabs.
-   - A stable string key and label for every tab.
+   - A stable, globally unique string key and label for every tab.
    - Optional styled leading text for every tab.
    - The selected tab key, if any.
    - Whether the bar is focused.
@@ -41,48 +41,50 @@ The orchestration designs establish the view states; the view remains domain-neu
 4. The main tab, when present, stays at the leading edge and does not participate in secondary paging.
 5. The caller controls any product label surrounding the tabs. The view supplies one consistent divider and previous/next arrows.
 6. An empty secondary list is valid.
+7. Duplicate keys across the main and secondary tabs are invalid; creating or reconfiguring the view returns a typed configuration error.
 
 ### Ownership
-7. The view privately owns stable mouse state for tabs and overflow controls.
-8. Re-rendering or resizing does not recreate mouse state for tab keys that remain present.
-9. Removed tab keys release their retained mouse state and cannot remain clickable.
-10. The view does not mutate application selection, focus, models, or caller-owned tab collections.
-11. Pointer interaction emits semantic view events:
+8. The view privately owns stable mouse state for tabs and overflow controls.
+9. Re-rendering or resizing does not recreate mouse state for tab keys that remain present.
+10. Removed tab keys release their retained mouse state and cannot remain clickable.
+11. The view does not mutate application selection, focus, models, or caller-owned tab collections.
+12. Pointer interaction emits semantic view events:
     - `SelectTab(key)` when a visible tab is clicked.
     - `PageChanged(anchor_key)` when an overflow control chooses another page.
 
 ### Selection and focus presentation
-12. The selected key determines which tab uses the selected treatment.
-13. Focused and unfocused selected treatments are independently caller-configurable.
-14. Focus changes affect presentation only.
-15. If the selected key is absent, the view renders no selected tab and continues to lay out and dispatch interactions normally.
+13. The selected key determines which tab uses the selected treatment.
+14. Focused and unfocused selected treatments are independently caller-configurable.
+15. Focus changes affect presentation only.
+16. If the selected key is absent, the view renders no selected tab and continues to lay out and dispatch interactions normally.
 
 ### Label width and truncation
-16. Width calculations use terminal display cells rather than Unicode scalar count or byte length.
-17. When a maximum label width is supplied, every label is constrained to that many display cells, including the ellipsis.
-18. A label exceeding its maximum is truncated with `...`.
-19. Wide and combining Unicode characters never split into invalid text or corrupt following cell alignment.
-20. The last visible secondary tab may be truncated below its configured maximum to preserve an applicable overflow control, but it moves to the next page when there is room for only ellipsis dots and no label content.
-21. At narrow widths, fixed leading content and overflow controls take priority over secondary-label content.
-22. The view never paints outside its assigned row.
+17. Width calculations use terminal display cells rather than Unicode scalar count or byte length.
+18. When a maximum label width is supplied, every label is constrained to that many display cells, including the ellipsis.
+19. A maximum label width is invalid when a truncated label cannot show at least one complete grapheme followed by `...`; creating or reconfiguring the view returns a typed configuration error.
+20. A label exceeding its maximum is truncated with `...`.
+21. Wide and combining Unicode characters never split into invalid text or corrupt following cell alignment.
+22. The last visible secondary tab may be truncated below its configured maximum to preserve an applicable overflow control, but it moves to the next page when there is room for only ellipsis dots and no label content.
+23. At narrow widths, fixed leading content and overflow controls take priority over secondary-label content.
+24. The view never paints outside its assigned row.
 
 ### Paging
-23. Responsive composition uses the row width supplied by the layout constraint.
-24. Secondary tabs are packed beginning at the caller's page anchor.
-25. A next overflow control appears only when later secondary tabs are hidden.
-26. A previous overflow control appears only when earlier secondary tabs are hidden.
-27. Activating an overflow control emits `PageChanged` with the computed page anchor.
-28. Paging does not emit `SelectTab` or change focus.
-29. A missing page anchor falls back to the first secondary page.
-30. Resizing recomputes visible tabs and page boundaries from the same supplied order and anchor.
-31. When selected-tab reveal is enabled, the current page remains stable while the selected secondary tab is visible; only an off-page selection moves the rendered page to that tab.
+25. Responsive composition uses the row width supplied by the layout constraint.
+26. Secondary tabs are packed beginning at the caller's page anchor.
+27. A next overflow control appears only when later secondary tabs are hidden.
+28. A previous overflow control appears only when earlier secondary tabs are hidden.
+29. Activating an overflow control emits `PageChanged` with the computed page anchor.
+30. Paging does not emit `SelectTab` or change focus.
+31. A missing page anchor falls back to the first secondary page.
+32. Resizing recomputes visible tabs and page boundaries from the same supplied order and anchor.
+33. When selected-tab reveal is enabled, the current page remains stable while the selected secondary tab is visible; only an off-page selection moves the rendered page to that tab.
 
 ### Navigation and pointer behavior
-32. Previous and next keyboard targets follow the complete semantic order of the main tab followed by secondary tabs and wrap at both ends.
-33. First/last-secondary target lookup excludes the main tab.
-34. Target lookup returns only a stable key; the caller decides what selecting it means.
-35. A tab remains clickable regardless of focused presentation.
-36. Activating a tab never changes focus by itself.
-37. Hit targets include only the painted tab or overflow-control footprint, not unused trailing row space.
-38. Hovering a tab bolds its label without changing selection, page, or focus.
-39. Hovering an overflow control bolds the arrow without changing its behavior.
+34. Previous and next keyboard targets follow the complete semantic order of the main tab followed by secondary tabs and wrap at both ends.
+35. First/last-secondary target lookup excludes the main tab.
+36. Target lookup returns only a stable key; the caller decides what selecting it means.
+37. A tab remains clickable regardless of focused presentation.
+38. Activating a tab never changes focus by itself.
+39. Hit targets include only the painted tab or overflow-control footprint, not unused trailing row space.
+40. Hovering a tab bolds its label without changing selection, page, or focus.
+41. Hovering an overflow control bolds the arrow without changing its behavior.

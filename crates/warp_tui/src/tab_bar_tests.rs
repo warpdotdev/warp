@@ -5,9 +5,9 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView};
 
 use super::{
-    deterministic_pages_at_width, minimum_row_width, page_variant_at_width, TuiTab,
-    TuiTabBarConfig, TuiTabBarNavigationDirection, TuiTabBarSecondaryEdge, TuiTabBarStyles,
-    TuiTabBarView,
+    deterministic_pages_at_width, minimum_label_width, minimum_row_width, page_variant_at_width,
+    validated_live_keys, TuiTab, TuiTabBarConfig, TuiTabBarConfigError,
+    TuiTabBarNavigationDirection, TuiTabBarSecondaryEdge, TuiTabBarStyles, TuiTabBarView,
 };
 
 fn key(key: u8) -> String {
@@ -21,7 +21,7 @@ fn tab(key: u8, label: &str) -> TuiTab {
 fn config(tabs: Vec<TuiTab>) -> TuiTabBarConfig {
     let mut config = TuiTabBarConfig::new(tabs);
     config.styles = TuiTabBarStyles {
-        bar: TuiStyle::default().bg(Color::Black),
+        background: Some(Color::Black),
         leading: TuiStyle::default().fg(Color::White),
         chrome: TuiStyle::default().fg(Color::White),
         tab: TuiStyle::default().fg(Color::White),
@@ -32,6 +32,10 @@ fn config(tabs: Vec<TuiTab>) -> TuiTabBarConfig {
         selected_unfocused: TuiStyle::default().add_modifier(Modifier::BOLD),
     };
     config
+}
+
+fn view(config: TuiTabBarConfig) -> TuiTabBarView {
+    TuiTabBarView::new(config).unwrap()
 }
 
 fn render(
@@ -62,7 +66,7 @@ fn orchestration_layout_stays_on_the_first_page_when_all_tabs_fit() {
             assert_eq!(page_variant_at_width(&config, narrow_width).start, 1);
             assert_eq!(page_variant_at_width(&config, 80).start, 0);
 
-            let frame = render(&TuiTabBarView::new(config), 80, app);
+            let frame = render(&view(config), 80, app);
             let lines = frame.buffer.to_lines();
             assert_eq!(lines.len(), 1);
             assert!(lines[0].contains("haiku-2"));
@@ -84,7 +88,7 @@ fn narrow_page_shows_label_content_or_defers_the_tab() {
                 tab(3, "charlie"),
             ]);
             let width = minimum_row_width(&first_config, 0, 1).saturating_add(2);
-            let line = render(&TuiTabBarView::new(first_config), width, app)
+            let line = render(&view(first_config), width, app)
                 .buffer
                 .to_lines()
                 .remove(0);
@@ -98,7 +102,7 @@ fn narrow_page_shows_label_content_or_defers_the_tab() {
             let page = page_variant_at_width(&config, ellipsis_only_width);
             assert_eq!(page.visible_count, 2);
             assert_eq!(page.next_start, Some(2));
-            let line = render(&TuiTabBarView::new(config), ellipsis_only_width, app)
+            let line = render(&view(config), ellipsis_only_width, app)
                 .buffer
                 .to_lines()
                 .remove(0);
@@ -125,7 +129,7 @@ fn overflow_controls_match_the_page_edges() {
             assert_eq!(pages[1].start, 2);
             assert_eq!(pages[1].previous_start, Some(0));
             let start_width = minimum_row_width(&start_config, 0, 1);
-            let start = render(&TuiTabBarView::new(start_config), start_width, app)
+            let start = render(&view(start_config), start_width, app)
                 .buffer
                 .to_lines()
                 .remove(0);
@@ -135,7 +139,7 @@ fn overflow_controls_match_the_page_edges() {
             let mut middle_config = tabs();
             middle_config.page_anchor = Some(key(2));
             let middle_width = minimum_row_width(&middle_config, 1, 1);
-            let middle = render(&TuiTabBarView::new(middle_config), middle_width, app)
+            let middle = render(&view(middle_config), middle_width, app)
                 .buffer
                 .to_lines()
                 .remove(0);
@@ -144,7 +148,7 @@ fn overflow_controls_match_the_page_edges() {
 
             let mut end_config = tabs();
             end_config.page_anchor = Some(key(3));
-            let end = render(&TuiTabBarView::new(end_config), 40, app)
+            let end = render(&view(end_config), 40, app)
                 .buffer
                 .to_lines()
                 .remove(0);
@@ -159,7 +163,7 @@ fn view_navigation_uses_semantic_order() {
     let mut config = config(vec![tab(2, "two"), tab(3, "three")]);
     config.main_tab = Some(tab(1, "main"));
     config.selected_key = Some(key(1));
-    let view = TuiTabBarView::new(config);
+    let view = view(config);
 
     assert_eq!(
         view.navigation_target(TuiTabBarNavigationDirection::Previous),
@@ -188,23 +192,56 @@ fn render_composes_selected_and_leading_styles() {
             ]);
             config.selected_key = Some(key(1));
             config.focused = true;
-            let view = TuiTabBarView::new(config);
+            let view = view(config);
             let frame = render(&view, 20, app);
 
             assert!(frame.buffer.to_lines()[0].contains("* one"));
             assert_eq!(frame.buffer[(0, 0)].bg, Color::Magenta);
             assert_eq!(frame.buffer[(1, 0)].fg, Color::Yellow);
             assert!(frame.buffer[(3, 0)].modifier.contains(Modifier::BOLD));
+            assert_eq!(frame.buffer[(19, 0)].bg, Color::Black);
         });
     });
 }
 
 #[test]
+fn minimum_label_width_measures_the_first_grapheme() {
+    let config = config(vec![]);
+    let tab = TuiTab::new("flag", "🇺🇸long");
+
+    assert_eq!(minimum_label_width(&tab, &config), 5);
+}
+
+#[test]
+fn config_rejects_a_label_cap_that_can_only_render_ellipsis() {
+    let mut config = config(vec![tab(1, "infrastructure")]);
+    config.maximum_label_columns = Some(3);
+    assert_eq!(
+        TuiTabBarView::new(config).err(),
+        Some(TuiTabBarConfigError::LabelWidthTooSmall {
+            key: key(1),
+            configured: 3,
+            required: 4,
+        })
+    );
+}
+
+#[test]
+fn config_rejects_duplicate_keys_across_main_and_secondary_tabs() {
+    let mut config = config(vec![tab(1, "secondary")]);
+    config.main_tab = Some(tab(1, "main"));
+    assert_eq!(
+        TuiTabBarView::new(config).err(),
+        Some(TuiTabBarConfigError::DuplicateKey(key(1)))
+    );
+}
+#[test]
 fn config_updates_reuse_live_mouse_state_and_prune_removed_tabs() {
-    let mut view = TuiTabBarView::new(config(vec![tab(1, "one"), tab(2, "two")]));
+    let mut view = view(config(vec![tab(1, "one"), tab(2, "two")]));
     let first_handle = view.mouse_states.get(&key(1)).cloned().unwrap();
     view.config = config(vec![tab(1, "one"), tab(3, "three")]);
-    view.reconcile_mouse_states();
+    let live_keys = validated_live_keys(&view.config).unwrap();
+    view.reconcile_mouse_states(live_keys);
 
     assert_eq!(view.mouse_states.len(), 2);
     assert!(!view.mouse_states.contains_key(&key(2)));
