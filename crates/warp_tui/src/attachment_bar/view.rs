@@ -136,8 +136,8 @@ impl TuiAttachmentBar {
         let model_for_subscription = model.clone();
         ctx.subscribe_to_model(&model, move |view, _, event, ctx| match event {
             TuiAttachmentModelEvent::Updated => {
-                // TUI notifications invalidate the whole window. Processing
-                // starts only after that invalidated frame is drawn.
+                // TUI notifications invalidate the whole window, including the
+                // parent that conditionally renders this attachment bar.
                 if view.focused && !model_for_subscription.as_ref(ctx).should_render(ctx) {
                     ctx.emit(TuiAttachmentBarEvent::ReturnFocus);
                 }
@@ -174,28 +174,13 @@ impl TuiAttachmentBar {
         text: String,
         ctx: &mut ViewContext<Self>,
     ) -> TuiAttachmentPasteDisposition {
-        let (rendered_tx, rendered_rx) = async_channel::bounded(1);
-        let disposition = self.model.update(ctx, |model, ctx| {
-            model.try_attach_paste(text, rendered_rx, ctx)
-        });
-        if disposition == TuiAttachmentPasteDisposition::Started {
-            ctx.on_next_frame_drawn(move || {
-                let _ = rendered_tx.try_send(());
-            });
-        }
-        disposition
+        self.model
+            .update(ctx, |model, ctx| model.try_attach_paste(text, ctx))
     }
 
     pub(crate) fn paste_image_from_clipboard(&mut self, ctx: &mut ViewContext<Self>) {
-        let (rendered_tx, rendered_rx) = async_channel::bounded(1);
-        let started = self.model.update(ctx, |model, ctx| {
-            model.paste_image_from_clipboard(rendered_rx, ctx)
-        });
-        if started {
-            ctx.on_next_frame_drawn(move || {
-                let _ = rendered_tx.try_send(());
-            });
-        }
+        self.model
+            .update(ctx, |model, ctx| model.paste_image_from_clipboard(ctx));
     }
 
     pub(crate) fn remove_selected(&mut self, ctx: &mut ViewContext<Self>) {

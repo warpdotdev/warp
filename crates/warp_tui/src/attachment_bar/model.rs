@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use async_channel::Receiver;
 use base64::Engine as _;
 use base64::engine::general_purpose;
 use warp::editor::CodeEditorModel;
@@ -186,7 +185,6 @@ impl TuiAttachmentModel {
     pub(crate) fn try_attach_paste(
         &mut self,
         text: String,
-        render_gate: Receiver<()>,
         ctx: &mut ModelContext<Self>,
     ) -> TuiAttachmentPasteDisposition {
         if !FeatureFlag::ImageAsContext.is_enabled() {
@@ -209,10 +207,7 @@ impl TuiAttachmentModel {
         self.start_processing(processing_file_name, paths.len(), ctx);
         let original_text = text;
         self.in_flight = Some(ctx.spawn_abortable(
-            async move {
-                let _ = render_gate.recv().await;
-                process_paths(paths).await
-            },
+            process_paths(paths),
             move |model, result, ctx| {
                 model.in_flight = None;
                 model.finish_processing();
@@ -236,21 +231,14 @@ impl TuiAttachmentModel {
         TuiAttachmentPasteDisposition::Started
     }
 
-    pub(crate) fn paste_image_from_clipboard(
-        &mut self,
-        render_gate: Receiver<()>,
-        ctx: &mut ModelContext<Self>,
-    ) -> bool {
+    pub(crate) fn paste_image_from_clipboard(&mut self, ctx: &mut ModelContext<Self>) -> bool {
         if let Err(error) = self.validate_new_images(1, ctx) {
             ctx.emit(TuiAttachmentModelEvent::ShowHint(error));
             return false;
         }
         self.start_processing("clipboard-image.png".to_owned(), 1, ctx);
         self.in_flight = Some(ctx.spawn_abortable(
-            async move {
-                let _ = render_gate.recv().await;
-                read_and_process_clipboard_image().await
-            },
+            read_and_process_clipboard_image(),
             |model, result, ctx| {
                 model.in_flight = None;
                 model.finish_processing();

@@ -142,7 +142,6 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         let mut writer = self.terminal.writer();
         self.renderer
             .draw(&mut writer, &frame.buffer, frame.cursor)?;
-        ctx.trigger_on_frame_drawn_callbacks(self.window_id);
         Ok(frame.repaint_at)
     }
 
