@@ -71,6 +71,13 @@ Out of scope (explicit non-goals for this slice):
   `<div align="center"><p align="right">…</p></div>`) — the tech spec should
   define a safe, non-panicking fallback (e.g. innermost wins, or outermost
   wins) but exotic nesting is not a design goal to optimize for.
+- **Full GUI/TUI render parity.** Alignment is stored once in the content model,
+  but the terminal (TUI) surface renders it with best-effort horizontal
+  positioning within terminal width and falls back to left-aligned where the
+  region can't be laid out (e.g. it exceeds the pane) — see the tech spec's TUI
+  surface disposition. Pixel-for-pixel equivalence between the GUI and the TUI
+  is an explicit non-goal; both surfaces read the same stored alignment, but the
+  terminal's coarser layout model means its result is an approximation.
 
 ## Behavior
 
@@ -103,8 +110,11 @@ Out of scope (explicit non-goals for this slice):
 
 6. Copy / export of a document containing an aligned block preserves the
    alignment: round-tripping through Warp (copy out, paste back in) does not
-   silently drop `align`/`text-align`. The tech spec defines the exact
-   serialization.
+   silently drop `align`/`text-align`. Preservation is *semantic*, not
+   byte-exact — consistent with the maintainer's ruling on the sibling
+   `<details>` spec (#13345) that "Warp's rich-text pipeline doesn't attempt to
+   guarantee exact preservation of the source Markdown… it's fine to continue
+   that here." The tech spec defines the exact serialization.
 
 7. Malformed input degrades deterministically, never to undefined behavior:
    an unterminated `<div>`/`<p>` (no matching close tag found) renders as

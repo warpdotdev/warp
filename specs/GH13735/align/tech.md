@@ -38,67 +38,135 @@ extend**. Verified:
   mechanism — block alignment needs a per-*block* (or per-*block-group*)
   property, not a per-column one.
 - `crates/warpui_core/src/elements/gui/align.rs` (`Align` element, `:12-132`) is a
-  generic widget-layout primitive: wraps a `child: Box<dyn Element>`, positions
-  it via a `Vector2F` alignment vector (`top_left`/`top_center`/…/`right`/`left`,
-  `:28-66`) inside its own layout box, implements `SelectableElement` by
-  delegating to the child. It is **not wired to Markdown rendering anywhere** —
-  no reference to it exists in `crates/markdown_parser` or the Markdown render
-  path. It is, however, exactly the shape of primitive block alignment needs at
-  the paint layer, if the Markdown block renderer can be made to use
-  `warpui_core` elements (needs confirmation — see open question below).
+  generic **GUI widget-layout primitive**: wraps a `child: Box<dyn Element>`,
+  positions it via a `Vector2F` alignment vector (`top_left`/`top_center`/…/
+  `right`/`left`, `:28-66`) inside its own layout box, implements
+  `SelectableElement` by delegating to the child. It is **not wired to Markdown
+  rendering anywhere** — no reference to it exists in `crates/markdown_parser` or
+  the Markdown render path. It is a **GUI-only paint strategy, not part of the
+  content model**: it is a candidate for *how* the GUI surface draws an aligned
+  group, but it says nothing about how alignment is *represented* in the buffer
+  so that copy/export, the TUI, and selection all agree. See §6.
+- The editor's own content model already has the vocabulary this feature needs.
+  `BufferText` (`crates/editor/src/content/text.rs:541-570`) is the per-character
+  buffer element enum, and it already distinguishes **two kinds of marker**:
+  paired inline-style markers `BufferText::Marker { marker_type, dir }`
+  (`:549-554`, Start/End) and block-level `BufferText::BlockMarker { marker_type:
+  BufferBlockStyle }` (`:564-566`). `BufferBlockStyle`
+  (`crates/editor/src/content/text.rs:867-893`) is the per-block style enum:
+  `PlainText`, `Header`, `UnorderedList`, `OrderedList { number, indent_level }`,
+  `TaskList`, `CodeBlock`, `Table`. Ordered lists carry their own per-block
+  metadata (`number`, `indent_level`) in the marker and are tracked through the
+  buffer's `SumTree`. `FormattedTextLine` (`crates/markdown_parser/src/lib.rs`)
+  is the *parser output* enum that `buffer.rs` maps **to and from** this content
+  model (`crates/editor/src/content/buffer.rs`: `from_markdown` at `:843`,
+  `BufferBlockStyle → FormattedTextLine` serialization at `:5989+`).
 
-**Conclusion: this is a content-model addition, not an extension of an existing
-field.** The shape most analogous in spirit is `TableAlignment`, but the actual
-change is closer to introducing a new `FormattedTextLine` variant than to adding
-a field to an existing one.
+**Conclusion: this is a content-model addition. The right layer to model it is the
+editor buffer's block-marker + `SumTree` mechanism (the same layer ordered lists
+live in), not a wrapper variant in the `markdown_parser` `FormattedTextLine` enum.**
+The reasoning — and the precedent that decides it — is in design question 1.
 
 ## Design questions this spec must answer
 
-1. **Representation: new variant vs. wrapper field.**
-   - **Option A (recommended): new `FormattedTextLine::AlignedBlock` variant**
-     wrapping a `Vec<FormattedTextLine>` (the grouped child blocks) plus an
-     alignment value:
-     ```rust
-     AlignedBlock(AlignedBlockContent),
-     // where
-     pub struct AlignedBlockContent {
-         pub alignment: BlockAlignment, // new enum: Left / Center / Right
-         pub lines: Vec<FormattedTextLine>,
-     }
-     ```
-     This directly matches product invariant 1 (`<div align>` groups multiple
-     blocks) and invariant 2 (`<p align>` is the single-block-content case,
-     represented as an `AlignedBlock` with exactly one `Line` inside). It makes
-     the container explicit and composable with every existing renderer for
-     `FormattedTextLine` children, since the renderer only needs one new case
-     that says "lay these children out, then align the group."
-   - **Option B: alignment as a side-table keyed by block index/id.** Rejected —
-     `FormattedTextLine` has no stable identity today, and this would need one
-     invented purely for this feature, adding indirection with no offsetting
-     benefit over Option A.
-   - **Option C: alignment as a style flag threaded through every existing
-     variant** (e.g. an `alignment: BlockAlignment` field added to `Heading`,
-     `Line`, `Image`, etc. individually). Rejected — this is the "ripples through
-     everything" version of Option A without the grouping capability
-     `<div align>` needs (product invariant 1), and it would require touching
-     every variant's construction site instead of one new one.
+1. **Representation: where does alignment live?** This is the load-bearing
+   decision, and there is direct maintainer precedent for it. On the sibling
+   spec PR **#13345** (`<details>`/`<summary>`, [PR](https://github.com/warpdotdev/warp/pull/13345)),
+   maintainer **bnavetta** ruled twice against bolting region state onto an
+   adjacent mechanism, and those rulings apply verbatim to alignment:
 
-   Recommend **Option A**, flagged for maintainer review since (like the tables
-   spec's cell-model choice) it changes the shared `FormattedTextLine` enum that
-   every consumer matches on exhaustively — every existing `match` over
-   `FormattedTextLine` (parser, layout, render, plain-text/export, selection)
-   gains one new arm. Grep `FormattedTextLine::` across `crates/` before
-   implementation to enumerate every match site and confirm none can silently
-   compile with a wildcard `_ =>` that would swallow the new variant
-   incorrectly.
+   - Against replicating the `Table` mechanism:
+     > "The approach taken by `Table` is very much an intermediate
+     > implementation… We shouldn't try to replicate it here… Given that you're
+     > supporting nested details items, I'd look at lists for inspiration
+     > instead (specifically ordered lists)… That approach should also make it
+     > fairly doable to track nested details depth in the `SumTree`."
+     ([review comment](https://github.com/warpdotdev/warp/pull/13345#discussion_r3545165725))
 
-2. **New enum: `BlockAlignment`.** Mirrors `TableAlignment`'s shape
-   (`lib.rs:346-351`) for consistency: `Left` (default) / `Center` / `Right`.
-   Kept as a distinct type from `TableAlignment` rather than reused, since the
-   two are semantically different axes (table *column* alignment vs. Markdown
-   *block* alignment) that happen to share three variant names — reusing one
-   enum for both would conflate unrelated concerns the first time either needs
-   to diverge (e.g. if `justify` is ever added to one but not the other).
+   - On why a region must **compose** with its body's own block style rather
+     than replace it:
+     > "We assume that there's only one `BufferBlockStyle` active for a given
+     > character, so we'll need a way to express that something is a code block
+     > within a details section, for example — that seems easier if details are
+     > not themselves block styles… details start/end markers should be new
+     > top-level variants of `BufferText`… we'd then be able to consult the
+     > `SumTree` to check both whether or not it's part of a details section and
+     > what its specific style is."
+     ([review comment](https://github.com/warpdotdev/warp/pull/13345#discussion_r3552861589))
+
+   Alignment is the same class of problem as a details region: it is a property
+   of a *span of blocks*, and the span's blocks keep their own styles (a code
+   block inside `<div align="center">` must still be a code block). bnavetta's
+   own analogy is instructive — he notes this is "equivalent to how link
+   start/end markers don't use quite the same modeling as data-less markers for
+   other inline styles like bold and italic," and the buffer already reflects
+   that: `BufferText::Link(LinkMarker)` and `BufferText::Marker { dir }` are
+   distinct variants (`text.rs:549-555`).
+
+   - **Recommended: alignment as start/end block markers + a `SumTree`
+     dimension.** Introduce paired `BufferText` markers — conceptually
+     `BufferText::AlignStart { alignment }` / `BufferText::AlignEnd` (top-level
+     `BufferText` variants, *not* a new `BufferBlockStyle`), plus a `SumTree`
+     dimension so that at render time the buffer can be asked "is this character
+     inside an aligned region, and if so, with what alignment?" independently of
+     its per-block style. This is the exact shape bnavetta steered the #13345
+     author toward (ordered-list precedent: `BufferBlockStyle::OrderedList {
+     number, indent_level }` carries per-block metadata in the marker and is
+     tracked through the `SumTree`, `text.rs:882-885` / `:918-923`). It composes
+     by construction: "aligned + code block" is representable because alignment
+     and block-style are two orthogonal `SumTree` queries, not one mutually
+     exclusive `BufferBlockStyle` slot. It also generalizes cleanly to the
+     `<div align>` **group** case (product invariant 1) — the start/end markers
+     bracket any number of interior blocks — and the single-paragraph
+     `<p align>` case (invariant 2) is just a region of length one.
+
+     Representation is **surface-agnostic**: the markers and the `SumTree`
+     dimension are the content model. *How* each surface paints an aligned
+     region is a separate, per-surface concern (GUI may wrap in
+     `warpui_core::Align`; TUI computes horizontal offsets against terminal
+     width — see §6 and the TUI scope decision). The content model does not
+     name `warpui_core::Align`.
+
+   - **Rejected alternative — `FormattedTextLine::AlignedBlock` wrapper
+     variant.** An earlier draft recommended a new `markdown_parser`
+     `FormattedTextLine::AlignedBlock(Vec<FormattedTextLine>)` wrapper carrying
+     an alignment value. This is rejected on bnavetta's #13345 grounds. Two
+     problems:
+
+     1. It is the parser-layer analogue of making alignment a block style: when
+        `buffer.rs` maps `FormattedTextLine` into the editor content model, an
+        `AlignedBlock` wrapper has to become *some* `BufferBlockStyle`, which
+        walks straight into "only one `BufferBlockStyle` active for a given
+        character." "Aligned **and** a code block" cannot be expressed if
+        alignment is modeled as (or collapses into) a block style — precisely
+        the composition failure bnavetta called out. The marker approach avoids
+        this because alignment never occupies the block-style slot.
+     2. It changes the shared `FormattedTextLine` enum every consumer matches on
+        exhaustively (see the Risks section for the concrete blast radius), for
+        a *parser-side* grouping that then has to be *un*-grouped again when
+        lowering into the flat buffer content model. The marker approach keeps
+        the parser output flat and expresses the region in the layer that
+        actually stores and renders it.
+
+   - **Rejected alternative — alignment as a side-table keyed by block
+     index/id.** `FormattedTextLine` has no stable identity today; this would
+     invent one purely for this feature, adding indirection the `SumTree`
+     dimension already provides for free.
+
+   - **Rejected alternative — a per-block `alignment` flag on every existing
+     variant.** Threading `alignment: BlockAlignment` through `Heading`, `Line`,
+     `Image`, etc. individually both loses the `<div align>` grouping
+     (invariant 1) and duplicates a property the region markers express once for
+     the whole span.
+
+2. **New alignment enum.** A small `Left` (default) / `Center` / `Right` enum
+   carried by the start marker (and, at the GUI paint layer, mapped to a
+   `Vector2F` for `warpui_core::Align`). It mirrors the *shape* of
+   `TableAlignment` (`lib.rs:346-351`) but is a distinct type: table *column*
+   alignment and *block-region* alignment are different axes that merely share
+   three variant names, and conflating them would couple unrelated concerns the
+   first time either needs to diverge (e.g. `justify` added to one but not the
+   other).
 
 3. **Grouping rule for `<div align>` (product invariant 1).** The issue's test
    case has the block content separated from the tag by blank lines — this
@@ -106,56 +174,84 @@ a field to an existing one.
    own-line raw-HTML block detection. Recommend a block-level detector in
    `markdown_parser.rs` (same pattern as those siblings: scan for an own-line
    `<div align="…">` / `<p align="…">`, find the matching own-line closing tag,
-   extract the raw content between them, recursively parse *that* content as
-   ordinary Markdown to get `Vec<FormattedTextLine>`, then wrap in
-   `AlignedBlock`). Recursion here reuses the existing top-level parse function
-   rather than inventing a second grammar — the aligned region's content is
-   parsed exactly as if it were a standalone document.
+   recursively parse the raw content between them as ordinary Markdown). The
+   detector's job is to emit an **alignment-start signal, the interior blocks
+   parsed exactly as if standalone, and an alignment-end signal** — the interior
+   is *not* wrapped in a new parser variant; it stays a flat run of ordinary
+   `FormattedTextLine`s bracketed by the region boundary. When `buffer.rs` lowers
+   this into the content model it inserts the paired `BufferText` align markers
+   (design question 1) around the interior blocks' `BufferText`. Recursion reuses
+   the existing top-level parse function rather than inventing a second grammar.
 
 4. **`<p align>` vs `<div align>` — single block vs. group.** Both route through
-   the same detector and `AlignedBlock` variant; the only difference is `<p>`'s
-   content is inline phrasing (parsed via `parse_phrasing_content`, matching how
-   `p` is treated elsewhere) and produces exactly one child `Line`, while `<div>`
-   content is full block-level Markdown and can produce any number of children.
-   This keeps one code path instead of two.
+   the same detector and emit the same paired region markers; the only difference
+   is `<p>`'s content is inline phrasing (parsed via `parse_phrasing_content`,
+   matching how `p` is treated elsewhere) and produces exactly one interior
+   `Line`, while `<div>` content is full block-level Markdown and can produce any
+   number of interior blocks. A `<p align>` region is just an aligned region of
+   length one — no separate code path.
 
 5. **Nested aligned blocks (product non-goal, but must not crash).** If a
    `<div align="center">` contains a nested `<p align="right">`, the recursive
-   parse of the div's inner content will itself detect and emit a nested
-   `AlignedBlock`. Recommend **innermost wins** for the nested block's own
-   content (natural consequence of recursion — no special-casing needed) while
-   the outer alignment still governs the group's overall horizontal position
-   relative to the pane. This falls out of Option A's recursive design for free
-   and needs no extra logic, only a test asserting it doesn't panic or infinite-
-   loop.
+   parse of the div's inner content detects the inner region and emits its own
+   paired markers *inside* the outer pair. Because alignment is a `SumTree`
+   dimension rather than a single mutually-exclusive slot, the render layer can
+   see both regions; recommend **innermost wins** for the nested block's own
+   content (the nearest enclosing align marker governs), while the outer
+   alignment still governs blocks that are only inside the outer region. This is
+   a query over the marker stack, not special-cased recursion logic — the only
+   requirement is a test asserting it doesn't panic or infinite-loop.
 
-6. **Render layer: how does an aligned group actually get positioned?**
-   Needs confirmation from the render/layout owner, but two candidate
-   approaches:
-   - Reuse `warpui_core::elements::gui::align::Align` (`align.rs:12-132`) by
-     wrapping the rendered block-group element in it — this is exactly the
-     primitive's purpose (`left()`/`right()`/default-center via `Vector2F`
-     alignment), just not currently wired to Markdown content. This is the
-     natural reuse point the issue itself points at.
-   - If the Markdown block renderer doesn't compose with arbitrary
-     `dyn Element` wrapping (needs verification against
-     `crates/editor/src/render/element/` and `render/model/mod.rs`, the same
-     files the tables spec's render layer touches), the alternative is
-     computing per-line x-offsets directly in the block layout pass, mirroring
-     how table column widths are computed in `measure_table_cells`
-     (`crates/editor/src/content/edit.rs:260-323`) rather than delegating to a
-     generic widget. This is more invasive but avoids introducing a dependency
-     from the Markdown render path onto a generic UI primitive if that boundary
-     doesn't currently cross.
-   The tech implementation should start by prototyping the `Align`-wrapping
-   approach given it is purpose-built and already exists; fall back to manual
-   offset computation only if element composition doesn't fit the render
-   pipeline's structure.
+6. **Render layer: how does each surface paint an aligned region?** This is a
+   **per-surface paint concern, downstream of the content model** — the markers
+   and `SumTree` dimension (design question 1) are surface-agnostic; each
+   renderer decides how to turn "this run of blocks is centered" into pixels or
+   cells.
+
+   - **GUI.** `warpui_core::elements::gui::align::Align` (`align.rs:12-132`) is
+     the natural paint primitive: wrap the rendered block-region element in it
+     (`left()`/`right()`/default-center via `Vector2F`). **This is a GUI-only
+     paint strategy, not the content model** — the buffer stores the region via
+     markers regardless of whether GUI happens to use `Align`. If the Markdown
+     block renderer doesn't compose with arbitrary `dyn Element` wrapping (verify
+     against `crates/editor/src/render/element/` and `render/model/mod.rs`), the
+     GUI fallback is per-line x-offsets computed in the block layout pass; either
+     way it is a GUI implementation detail behind the same content model.
+   - **TUI.** See the TUI surface disposition below — the terminal surface reads
+     the same markers but positions within terminal width, with a defined
+     fallback. The content model does not privilege either surface.
+
+   Because alignment is not `warpui_core::Align`-specific at the model layer, the
+   GUI paint choice can be prototyped (start with `Align`-wrapping, given it is
+   purpose-built) without blocking the TUI or the serialization work.
+
+### TUI surface disposition
+
+Master's TUI Markdown renderer (`crates/warp_tui/src/tui_markdown.rs`) consumes
+`FormattedTextLine` directly and implements its **own** alignment for tables,
+separately from the GUI, in `crates/warp_tui/src/tui_markdown/table.rs`
+(`aligned_cell_spans`, `:260`, padding per `TableAlignment`). Block-region
+alignment must therefore have an explicit TUI disposition rather than assuming
+the GUI `Align` element covers it (it does not — `warpui_core::Align` is not a
+TUI concept).
+
+**Scope decision:** the TUI renders an aligned region with **best-effort
+horizontal positioning within the terminal width** (compute the region's
+rendered width, pad leading columns per the alignment, mirroring how
+`aligned_cell_spans` pads table cells), and **falls back to left-aligned** where
+the region's width can't be determined or exceeds the pane. This keeps the TUI
+consuming the same content-model markers as the GUI while acknowledging the
+terminal's coarser layout model; it is an explicit scope decision, not an
+oversight. (This mirrors bnavetta's #13345 framing that region state lives in the
+buffer so every surface can consult it — the TUI reads the same `SumTree`
+dimension the GUI does.)
 
 7. **Feature gating.** No existing flag covers this (`MarkdownTables` is
    table-specific). Recommend a new flag, e.g. `FeatureFlag::MarkdownBlockAlign`,
-   following the same gating pattern as `buffer.rs:850-855`, so the feature can
-   ship dark and be enabled independently of unrelated Markdown work.
+   following the same gating pattern used for `MarkdownTables` in
+   `crates/editor/src/content/buffer.rs:850-855` (the `from_markdown` parse-fn
+   switch), so the feature can ship dark and be enabled independently of
+   unrelated Markdown work.
 
 ## Security
 
@@ -164,18 +260,21 @@ values are consulted; any other `style` property or attribute (`onclick`,
 `class`, `id`, arbitrary CSS) is ignored, matching the pattern already
 established for the tables spec (invariant 10 there). No script/event-handler
 surface. Nested content inherits the viewer's existing trust boundary — an
-`AlignedBlock`'s children are ordinary `FormattedTextLine`s parsed the same way
-as unaligned content, so no new content-injection surface is introduced beyond
-"this content is now positioned differently."
+aligned region's interior blocks are ordinary `FormattedTextLine`s parsed the same
+way as unaligned content, and the region itself is expressed only by content-model
+markers, so no new content-injection surface is introduced beyond "this content is
+now positioned differently."
 
 ## Testing and validation
 
 ### Parser unit tests (`crates/markdown_parser/src/markdown_parser_tests.rs`)
 
-- `<div align="center">` wrapping a heading + blank line + text → `AlignedBlock`
-  with `Center` and the expected child `Vec<FormattedTextLine>` (invariant 1).
-- `<p align="right">caption</p>` → `AlignedBlock` with `Right` and exactly one
-  `Line` child (invariant 2).
+- `<div align="center">` wrapping a heading + blank line + text → a `Center`
+  aligned region bracketing the expected interior `Vec<FormattedTextLine>`
+  (assert the region markers are emitted around the interior, and the interior
+  blocks parse as normal — invariant 1).
+- `<p align="right">caption</p>` → a `Right` aligned region bracketing exactly
+  one interior `Line` (invariant 2).
 - `style="text-align: center"` → same result as `align="center"` (invariant 3).
 - `align` and conflicting `style` both present → `style` wins (invariant 3).
 - Unrecognized value (`align="justify"`, `align="bogus"`) → unaligned
@@ -192,11 +291,19 @@ as unaligned content, so no new content-injection surface is introduced beyond
 
 ### Round-trip (`crates/markdown_parser` + `crates/editor/src/content/text_tests.rs`)
 
-- Aligned block → internal/export format → re-parsed, alignment preserved
-  (invariant 6). Tech spec's chosen serialization (likely re-emitting the
-  `<div align="…">`/`<p align="…">` wrapper around the re-serialized children)
-  needs its own round-trip test distinct from the tables spec's tab-delimited
-  internal format, since this content is block-structured, not tabular.
+- Aligned region → internal/export format → re-parsed, alignment preserved
+  (invariant 6). Serialization re-emits a `<div align="…">`/`<p align="…">`
+  wrapper around the re-serialized interior blocks (the `BufferBlockStyle →
+  FormattedTextLine` path at `buffer.rs:5989+` reads the region markers and
+  brackets the interior). Per bnavetta on #13345, exact source-Markdown
+  preservation is explicitly **not** a goal — "Warp's rich-text pipeline doesn't
+  attempt to guarantee exact preservation of the source Markdown; I think it's
+  fine to continue that here"
+  ([review comment](https://github.com/warpdotdev/warp/pull/13345#discussion_r3545145887)).
+  The round-trip test therefore asserts *alignment survives* (semantic
+  round-trip), not byte-identical re-emission, and is distinct from the tables
+  spec's tab-delimited internal-format test since this content is
+  block-structured, not tabular.
 
 ### Layout / render tests
 
@@ -211,6 +318,11 @@ as unaligned content, so no new content-injection surface is introduced beyond
   sink every other `FormattedTextLine` variant renders through) still
   positions that literal text per the group's alignment — the two features
   are independently testable.
+- **TUI** (`crates/warp_tui/src/tui_markdown_tests.rs`): an aligned region
+  renders with best-effort horizontal positioning within a fixed terminal
+  width, and falls back to left-aligned when the region width exceeds the pane
+  (the explicit TUI scope decision) — asserting the terminal surface reads the
+  same content-model markers as the GUI, not a GUI-only path.
 
 ### Integration / manual
 
@@ -222,16 +334,40 @@ horizontal position must be correct).
 
 ## Risks and follow-ups
 
-- **No existing content-model hook, unlike the tables slice.** This is a new
-  `FormattedTextLine` variant, meaning every exhaustive match over the enum
-  across `crates/` gains a required arm. Enumerate those match sites early (see
-  design question 1) — this is the main risk of scope creep if a match site is
-  missed and silently mishandled via a wildcard arm.
-- **Render-layer approach is unconfirmed** (design question 6). Whether the
-  `warpui_core::Align` element composes cleanly with the Markdown block
-  renderer needs a spike before committing to that path; the manual-offset
-  fallback is more invasive and should only be taken if composition doesn't
-  fit.
+- **Marker-model blast radius is narrower than the rejected wrapper, but real.**
+  Because alignment rides existing channels — new `BufferText` variants and a
+  `SumTree` dimension, following the ordered-list precedent — it does **not**
+  add an arm to every `match` over `FormattedTextLine`. The touched surface is:
+  the `markdown_parser` block detector (`markdown_parser.rs`, plus
+  `html_parser.rs` if the paste path is in scope), the `buffer.rs` lower/serialize
+  bridge (insert markers around interior blocks on parse; bracket on serialize),
+  and the `SumTree` summary/dimension plumbing that answers "is this character
+  inside an aligned region." Any code that exhaustively matches `BufferText`
+  (e.g. `find.rs:338`, which already special-cases `BufferText::BlockMarker`)
+  gains a new-variant arm — a bounded, compiler-enforced set, not the full
+  `FormattedTextLine` fan-out.
+
+  For contrast, the **rejected `FormattedTextLine::AlignedBlock` wrapper** (design
+  question 1) *would* have added a required arm to every exhaustive match over
+  `FormattedTextLine`. That enum is referenced across **20 files** in `crates/`;
+  the production match sites that would have needed a new arm span not just the
+  obvious Markdown files (`markdown_parser` `lib.rs` / `markdown_parser.rs` /
+  `html_parser.rs`; `editor` `content/{buffer,core,markdown,text}.rs`) but two
+  non-obvious ones worth calling out explicitly: the **Jupyter notebook parser**
+  (`crates/ipynb_parser/src/lib.rs`) and the **TUI** (`crates/warp_tui/
+  src/tui_markdown.rs` and `tui_plan_view.rs`), plus the GUI element sink
+  (`crates/warpui_core/src/elements/gui/formatted_text_element.rs`). The wrapper's
+  cost was paid across all of those *and* still failed bnavetta's composition
+  constraint — which is the substantive reason to reject it, the arm-count being
+  secondary. The marker design pays a smaller, differently-shaped cost and
+  composes.
+- **Render-layer approach is per-surface and partly unconfirmed** (design
+  question 6). GUI: whether `warpui_core::Align` composes cleanly with the
+  Markdown block renderer needs a spike; the manual per-line-offset fallback is
+  more invasive and only taken if element composition doesn't fit. TUI: the
+  best-effort-within-terminal-width behavior with left-aligned fallback is a
+  deliberate scope decision (see the TUI surface disposition), not full parity
+  with the GUI. Neither surface's paint choice affects the content model.
 - **Float/wrap (`<img align="right">` interleaving prose) is explicitly
   deferred** (product non-goal) but is the more visually striking half of the
   "right-anchored README image" pattern the issue motivates. This spec commits
