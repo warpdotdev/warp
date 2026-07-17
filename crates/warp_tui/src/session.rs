@@ -83,7 +83,8 @@ pub fn run() -> Result<()> {
     if result.is_ok() {
         if let Some(token) = exit_summary.token() {
             let token = token.as_str();
-            println!("To continue this conversation, run: warp --resume {token}");
+            println!("To continue this conversation, run:");
+            println!("warp --resume {token}");
         }
     }
     result
