@@ -288,6 +288,14 @@ impl AltScreen {
         self.grid_handler.url_at_point(*point)
     }
 
+    /// OSC 8 hyperlink span at `point`, paired with its URI (owned, cloned
+    /// out of the alt-screen's per-screen `HyperlinkRegistry`).
+    pub fn hyperlink_at_point(&self, point: &Point) -> Option<(Link, String)> {
+        let link = self.grid_handler.hyperlink_at_point(*point)?;
+        let uri = self.grid_handler.hyperlink_uri_at_point(*point)?.to_owned();
+        Some((link, uri))
+    }
+
     pub fn fragment_boundary_at_point(&self, point: &Point) -> FragmentBoundary {
         self.grid_handler.fragment_boundary_at_point(point)
     }
@@ -385,6 +393,10 @@ impl ansi::Handler for AltScreen {
 
     fn input(&mut self, c: char) {
         self.ansi_handler().input(c);
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        self.ansi_handler().set_hyperlink(hyperlink);
     }
 
     fn goto(&mut self, row: VisibleRow, col: usize) {

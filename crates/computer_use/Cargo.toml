@@ -52,7 +52,7 @@ ashpd.workspace = true
 futures.workspace = true
 image.workspace = true
 nix = { workspace = true, features = ["signal"] }
-tokio = { workspace = true, features = ["process", "time"] }
+tokio = { workspace = true, features = ["io-util", "process", "time"] }
 url.workspace = true
 uuid.workspace = true
 warpui_core.workspace = true

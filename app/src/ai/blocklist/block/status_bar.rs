@@ -852,10 +852,7 @@ impl BlocklistAIStatusBar {
                             .conversation(app)
                             .map(|c| c.autoexecute_any_action())
                             .unwrap_or(false),
-                        is_locked: is_in_cloud_context(
-                            terminal_model.block_list().agent_view_state(),
-                            &terminal_model,
-                        ),
+                        is_locked: is_in_cloud_context(&terminal_model),
                     },
                 ),
                 queue_next_prompt_button: FeatureFlag::QueueSlashCommand.is_enabled().then_some(

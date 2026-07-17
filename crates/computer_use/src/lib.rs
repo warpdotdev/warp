@@ -8,11 +8,13 @@ mod imp;
 #[cfg(macos)]
 mod mock;
 mod noop;
+mod overlay;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -21,6 +23,7 @@ use async_trait::async_trait;
 // module definition.
 #[cfg(noop)]
 use noop as imp;
+pub use overlay::{ActionLogEntry, overlay_labels_for};
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
@@ -42,6 +45,14 @@ pub fn is_supported_on_current_platform() -> bool {
         imp::is_supported_on_current_platform()
     }
 }
+/// Why a capture process exited before an explicit stop.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RecordingExitKind {
+    LimitReached,
+    Crashed,
+}
+
+pub type RecordingExitState = Arc<Mutex<Option<RecordingExitKind>>>;
 
 #[derive(Debug, Error)]
 pub enum RecordingError {
@@ -238,6 +249,27 @@ pub fn create_recorder() -> Box<dyn Recorder> {
     }
 }
 
+/// Burns action labels into a recorded video, returning the path to the
+/// annotated file. The original file is left untouched; the caller owns cleanup
+/// of both. Real compositing (ffmpeg + libass) only runs on the Linux capture
+/// path; every other target returns `input` unchanged so callers can treat
+/// annotation as best-effort and upload the original on any failure.
+pub async fn burn_in_action_log(
+    input: &Path,
+    entries: &[ActionLogEntry],
+    dimensions: (u32, u32),
+) -> Result<PathBuf, RecordingError> {
+    #[cfg(all(linux, not(noop)))]
+    {
+        imp::burn_in_action_log(input, entries, dimensions).await
+    }
+    #[cfg(not(all(linux, not(noop))))]
+    {
+        let _ = (entries, dimensions);
+        Ok(input.to_path_buf())
+    }
+}
+
 /// A long-lived capability that records a video of the computer-use display.
 ///
 /// Unlike [`Actor`], a recorder spans many tool calls: `start` launches capture
@@ -264,6 +296,14 @@ pub struct RecordingConfig {
     pub max_duration: Duration,
     /// Maximum output size in bytes before the runtime auto-stops recording.
     pub max_size_bytes: u64,
+    /// How many times faster the output video should play back relative to real
+    /// time. For example, 4.0 makes a 4-minute recording play in 1 minute. A
+    /// value of 0.0 or 1.0 means real-time (no speedup). Applied via an ffmpeg
+    /// presentation-timestamp rescale filter on the output video.
+    pub playback_speed_multiplier: f32,
+    /// The surface to capture. `Screen` records the whole X display (legacy behavior);
+    /// `Window` records the targeted window after making it foreground-visible when supported.
+    pub target: Target,
 }
 
 impl Default for RecordingConfig {
@@ -274,6 +314,11 @@ impl Default for RecordingConfig {
             // NOTE: Bounds every capture so an unattended recording can't grow without bound (~10 min / 1 GiB).
             max_duration: Duration::from_secs(10 * 60),
             max_size_bytes: 1024 * 1024 * 1024,
+            // NOTE: 4x playback speed keeps demo videos short and watchable. A 4-minute
+            // recording plays in 1 minute. The server can override via the StartRecording
+            // tool call's playback_speed_multiplier field.
+            playback_speed_multiplier: 4.0,
+            target: Target::Screen,
         }
     }
 }
@@ -284,6 +329,7 @@ impl Default for RecordingConfig {
 pub struct RecordingHandle {
     width: u32,
     height: u32,
+    exit_state: RecordingExitState,
     // The live capture process plus the fields used to finalize it are only
     // populated by the real Linux recorder; the no-op recorders never construct
     // a handle.
@@ -292,7 +338,11 @@ pub struct RecordingHandle {
     #[cfg(linux)]
     started_at: instant::Instant,
     #[cfg(linux)]
-    process: tokio::process::Child,
+    process: Option<tokio::process::Child>,
+    // The handle owns and deletes partial output until `Recorder::stop`
+    // validates the file and transfers its path to `RecordingOutput`.
+    #[cfg(linux)]
+    cleanup_on_drop: bool,
 }
 
 impl RecordingHandle {
@@ -304,6 +354,68 @@ impl RecordingHandle {
     /// The applied capture height in pixels.
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    /// Checks whether capture exited without an explicit stop.
+    pub fn poll_exit(&mut self) -> Option<RecordingExitKind> {
+        if let Some(kind) = *self
+            .exit_state
+            .lock()
+            .expect("recording exit state poisoned")
+        {
+            return Some(kind);
+        }
+
+        #[cfg(linux)]
+        if let Some(process) = self.process.as_mut()
+            && let Ok(Some(status)) = process.try_wait()
+        {
+            let kind = if status.success() {
+                RecordingExitKind::LimitReached
+            } else {
+                RecordingExitKind::Crashed
+            };
+            *self
+                .exit_state
+                .lock()
+                .expect("recording exit state poisoned") = Some(kind);
+            return Some(kind);
+        }
+
+        None
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn new_test(width: u32, height: u32) -> (Self, RecordingExitState) {
+        let exit_state = Arc::new(Mutex::new(None));
+        let handle = Self {
+            width,
+            height,
+            exit_state: exit_state.clone(),
+            #[cfg(linux)]
+            path: PathBuf::new(),
+            #[cfg(linux)]
+            started_at: instant::Instant::now(),
+            #[cfg(linux)]
+            process: None,
+            #[cfg(linux)]
+            cleanup_on_drop: false,
+        };
+        (handle, exit_state)
+    }
+}
+
+#[cfg(linux)]
+impl Drop for RecordingHandle {
+    fn drop(&mut self) {
+        // A handle can be abandoned without reaching `Recorder::stop`, notably
+        // when a start action finishes after cancellation. The child process's
+        // kill-on-drop handles ffmpeg; this removes its partial output. A
+        // successful stop disables cleanup and transfers file ownership.
+        if self.cleanup_on_drop {
+            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(self.path.with_extension("log"));
+        }
     }
 }
 
@@ -325,6 +437,10 @@ pub enum RecordingCompletionStatus {
     Completed,
     StoppedEarly,
 }
+
+#[cfg(test)]
+#[path = "recording_tests.rs"]
+mod recording_tests;
 
 /// A key that can be pressed or released.
 #[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]

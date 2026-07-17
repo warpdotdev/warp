@@ -24,6 +24,8 @@ pub(crate) mod blocklist;
 pub(crate) mod codebase_auto_indexing;
 pub mod control_code_parser;
 pub(crate) mod conversation_details_panel;
+#[cfg(feature = "local_fs")]
+pub(crate) mod conversation_export;
 pub(crate) mod conversation_navigation;
 pub(crate) mod conversation_rename;
 pub(crate) mod conversation_status_ui;
@@ -40,6 +42,7 @@ pub(crate) mod llms;
 pub(crate) mod local_harness_setup;
 pub(crate) mod metadata_project_rules;
 pub mod onboarding;
+pub(crate) mod orchestration;
 pub(crate) mod persisted_workspace;
 pub(crate) mod predict;
 #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]

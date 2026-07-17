@@ -866,6 +866,23 @@ where
                 unhandled(params);
             }
 
+            // OSC 8: Hyperlink (terminal anchor) sequences.
+            // Format: OSC 8 ; params ; URI ST. An empty URI closes the active
+            // hyperlink.
+            // Reference: https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
+            b"8" if FeatureFlag::OscHyperlinks.is_enabled() => {
+                match Hyperlink::parse_osc_params(&params[1..]) {
+                    Ok(hyperlink) => self.handler.set_hyperlink(hyperlink),
+                    // A malformed, non-UTF-8, or over-length sequence closes any
+                    // active hyperlink so later unrelated output can't inherit a
+                    // stale URI.
+                    Err(_) => {
+                        self.handler.set_hyperlink(None);
+                        unhandled(params);
+                    }
+                }
+            }
+
             // OSC 9: Desktop notification (iTerm2/xterm style)
             // Format: OSC 9 ; <message> ST
             //

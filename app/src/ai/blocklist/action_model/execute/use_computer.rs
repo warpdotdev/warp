@@ -1,10 +1,11 @@
 use ai::agent::action_result::AIAgentActionResultType;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use warpui::{Entity, ModelContext};
+use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::{AIAgentActionType, UseComputerResult};
+use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 use crate::features::FeatureFlag;
 
 pub struct UseComputerExecutor;
@@ -34,12 +35,22 @@ impl UseComputerExecutor {
     pub(super) fn execute(
         &mut self,
         input: ExecuteActionInput,
-        _ctx: &mut ModelContext<Self>,
+        ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> {
-        let ExecuteActionInput { action, .. } = input;
+        let ExecuteActionInput {
+            action,
+            conversation_id,
+        } = input;
         let AIAgentActionType::UseComputer(request) = &action.action else {
             return ActionExecution::InvalidAction;
         };
+
+        let labels = computer_use::overlay_labels_for(&request.actions, &request.action_summary);
+        if !labels.is_empty() {
+            RecordingController::handle(ctx).update(ctx, |controller, _| {
+                controller.record_action(conversation_id, labels);
+            });
+        }
 
         let actions = request.actions.clone();
         let screenshot_params = request.screenshot_params;

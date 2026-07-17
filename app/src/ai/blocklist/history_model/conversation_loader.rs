@@ -215,6 +215,14 @@ impl AIConversationMetadata {
         if self.artifacts.is_empty() {
             self.artifacts = other.artifacts;
         }
+        // Preserve parent linkage so a merged record (e.g. cloud metadata merged
+        // with the in-memory child's metadata) keeps its child-agent status.
+        if self.parent_conversation_id.is_none() {
+            self.parent_conversation_id = other.parent_conversation_id;
+        }
+        if self.parent_agent_id.is_none() {
+            self.parent_agent_id = other.parent_agent_id;
+        }
         self
     }
 }
@@ -653,6 +661,17 @@ impl BlocklistAIHistoryModel {
                         artifacts,
                         // Only populated when loading from server, not from local DB
                         server_conversation_metadata: None,
+                        // Carry parent linkage from persisted data so child-agent
+                        // status survives even if the parent isn't resolvable
+                        // locally (the child-skip above only fires when the
+                        // parent conversation is known).
+                        parent_conversation_id: conversation_data
+                            .as_ref()
+                            .and_then(|data| data.parent_conversation_id.as_deref())
+                            .and_then(|id| AIConversationId::try_from(id.to_owned()).ok()),
+                        parent_agent_id: conversation_data
+                            .as_ref()
+                            .and_then(|data| data.parent_agent_id.clone()),
                     },
                 ))
             })

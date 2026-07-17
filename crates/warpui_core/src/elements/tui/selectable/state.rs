@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::cmp::{max, min};
-use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -14,7 +13,6 @@ struct TuiSelectionState {
     selection_type: SelectionType,
     is_selecting: bool,
     width: u16,
-    cell_snapshot: BTreeMap<TuiGridPoint, String>,
 }
 
 impl TuiSelectionState {
@@ -66,7 +64,6 @@ impl TuiSelectionHandle {
             selection_type,
             is_selecting: true,
             width,
-            cell_snapshot: BTreeMap::new(),
         });
     }
 
@@ -114,26 +111,6 @@ impl TuiSelectionHandle {
         }
         *slot = None;
         false
-    }
-
-    /// Validates visible cells and records newly visible selected glyphs.
-    pub(crate) fn validate_and_snapshot(&self, cells: BTreeMap<TuiGridPoint, String>) -> bool {
-        let mut slot = self.0.borrow_mut();
-        let Some(selection) = slot.as_mut() else {
-            return false;
-        };
-        let changed = cells.iter().any(|(point, symbol)| {
-            selection
-                .cell_snapshot
-                .get(point)
-                .is_some_and(|previous| previous != symbol)
-        });
-        if changed {
-            *slot = None;
-            return false;
-        }
-        selection.cell_snapshot.extend(cells);
-        true
     }
 
     /// Rebases selection rows around one resized content range.
@@ -187,10 +164,6 @@ impl TuiSelectionHandle {
         selection.focus_span = selection
             .focus_span
             .map(|span| rebase_span(span, old_end, new_end, old_height, new_height));
-        selection.cell_snapshot = std::mem::take(&mut selection.cell_snapshot)
-            .into_iter()
-            .map(|(point, symbol)| (rebase_point(point, old_end, old_height, new_height), symbol))
-            .collect();
         true
     }
 

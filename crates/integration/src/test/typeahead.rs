@@ -1,4 +1,3 @@
-use warp::integration_testing::agent_mode::AgentViewState;
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::util::current_shell_starter_and_version;
 use warp::integration_testing::terminal::{
@@ -7,6 +6,7 @@ use warp::integration_testing::terminal::{
     assert_no_visible_background_blocks, wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::single_terminal_view_for_tab;
+use warp::terminal::model::block::TranscriptScope;
 use warp::terminal::model::terminal_model::BlockIndex;
 use warp::terminal::shell::{Shell, ShellType};
 use warpui_core::integration::{AssertionCallback, AssertionOutcome, TestStep};
@@ -157,7 +157,7 @@ pub fn test_input_reporting_posix_shells() -> Builder {
                             .block_at(start_index + BlockIndex::from(4))
                             .expect("Block should exist");
                         if next_block.is_background() {
-                            async_assert!(next_block.is_empty(&AgentViewState::Inactive))
+                            async_assert!(next_block.is_empty(&TranscriptScope::Terminal))
                         } else {
                             async_assert_eq!(next_block.index(), blocks.active_block_index())
                         }

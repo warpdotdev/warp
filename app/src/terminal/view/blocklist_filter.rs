@@ -21,7 +21,7 @@ pub(crate) fn conversation_would_render_in_blocklist(conversation: &AIConversati
 
 /// Returns all exchanges from a conversation that should be displayed in the blocklist.
 /// Filters by task type using `should_show_task_in_blocklist` and skips hidden exchanges.
-pub(super) fn exchanges_for_blocklist(conversation: &AIConversation) -> Vec<&AIAgentExchange> {
+pub(crate) fn exchanges_for_blocklist(conversation: &AIConversation) -> Vec<&AIAgentExchange> {
     conversation
         .all_exchanges_by_task()
         .into_iter()

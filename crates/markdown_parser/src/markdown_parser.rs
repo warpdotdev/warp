@@ -42,8 +42,17 @@ const INDENT_TAG_MIN_COUNT: usize = 0;
 const INDENT_TAG_MAX_COUNT: usize = INDENT_MAX_LEVEL * NUM_SPACE_PER_INDENT_LEVEL;
 
 /// Formatting delimiter characters used for emphasis/strikethrough in Markdown.
-/// These are stripped from trailing URLs and used to detect valid autolink boundaries.
+/// Used to detect valid autolink boundaries (an autolink may follow one of these).
 const FORMATTING_DELIMITERS: &str = "*_~";
+
+/// Trailing punctuation that is not considered part of an autolink, per the GFM
+/// autolink extension: <https://github.github.com/gfm/#autolinks-extension->.
+/// This is a superset of [`FORMATTING_DELIMITERS`] and is stripped from the end
+/// of a parsed URL. Stripping the whole set (not just the formatting delimiters)
+/// matters when an emphasized autolink is followed by other punctuation — e.g.
+/// `**https://example.com**.` — so the closing `**` is freed from the URL and
+/// the emphasis can still be matched.
+const AUTOLINK_TRAILING_PUNCTUATION: &str = "?!.,:*_~";
 
 /// Tracks indentation context during list parsing to enable relative indentation calculation.
 #[derive(Debug, Clone)]
@@ -1846,7 +1855,7 @@ fn parse_url_prefix<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 // This is NOT a great URL parser. For now, a URL is a string that
 // - starts with "https://" or "http://" or "www."
 // - has at least one alphanumeric char after the prefix
-// - does not include trailing formatting characters (*, _, ~)
+// - does not include trailing punctuation (? ! . , : * _ ~), per the GFM autolink extension
 // - backslash escapes are processed (e.g., `\.` → `.`)
 fn parse_url<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     i: &'a str,
@@ -1857,12 +1866,24 @@ fn parse_url<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
         take_till1(|c: char| c.is_whitespace() || "[]<".find_token(c)),
     )))(i)?;
 
-    // Strip trailing formatting characters (*, _, ~) from the URL.
-    // Per GFM spec, autolinks should not include trailing punctuation that could be
-    // markdown formatting delimiters.
-    let trimmed_len = raw_url
-        .trim_end_matches(|c| FORMATTING_DELIMITERS.contains(c))
-        .len();
+    // Strip trailing punctuation from the URL. Per the GFM autolink extension.
+    let bytes = raw_url.as_bytes();
+    let mut trimmed_len = raw_url.len();
+    while trimmed_len > 0 {
+        let last = bytes[trimmed_len - 1];
+        if !AUTOLINK_TRAILING_PUNCTUATION.contains(last as char) {
+            break;
+        }
+        let preceding_backslashes = bytes[..trimmed_len - 1]
+            .iter()
+            .rev()
+            .take_while(|&&b| b == b'\\')
+            .count();
+        if preceding_backslashes % 2 == 1 {
+            break;
+        }
+        trimmed_len -= 1;
+    }
 
     // If we trimmed everything after the prefix, the URL is invalid
     let min_valid_len = match raw_url.find("://") {

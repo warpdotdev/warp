@@ -44,13 +44,13 @@ pub fn enter_agent_view() -> TestStep {
                     let is_ai_input_mode = terminal_view
                         .input()
                         .read(app, |input, app| input.input_type(app).is_ai());
-                    let agent_view_state = {
+                    let transcript_scope = {
                         let model = terminal_view.model.lock();
-                        model.block_list().agent_view_state().clone()
+                        *model.block_list().transcript_scope()
                     };
                     async_assert!(
-                        is_ai_input_mode && agent_view_state.is_active(),
-                        "Expected fullscreen Agent View + AI input mode, got agent_view_state={agent_view_state:?}, is_ai_input_mode={is_ai_input_mode}"
+                        is_ai_input_mode && transcript_scope.is_conversation(),
+                        "Expected fullscreen Agent View + AI input mode, got transcript_scope={transcript_scope:?}, is_ai_input_mode={is_ai_input_mode}"
                     )
                 })
             },
@@ -69,13 +69,13 @@ pub fn exit_agent_view() -> TestStep {
                     let is_ai_input_mode = terminal_view
                         .input()
                         .read(app, |input, app| input.input_type(app).is_ai());
-                    let agent_view_state = {
+                    let transcript_scope = {
                         let model = terminal_view.model.lock();
-                        model.block_list().agent_view_state().clone()
+                        *model.block_list().transcript_scope()
                     };
                     async_assert!(
-                        !is_ai_input_mode && !agent_view_state.is_active(),
-                        "Expected inactive Agent View + non-AI input mode, got agent_view_state={agent_view_state:?}, is_ai_input_mode={is_ai_input_mode}"
+                        !is_ai_input_mode && !transcript_scope.is_conversation(),
+                        "Expected inactive Agent View + non-AI input mode, got transcript_scope={transcript_scope:?}, is_ai_input_mode={is_ai_input_mode}"
                     )
                 })
             },

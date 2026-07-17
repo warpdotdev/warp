@@ -4,26 +4,28 @@
 //! Rendering and keyboard dispatch live in later layers; this model is only
 //! responsible for tracking when slash command composition is active, running
 //! shared-source queries, and snapshotting render-friendly row data.
+use std::ops::Range;
 
+use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
 use warp::tui_export::{
-    slash_command_query, slash_command_selection_behavior, AcceptSlashCommandOrSavedPrompt,
-    ParsedSlashCommandInput, SlashCommandDataSource as _, SlashCommandMixer,
-    SlashCommandSelectionBehavior, TuiSlashCommandDataSource, UpdatedActiveCommands,
+    should_close_slash_command_menu_for_exact_match, slash_command_query,
+    AcceptSlashCommandOrSavedPrompt, ParsedSlashCommandInput, SlashCommandDataSource as _,
+    SlashCommandMixer, TuiSlashCommandDataSource, UpdatedActiveCommands,
 };
 use warp_editor::model::CoreEditorModel;
-use warp_search_core::inline_menu::{
-    InlineMenuResultsUpdate, InlineMenuSelection, InputDrivenInlineMenuLifecycle,
-};
+use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InputDrivenInlineMenuLifecycle};
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::inline_menu::{
-    keep_selected_visible, TuiInlineMenuRow, TuiInlineMenuSnapshot, TuiInlineMenuStatus,
+    result_row_capacity, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
 };
+use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
-const MAX_VISIBLE_ROWS: usize = 8;
+const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, false, false);
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -31,6 +33,35 @@ pub(crate) struct TuiSlashCommandRow {
     pub(crate) title: String,
     pub(crate) description: Option<String>,
     pub(crate) action: AcceptSlashCommandOrSavedPrompt,
+}
+fn highlighted_prefix_len_for_parsed_input(
+    parsed_input: &ParsedSlashCommandInput,
+    input: &str,
+) -> Option<usize> {
+    match parsed_input {
+        ParsedSlashCommandInput::SlashCommand(detected) => input
+            .starts_with(detected.command.name)
+            .then(|| detected.command.name.chars().count()),
+        ParsedSlashCommandInput::SkillCommand(detected) => {
+            let prefix = format!("/{}", detected.name);
+            input.starts_with(&prefix).then(|| prefix.chars().count())
+        }
+        ParsedSlashCommandInput::None | ParsedSlashCommandInput::Composing { .. } => None,
+    }
+}
+
+fn argument_hint_text_for_parsed_input(
+    parsed_input: &ParsedSlashCommandInput,
+    input: &str,
+) -> Option<&'static str> {
+    let ParsedSlashCommandInput::SlashCommand(detected) = parsed_input else {
+        return None;
+    };
+    detected
+        .command
+        .argument_hint()
+        .filter(|hint| hint.input_prefix == input)
+        .map(|hint| hint.text)
 }
 
 #[allow(dead_code)]
@@ -40,10 +71,7 @@ pub(crate) enum TuiSlashCommandState {
     Closed,
     Open {
         query: String,
-        rows: Vec<TuiSlashCommandRow>,
-        selection: InlineMenuSelection,
-        scroll_offset: usize,
-        is_loading: bool,
+        list: TuiInlineMenuListState<TuiSlashCommandRow>,
     },
 }
 
@@ -52,30 +80,32 @@ pub(crate) struct TuiSlashCommandModelEvent;
 
 pub(crate) struct TuiSlashCommandModel {
     input_editor: ModelHandle<CodeEditorModel>,
+    suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     slash_commands_source: Option<ModelHandle<TuiSlashCommandDataSource>>,
     mixer: ModelHandle<SlashCommandMixer>,
     state: TuiSlashCommandState,
     lifecycle: InputDrivenInlineMenuLifecycle,
+    highlighted_prefix_len: Option<usize>,
+    argument_hint_text: Option<&'static str>,
 }
 
 impl TuiSlashCommandModel {
     pub(crate) fn new(
         input_editor: ModelHandle<CodeEditorModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
         mixer: ModelHandle<SlashCommandMixer>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&input_editor, |me, _, event, ctx| {
             if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
-                me.update_from_input(ctx);
+                me.update_from_input(false, ctx);
             }
         });
         ctx.subscribe_to_model(
             &slash_commands_source,
             |me, _, _: &UpdatedActiveCommands, ctx| {
-                if let Some(query) = me.query().map(str::to_owned) {
-                    me.run_query(query, true, ctx);
-                }
+                me.update_from_input(true, ctx);
             },
         );
         ctx.subscribe_to_model(&mixer, |me, _, event, ctx| {
@@ -86,97 +116,109 @@ impl TuiSlashCommandModel {
 
         let mut model = Self {
             input_editor,
+            suggestions_mode,
             slash_commands_source: Some(slash_commands_source),
             mixer,
             state: TuiSlashCommandState::Closed,
             lifecycle: InputDrivenInlineMenuLifecycle::default(),
+            highlighted_prefix_len: None,
+            argument_hint_text: None,
         };
-        model.update_from_input(ctx);
+        model.update_from_input(false, ctx);
         model
     }
 
     #[cfg(test)]
     pub(crate) fn new_for_test(
         input_editor: ModelHandle<CodeEditorModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         mixer: ModelHandle<SlashCommandMixer>,
         rows: Vec<TuiSlashCommandRow>,
         selected_index: usize,
     ) -> Self {
-        let mut selection = InlineMenuSelection::default();
-        selection.select(selected_index, rows.len(), |_| true);
+        let mut list = TuiInlineMenuListState::default();
+        list.replace_rows(rows, false, Some(selected_index), MAX_VISIBLE_ROWS, |_| {
+            true
+        });
         Self {
             input_editor,
+            suggestions_mode,
             slash_commands_source: None,
             mixer,
             state: TuiSlashCommandState::Open {
                 query: String::new(),
-                rows,
-                selection,
-                scroll_offset: 0,
-                is_loading: false,
+                list,
             },
             lifecycle: InputDrivenInlineMenuLifecycle::default(),
+            highlighted_prefix_len: None,
+            argument_hint_text: None,
         }
     }
 
-    pub(crate) fn query(&self) -> Option<&str> {
-        match &self.state {
-            TuiSlashCommandState::Closed => None,
-            TuiSlashCommandState::Open { query, .. } => Some(query),
-        }
+    #[cfg(test)]
+    pub(crate) fn set_highlighted_prefix_len_for_test(&mut self, len: Option<usize>) {
+        self.highlighted_prefix_len = len;
     }
 
-    pub(crate) fn is_open(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn set_argument_hint_text_for_test(&mut self, text: Option<&'static str>) {
+        self.argument_hint_text = text;
+    }
+
+    fn has_open_state(&self) -> bool {
         matches!(self.state, TuiSlashCommandState::Open { .. })
     }
 
+    pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
+        self.has_open_state()
+            && self.suggestions_mode.as_ref(ctx).mode() == TuiInputSuggestionsMode::SlashCommands
+    }
+    pub(crate) fn highlighted_prefix_range(&self) -> Option<Range<CharOffset>> {
+        self.highlighted_prefix_len
+            .map(|len| CharOffset::zero()..CharOffset::from(len))
+    }
+
+    pub(crate) fn argument_hint_text(&self) -> Option<&'static str> {
+        self.argument_hint_text
+    }
+
     pub(crate) fn selected_action(&self) -> Option<AcceptSlashCommandOrSavedPrompt> {
-        let TuiSlashCommandState::Open {
-            rows, selection, ..
-        } = &self.state
-        else {
+        let TuiSlashCommandState::Open { list, .. } = &self.state else {
             return None;
         };
-        selection
-            .selected_index()
-            .and_then(|index| rows.get(index))
-            .map(|row| row.action.clone())
+        list.selected_row().map(|row| row.action.clone())
     }
 
     pub(crate) fn select_previous(&mut self, ctx: &mut ModelContext<Self>) {
-        let TuiSlashCommandState::Open {
-            rows,
-            selection,
-            scroll_offset,
-            ..
-        } = &mut self.state
-        else {
+        let TuiSlashCommandState::Open { list, .. } = &mut self.state else {
             return;
         };
-        if let Some(selected_index) = selection.select_previous(rows.len(), |_| true) {
-            keep_selected_visible(rows.len(), selected_index, MAX_VISIBLE_ROWS, scroll_offset);
+        list.select_previous(MAX_VISIBLE_ROWS, |_| true);
+        ctx.emit(TuiSlashCommandModelEvent);
+    }
+
+    fn set_argument_hint_text(
+        &mut self,
+        argument_hint_text: Option<&'static str>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.argument_hint_text == argument_hint_text {
+            return;
         }
+        self.argument_hint_text = argument_hint_text;
         ctx.emit(TuiSlashCommandModelEvent);
     }
 
     pub(crate) fn select_next(&mut self, ctx: &mut ModelContext<Self>) {
-        let TuiSlashCommandState::Open {
-            rows,
-            selection,
-            scroll_offset,
-            ..
-        } = &mut self.state
-        else {
+        let TuiSlashCommandState::Open { list, .. } = &mut self.state else {
             return;
         };
-        if let Some(selected_index) = selection.select_next(rows.len(), |_| true) {
-            keep_selected_visible(rows.len(), selected_index, MAX_VISIBLE_ROWS, scroll_offset);
-        }
+        list.select_next(MAX_VISIBLE_ROWS, |_| true);
         ctx.emit(TuiSlashCommandModelEvent);
     }
 
     pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.is_open() {
+        if !self.is_open(ctx) {
             return;
         }
         let input_is_empty = input_text(&self.input_editor, ctx).is_empty();
@@ -193,19 +235,15 @@ impl TuiSlashCommandModel {
         action
     }
 
-    pub(crate) fn snapshot(&self) -> Option<TuiInlineMenuSnapshot> {
-        let TuiSlashCommandState::Open {
-            rows,
-            selection,
-            scroll_offset,
-            is_loading,
-            ..
-        } = &self.state
-        else {
+    pub(crate) fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        if !self.is_open(ctx) {
+            return None;
+        }
+        let TuiSlashCommandState::Open { list, .. } = &self.state else {
             return None;
         };
-        let status = if rows.is_empty() {
-            Some(if *is_loading {
+        let status = if list.rows().is_empty() {
+            Some(if list.is_loading() {
                 TuiInlineMenuStatus::Loading("Loading slash commands…".to_owned())
             } else {
                 TuiInlineMenuStatus::Empty("No slash commands found".to_owned())
@@ -215,58 +253,105 @@ impl TuiSlashCommandModel {
         };
         Some(TuiInlineMenuSnapshot {
             header: None,
-            rows: rows
+            rows: list
+                .rows()
                 .iter()
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
                     description: row.description.clone(),
                     is_selectable: true,
+                    style: TuiInlineMenuRowStyle::InlineMenuItem,
                 })
                 .collect(),
-            selected_index: selection.selected_index(),
-            scroll_offset: *scroll_offset,
+            selected_index: list.selected_index(),
+            scroll_offset: list.scroll_offset(),
             max_visible_rows: MAX_VISIBLE_ROWS,
             status,
         })
     }
 
-    fn update_from_input(&mut self, ctx: &mut ModelContext<Self>) {
+    fn update_from_input(&mut self, force_query: bool, ctx: &mut ModelContext<Self>) {
         let input = input_text(&self.input_editor, ctx);
+        if matches!(
+            self.suggestions_mode.as_ref(ctx).mode(),
+            TuiInputSuggestionsMode::ConversationMenu
+                | TuiInputSuggestionsMode::ModelSelector
+                | TuiInputSuggestionsMode::SkillMenu
+                | TuiInputSuggestionsMode::Mcp
+        ) {
+            self.set_highlighted_prefix_len(None, ctx);
+            self.set_argument_hint_text(None, ctx);
+            self.close(ctx);
+            return;
+        }
         if !self
             .lifecycle
             .input_changed(input.is_empty(), input.starts_with('/'))
         {
+            self.set_highlighted_prefix_len(None, ctx);
+            self.set_argument_hint_text(None, ctx);
             self.close(ctx);
             return;
         }
         let Some(slash_commands_source) = &self.slash_commands_source else {
+            self.set_highlighted_prefix_len(None, ctx);
             return;
         };
         let parsed_input = slash_commands_source.as_ref(ctx).parse_input(&input, ctx);
-        let Some(query) = menu_query_for_parsed_input(&parsed_input) else {
+        self.set_highlighted_prefix_len(
+            highlighted_prefix_len_for_parsed_input(&parsed_input, &input),
+            ctx,
+        );
+        self.set_argument_hint_text(
+            argument_hint_text_for_parsed_input(&parsed_input, &input),
+            ctx,
+        );
+        let menu_was_open = self.is_open(ctx);
+        let result_count = self.mixer.as_ref(ctx).results().len();
+        let Some(query) = menu_query_for_parsed_input(&parsed_input, menu_was_open, result_count)
+        else {
             self.close(ctx);
             return;
         };
-        self.run_query(query, false, ctx);
+        self.run_query(query, force_query, ctx);
+    }
+
+    fn set_highlighted_prefix_len(
+        &mut self,
+        highlighted_prefix_len: Option<usize>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.highlighted_prefix_len == highlighted_prefix_len {
+            return;
+        }
+        self.highlighted_prefix_len = highlighted_prefix_len;
+        ctx.emit(TuiSlashCommandModelEvent);
     }
 
     fn run_query(&mut self, query: String, force: bool, ctx: &mut ModelContext<Self>) {
-        let (previous_rows, previous_selection, previous_scroll_offset) = match &self.state {
-            TuiSlashCommandState::Closed => (Vec::new(), InlineMenuSelection::default(), 0),
+        let did_open = self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.try_open(TuiInputSuggestionsMode::SlashCommands, ctx)
+        });
+        if !did_open {
+            return;
+        }
+        match &mut self.state {
+            TuiSlashCommandState::Closed => {
+                let mut list = TuiInlineMenuListState::default();
+                list.set_loading(true);
+                self.state = TuiSlashCommandState::Open {
+                    query: query.clone(),
+                    list,
+                };
+            }
             TuiSlashCommandState::Open {
-                rows,
-                selection,
-                scroll_offset,
-                ..
-            } => (rows.clone(), *selection, *scroll_offset),
-        };
-        self.state = TuiSlashCommandState::Open {
-            query: query.clone(),
-            rows: previous_rows,
-            selection: previous_selection,
-            scroll_offset: previous_scroll_offset,
-            is_loading: true,
-        };
+                query: current_query,
+                list,
+            } => {
+                *current_query = query.clone();
+                list.set_loading(true);
+            }
+        }
         self.mixer.update(ctx, |mixer, ctx| {
             if !force && mixer.current_query().is_some_and(|q| q.text == query) {
                 return;
@@ -285,57 +370,39 @@ impl TuiSlashCommandModel {
             )
         };
         let results_update = {
-            let TuiSlashCommandState::Open {
-                selection,
-                is_loading,
-                ..
-            } = &mut self.state
-            else {
+            let TuiSlashCommandState::Open { list, .. } = &mut self.state else {
                 return;
             };
-            *is_loading = mixer_is_loading;
-            selection.reconcile_results(mixer_is_loading, new_rows.len(), |_| true)
+            list.reconcile_mixer_rows(new_rows, mixer_is_loading, MAX_VISIBLE_ROWS, |_| true)
         };
-        let selected_index = match results_update {
+        match results_update {
             InlineMenuResultsUpdate::Loading => return,
             InlineMenuResultsUpdate::Empty => {
                 self.close(ctx);
                 return;
             }
-            InlineMenuResultsUpdate::Ready { selected_index } => selected_index,
-        };
-
-        let TuiSlashCommandState::Open {
-            scroll_offset,
-            rows,
-            ..
-        } = &mut self.state
-        else {
-            return;
-        };
-        *rows = new_rows;
-        if let Some(selected_index) = selected_index {
-            keep_selected_visible(rows.len(), selected_index, MAX_VISIBLE_ROWS, scroll_offset);
+            InlineMenuResultsUpdate::Ready { .. } => {}
         }
         ctx.emit(TuiSlashCommandModelEvent);
     }
 
     fn close(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.is_open() {
-            return;
+        if self.has_open_state() {
+            self.state = TuiSlashCommandState::Closed;
+            self.mixer.update(ctx, |mixer, ctx| {
+                mixer.reset_results(ctx);
+            });
+            ctx.emit(TuiSlashCommandModelEvent);
         }
-        self.state = TuiSlashCommandState::Closed;
-        self.mixer.update(ctx, |mixer, ctx| {
-            mixer.reset_results(ctx);
+        self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.close_if_active(TuiInputSuggestionsMode::SlashCommands, ctx);
         });
-        ctx.emit(TuiSlashCommandModelEvent);
     }
 }
 
 impl Entity for TuiSlashCommandModel {
     type Event = TuiSlashCommandModelEvent;
 }
-
 fn input_text(input_editor: &ModelHandle<CodeEditorModel>, ctx: &AppContext) -> String {
     let editor = input_editor.as_ref(ctx);
     let content = editor.content().as_ref(ctx);
@@ -346,17 +413,21 @@ fn input_text(input_editor: &ModelHandle<CodeEditorModel>, ctx: &AppContext) -> 
     }
 }
 
-fn menu_query_for_parsed_input(parsed_input: &ParsedSlashCommandInput) -> Option<String> {
+fn menu_query_for_parsed_input(
+    parsed_input: &ParsedSlashCommandInput,
+    menu_was_open: bool,
+    result_count: usize,
+) -> Option<String> {
     match parsed_input {
         ParsedSlashCommandInput::None => None,
         ParsedSlashCommandInput::Composing { filter } => Some(filter.clone()),
         ParsedSlashCommandInput::SlashCommand(detected_command) => {
-            let is_argument_entry = detected_command.argument.is_some();
-            let executes_on_selection = matches!(
-                slash_command_selection_behavior(&detected_command.command),
-                SlashCommandSelectionBehavior::Execute
-            );
-            if is_argument_entry || executes_on_selection {
+            if !menu_was_open
+                || should_close_slash_command_menu_for_exact_match(
+                    result_count,
+                    detected_command.argument.is_some(),
+                )
+            {
                 None
             } else {
                 Some(
@@ -369,10 +440,18 @@ fn menu_query_for_parsed_input(parsed_input: &ParsedSlashCommandInput) -> Option
                 )
             }
         }
-        ParsedSlashCommandInput::SkillCommand(detected_skill) => detected_skill
-            .argument
-            .is_none()
-            .then(|| detected_skill.name.clone()),
+        ParsedSlashCommandInput::SkillCommand(detected_skill) => {
+            if !menu_was_open
+                || should_close_slash_command_menu_for_exact_match(
+                    result_count,
+                    detected_skill.argument.is_some(),
+                )
+            {
+                None
+            } else {
+                Some(detected_skill.name.clone())
+            }
+        }
     }
 }
 

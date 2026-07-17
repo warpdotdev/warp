@@ -38,21 +38,32 @@ pub(crate) fn terminal_view_agent_icon_variant(
 ) -> Option<IconWithStatusVariant> {
     let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
 
+    // Ambient task id from a restored cloud transcript's server metadata. This is a genuine
+    // cloud signal (unlike an orchestrator task id on a `User` share's `source_task_id`).
+    let server_ambient_task_id = terminal_view
+        .selected_conversation_server_metadata(app)
+        .and_then(|m| m.ambient_agent_task_id);
+
     // Resolve the ambient task id from [`TerminalView::ambient_agent_task_id_for_details_panel`],
-    // falling back to the selected conversation's server metadata for restored cloud transcripts.
+    // falling back to the server metadata above. Used only to look up task data for status; the
+    // cloud-vs-local treatment is decided by `is_cloud` below.
     let ambient_task_id = terminal_view
         .ambient_agent_task_id_for_details_panel(app)
-        .or_else(|| {
-            terminal_view
-                .selected_conversation_server_metadata(app)
-                .and_then(|m| m.ambient_agent_task_id)
-        });
+        .or(server_ambient_task_id);
     let task_data = ambient_task_id
         .and_then(|task_id| AgentConversationsModel::as_ref(app).get_task_data(&task_id));
 
     // Local orchestration children are dispatched as server tasks (so they carry an ambient
     // task id) but execute on the user's machine, so they must not get the cloud treatment.
     let is_local_child = terminal_view.selected_conversation_is_local_child(app);
+
+    // Whether this pane is genuinely a cloud/ambient conversation for icon purposes. Keys off
+    // [`TerminalView::is_cloud_agent_session`] or a restored cloud transcript (server metadata),
+    // NOT the mere presence of an orchestrator task id — a manually shared *local* (`User`)
+    // session carries a `source_task_id` sidecar but is not cloud (see QUALITY-726). Local
+    // orchestration children always keep the local treatment.
+    let is_cloud = (terminal_view.is_cloud_agent_session(app) || server_ambient_task_id.is_some())
+        && !is_local_child;
 
     // Defer to the card helper when we have task data and no CLI session takes precedence.
     if cli_agent_session.is_none() {
@@ -64,14 +75,12 @@ pub(crate) fn terminal_view_agent_icon_variant(
                 .and_then(|config| config.harness.as_ref())
                 .map(|harness| harness.harness_type)
                 .unwrap_or(Harness::Oz);
-            return Some(agent_icon_variant_for_run(harness, status, !is_local_child));
+            return Some(agent_icon_variant_for_run(harness, status, is_cloud));
         }
     }
 
-    let is_ambient = terminal_view.is_ambient_agent_session(app)
-        || (ambient_task_id.is_some() && !is_local_child);
     let inputs = TerminalIconInputs {
-        is_ambient,
+        is_ambient: is_cloud,
         cli_session: cli_agent_session.map(|session| CLISessionInputs {
             agent: session.agent,
             has_listener: session.listener.is_some(),

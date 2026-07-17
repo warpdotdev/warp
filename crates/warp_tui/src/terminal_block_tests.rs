@@ -1,13 +1,18 @@
 use warp::tui_export::{
     AIAgentActionId, AIConversationId, AgentInteractionMetadata, BlockId, TerminalModel,
+    TranscriptScope,
 };
+use warpui_core::elements::tui::TuiSize;
 
-use super::should_render_terminal_block;
+use super::{should_render_terminal_block, terminal_block_cursor};
 
 /// Builds a mock model with a single simulated (started + finished) block and
 /// returns the model together with that block's id.
 fn model_with_finished_block(command: &str) -> (TerminalModel, BlockId) {
     let mut model = TerminalModel::mock(None, None);
+    model
+        .block_list_mut()
+        .set_transcript_scope(TranscriptScope::Unfiltered);
     model.simulate_block(command, "output\r\n");
     let block_id = model
         .block_list()
@@ -56,7 +61,7 @@ fn agent_monitored_command_block_is_not_rendered_at_top_level() {
     // Sanity: this is an agent-requested command whose hide flag is off, so it
     // is otherwise "visible" and would leak into the top-level transcript.
     assert!(block.is_agent_requested_command());
-    assert!(block.is_visible(block_list.agent_view_state()));
+    assert!(block.is_visible(block_list.transcript_scope()));
 
     // Regression: an agent's command is rendered inline inside its agent
     // block's shell-command view, so it must NOT also appear as a standalone
@@ -97,4 +102,31 @@ fn user_command_block_is_rendered_at_top_level() {
 
     assert!(!block.is_agent_requested_command());
     assert!(should_render_terminal_block(block, block_list));
+}
+
+#[test]
+fn user_controlled_running_command_submits_cursor_within_window() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("python3", ">>> ");
+    let block = model.block_list().active_block();
+
+    // A finished/agent block never owns the inline cursor; an active
+    // user-controlled command does when its cursor lands inside the window.
+    let in_window = terminal_block_cursor(block, &(0..8), TuiSize::new(40, 8));
+    let clipped = terminal_block_cursor(block, &(0..8), TuiSize::new(40, 0));
+    assert!(in_window.is_some());
+    assert_eq!(clipped, None);
+}
+
+#[test]
+fn finished_command_does_not_submit_a_cursor() {
+    let (model, block_id) = model_with_finished_block("ls");
+    let block = model
+        .block_list()
+        .block_with_id(&block_id)
+        .expect("block should exist");
+    assert_eq!(
+        terminal_block_cursor(block, &(0..8), TuiSize::new(40, 8)),
+        None
+    );
 }

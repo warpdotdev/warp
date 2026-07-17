@@ -12,7 +12,7 @@ use crate::ai::agent::{AIAgentActionType, AIAgentOutput, AIAgentTextSection, Rea
 use crate::ai::blocklist::block::view_impl::output::LinkActionConstructors;
 use crate::ai::blocklist::block::TextLocation;
 use crate::terminal::links::should_directly_open_link;
-use crate::terminal::model::grid::grid_handler::is_file_link_separator;
+use crate::terminal::model::grid::grid_handler::{is_file_link_separator, is_url_link_separator};
 use crate::terminal::ShellLaunchData;
 
 cfg_if::cfg_if! {
@@ -194,10 +194,37 @@ pub(crate) fn add_link_detection_mouse_interactions<T: PartialClickableElement, 
 
 /// Returns the char ranges of detected URLs in the given text.
 fn detect_urls(text: &str) -> Vec<Range<usize>> {
+    fn push_url_range(
+        url_ranges: &mut Vec<Range<usize>>,
+        text: &str,
+        start: Option<usize>,
+        end: Option<usize>,
+    ) {
+        let Some((start, mut end)) = start.zip(end) else {
+            return;
+        };
+
+        while end > start && text.chars().nth(end - 1).is_some_and(is_url_link_separator) {
+            end -= 1;
+        }
+
+        if start < end {
+            url_ranges.push(start..end);
+        }
+    }
+
     let mut locator = UrlLocator::new();
     let mut url_ranges = vec![];
     let (mut start, mut end) = (None, None);
     for (i, c) in text.chars().enumerate() {
+        if is_url_link_separator(c) {
+            push_url_range(&mut url_ranges, text, start, end);
+            start = None;
+            end = None;
+            locator = UrlLocator::new();
+            continue;
+        }
+
         // Reference to https://docs.rs/urlocator/latest/urlocator/#example-url-boundaries
         // We know we have fully parsed an url when the locator advances from the `UrlLocation::Url`
         // to the `UrlLocation::Reset` stage.
@@ -207,9 +234,7 @@ fn detect_urls(text: &str) -> Vec<Range<usize>> {
                 start = Some(end.unwrap() - length as usize);
             }
             UrlLocation::Reset => {
-                if let Some((start, end)) = start.zip(end) {
-                    url_ranges.push(start..end)
-                }
+                push_url_range(&mut url_ranges, text, start, end);
                 start = None;
                 end = None;
             }
@@ -217,9 +242,7 @@ fn detect_urls(text: &str) -> Vec<Range<usize>> {
         }
     }
     // If the last character completes a valid URL, add it.
-    if let Some((start, end)) = start.zip(end) {
-        url_ranges.push(start..end)
-    }
+    push_url_range(&mut url_ranges, text, start, end);
     url_ranges
 }
 

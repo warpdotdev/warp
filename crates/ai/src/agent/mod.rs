@@ -2,6 +2,7 @@ pub mod action;
 pub mod action_result;
 mod citation;
 pub mod convert;
+pub mod document_action_presentation;
 pub mod file_locations;
 pub mod orchestration_config;
 

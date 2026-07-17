@@ -58,6 +58,42 @@ fn test_possible_file_paths_in_word() {
 }
 
 #[test]
+fn test_detect_urls_stops_at_fullwidth_punctuation() {
+    assert_eq!(detect_urls("go https://example.com，next"), vec![3..22]);
+    assert_eq!(detect_urls("go https://example.com。"), vec![3..22]);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_detect_file_paths_stops_at_fullwidth_punctuation() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("warp-rich-content.md");
+    std::fs::write(&file, "# Hello\n").unwrap();
+
+    let text = "see warp-rich-content.md， and warp-rich-content.md。";
+    let detected_paths = detect_file_paths(dir.path().to_str().unwrap(), text, None);
+
+    let link_ranges = detected_paths.keys().cloned().collect_vec();
+    assert!(link_ranges.contains(&(4..24)));
+    assert!(link_ranges.contains(&(30..50)));
+    assert!(!link_ranges.contains(&(4..25)));
+    assert!(!link_ranges.contains(&(30..51)));
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_detect_file_paths_keeps_fullwidth_punctuation_when_it_is_the_filename() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("warp-rich-content.md，");
+    std::fs::write(&file, "# Hello\n").unwrap();
+
+    let text = "see warp-rich-content.md，";
+    let detected_paths = detect_file_paths(dir.path().to_str().unwrap(), text, None);
+
+    assert!(detected_paths.contains_key(&(4..25)));
+}
+
+#[test]
 fn test_possible_file_paths_in_word_multibyte() {
     let word = "/path/音楽/テストファイル.txt:16:ḧeĹḹo";
     let possible_paths = possible_file_paths_in_word(word).collect_vec();

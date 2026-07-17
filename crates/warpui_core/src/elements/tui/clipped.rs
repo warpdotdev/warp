@@ -6,8 +6,9 @@
 //! the child rows before the first visible row.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
+    TuiBuffer, TuiClipBounds, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect,
+    TuiScreenPoint, TuiScreenPosition, TuiScreenRect, TuiSize,
 };
 use crate::AppContext;
 
@@ -15,6 +16,8 @@ use crate::AppContext;
 pub struct TuiClipped {
     child: Box<dyn TuiElement>,
     viewport_origin_y: u16,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiClipped {
@@ -23,6 +26,26 @@ impl TuiClipped {
         Self {
             child,
             viewport_origin_y: 0,
+            size: None,
+            origin: None,
+        }
+    }
+
+    /// Wraps an already-laid-out child with retained viewport geometry.
+    pub(crate) fn from_laid_out_child(
+        child: Box<dyn TuiElement>,
+        viewport_origin_y: usize,
+        size: TuiSize,
+    ) -> Self {
+        debug_assert!(
+            child.size().is_some(),
+            "TuiClipped child size must be retained before wrapping"
+        );
+        Self {
+            child,
+            viewport_origin_y: viewport_origin_y.min(usize::from(u16::MAX)) as u16,
+            size: Some(size),
+            origin: None,
         }
     }
 
@@ -70,39 +93,67 @@ impl TuiElement for TuiClipped {
             self.child_height(constraint.max.height),
         );
         let child_size = self.child.layout(TuiConstraint::loose(child_max), ctx, app);
-        constraint.clamp(TuiSize::new(
+        let size = constraint.clamp(TuiSize::new(
             child_size.width,
             child_size.height.saturating_sub(self.viewport_origin_y),
-        ))
+        ));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        if area.is_empty() {
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        self.child.after_layout(ctx, app);
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        let screen_origin = ctx.scene_point(origin);
+        self.origin = Some(screen_origin);
+        let Some(size) = self.size else {
+            return;
+        };
+        if size.width == 0 || size.height == 0 {
             return;
         }
-
-        let child_height = self.child_height(area.height);
-        let child_area = TuiRect::new(0, 0, area.width, child_height);
+        let child_size = self
+            .child
+            .size()
+            .expect("TuiClipped child size must be retained after layout");
+        let child_area = TuiRect::new(
+            0,
+            0,
+            size.width.max(child_size.width),
+            self.child_height(size.height).max(child_size.height),
+        );
         let mut child_buffer = TuiBuffer::empty(child_area);
-        self.child.render(child_area, &mut child_buffer, ctx);
+        let clip = TuiScreenRect::new(screen_origin, size);
+        let child_origin = origin.offset(0, -i32::from(self.viewport_origin_y));
+        ctx.with_scene_layer(TuiClipBounds::BoundedByActiveLayerAnd(clip), |ctx| {
+            let mut child_surface = TuiPaintSurface::mapped(&mut child_buffer, child_origin);
+            self.child.render(child_origin, &mut child_surface, ctx);
+        });
 
-        for y in 0..area.height {
+        for y in 0..size.height {
             let source_y = y.saturating_add(self.viewport_origin_y);
-            for x in 0..area.width {
-                if let Some(cell) =
-                    buffer.cell_mut((area.x.saturating_add(x), area.y.saturating_add(y)))
-                {
-                    *cell = child_buffer[(x, source_y)].clone();
-                }
+            for x in 0..size.width {
+                surface.set_cell(
+                    origin.offset(i32::from(x), i32::from(y)),
+                    child_buffer[(x, source_y)].clone(),
+                );
             }
         }
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        let child_area = TuiRect::new(area.x, area.y, area.width, self.child_height(area.height));
-        let (x, y) = self.child.cursor_position(child_area, ctx)?;
-        let y = y.checked_sub(self.viewport_origin_y)?;
-        (y < area.height).then_some((x, y))
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -112,30 +163,10 @@ impl TuiElement for TuiClipped {
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        // The child was laid out at its full logical height (visible +
-        // clipped rows). Filter mouse events to the visible window, then give the
-        // child its full logical area translated so `viewport_origin_y`
-        // aligns with the visible top: a container child then splits the
-        // correct height, and a click at the visible top hits logical row
-        // `viewport_origin_y`.
-        if let Some(position) = event.position() {
-            if !area.contains_point(position) {
-                return false;
-            }
-        }
-        let child_area = TuiRect::new(
-            area.x,
-            area.y.saturating_sub(self.viewport_origin_y),
-            area.width,
-            self.child_height(area.height),
-        );
-        self.child
-            .dispatch_event(event, child_area, event_ctx, ctx, app)
+        self.child.dispatch_event(event, event_ctx, app)
     }
 }
 

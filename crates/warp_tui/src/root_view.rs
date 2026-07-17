@@ -12,6 +12,7 @@ use warpui_core::{
 };
 
 use crate::keybindings::TUI_BINDING_GROUP;
+use crate::resume::TuiExitSummaryHandle;
 use crate::terminal_session_view::TuiTerminalSessionView;
 use crate::ui::{login_failed, login_placeholder, terminal_starting};
 
@@ -39,6 +40,7 @@ pub enum RootTuiAction {
 /// The app-level TUI shell. It gates the authenticated terminal session on login state.
 pub struct RootTuiView {
     state: RootTuiState,
+    exit_summary: TuiExitSummaryHandle,
 }
 
 /// Registers the root view's keybindings. Called once at TUI startup from
@@ -53,9 +55,10 @@ pub fn init(app: &mut AppContext) {
 }
 
 impl RootTuiView {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(exit_summary: TuiExitSummaryHandle) -> Self {
         Self {
             state: RootTuiState::Auth,
+            exit_summary,
         }
     }
     /// Creates the terminal child view once login has completed, or returns the
@@ -64,13 +67,21 @@ impl RootTuiView {
     pub(crate) fn create_terminal_session(
         &mut self,
         surface_init: TerminalSurfaceInit,
+        keyboard_enhancement_supported: bool,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<TuiTerminalSessionView> {
         if let RootTuiState::Terminal(terminal_session) = &self.state {
             return terminal_session.clone();
         }
-        let terminal_session =
-            ctx.add_typed_action_tui_view(|ctx| TuiTerminalSessionView::new(surface_init, ctx));
+        let exit_summary = self.exit_summary.clone();
+        let terminal_session = ctx.add_typed_action_tui_view(|ctx| {
+            TuiTerminalSessionView::new(
+                surface_init,
+                exit_summary,
+                keyboard_enhancement_supported,
+                ctx,
+            )
+        });
         self.state = RootTuiState::Terminal(terminal_session.clone());
         terminal_session
     }

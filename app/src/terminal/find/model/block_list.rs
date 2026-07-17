@@ -67,12 +67,12 @@ pub(super) fn run_find_on_block_list(
         // In both cases we want the most recent block updated last, which means the sort direction
         // here should always be MostRecentLast
         for block_index in blocks_to_include_in_results {
-            let agent_view_state = block_list.agent_view_state();
+            let transcript_scope = block_list.transcript_scope();
             if let Some(block) = block_list
                 .block_at(*block_index)
-                .filter(|block| !block.is_empty(agent_view_state))
+                .filter(|block| !block.is_empty(transcript_scope))
             {
-                if block.height(agent_view_state) == Lines::zero() {
+                if block.height(transcript_scope) == Lines::zero() {
                     // This should not happen in practice, because `blocks_to_include_in_results`
                     // is set by selecting blocks, which are presumably visible.
                     continue;

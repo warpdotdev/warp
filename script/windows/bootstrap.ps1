@@ -46,7 +46,7 @@ function Show-BootstrapPreview {
     Write-Output 'It will:'
     Write-Output '  - Check for Git for Windows.'
     Write-Output '  - Install Rust if cargo is unavailable.'
-    Write-Output '  - Install Visual Studio Build Tools, jq, CMake, InnoSetup, and gcloud as needed.'
+    Write-Output '  - Install Visual Studio Build Tools, jq, CMake, Protobuf, LLVM, InnoSetup, and gcloud as needed.'
     Write-Output '  - Install Cargo test dependencies.'
 
     if (-not $InstallCommonSkills) {
@@ -63,6 +63,81 @@ function Show-BootstrapPreview {
 
     Write-Output 'Run .\script\windows\bootstrap.ps1 -Help to see options and environment overrides.'
     Write-Output ''
+}
+
+function Add-DirectoryToPathIfPresent {
+    param([string]$Path)
+
+    if (-not $Path -or -not (Test-Path -Path $Path -PathType Container)) {
+        return
+    }
+
+    $pathEntries = $env:PATH -split ';'
+    if ($pathEntries -notcontains $Path) {
+        $env:PATH = "$Path;$env:PATH"
+    }
+}
+
+function Add-WinGetPackageCommandToPath {
+    param(
+        [string]$CommandName,
+        [string]$PackageId
+    )
+
+    if (Get-Command -Name $CommandName -Type Application -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    $winGetPackagesDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    if (-not (Test-Path -Path $winGetPackagesDir -PathType Container)) {
+        return
+    }
+
+    $escapedPackageId = [WildcardPattern]::Escape($PackageId)
+    $packageDirs = Get-ChildItem -Path $winGetPackagesDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "$escapedPackageId*" }
+
+    foreach ($packageDir in $packageDirs) {
+        $command = Get-ChildItem -Path $packageDir.FullName -Filter "$CommandName.exe" -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($command) {
+            Add-DirectoryToPathIfPresent $command.DirectoryName
+            return
+        }
+    }
+}
+
+function Use-LibclangIfInstalled {
+    $candidateDirs = @(
+        "$env:ProgramFiles\LLVM\bin",
+        "${env:ProgramFiles(x86)}\LLVM\bin"
+    )
+
+    foreach ($dir in $candidateDirs) {
+        if (Test-Path -Path (Join-Path $dir 'libclang.dll') -PathType Leaf) {
+            Add-DirectoryToPathIfPresent $dir
+            $env:LIBCLANG_PATH = $dir
+            return
+        }
+    }
+
+    $winGetPackagesDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    if (-not (Test-Path -Path $winGetPackagesDir -PathType Container)) {
+        return
+    }
+
+    $packageDirs = Get-ChildItem -Path $winGetPackagesDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like 'LLVM.LLVM*' }
+
+    foreach ($packageDir in $packageDirs) {
+        $libclang = Get-ChildItem -Path $packageDir.FullName -Filter 'libclang.dll' -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($libclang) {
+            Add-DirectoryToPathIfPresent $libclang.DirectoryName
+            $env:LIBCLANG_PATH = $libclang.DirectoryName
+            return
+        }
+    }
 }
 
 if ($Help) {
@@ -87,7 +162,12 @@ if (-not $gitBinDir) {
     Write-Error 'https://gitforwindows.org/'
     exit 1
 }
-$env:PATH = "$gitBinDir;$env:PATH"
+Add-DirectoryToPathIfPresent $gitBinDir
+
+# Some Rust build scripts depend on Unix patch.exe, which ships with Git for Windows.
+$gitUsrBinDir = Join-Path (Split-Path -Parent $gitBinDir) 'usr\bin'
+Add-DirectoryToPathIfPresent $gitUsrBinDir
+
 function Resolve-CommonSkillsScript {
     param([string]$ScriptName)
 
@@ -154,6 +234,14 @@ winget install jqlang.jq
 # CMake is needed to build some dependencies, e.g.: sentry-contrib-native.
 winget install -e --id Kitware.CMake
 
+# Protoc is required by prost-build for warp-proto-apis generated crates.
+winget install -e --id Google.Protobuf
+Add-WinGetPackageCommandToPath -CommandName 'protoc' -PackageId 'Google.Protobuf'
+
+# LLVM provides libclang.dll, which is required by bindgen-based build scripts.
+winget install -e --id LLVM.LLVM
+Use-LibclangIfInstalled
+
 # We use InnoSetup to build our release bundle installer.
 winget install -e --id JRSoftware.InnoSetup
 
@@ -168,11 +256,13 @@ if (-not (Get-Command -Name gcloud -Type Application -ErrorAction SilentlyContin
     Start-Process "$env:Temp\GoogleCloudSDKInstaller.exe" -Wait
 }
 
-[string]$identityToken = gcloud auth print-identity-token
-if ($identityToken.Trim().Length -eq 0) {
-    Write-Output 'gcloud CLI authentication missing.  Press enter to continue...'
-    Read-Host
-    gcloud auth login
+if ($env:WARP_SKIP_GCLOUD_AUTH -ne '1') {
+    [string]$identityToken = gcloud auth print-identity-token
+    if ($identityToken.Trim().Length -eq 0) {
+        Write-Output 'gcloud CLI authentication missing.  Press enter to continue...'
+        Read-Host
+        gcloud auth login
+    }
 }
 
 if ($InstallCommonSkills) {

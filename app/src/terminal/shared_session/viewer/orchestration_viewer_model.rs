@@ -1,25 +1,18 @@
 //! Drives the orchestration pill bar in shared session viewers.
 //!
 //! After the viewer joins a parent ambient-agent session, this model
-//! discovers and tracks the parent's direct children using one of two
-//! delivery paths, gated on [`FeatureFlag::OrchestrationViewerStreamer`]:
-//!
-//! 1. **Streamer-driven (flag ON, default).** Registers as a viewer-mode
-//!    consumer on [`OrchestrationEventStreamer`], which opens an ancestor
-//!    SSE (seeded by a one-shot REST snapshot) and broadcasts
-//!    `ChildSpawned`/`ChildStatusChanged` events.
-//! 2. **Legacy REST polling (flag OFF).** Periodically polls
-//!    `GET /agent/runs?ancestor_run_id=` and reconciles the full child
-//!    list each cycle.
+//! discovers and tracks the parent's direct children via the
+//! [`OrchestrationEventStreamer`], which opens an ancestor SSE (seeded
+//! by a one-shot REST snapshot) and broadcasts `ChildSpawned` /
+//! `ChildStatusChanged` events.
 //!
 //! Each viewer pane has its own model with its own placeholder
-//! conversations; the streamer (when on) is a shared singleton.
+//! conversations; the streamer is a shared singleton.
 //! Pill clicks navigate via `SwapPaneToConversation`.
 use std::collections::HashMap;
 use std::time::Duration;
 
 use session_sharing_protocol::common::SessionId;
-use warp_core::features::FeatureFlag;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
 
@@ -30,16 +23,9 @@ use crate::ai::blocklist::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::server::server_api::ai::TaskListFilter;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::{Event as TerminalViewEvent, TerminalView};
 
-/// Max child runs per legacy `?ancestor_run_id=` page (polling path).
-const CHILD_DISCOVERY_FETCH_LIMIT: i32 = 100;
-/// Polling cadence (legacy path) while any child is non-terminal.
-const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
-/// Slower polling cadence (legacy path) once every known child is terminal.
-const STATUS_POLL_INTERVAL_IDLE: Duration = Duration::from_secs(30);
 /// Refetch cadence for children whose claim-time `session_id` is not yet known.
 const PENDING_SESSION_ID_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -48,7 +34,8 @@ struct ChildAgentEntry {
     conversation_id: AIConversationId,
     /// `None` until execution has been claimed.
     session_id: Option<SessionId>,
-    /// Polling path uses this to dedupe status writes.
+    /// Cached to deduplicate status writes: we only push an update when the
+    /// state actually changes.
     last_state: AmbientAgentTaskState,
     /// True once `EnsureSharedSessionViewerChildPane` has been emitted.
     pane_materialization_requested: bool,
@@ -63,18 +50,10 @@ pub struct OrchestrationViewerModel {
     /// Placeholder conversations materialized for direct children.
     children: HashMap<AmbientAgentTaskId, ChildAgentEntry>,
     /// Secondary index keyed by stringified `run_id`, used by the streamer
-    /// path's broadcast event handler. Kept in sync with `children`.
+    /// broadcast event handler. Kept in sync with `children`.
     children_by_run_id: HashMap<String, AmbientAgentTaskId>,
-    /// (Polling path.) `None` on the streamer path.
-    polling_handle: Option<SpawnedFutureHandle>,
-    /// (Polling path.) Bumped before each fetch so stale responses can
-    /// be dropped.
-    fetch_generation: u64,
-    /// Set when the most recent fetch returned no children; resumed by
-    /// the next orchestrator `AppendedExchange`.
-    idle_due_to_no_children: bool,
-    /// (Streamer path.) Periodic timer fetching the claim-time
-    /// `session_id` for not-yet-claimed children.
+    /// Periodic timer fetching the claim-time `session_id` for
+    /// not-yet-claimed children.
     pending_session_id_poll_handle: Option<SpawnedFutureHandle>,
     /// Test-only: counts `spawn_task_metadata_fetch` invocations.
     #[cfg(test)]
@@ -91,76 +70,39 @@ impl OrchestrationViewerModel {
         self.parent_task_id
     }
     /// Builds a viewer model attached to the given parent shared session.
-    /// See the module docs for the two delivery paths.
     pub fn new(
         parent_task_id: AmbientAgentTaskId,
         terminal_view_id: EntityId,
         terminal_view: WeakViewHandle<TerminalView>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        if FeatureFlag::OrchestrationViewerStreamer.is_enabled() {
-            // Streamer-driven path. Subscribe to broadcast events filtered
-            // on `parent_task_id`; the streamer handles SSE open/teardown,
-            // cold-start seed, and cursor persistence on our behalf.
-            let streamer = OrchestrationEventStreamer::handle(ctx);
-            ctx.subscribe_to_model(&streamer, move |me, _, event, ctx| {
-                me.handle_streamer_event(event, ctx);
-            });
-            ctx.subscribe_to_model(
-                &BlocklistAIHistoryModel::handle(ctx),
-                |me, _, event, ctx| {
-                    me.handle_history_event(event, ctx);
-                },
-            );
-
-            let model = Self {
-                parent_task_id,
-                terminal_view_id,
-                terminal_view,
-                children: HashMap::new(),
-                children_by_run_id: HashMap::new(),
-                polling_handle: None,
-                fetch_generation: 0,
-                idle_due_to_no_children: false,
-                pending_session_id_poll_handle: None,
-                #[cfg(test)]
-                metadata_fetch_dispatch_count: 0,
-            };
-            model.register_viewer_mode_consumer_if_possible(ctx);
-            return model;
-        }
-
-        // Legacy polling path. Kick to fast cadence on `AppendedExchange` so
-        // follow-up input that spawns new children surfaces without waiting
-        // for the next 30s idle poll.
+        // Subscribe to broadcast events filtered on `parent_task_id`; the
+        // streamer handles SSE open/teardown, cold-start seed, and cursor
+        // persistence on our behalf.
+        let streamer = OrchestrationEventStreamer::handle(ctx);
+        ctx.subscribe_to_model(&streamer, move |me, _, event, ctx| {
+            me.handle_streamer_event(event, ctx);
+        });
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
-                me.maybe_kick_polling(event, ctx);
-                me.maybe_backfill_parent_agent_ids(event, ctx);
+                me.handle_history_event(event, ctx);
             },
         );
 
-        let mut model = Self {
+        let model = Self {
             parent_task_id,
             terminal_view_id,
             terminal_view,
             children: HashMap::new(),
             children_by_run_id: HashMap::new(),
-            polling_handle: None,
-            fetch_generation: 0,
-            idle_due_to_no_children: false,
             pending_session_id_poll_handle: None,
             #[cfg(test)]
             metadata_fetch_dispatch_count: 0,
         };
-
-        // Each fetch reschedules itself via its response callback.
-        model.fetch_children(ctx);
+        model.register_viewer_mode_consumer_if_possible(ctx);
         model
     }
-
-    // ---- Streamer-driven path (FeatureFlag::OrchestrationViewerStreamer on)
 
     fn handle_history_event(
         &mut self,
@@ -368,8 +310,8 @@ impl OrchestrationViewerModel {
 
         if let Some(entry) = self.children.get_mut(&task_id) {
             // Existing child: update status if it changed and fill in
-            // session id once it becomes available. (Polling path replays
-            // every cycle; streamer path can also re-register on reconnect.)
+            // session id once it becomes available. Can be called again
+            // on streamer reconnect.
             if entry.last_state != new_state {
                 let conversation_id = entry.conversation_id;
                 let terminal_view_id = self.terminal_view_id;
@@ -484,11 +426,11 @@ impl OrchestrationViewerModel {
             self.request_child_pane_materialization(conversation_id, sid, ctx);
         }
 
-        // Streamer path only: arm the session_id refetch timer.
+        // Arm the session_id refetch timer if the child arrived pre-claim.
         self.maybe_schedule_pending_session_id_poll(ctx);
     }
 
-    // ---- Pending-session_id polling (streamer path) -------------------
+    // ---- Pending-session_id polling ----------------------------------
 
     /// True iff at least one tracked child is still pending materialization.
     fn has_pending_session_id_children(&self) -> bool {
@@ -497,12 +439,9 @@ impl OrchestrationViewerModel {
             .any(|entry| entry.session_id.is_none() || !entry.pane_materialization_requested)
     }
 
-    /// Schedules the next session_id refetch tick on the streamer path.
+    /// Schedules the next session_id refetch tick.
     /// Safe to call unconditionally — bails when not needed.
     fn maybe_schedule_pending_session_id_poll(&mut self, ctx: &mut ModelContext<Self>) {
-        if !FeatureFlag::OrchestrationViewerStreamer.is_enabled() {
-            return;
-        }
         if self.pending_session_id_poll_handle.is_some() {
             return;
         }
@@ -545,112 +484,12 @@ impl OrchestrationViewerModel {
         self.maybe_schedule_pending_session_id_poll(ctx);
     }
 
-    // ---- Legacy polling path (FeatureFlag::OrchestrationViewerStreamer off)
-
-    /// Schedules the next poll: fast cadence while any child is
-    /// non-terminal, slow once all are terminal. Skipped while
-    /// [`Self::idle_due_to_no_children`] is set; [`Self::maybe_kick_polling`]
-    /// resumes on the next orchestrator `AppendedExchange`.
-    fn schedule_next_poll(&mut self, ctx: &mut ModelContext<Self>) {
-        // `SpawnedFutureHandle` doesn't abort on drop, so abort
-        // explicitly to avoid stacking parallel timer chains.
-        if let Some(prior) = self.polling_handle.take() {
-            prior.abort();
-        }
-
-        // Stay idle until an `AppendedExchange` on the orchestrator wakes
-        // us up. `apply_children_fetch` is responsible for setting this
-        // flag when an empty descendant list comes back.
-        if self.idle_due_to_no_children {
-            return;
-        }
-
-        let all_terminal = !self.children.is_empty()
-            && self
-                .children
-                .values()
-                .all(|child| child.last_state.is_terminal());
-        let interval = if all_terminal {
-            STATUS_POLL_INTERVAL_IDLE
-        } else {
-            STATUS_POLL_INTERVAL
-        };
-
-        let handle = ctx.spawn(
-            async move {
-                Timer::after(interval).await;
-            },
-            |me, _, ctx| me.fetch_children(ctx),
-        );
-        self.polling_handle = Some(handle);
-    }
-
-    /// Tightens polling on `AppendedExchange` during the idle→active
-    /// transition, and resumes from `idle_due_to_no_children` on an
-    /// orchestrator-scoped exchange. The idle-resume check runs first
-    /// because it would otherwise be conflated with the
-    /// "fetch in flight" state by the `polling_handle.is_none()` guard.
-    fn maybe_kick_polling(
-        &mut self,
-        event: &BlocklistAIHistoryEvent,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let BlocklistAIHistoryEvent::AppendedExchange {
-            conversation_id, ..
-        } = event
-        else {
-            return;
-        };
-        let conversation_id = *conversation_id;
-        let is_orchestrator = self.find_parent_conversation_id(ctx) == Some(conversation_id);
-
-        // Resume from idle-due-to-no-children. Only orchestrator-scoped
-        // exchanges count: child events are ignored because we have no
-        // tracked children to update yet, and an unrelated conversation's
-        // exchange does not imply this orchestrator just spawned a child.
-        if self.idle_due_to_no_children {
-            if is_orchestrator {
-                self.idle_due_to_no_children = false;
-                if let Some(prior) = self.polling_handle.take() {
-                    prior.abort();
-                }
-                self.fetch_children(ctx);
-            }
-            return;
-        }
-
-        let all_terminal = !self.children.is_empty()
-            && self
-                .children
-                .values()
-                .all(|child| child.last_state.is_terminal());
-        if !all_terminal {
-            return;
-        }
-        // `polling_handle = None` here means a kick fetch is already in
-        // flight (the idle-due-to-no-children case is handled above);
-        // skipping prevents pile-up when exchanges arrive in bursts.
-        if self.polling_handle.is_none() {
-            return;
-        }
-        let is_tracked_child = self
-            .children
-            .values()
-            .any(|child| child.conversation_id == conversation_id);
-        if !is_orchestrator && !is_tracked_child {
-            return;
-        }
-        if let Some(prior) = self.polling_handle.take() {
-            prior.abort();
-        }
-        self.fetch_children(ctx);
-    }
+    // ---- Helpers -------------------------------------------------------
 
     /// Backfills `parent_agent_id` on viewer-created children once the
-    /// orchestrator receives its server token / run id. First-poll
-    /// children are created with `parent_agent_id = None` because the
-    /// orchestrator hasn't been identified yet; this fixes them up so
-    /// `parent_conversation_id` resolution works.
+    /// orchestrator receives its server token. Children registered before
+    /// the parent's run_id was known would otherwise stay with
+    /// `parent_agent_id = None` and break parent-conversation lookups.
     fn maybe_backfill_parent_agent_ids(
         &mut self,
         event: &BlocklistAIHistoryEvent,
@@ -691,77 +530,6 @@ impl OrchestrationViewerModel {
             }
         });
     }
-
-    /// Issues a `GET /agent/runs?ancestor_run_id={parent_task_id}` request
-    /// and routes the response into [`Self::apply_children_fetch`]. Errors
-    /// are logged and ignored; the next poll retries.
-    fn fetch_children(&mut self, ctx: &mut ModelContext<Self>) {
-        // Bump generation BEFORE dispatch so any in-flight stale fetch
-        // is invalidated when its response callback compares.
-        self.fetch_generation = self.fetch_generation.wrapping_add(1);
-        let fetch_generation = self.fetch_generation;
-
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let filter = TaskListFilter {
-            ancestor_run_id: Some(self.parent_task_id.to_string()),
-            ..TaskListFilter::default()
-        };
-        let parent_task_id = self.parent_task_id;
-
-        ctx.spawn(
-            async move {
-                ai_client
-                    .list_ambient_agent_tasks(CHILD_DISCOVERY_FETCH_LIMIT, filter)
-                    .await
-            },
-            move |me, result, ctx| {
-                // Stale fetch: a newer one's already in flight (or applied).
-                // The newer fetch owns rescheduling.
-                if me.fetch_generation != fetch_generation {
-                    return;
-                }
-                match result {
-                    Ok(tasks) => me.apply_children_fetch(tasks, ctx),
-                    Err(err) => {
-                        log::warn!(
-                            "OrchestrationViewerModel: failed to fetch children for {parent_task_id}: {err:#}"
-                        );
-                    }
-                }
-                // Always reschedule (even on error) so transient failures
-                // don't break the polling loop.
-                me.schedule_next_poll(ctx);
-            },
-        );
-    }
-
-    /// Consumes a children list response, registering new children and
-    /// updating statuses / session ids on existing ones. Each child goes
-    /// through [`Self::register_child`] which is shared with the streamer
-    /// path. Also manages the polling-path `idle_due_to_no_children` flag
-    /// so an empty descendant list parks the timer chain until the next
-    /// orchestrator `AppendedExchange` resumes it.
-    fn apply_children_fetch(&mut self, tasks: Vec<AmbientAgentTask>, ctx: &mut ModelContext<Self>) {
-        for task in tasks {
-            self.register_child(task, ctx);
-        }
-
-        // Polling-cost mitigation: if no children are tracked after this
-        // fetch, stop scheduling timers. The resume signal is an
-        // `AppendedExchange` on the orchestrator (see
-        // `maybe_kick_polling`). `schedule_next_poll` honours this flag
-        // and bails before spawning a new timer.
-        if self.children.is_empty() {
-            self.idle_due_to_no_children = true;
-            if let Some(prior) = self.polling_handle.take() {
-                prior.abort();
-            }
-        } else {
-            self.idle_due_to_no_children = false;
-        }
-    }
-
-    // ---- Shared helpers ------------------------------------------------
 
     /// Resolves the orchestrator's local conversation id via the view's
     /// active conversation, which `on_shared_init` sets on first join.

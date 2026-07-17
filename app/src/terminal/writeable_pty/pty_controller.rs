@@ -588,6 +588,12 @@ impl<T: EventLoopSender> PtyController<T> {
         self.terminal_model.lock().start_command_execution();
     }
 
+    /// Interrupts the foreground PTY process.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn write_interrupt(&mut self, ctx: &mut ModelContext<Self>) {
+        self.write_bytes(&[escape_sequences::C0::ETX][..], ctx);
+    }
+
     /// Resizes the PTY's size (i.e. its notion of the number of columns and rows in the screen) via
     /// ioctl system call and updates the terminal model as appropriate.
     pub fn resize_pty(&self, size_update: SizeUpdate, ctx: &mut ModelContext<Self>) {

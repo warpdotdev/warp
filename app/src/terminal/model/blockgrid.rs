@@ -209,6 +209,15 @@ impl BlockGrid {
         )))
     }
 
+    /// Returns the visible cursor position in displayed-grid coordinates as
+    /// `(column, row)`. A cursor hidden below trimmed content is omitted.
+    pub fn visible_cursor_display_position(&self) -> Option<(usize, usize)> {
+        match self.cursor_display_point()? {
+            CursorDisplayPoint::Visible(point) => Some((point.col, point.row)),
+            CursorDisplayPoint::HiddenCache(_) => None,
+        }
+    }
+
     /// Determine whether the block is currently empty
     ///
     /// Note: Depending on the state of the block, it can be _currently_ empty even when it has
@@ -726,6 +735,10 @@ impl ansi::Handler for BlockGrid {
 
     fn input(&mut self, c: char) {
         self.ansi_handler().input(c);
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        self.ansi_handler().set_hyperlink(hyperlink);
     }
 
     fn goto(&mut self, row: VisibleRow, col: usize) {

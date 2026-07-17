@@ -259,9 +259,7 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
         }
     }
 
-    if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-        supported_tools.push(api::ToolType::InsertReviewComments);
-    }
+    supported_tools.push(api::ToolType::InsertReviewComments);
 
     if FeatureFlag::ListSkills.is_enabled() {
         supported_tools.push(api::ToolType::ReadSkill);

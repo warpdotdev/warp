@@ -11,8 +11,9 @@ use warpui::{Action, AppContext, Element};
 
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::llms::{
-    should_show_bedrock_icon_for_model, should_show_key_icon_for_model, DisableReason, LLMId,
-    LLMInfo,
+    should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
+    DisableReason, LLMId, LLMInfo,
 };
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
 
@@ -84,20 +85,21 @@ fn make_item_fields<A: Action + Clone>(
         llm.menu_display_name()
     };
     let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
+    let is_using_gemini_enterprise_agent_platform =
+        should_show_gemini_enterprise_agent_platform_icon_for_model(llm, app);
     let is_using_api_key = should_show_key_icon_for_model(llm, app);
     let is_custom_router = is_custom_router_id(llm.id.as_str());
     let leading_icon = if is_using_bedrock {
         Icon::Aws
+    } else if is_using_gemini_enterprise_agent_platform {
+        Icon::GeminiEnterpriseAgentPlatform
     } else if is_custom_router {
         Icon::Dataflow
     } else {
         llm.provider.icon().unwrap_or(Icon::Oz)
     };
-    let trailing_credential_icon = if !is_using_bedrock && is_using_api_key {
-        Some(Icon::Key)
-    } else {
-        None
-    };
+    let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;
+    let trailing_credential_icon = (!is_using_cloud_host && is_using_api_key).then_some(Icon::Key);
 
     let mut item = if let Some(position_id_fn) = position_id_fn {
         let position_id = position_id_fn(&llm.id);

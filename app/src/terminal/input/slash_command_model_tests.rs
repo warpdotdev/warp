@@ -2,13 +2,43 @@ use settings::Setting as _;
 use warp_errors::report_if_error;
 use warpui::{App, SingletonEntity as _};
 
-use super::SlashCommandEntryState;
+use super::{ParsedSlashCommandInput, SlashCommandEntryState};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{QueuedQuery, QueuedQueryModel, QueuedQueryOrigin};
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::settings::AISettings;
 use crate::terminal::input::slash_commands::SlashCommandDataSource as _;
 use crate::terminal::input::tests::{add_window_with_bootstrapped_terminal, initialize_app};
+
+#[test]
+fn test_parse_input_requires_slash_at_start() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let slash_command_data_source =
+            input.read(&app, |input, _| input.slash_command_data_source.clone());
+
+        slash_command_data_source.read(&app, |data_source, ctx| {
+            let command_name = data_source
+                .active_commands()
+                .next()
+                .map(|(_, command)| command.name)
+                .expect("expected at least one active slash command");
+            let input = format!("  {command_name}");
+
+            assert!(matches!(
+                data_source.parse_input(&input, ctx),
+                ParsedSlashCommandInput::None
+            ));
+        });
+    });
+}
 
 #[test]
 fn test_parse_slash_command_handles_argument_rules() {

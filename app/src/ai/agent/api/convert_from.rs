@@ -772,7 +772,7 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                 create_standard_action(request_computer_use.into())
             }
             api::message::tool_call::Tool::StartRecording(start_recording) => {
-                create_standard_action(start_recording.into())
+                create_standard_action(start_recording.try_into()?)
             }
             api::message::tool_call::Tool::StopRecording(stop_recording) => {
                 create_standard_action(stop_recording.into())
@@ -985,12 +985,6 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                         api::message::system_query::Type::AutoCodeDiff(p) => {
                             inputs.push(AIAgentInput::AutoCodeDiffQuery {
                                 query: p.query.clone(),
-                                context: ctx,
-                            });
-                        }
-                        api::message::system_query::Type::FetchReviewComments(fetch) => {
-                            inputs.push(AIAgentInput::FetchReviewComments {
-                                repo_path: fetch.repo_path.clone(),
                                 context: ctx,
                             });
                         }

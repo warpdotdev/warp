@@ -261,7 +261,7 @@ pub fn render_json_tree(
     on_copy_json: Arc<CopyJsonFn>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let font_family = appearance.ui_font_family();
+    let font_family = appearance.monospace_font_family();
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
     // Optional section label.
