@@ -189,7 +189,7 @@ impl TuiOrchestrationModel {
         }
 
         let page_state_applies = self.page_root_conversation_id == Some(root_conversation_id);
-        let page_anchor = page_state_applies
+        let page_anchor = (page_state_applies && self.explicitly_paged)
             .then_some(self.page_anchor)
             .flatten()
             .filter(|anchor| tabs.iter().any(|tab| tab.conversation_id == *anchor))
@@ -222,20 +222,12 @@ impl TuiOrchestrationModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<TuiSessionId> {
-        let current_page_anchor = self
-            .snapshot(conversation_id, ctx)
-            .and_then(|snapshot| snapshot.page_anchor);
         let history = BlocklistAIHistoryModel::as_ref(ctx);
         let root_conversation_id = orchestration_root_conversation_id(history, conversation_id)?;
         let session_id =
             TuiSessions::as_ref(ctx).session_id_for_conversation(history, conversation_id)?;
-        if self.page_root_conversation_id != Some(root_conversation_id) {
-            // Capture the page before focus changes any ordering inputs. The
-            // first switch in a tree must not replace the visible page with a
-            // new fallback anchor.
-            self.page_anchor = current_page_anchor;
-        }
         self.page_root_conversation_id = Some(root_conversation_id);
+        self.page_anchor = None;
         self.explicitly_paged = false;
         TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
             sessions.focus_session(session_id, ctx);

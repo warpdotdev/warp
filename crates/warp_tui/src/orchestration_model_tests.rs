@@ -278,7 +278,7 @@ fn snapshot_is_shared_across_tree_and_filters_conversations_without_sessions() {
                 TuiSessions::as_ref(ctx).focused_session_id(),
                 Some(first_session_id)
             );
-            assert_eq!(snapshot.page_anchor, Some(second_child_id));
+            assert_eq!(snapshot.page_anchor, Some(first_child_id));
             assert!(snapshot.reveal_selected);
         });
     });
