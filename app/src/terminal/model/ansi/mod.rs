@@ -40,7 +40,7 @@ use crate::terminal::model::completions::{
 use crate::terminal::model::escape_sequences::C0;
 use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::parse_iterm_image_metadata;
-use crate::{safe_debug, safe_error};
+use crate::{safe_debug, safe_error, safe_warn};
 
 /// Marks an OSC as one that is sent by Warp logic registered in the shell.
 ///
@@ -714,8 +714,9 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
                 self.handler.update_hook(key.to_string(), value);
             }
             invalid_marker => {
-                log::warn!(
-                    "Invalid marker received for pending shell hook OSC: marker={invalid_marker:?}"
+                safe_warn!(
+                    safe: ("Invalid marker received for pending shell hook OSC"),
+                    full: ("Invalid marker received for pending shell hook OSC: marker={:?}", invalid_marker)
                 );
             }
         }
@@ -1151,7 +1152,10 @@ where
                     }
                     UNENCODED_KV_MARKER => self.handle_kv_marker(params),
                     _ => {
-                        log::warn!("Invalid OSC JSON marker found: marker={json_marker_char}");
+                        safe_warn!(
+                            safe: ("Invalid OSC JSON marker found"),
+                            full: ("Invalid OSC JSON marker found: marker={}", json_marker_char)
+                        );
                     }
                 }
             }
