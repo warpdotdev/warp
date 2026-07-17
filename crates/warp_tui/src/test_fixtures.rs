@@ -1,15 +1,35 @@
 //! Shared fixtures for `warp_tui` unit tests.
+use std::any::Any;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
     ActiveSession, BlocklistAIActionModel, BlocklistAIHistoryModel, GetRelevantFilesController,
-    ModelEventDispatcher, Sessions, TerminalModel,
+    ModelEventDispatcher, Sessions, TerminalManagerTrait, TerminalModel, TerminalSurfaceInit,
 };
 use warp_core::semantic_selection::SemanticSelection;
 use warpui::{AddSingletonModel, App, EntityId, ModelHandle};
 use warpui_core::elements::tui::{TuiElement, TuiText};
-use warpui_core::{AppContext, Entity, TuiView, TypedActionView};
+use warpui_core::{AppContext, Entity, TuiView, TypedActionView, ViewHandle, WindowId};
+
+use crate::resume::TuiExitSummaryHandle;
+use crate::terminal_session_view::TuiTerminalSessionView;
+
+struct TestTerminalManager(Arc<FairMutex<TerminalModel>>);
+
+impl TerminalManagerTrait for TestTerminalManager {
+    fn model(&self) -> Arc<FairMutex<TerminalModel>> {
+        self.0.clone()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
 
 /// A trivial typed-action root view for tests that need a TUI window whose
 /// real subject is a non-root child view.
@@ -74,4 +94,25 @@ pub(crate) fn add_test_action_model_and_events(
         )
     });
     (action_model, dispatcher)
+}
+
+/// Builds a full session view against mock terminal plumbing.
+pub(crate) fn add_test_terminal_session(
+    app: &mut App,
+    window_id: WindowId,
+) -> (
+    ViewHandle<TuiTerminalSessionView>,
+    ModelHandle<Box<dyn TerminalManagerTrait>>,
+) {
+    app.update(|ctx| {
+        let surface_init = TerminalSurfaceInit::new_for_test(ctx);
+        let terminal_model = surface_init.model.clone();
+        let view = ctx.add_typed_action_tui_view(window_id, |ctx| {
+            TuiTerminalSessionView::new(surface_init, TuiExitSummaryHandle::default(), false, ctx)
+        });
+        let manager = ctx.add_model(|_| {
+            Box::new(TestTerminalManager(terminal_model)) as Box<dyn TerminalManagerTrait>
+        });
+        (view, manager)
+    })
 }

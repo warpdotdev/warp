@@ -27,10 +27,11 @@ pub use crate::ai::agent::{
     AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText,
     AIAgentTextSection, AIAgentTodo, AIAgentTodoId, AgentOutputImage, AgentOutputImageLayout,
     AgentOutputMermaidDiagram, AgentOutputTable, AskUserQuestionResult, CancellationReason,
-    FileGlobV2Result, GrepResult, MessageId, RequestCommandOutputResult, RunAgentsAgentOutcomeKind,
-    RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
-    ShellCommandDelay, StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType,
-    TodoOperation, UserQueryMode,
+    FileGlobV2Result, GrepResult, MessageId, ReceivedMessageDisplay, RenderableAIError,
+    RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
+    SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared, ShellCommandDelay,
+    StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, TodoOperation,
+    UserQueryMode,
 };
 pub use crate::ai::agent_conversations_model::{
     query_conversation_entries, AgentConversationEntry, AgentConversationEntryId,
@@ -38,6 +39,7 @@ pub use crate::ai::agent_conversations_model::{
     AgentConversationsModelEvent, AgentManagementFilters, AgentRunDisplayStatus, HarnessFilter,
     OwnerFilter,
 };
+pub use crate::ai::ambient_agents::AmbientAgentTaskId;
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
     EphemeralMessageModel,
@@ -62,14 +64,26 @@ pub use crate::ai::blocklist::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
     ConversationStatusUpdate,
 };
+pub use crate::ai::blocklist::orchestration_event_streamer::{
+    register_agent_event_consumer, unregister_agent_event_consumer,
+};
+pub use crate::ai::blocklist::orchestration_topology::{
+    orchestrator_agent_id_for_conversation, resolve_orchestration_participant,
+    OrchestrationParticipantKind, ResolvedOrchestrationParticipant,
+};
 pub use crate::ai::blocklist::view_util::format_credits;
+#[cfg(not(target_family = "wasm"))]
 pub use crate::ai::blocklist::{
-    block_context_from_terminal_model, AIActionStatus, AskUserQuestionExecutor,
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIInputModel, InputConfig, InputModePolicy, InputModePolicyHandle, InputType,
-    InputTypeAutoDetectionSource, PolicyConfigUpdate, RequestFileEditsExecutor, RunAgentsExecutor,
-    RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
-    ShellCommandExecutorEvent,
+    apply_child_agent_model_override, prepare_local_oz_child_launch, PreparedLocalOzChildLaunch,
+};
+pub use crate::ai::blocklist::{
+    block_context_from_terminal_model, inherit_child_agent_settings, AIActionStatus,
+    AskUserQuestionExecutor, BlocklistAIActionEvent, BlocklistAIActionModel,
+    BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel, InputConfig,
+    InputModePolicy, InputModePolicyHandle, InputType, InputTypeAutoDetectionSource,
+    PolicyConfigUpdate, RequestFileEditsExecutor, RunAgentsExecutor, RunAgentsExecutorEvent,
+    RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest, StartAgentRequestId,
 };
 pub use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
@@ -169,6 +183,8 @@ pub use crate::tui::{
     TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
     TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
 };
+#[cfg(any(test, feature = "test-util"))]
+pub use crate::tui_test_support::register_tui_session_view_test_singletons;
 pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 pub use crate::util::time_format::format_elapsed_seconds;
 

@@ -1,3 +1,6 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use warpui::App;
 
 use super::*;
@@ -929,6 +932,104 @@ fn tui_agent_model_known_id_resolves_to_that_model() {
         let info = preferences.tui_agent_model_info("claude-opus", app);
         assert_eq!(info.id.as_str(), "claude-opus");
         assert_eq!(info.display_name, "Opus");
+    });
+}
+
+#[test]
+fn tui_surface_override_precedes_file_backed_default() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.read(|app_ctx| {
+            let surface_id = EntityId::new();
+            let mut preferences = preferences_for_tui_tests();
+            preferences
+                .base_llm_for_terminal_view
+                .insert(surface_id, LLMId::from("auto"));
+
+            let info = preferences.get_preferred_base_model_for_settings_mode(
+                settings::SettingsMode::Tui,
+                app_ctx,
+                Some(surface_id),
+            );
+
+            assert_eq!(info.id.as_str(), "auto");
+        });
+    });
+}
+
+#[test]
+fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_changes() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+        let profiles = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let preferences = app.add_singleton_model(|_| preferences_for_tui_tests());
+        let active_model_events = Rc::new(Cell::new(0));
+        let captured_events = active_model_events.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&preferences, move |_, event, _| {
+                if matches!(event, LLMPreferencesEvent::UpdatedActiveAgentModeLLM) {
+                    captured_events.set(captured_events.get() + 1);
+                }
+            });
+        });
+
+        let surface_id = EntityId::new();
+        preferences.update(&mut app, |preferences, ctx| {
+            preferences.set_agent_mode_llm_override(surface_id, LLMId::from("auto"), ctx);
+        });
+        assert_eq!(active_model_events.get(), 0);
+        preferences.read(&app, |preferences, ctx| {
+            assert_eq!(
+                preferences
+                    .get_active_base_model(ctx, Some(surface_id))
+                    .id
+                    .as_str(),
+                "auto"
+            );
+            assert_eq!(
+                preferences
+                    .base_llm_for_terminal_view
+                    .get(&surface_id)
+                    .map(LLMId::as_str),
+                Some("auto")
+            );
+        });
+
+        profiles.update(&mut app, |profiles, ctx| {
+            let profile_id = *profiles.active_profile(Some(surface_id), ctx).id();
+            profiles.set_base_model(profile_id, Some(LLMId::from("claude-opus")), ctx);
+        });
+        preferences.read(&app, |preferences, ctx| {
+            assert_eq!(
+                preferences
+                    .get_active_base_model(ctx, Some(surface_id))
+                    .id
+                    .as_str(),
+                "auto"
+            );
+        });
+
+        preferences.update(&mut app, |preferences, ctx| {
+            preferences.set_agent_mode_llm_override(surface_id, LLMId::from("claude-opus"), ctx);
+        });
+        assert_eq!(active_model_events.get(), 1);
+        preferences.update(&mut app, |preferences, ctx| {
+            preferences.set_agent_mode_llm_override(surface_id, LLMId::from("claude-opus"), ctx);
+        });
+        assert_eq!(active_model_events.get(), 1);
     });
 }
 

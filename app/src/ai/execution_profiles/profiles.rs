@@ -128,7 +128,7 @@ pub struct AIExecutionProfilesModel {
 
 impl AIExecutionProfilesModel {
     #[allow(unused_variables)]
-    pub fn new(launch_mode: &LaunchMode, ctx: &mut ModelContext<Self>) -> Self {
+    pub(crate) fn new(launch_mode: &LaunchMode, ctx: &mut ModelContext<Self>) -> Self {
         cfg_if::cfg_if! {
             if #[cfg(feature = "agent_mode_evals")] {
                 let default_profile_state = DefaultProfileState::Unsynced {

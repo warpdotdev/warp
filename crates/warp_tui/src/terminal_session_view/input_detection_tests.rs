@@ -41,6 +41,18 @@ fn empty_input_resets_to_agent() {
 }
 
 #[test]
+fn unrecognized_slash_prefix_is_parsed_as_possible_shell_input() {
+    assert_eq!(
+        input_detection_decision("/usr/bin/env", None, 0, false),
+        InputDetectionDecision::Parse
+    );
+    assert_eq!(
+        input_detection_decision("/usr/bin/env", Some(1), 12, true),
+        InputDetectionDecision::Classify
+    );
+}
+
+#[test]
 fn nonempty_input_is_parsed_before_detection() {
     assert_eq!(
         input_detection_decision("cargo", None, 0, false),

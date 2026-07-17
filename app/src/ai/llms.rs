@@ -728,10 +728,9 @@ struct AvailableLLMsUpdate {
 pub struct LLMPreferences {
     models_by_feature: ModelsByFeature,
     last_update: Option<AvailableLLMsUpdate>,
-    // Stores temporary model overrides for a given terminal view.
-    // NOTE: We only store an override if the model selected by the user is different
-    // from the base LLM for the active profile. This means that if the user selects the
-    // profile's default model and changes their profile, the model will update to that profile's default.
+    // Stores model overrides for a given terminal view. User selections are
+    // normalized against the GUI profile default, while explicit child-run
+    // selections remain pinned even when they currently equal the fallback.
     base_llm_for_terminal_view: HashMap<EntityId, LLMId>,
     /// Synthetic `LLMInfo` entries built from the user's `ApiKeyManager.custom_endpoints` so
     /// custom models surface in the model picker and resolve through `info_for_id` lookups.
@@ -854,14 +853,6 @@ impl LLMPreferences {
         app: &AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &LLMInfo {
-        // In the TUI, the file-backed `agents.model` setting is the source of
-        // truth for the base model: it overrides both per-surface overrides
-        // and the cloud-synced execution profile, keeping the TUI's TOML file
-        // the single place the model is configured.
-        if settings_mode == settings::SettingsMode::Tui {
-            return self.tui_agent_model_info(AISettings::as_ref(app).agent_model.value(), app);
-        }
-
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override {
@@ -873,6 +864,12 @@ impl LLMPreferences {
             }
         }
 
+        // In the TUI, the file-backed `agents.model` setting is the default
+        // for every surface. Explicit per-surface overrides still take
+        // precedence for orchestrated children launched with a model override.
+        if settings_mode == settings::SettingsMode::Tui {
+            return self.tui_agent_model_info(AISettings::as_ref(app).agent_model.value(), app);
+        }
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
 
         profile
@@ -1497,13 +1494,41 @@ impl LLMPreferences {
                 .is_some()
         } else {
             self.base_llm_for_terminal_view
-                .insert(terminal_view_id, preferred_llm_id.clone());
-            true
+                .insert(terminal_view_id, preferred_llm_id.clone())
+                != Some(preferred_llm_id.clone())
         };
 
         if changed {
             self.trigger_snapshot_save(ctx);
             ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+        }
+    }
+
+    /// Pins an explicit child-run model independently of profile or TUI
+    /// defaults. Persist the pin whenever it changes, but notify active-model
+    /// subscribers only when the surface's effective selection changes.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn set_agent_mode_llm_override(
+        &mut self,
+        terminal_view_id: EntityId,
+        model_id: LLMId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let previous_effective_model_id = self
+            .get_active_base_model(ctx, Some(terminal_view_id))
+            .id
+            .clone();
+        let stored_selection_changed = self
+            .base_llm_for_terminal_view
+            .insert(terminal_view_id, model_id.clone())
+            != Some(model_id);
+        if stored_selection_changed {
+            self.trigger_snapshot_save(ctx);
+            if self.get_active_base_model(ctx, Some(terminal_view_id)).id
+                != previous_effective_model_id
+            {
+                ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+            }
         }
     }
 

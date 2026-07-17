@@ -11984,7 +11984,7 @@ impl Workspace {
                 .collect_vec();
             let summary = UnsavedStateSummary::for_tabs(tabs, ctx);
 
-            if summary.should_display_warning(ctx) {
+            if summary.save_unsaved_code_and_should_warn(ctx) {
                 // The quit-warning dialog uses app-scoped callbacks (ironically, because that's
                 // what Self::show_native_modal expects). That means we need a handle to the
                 // current workspace here.

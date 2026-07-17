@@ -845,7 +845,13 @@ voice_input = ["dep:voice_input"]
 system_theme = []
 tab_close_button_on_left = []
 team_features_override = []
-test-util = ["cloud_object_client/test-util", "warp_server_auth/test-util"]
+test-util = [
+    "cloud_object_client/test-util",
+    "warp_server_auth/test-util",
+    "http_client/test-util",
+    "warp_core/test-util",
+    "ai/test-util",
+]
 team_workflows = ["team_features_override"]
 terminal_lifecycle_recovery = []
 toggle_bootstrap_block = []

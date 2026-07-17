@@ -7,6 +7,9 @@
 //! an explicit [`Axis`]) and append boxed children (see [`TuiElement::finish`])
 //! with [`child`](TuiFlex::child) (fixed main-axis extent) or
 //! [`flex_child`](TuiFlex::flex_child) (fills leftover main-axis extent). The
+//! [`with_spacing`](TuiFlex::with_spacing) builder inserts a fixed number of
+//! blank cells between adjacent children.
+//! The
 //! [`TuiParentElement`](super::TuiParentElement) trait's `with_child` /
 //! `with_children` / `add_child` / `add_children` also work and add fixed
 //! children.
@@ -26,9 +29,9 @@
 //! offered cross extent (e.g. a full-width background banner).
 //!
 //! Along the main axis, each fixed child is laid out against the remaining
-//! extent (loose) and takes its natural size; children are packed without gaps
-//! from the start, and children that fall past the available extent are
-//! clipped.
+//! extent (loose) and takes its natural size; children are packed from the
+//! start with the configured spacing, and children that fall past the
+//! available extent are clipped.
 //!
 //! A child added with [`flex_child`](TuiFlex::flex_child) instead *fills* the
 //! main-axis extent left over after the fixed children, so content can be
@@ -59,6 +62,8 @@ pub struct TuiFlex {
     /// Where children land along the cross axis (see
     /// [`with_cross_axis_alignment`](Self::with_cross_axis_alignment)).
     cross_axis_alignment: CrossAxisAlignment,
+    /// Blank cells inserted between adjacent children along the main axis.
+    spacing: u16,
     /// Sizes returned by each child's `layout()` call; populated during layout
     /// so `render`, `cursor_position`, and `dispatch_event` have consistent slot
     /// information.
@@ -73,6 +78,7 @@ impl TuiFlex {
             axis,
             children: Vec::new(),
             cross_axis_alignment: CrossAxisAlignment::Start,
+            spacing: 0,
             child_sizes: Vec::new(),
             size: None,
             origin: None,
@@ -96,6 +102,12 @@ impl TuiFlex {
             element: child,
             flex: false,
         });
+        self
+    }
+
+    /// Inserts `spacing` blank cells between adjacent children.
+    pub fn with_spacing(mut self, spacing: u16) -> Self {
+        self.spacing = spacing;
         self
     }
 
@@ -161,15 +173,23 @@ impl TuiFlex {
         axis: Axis,
         area: TuiRect,
         child_sizes: &[TuiSize],
+        spacing: u16,
     ) -> impl Iterator<Item = TuiRect> + '_ {
-        child_sizes.iter().scan(area, move |remaining, size| {
-            if remaining.is_empty() {
-                return None;
-            }
-            let (slot, rest) = Self::split_main(axis, *remaining, Self::main_extent(axis, *size));
-            *remaining = rest;
-            Some(slot)
-        })
+        child_sizes
+            .iter()
+            .enumerate()
+            .scan(area, move |remaining, (index, size)| {
+                if remaining.is_empty() {
+                    return None;
+                }
+                let (slot, mut rest) =
+                    Self::split_main(axis, *remaining, Self::main_extent(axis, *size));
+                if index + 1 < child_sizes.len() {
+                    (_, rest) = Self::split_main(axis, rest, spacing);
+                }
+                *remaining = rest;
+                Some(slot)
+            })
     }
 
     /// Clamps a main-axis extent into the constraint's main-axis bounds.
@@ -285,7 +305,10 @@ impl TuiElement for TuiFlex {
             // No flex children: give each child the remaining main-axis extent
             // (loose) and sum the actual extents.
             let mut total_main: u16 = 0;
-            for child in &mut self.children {
+            for (index, child) in self.children.iter_mut().enumerate() {
+                if index > 0 {
+                    total_main = total_main.saturating_add(self.spacing);
+                }
                 let remaining = offered_main.saturating_sub(total_main);
                 let child_constraint = TuiConstraint::new(
                     Self::size_of(axis, 0, cross_min),
@@ -308,7 +331,9 @@ impl TuiElement for TuiFlex {
         // Flex children: two passes.
         // Pass 1 — lay out fixed children to measure their total main-axis extent.
         let mut fixed_sizes: Vec<Option<TuiSize>> = Vec::with_capacity(self.children.len());
-        let mut total_fixed: u16 = 0;
+        let mut total_fixed = self
+            .spacing
+            .saturating_mul(self.children.len().saturating_sub(1) as u16);
         for child in &mut self.children {
             if child.flex {
                 fixed_sizes.push(None);
@@ -378,11 +403,16 @@ impl TuiElement for TuiFlex {
         let area = TuiRect::new(0, 0, size.width, size.height);
         let axis = self.axis;
         let alignment = self.cross_axis_alignment;
-        for ((child, size), slot) in self
-            .children
-            .iter_mut()
-            .zip(&self.child_sizes)
-            .zip(Self::child_slots(axis, area, &self.child_sizes))
+        for ((child, size), slot) in
+            self.children
+                .iter_mut()
+                .zip(&self.child_sizes)
+                .zip(Self::child_slots(
+                    axis,
+                    area,
+                    &self.child_sizes,
+                    self.spacing,
+                ))
         {
             let rect = Self::child_rect_for(axis, alignment, slot, *size);
             child.element.render(

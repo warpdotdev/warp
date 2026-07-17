@@ -228,7 +228,7 @@ impl AIDocumentModel {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test() -> Self {
         let (save_tx, _save_rx) = async_channel::unbounded();
         Self {

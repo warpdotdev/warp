@@ -115,7 +115,7 @@ impl AuthManager {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
         use crate::server::server_api::ServerApiProvider;
 

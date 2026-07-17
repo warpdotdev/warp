@@ -9,6 +9,7 @@
 
 mod agent_block;
 mod agent_block_sections;
+mod agent_message;
 mod alt_screen_view;
 mod autoupdate;
 mod clipboard;
@@ -35,9 +36,12 @@ mod model_menu;
 mod option_selector;
 mod orchestrated_agent_identity_styling;
 mod orchestration_block;
+mod orchestration_model;
 mod resume;
+mod session_registry;
 mod skills_menu;
 mod slash_commands;
+pub mod tab_bar;
 mod terminal_background;
 mod terminal_block;
 mod terminal_content_element;

@@ -81,6 +81,10 @@ const DROP_SHADOW_COLOR: ColorU = ColorU {
 
 const HOVER_DEBOUNCE_PERIOD: Duration = Duration::from_millis(500);
 
+/// How long to wait after the user stops typing before triggering a debounced
+/// auto-save. Mirrors VS Code's default `files.autoSaveDelay` of 1000ms.
+const AUTO_SAVE_DEBOUNCE_PERIOD: Duration = Duration::from_millis(1000);
+
 use warp_core::send_telemetry_from_ctx;
 
 use super::diff_viewer::DiffViewer;
@@ -107,7 +111,11 @@ pub enum LocalCodeEditorEvent {
     FailedToLoad {
         error: Rc<FileLoadError>,
     },
-    FileSaved,
+    FileSaved {
+        /// Whether the save was triggered by auto-save. Used to suppress the
+        /// "File saved." toast, which should only appear for manual (cmd-s) saves.
+        auto_saved: bool,
+    },
     FailedToSave {
         error: Arc<FileSaveError>,
     },
@@ -290,6 +298,12 @@ pub struct LocalCodeEditorView {
     context_menu_state: ContextMenuState,
     /// Channel for debouncing hover requests.
     hover_debounce_tx: async_channel::Sender<CharOffset>,
+    /// Channel for debouncing auto-save requests while the user types.
+    auto_save_debounce_tx: async_channel::Sender<()>,
+    /// Set while an auto-save (debounced or focus-change) is in flight so the
+    /// resulting `FileSaved` event can be marked as an auto-save and suppress
+    /// the success toast.
+    auto_save_in_flight: bool,
     /// State for the LSP hover tooltip.
     pub(super) lsp_hover_state: LspHoverState,
     /// Pending scroll position to apply after the file is loaded. This is used when
@@ -337,6 +351,17 @@ impl LocalCodeEditorView {
                 if origin.from_user() {
                     me.was_edited = true;
                     ctx.emit(LocalCodeEditorEvent::UserEdited);
+
+                    // Queue a debounced auto-save while the user types. The
+                    // debounced path saves without running the LSP formatter,
+                    // matching VS Code's `files.autoSave: afterDelay` behavior.
+                    // A `Some` `diff_type` means this editor is showing a
+                    // pending accept/reject diff (e.g. an agent "edit-file"
+                    // proposal), which must never auto-save. Editable
+                    // code-review diffs use `diff_type = None` and stay eligible.
+                    if me.diff_type.is_none() && *CodeSettings::as_ref(ctx).auto_save {
+                        let _ = me.auto_save_debounce_tx.try_send(());
+                    }
                 }
             }
             CodeEditorEvent::VimEscapeInNormalMode => {
@@ -473,6 +498,21 @@ impl LocalCodeEditorView {
             |_, _| {},
         );
 
+        // Set up debounce for auto-save while the user types.
+        let (auto_save_debounce_tx, auto_save_debounce_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(
+            debounce(AUTO_SAVE_DEBOUNCE_PERIOD, auto_save_debounce_rx),
+            |me, (), ctx| me.auto_save_after_delay(ctx),
+            |_, _| {},
+        );
+
+        // Auto-save when the editor's window is navigated away from (mirrors VS
+        // Code's `files.autoSave: onWindowChange`).
+        ctx.subscribe_to_model(
+            &warpui::windowing::WindowManager::handle(ctx),
+            Self::handle_window_focus_change,
+        );
+
         let model = Self {
             editor,
             diff_type,
@@ -491,6 +531,8 @@ impl LocalCodeEditorView {
             context_menu,
             context_menu_state: Default::default(),
             hover_debounce_tx,
+            auto_save_debounce_tx,
+            auto_save_in_flight: false,
             lsp_hover_state: LspHoverState::None,
             pending_scroll_on_load: None,
             processed_diagnostics: Vec::new(),
@@ -1138,11 +1180,103 @@ impl LocalCodeEditorView {
         };
 
         if let Err(err) = result {
+            // A synchronous save failure means no async `FileSaved` will arrive,
+            // so clear the auto-save marker here.
+            self.auto_save_in_flight = false;
             report_error!(&err);
             ctx.emit(LocalCodeEditorEvent::FailedToSave {
                 error: Arc::new(err),
             });
         }
+    }
+
+    /// Auto-save triggered by the debounce timer after the user pauses typing.
+    ///
+    /// Mirrors VS Code's `files.autoSave: afterDelay`: the file is written
+    /// *without* running the language-server formatter, so formatting never
+    /// disrupts the user mid-edit. New/untitled files (no `file_id`) and
+    /// disconnected remotes are intentionally skipped.
+    fn auto_save_after_delay(&mut self, ctx: &mut ViewContext<Self>) {
+        if !*CodeSettings::as_ref(ctx).auto_save {
+            return;
+        }
+
+        // Never auto-save a pending accept/reject diff (e.g. an agent
+        // "edit-file" proposal). Editable code-review diffs use `diff_type =
+        // None` and remain eligible.
+        if self.diff_type.is_some() {
+            return;
+        }
+
+        if self.is_remote_disconnected(ctx) || !self.has_unsaved_changes(ctx) {
+            return;
+        }
+
+        let Some(file_id) = self.file_id() else {
+            return;
+        };
+
+        // Skip LSP formatting for delay-based auto-saves. Mark this as an
+        // auto-save so the "File saved." toast is suppressed.
+        self.auto_save_in_flight = true;
+        self.perform_save(file_id, ctx);
+    }
+
+    /// Auto-save triggered when the editor loses focus (either another view in
+    /// the app takes focus, or the editor's window is navigated away from).
+    ///
+    /// Mirrors VS Code's `files.autoSave: onFocusChange` / `onWindowChange`,
+    /// which *do* honor format-on-save. We route through [`Self::save_local`] so
+    /// the existing format-on-save setting is respected. `NoFileId` (untitled
+    /// files) and `RemoteDisconnected` are expected no-ops; real save failures
+    /// still surface via `FailedToSave` events.
+    fn auto_save_on_focus_change(&mut self, ctx: &mut ViewContext<Self>) {
+        // Never auto-save a pending accept/reject diff (see
+        // `auto_save_after_delay`); editable code-review diffs use `diff_type =
+        // None` and remain eligible.
+        if !*CodeSettings::as_ref(ctx).auto_save
+            || self.diff_type.is_some()
+            || !self.has_unsaved_changes(ctx)
+        {
+            return;
+        }
+
+        // Mark this as an auto-save so the "File saved." toast is suppressed.
+        // If the save never starts (untitled file with no `file_id`, or a
+        // disconnected remote), clear the marker so the next manual save still
+        // shows its "File saved." toast.
+        self.auto_save_in_flight = true;
+        if self.save_local(ctx).is_err() {
+            self.auto_save_in_flight = false;
+        }
+    }
+
+    /// Handles application window focus changes. When the window containing this
+    /// focused editor is navigated away from (the app is deactivated or another
+    /// window becomes active), we auto-save — mirroring VS Code's
+    /// `files.autoSave: onWindowChange`. In-app focus moves between views are
+    /// handled separately by [`View::on_blur`].
+    fn handle_window_focus_change(
+        &mut self,
+        _handle: ModelHandle<warpui::windowing::WindowManager>,
+        event: &warpui::windowing::StateEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let warpui::windowing::StateEvent::ValueChanged { current, previous } = event;
+        let focused = ctx.is_self_or_child_focused();
+        let was_window_focused = focused && previous.active_window == Some(ctx.window_id());
+        let is_window_focused = focused && current.active_window == Some(ctx.window_id());
+
+        if was_window_focused && !is_window_focused {
+            self.auto_save_on_focus_change(ctx);
+        }
+    }
+
+    /// Marks the next save as an auto-save so the resulting `FileSaved` event
+    /// suppresses the "File saved." toast. Used by the close flow when auto-save
+    /// is enabled, so closing a file flushes edits silently.
+    pub fn mark_next_save_as_auto_save(&mut self) {
+        self.auto_save_in_flight = true;
     }
 
     pub fn is_new_file(&self) -> bool {
@@ -1561,11 +1695,15 @@ impl LocalCodeEditorView {
                 GlobalBufferModelEvent::FileSaved {
                     content_version, ..
                 } => {
+                    // Consume the auto-save marker: suppress the toast for
+                    // auto-saves, show it for manual (cmd-s) saves.
+                    let auto_saved = std::mem::take(&mut me.auto_save_in_flight);
                     me.base_content_version = Some(*content_version);
                     me.has_remote_conflict = false;
-                    ctx.emit(LocalCodeEditorEvent::FileSaved);
+                    ctx.emit(LocalCodeEditorEvent::FileSaved { auto_saved });
                 }
                 GlobalBufferModelEvent::FailedToSave { error, .. } => {
+                    me.auto_save_in_flight = false;
                     me.base_content_version = GlobalBufferModel::as_ref(ctx).base_version(file_id);
                     ctx.emit(LocalCodeEditorEvent::FailedToSave {
                         error: error.clone(),
@@ -1608,6 +1746,13 @@ impl LocalCodeEditorView {
         RemoteServerManager::as_ref(app)
             .client_for_host(&remote_path.host_id)
             .is_none()
+    }
+
+    /// Whether auto-save can actually persist this editor's changes: it needs
+    /// a backing file and, for remote files, a still-connected host. Untitled
+    /// buffers (no `file_id`) and disconnected remotes return `false`.
+    pub fn can_auto_save(&self, app: &AppContext) -> bool {
+        self.file_id().is_some() && !self.is_remote_disconnected(app)
     }
 
     /// Save the file to the local file system (or remotely via the remote server).
@@ -2142,6 +2287,17 @@ impl View for LocalCodeEditorView {
     fn on_focus(&mut self, focus_ctx: &warpui::FocusContext, ctx: &mut ViewContext<Self>) {
         if focus_ctx.is_self_focused() {
             self.editor.update(ctx, |editor, ctx| editor.focus(ctx));
+        }
+    }
+
+    fn on_blur(&mut self, _blur_ctx: &warpui::BlurContext, ctx: &mut ViewContext<Self>) {
+        // When focus leaves this editor's subtree entirely, treat it as a
+        // focus-change auto-save (mirrors VS Code's `files.autoSave:
+        // onFocusChange`). Focus moving to a child overlay (hover card,
+        // find-references card, context menu, etc.) stays within the subtree, so
+        // `is_self_or_child_focused` prevents saving on those transitions.
+        if !ctx.is_self_or_child_focused() {
+            self.auto_save_on_focus_change(ctx);
         }
     }
 

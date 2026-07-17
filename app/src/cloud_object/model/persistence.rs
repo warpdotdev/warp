@@ -1684,7 +1684,7 @@ impl CloudModel {
             .collect::<HashMap<_, _>>()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(_ctx: &mut ModelContext<Self>) -> Self {
         Self::new(None, Vec::new(), None)
     }

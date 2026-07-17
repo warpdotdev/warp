@@ -36,9 +36,8 @@ use warpui_core::elements::tui::{
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
-use crate::agent_block_sections::{tool_call_glyph_style, tool_call_label_style};
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
-use crate::tool_call_labels::{tool_call_display_state, tool_call_glyph, ToolCallDisplayState};
+use crate::tool_call_labels::{tool_call_display_state, ToolCallDisplayState};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageEvent, TuiDiffStorageHandle};
 
@@ -364,13 +363,13 @@ impl TuiFileEditsView {
         let state = self.display_state(app);
 
         // State lives in the glyph, mirroring `render_tool_call_section`.
-        let glyph_style = tool_call_glyph_style(state, builder);
-        let name_style = tool_call_label_style(state, builder);
+        let glyph_style = state.glyph_style(builder);
+        let name_style = state.label_style(builder);
         let bold = |style: TuiStyle| style.add_modifier(Modifier::BOLD);
         let embolden = |style: TuiStyle| if hovered { bold(style) } else { style };
 
         let mut spans = vec![
-            (format!("{} ", tool_call_glyph(state)), glyph_style),
+            (format!("{} ", state.glyph()), glyph_style),
             (label.to_owned(), embolden(bold(name_style))),
         ];
         if let Some((added, removed)) = line_stats {

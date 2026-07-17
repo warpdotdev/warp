@@ -1927,6 +1927,66 @@ fn test_set_parent_multiple_children() {
 }
 
 #[test]
+fn test_remove_child_conversation_cleans_parent_index() {
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let parent_id = history_model.update(&mut app, |model, ctx| {
+            model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_id = history_model.update(&mut app, |model, ctx| {
+            let child_id = model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            model.set_parent_for_conversation(child_id, parent_id);
+            child_id
+        });
+
+        history_model.update(&mut app, |model, ctx| {
+            model.remove_conversation(child_id, terminal_view_id, ctx);
+        });
+
+        history_model.read(&app, |model, _| {
+            assert!(model.conversation(&child_id).is_none());
+            assert!(model.child_conversation_ids_of(&parent_id).is_empty());
+        });
+    });
+}
+
+#[test]
+fn test_remove_parent_conversation_cleans_incoming_and_outgoing_index_entries() {
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let grandparent_id = history_model.update(&mut app, |model, ctx| {
+            model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let parent_id = history_model.update(&mut app, |model, ctx| {
+            let parent_id =
+                model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            model.set_parent_for_conversation(parent_id, grandparent_id);
+            parent_id
+        });
+        let child_id = history_model.update(&mut app, |model, ctx| {
+            let child_id = model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            model.set_parent_for_conversation(child_id, parent_id);
+            child_id
+        });
+
+        history_model.update(&mut app, |model, ctx| {
+            model.remove_conversation(parent_id, terminal_view_id, ctx);
+        });
+
+        history_model.read(&app, |model, _| {
+            assert!(model.conversation(&parent_id).is_none());
+            assert!(model.conversation(&child_id).is_some());
+            assert!(model.child_conversation_ids_of(&grandparent_id).is_empty());
+            assert!(model.child_conversation_ids_of(&parent_id).is_empty());
+        });
+    });
+}
+
+#[test]
 fn test_child_conversation_ids_of_unknown_parent() {
     App::test((), |app| async move {
         let history_model =

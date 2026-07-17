@@ -562,6 +562,7 @@ fn test_detect_aifx_agent_run_claude_wrong_team() {
 #[test]
 fn test_command_is_warp_tui_matches_binaries_and_launchers() {
     // Direct binary names.
+    assert!(CLIAgent::command_is_warp_tui("warp", None));
     assert!(CLIAgent::command_is_warp_tui("warp-tui", None));
     assert!(CLIAgent::command_is_warp_tui("warp-tui-oss", None));
     // The dev launcher script.
@@ -577,10 +578,7 @@ fn test_command_is_warp_tui_matches_binaries_and_launchers() {
         None
     ));
     // With arguments and leading whitespace.
-    assert!(CLIAgent::command_is_warp_tui(
-        "  warp-tui --resume abc",
-        None
-    ));
+    assert!(CLIAgent::command_is_warp_tui("  warp --resume abc", None));
 }
 
 #[test]
@@ -588,7 +586,7 @@ fn test_command_is_warp_tui_with_env_var_prefix() {
     // Env-var assignments before the command are skipped when an escape char is
     // provided (mirrors `CLIAgent::detect`).
     assert!(CLIAgent::command_is_warp_tui(
-        "WARP_API_KEY=secret warp-tui",
+        "WARP_API_KEY=secret warp",
         Some(EscapeChar::Backslash),
     ));
 }

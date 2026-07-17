@@ -14,7 +14,8 @@ use warpui_core::App;
 
 use super::{
     hide_agent_requested_command_from_top_level, inline_process_owns_input,
-    terminal_use_conversation_to_resume, terminal_use_interrupt_action, TerminalUseInterruptAction,
+    terminal_use_conversation_to_resume, terminal_use_interrupt_action, tui_input_target,
+    tui_input_target_for_state, TerminalUseInterruptAction, TuiInputTarget,
 };
 use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
 
@@ -42,6 +43,18 @@ fn ordinary_long_running_command_owns_inline_input() {
     model.simulate_long_running_block("cat", "");
 
     assert!(inline_process_owns_input(&model));
+}
+#[test]
+fn shell_startup_routes_input_by_bootstrap_stage() {
+    let mut model = TerminalModel::mock(None, None);
+    assert_eq!(tui_input_target(&model), TuiInputTarget::AgentEditor);
+
+    model.block_list_mut().reinit_shell();
+    assert_eq!(tui_input_target(&model), TuiInputTarget::Disabled);
+    assert_eq!(
+        tui_input_target_for_state(false, true, false, false),
+        TuiInputTarget::Pty,
+    );
 }
 
 #[test]
