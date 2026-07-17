@@ -639,3 +639,45 @@ fn test_kbd_in_table_cell_serialization() {
         assert!(html.contains("<kbd>Cmd</kbd>"), "html was: {html}");
     });
 }
+
+/// A run that is both `<kbd>` and underlined must export properly nested Markdown tags (issue
+/// #13733). The Markdown serializer closes `</kbd>` before `</u>`, so it must also open `<u>`
+/// before `<kbd>` — otherwise a crossed `<kbd><u>…</kbd></u>` is emitted, which is malformed and
+/// does not re-import to the same styles. This pins proper nesting and round-trip stability.
+#[test]
+fn test_kbd_underline_serializes_properly_nested() {
+    App::test((), |mut app| async move {
+        let markdown = "Press <u><kbd>Esc</kbd></u> now\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        // Tags must be properly nested, not crossed. The close order is `</kbd></u>`, so the open
+        // order must be `<u><kbd>`.
+        assert!(
+            exported.contains("<u><kbd>Esc</kbd></u>"),
+            "kbd+underline run must serialize as properly nested tags, was: {exported}"
+        );
+        assert!(
+            !exported.contains("<kbd><u>"),
+            "serialization must not emit crossed <kbd><u> tags, was: {exported}"
+        );
+
+        // Round-trip: re-importing the exported Markdown must yield the same kbd+underline styles.
+        let reparsed = parse_markdown(&exported).unwrap();
+        let has_kbd_underline_run = reparsed.lines.iter().any(|line| match line {
+            markdown_parser::FormattedTextLine::Line(fragments) => fragments
+                .iter()
+                .any(|f| f.styles.kbd && f.styles.underline && f.text.contains("Esc")),
+            _ => false,
+        });
+        assert!(
+            has_kbd_underline_run,
+            "exported markdown must re-import to a kbd+underline run, was: {exported}"
+        );
+    });
+}

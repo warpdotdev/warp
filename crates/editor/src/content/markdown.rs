@@ -325,12 +325,15 @@ impl<'a> BufferMarkdownParser<'a> {
             buf.push_str("~~");
         }
 
-        if start_kbd {
-            buf.push_str("<kbd>");
-        }
-
+        // Open underline before kbd so tags nest properly: the close order above is `</kbd>` then
+        // `</u>`, so the mirrored open order is `<u>` then `<kbd>`, yielding `<u><kbd>…</kbd></u>`
+        // rather than a crossed `<kbd><u>…</kbd></u>`.
         if start_underline {
             buf.push_str("<u>");
+        }
+
+        if start_kbd {
+            buf.push_str("<kbd>");
         }
 
         if !prev_styles.is_inline_code() && next_styles.is_inline_code() {
