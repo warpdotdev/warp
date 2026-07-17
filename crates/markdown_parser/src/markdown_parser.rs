@@ -21,7 +21,7 @@ use crate::{
     CodeBlockText, CustomWeight, FormattedImage, FormattedIndentTextInline, FormattedTable,
     FormattedTaskList, FormattedText, FormattedTextFragment, FormattedTextHeader,
     FormattedTextInline, FormattedTextLine, FormattedTextStyles, Hyperlink,
-    OrderedFormattedIndentTextInline, TableAlignment,
+    OrderedFormattedIndentTextInline, TableAlignment, VerticalAlign,
 };
 
 const HEADER_TAG_MIN_COUNT: usize = 1;
@@ -1035,6 +1035,12 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
             }
+            InlineToken::SubEnd => {
+                input = parse_sub(&mut state, remaining);
+            }
+            InlineToken::SupEnd => {
+                input = parse_sup(&mut state, remaining);
+            }
         }
     }
 
@@ -1316,6 +1322,84 @@ fn parse_underline<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
     remaining
 }
 
+/// Parses subscript text (`<sub>…</sub>`) using the same logic as [`parse_underline`].
+fn parse_sub<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
+    parse_vertical_align(
+        state,
+        remaining,
+        DelimiterKind::SubStart,
+        VerticalAlign::Sub,
+    )
+}
+
+/// Parses superscript text (`<sup>…</sup>`) using the same logic as [`parse_underline`].
+fn parse_sup<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
+    parse_vertical_align(
+        state,
+        remaining,
+        DelimiterKind::SupStart,
+        VerticalAlign::Sup,
+    )
+}
+
+/// Shared resolver for a matched `<sub>`/`<sup>` delimiter pair, mirroring [`parse_underline`].
+///
+/// On a missing/inactive start, the closing tag falls back to literal text. On a match, the
+/// `vertical_align` flag is set over the enclosed span — but only on fragments that don't already
+/// carry a vertical alignment, so that in a nested pair (`<sub>…<sup>…</sup>…</sub>`) the innermost
+/// tag wins (it resolves first and claims its span; the outer tag's later backtrack skips it). This
+/// is the documented degraded behavior for nesting; compounding offsets is out of scope.
+fn parse_vertical_align<'a>(
+    state: &mut InlineState,
+    remaining: &'a str,
+    start_kind: DelimiterKind,
+    align: VerticalAlign,
+) -> &'a str {
+    let close_tag = match start_kind {
+        DelimiterKind::SubStart => "</sub>",
+        DelimiterKind::SupStart => "</sup>",
+        _ => unreachable!("parse_vertical_align called with a non-sub/sup delimiter kind"),
+    };
+
+    let Some((start_index, start)) = state
+        .delimiters
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, delimiter)| delimiter.kind == start_kind)
+    else {
+        // If there's no matching start, treat this as literal closing-tag text.
+        state.push_text(close_tag);
+        return remaining;
+    };
+
+    if !start.active {
+        // If the start is inactive, remove it - this prevents nesting the same tag.
+        state.delimiters.remove(start_index);
+        state.push_text(close_tag);
+        return remaining;
+    }
+
+    let start_node = start.node_index;
+    state.backtrack_styles(start_node, |styles| {
+        if styles.vertical_align.is_none() {
+            styles.vertical_align = Some(align);
+        }
+    });
+    process_emphasis(state, Some(start_index));
+
+    state.delimiters.remove(start_index);
+    for delimiter in &mut state.delimiters[..start_index] {
+        if delimiter.kind == start_kind {
+            delimiter.active = false;
+        }
+    }
+
+    state.remove_node(start_node);
+    state.last_node_closed = true;
+    remaining
+}
+
 /// Process emphasis delimiters on the state's delimiter stack, bounded by `stack_bottom`.
 ///
 /// This is approximately equivalent to the CommonMark [process emphasis](https://spec.commonmark.org/0.30/#phase-2-inline-structure)
@@ -1549,6 +1633,10 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             parse_inline_token_autolink,
             parse_inline_token_underline_start,
             parse_inline_token_underline_end,
+            parse_inline_token_sub_start,
+            parse_inline_token_sub_end,
+            parse_inline_token_sup_start,
+            parse_inline_token_sup_end,
             whitespace,
             text,
             // This _must_ be the last parser in the chain. It unconditionally consumes a single
@@ -1654,6 +1742,46 @@ fn parse_inline_token_underline_end<'a, E: ContextError<&'a str> + ParseError<&'
     )(input)
 }
 
+/// Parse a subscript-start delimiter (`<sub>`).
+fn parse_inline_token_sub_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "sub_start",
+        map(tag("<sub>"), |_| InlineToken::Delimiter {
+            kind: DelimiterKind::SubStart,
+            count: 1,
+        }),
+    )(input)
+}
+
+/// Parse a subscript-end delimiter (`</sub>`).
+fn parse_inline_token_sub_end<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context("sub_end", map(tag("</sub>"), |_| InlineToken::SubEnd))(input)
+}
+
+/// Parse a superscript-start delimiter (`<sup>`).
+fn parse_inline_token_sup_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "sup_start",
+        map(tag("<sup>"), |_| InlineToken::Delimiter {
+            kind: DelimiterKind::SupStart,
+            count: 1,
+        }),
+    )(input)
+}
+
+/// Parse a superscript-end delimiter (`</sup>`).
+fn parse_inline_token_sup_end<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context("sup_end", map(tag("</sup>"), |_| InlineToken::SupEnd))(input)
+}
+
 /// Helper to parse a run of delimiters.
 fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     kind: DelimiterKind,
@@ -1700,6 +1828,10 @@ enum InlineToken<'a> {
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
     UnderlineEnd,
+    /// A closing </sub>, which triggers subscript parsing.
+    SubEnd,
+    /// A closing </sup>, which triggers superscript parsing.
+    SupEnd,
 }
 
 /// An entry in the [delimiter stack](https://spec.commonmark.org/0.30/#delimiter-stack)
@@ -1758,6 +1890,7 @@ impl Delimiter {
             // The GFM spec doesn't fully specify how strikethrough works, so treat it like asterisks.
             DelimiterKind::Strikethrough => left_flanking,
             DelimiterKind::UnderlineStart => left_flanking,
+            DelimiterKind::SubStart | DelimiterKind::SupStart => left_flanking,
         };
 
         let can_close = match kind {
@@ -1768,6 +1901,7 @@ impl Delimiter {
             }
             DelimiterKind::Strikethrough => right_flanking,
             DelimiterKind::UnderlineStart => right_flanking,
+            DelimiterKind::SubStart | DelimiterKind::SupStart => right_flanking,
         };
 
         Self {
@@ -1819,6 +1953,8 @@ enum DelimiterKind {
     LinkStart,
     Strikethrough,
     UnderlineStart,
+    SubStart,
+    SupStart,
 }
 
 impl DelimiterKind {
@@ -1832,6 +1968,7 @@ impl DelimiterKind {
             // tildes do not create strikethrough.
             DelimiterKind::Strikethrough => count <= 2,
             DelimiterKind::UnderlineStart => count == 1,
+            DelimiterKind::SubStart | DelimiterKind::SupStart => count == 1,
         }
     }
 
@@ -1842,6 +1979,8 @@ impl DelimiterKind {
             DelimiterKind::LinkStart => "[",
             DelimiterKind::Strikethrough => "~",
             DelimiterKind::UnderlineStart => "<u>",
+            DelimiterKind::SubStart => "<sub>",
+            DelimiterKind::SupStart => "<sup>",
         }
     }
 }

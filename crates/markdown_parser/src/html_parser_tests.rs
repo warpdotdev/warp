@@ -143,6 +143,50 @@ fn test_parse_text_styles() {
 }
 
 #[test]
+fn test_parse_sub_sup() {
+    // Issue #13734 — the paste-path HTML parser recognizes `<sub>`/`<sup>` as phrasing tags.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'>H<sub>2</sub>O"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("H"),
+            FormattedTextFragment::subscript("2"),
+            FormattedTextFragment::plain_text("O"),
+        ])]
+    );
+
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'>x<sup>2</sup>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("x"),
+            FormattedTextFragment::superscript("2"),
+        ])]
+    );
+
+    // Invariant 9: attributes on the tag are ignored; only the tag semantics apply.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'>H<sub class=\"foo\" id=\"x\">2</sub>O"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("H"),
+            FormattedTextFragment::subscript("2"),
+            FormattedTextFragment::plain_text("O"),
+        ])]
+    );
+
+    // Invariant 4: content inside composes with other inline styling.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub><em>n</em></sub>"),
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment {
+            text: "n".to_string(),
+            styles: FormattedTextStyles {
+                italic: true,
+                vertical_align: Some(VerticalAlign::Sub),
+                ..Default::default()
+            },
+        }])]
+    );
+}
+
+#[test]
 fn test_block() {
     assert_eq!(
         test_parse_html(

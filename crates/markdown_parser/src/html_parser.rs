@@ -14,7 +14,7 @@ use crate::weight::CustomWeight;
 use crate::{
     CodeBlockText, FormattedIndentTextInline, FormattedTaskList, FormattedText,
     FormattedTextFragment, FormattedTextHeader, FormattedTextInline, FormattedTextLine,
-    FormattedTextStyles, Hyperlink, OrderedFormattedIndentTextInline,
+    FormattedTextStyles, Hyperlink, OrderedFormattedIndentTextInline, VerticalAlign,
 };
 
 // Top element element tags we are not parsing for right now.
@@ -24,7 +24,7 @@ const TOP_LEVEL_ELEMENT_TAGS_TO_SKIP: &[&str] = &[
     "head", "body", "html", "meta", "table", "b", "div", "ul", "ol", "li", "input",
 ];
 const PHRASING_ELEMENT_TAGS: &[&str] = &[
-    "span", "i", "code", "strong", "em", "br", "a", "s", "u", "ins",
+    "span", "i", "code", "strong", "em", "br", "a", "s", "u", "ins", "sub", "sup",
 ];
 
 pub const WARP_EMBED_ATTRIBUTE_NAME: &str = "data-warp-embedded-item";
@@ -50,6 +50,7 @@ struct Styling {
     strikethrough: bool,
     inline_code: bool,
     link: Option<String>,
+    vertical_align: Option<VerticalAlign>,
 }
 
 impl Styling {
@@ -443,6 +444,8 @@ fn parse_phrasing_content(nodes: &[Rc<Node>], text_styling: Styling) -> Formatte
                     "i" | "em" => decorated_styling.italic = true,
                     "s" => decorated_styling.strikethrough = true,
                     "u" | "ins" => decorated_styling.underline = true,
+                    "sub" => decorated_styling.vertical_align = Some(VerticalAlign::Sub),
+                    "sup" => decorated_styling.vertical_align = Some(VerticalAlign::Sup),
                     "code" => decorated_styling.inline_code = true,
                     // TODO: We need to add more phrasing styling we support (e.g. links) here.
                     // https://linear.app/warpdotdev/issue/CLD-335/add-html-parsing-for-headers-and-lists
@@ -476,6 +479,7 @@ fn phrasing_to_formatted_text(text: impl Into<String>, styling: &Styling) -> For
             strikethrough: styling.strikethrough,
             hyperlink: styling.link.clone().map(Hyperlink::Url),
             inline_code: styling.inline_code,
+            vertical_align: styling.vertical_align,
         },
     }
 }

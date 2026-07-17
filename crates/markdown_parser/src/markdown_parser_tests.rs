@@ -4,7 +4,8 @@ use serde_yaml::Mapping;
 
 use super::*;
 use crate::{
-    CustomWeight, FormattedTable, FormattedTextStyles, LineCount, compute_formatted_text_delta,
+    CustomWeight, FormattedTable, FormattedTextStyles, LineCount, VerticalAlign,
+    compute_formatted_text_delta,
 };
 
 // Simple transformer to make testing easier.
@@ -1979,6 +1980,127 @@ fn test_parse_empty_underline() {
             FormattedTextFragment::plain_text(" text")
         ]
     )
+}
+
+// --- Subscript / superscript (`<sub>` / `<sup>`) — issue #13734 --------------------------
+
+#[test]
+fn test_parse_subscript_basic() {
+    // Invariant 2: `H<sub>2</sub>O` subscripts the "2".
+    assert_eq!(
+        parse_all("H<sub>2</sub>O", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("H"),
+            FormattedTextFragment::subscript("2"),
+            FormattedTextFragment::plain_text("O"),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_superscript_basic() {
+    // Invariant 3: footnote-style marker `citation<sup>1</sup>`.
+    assert_eq!(
+        parse_all("citation<sup>1</sup>.", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("citation"),
+            FormattedTextFragment::superscript("1"),
+            FormattedTextFragment::plain_text("."),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_subscript_composes_with_italic() {
+    // Invariant 4: inline formatting inside `<sub>` composes with the vertical offset.
+    assert_eq!(
+        parse_all("<sub>*n*</sub>", parse_inline),
+        vec![FormattedTextFragment {
+            text: "n".to_string(),
+            styles: FormattedTextStyles {
+                italic: true,
+                vertical_align: Some(VerticalAlign::Sub),
+                ..Default::default()
+            },
+        }]
+    );
+}
+
+#[test]
+fn test_parse_superscript_composes_with_bold() {
+    assert_eq!(
+        parse_all("x<sup>**2**</sup>", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("x"),
+            FormattedTextFragment {
+                text: "2".to_string(),
+                styles: FormattedTextStyles {
+                    weight: Some(CustomWeight::Bold),
+                    vertical_align: Some(VerticalAlign::Sup),
+                    ..Default::default()
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_parse_unclosed_subscript_falls_back_to_literal() {
+    // Invariant 6: an unterminated `<sub>` degrades to literal text for the opening tag,
+    // leaving the rest of the document intact.
+    assert_eq!(
+        parse_all("H<sub>2 and more", parse_inline),
+        vec![FormattedTextFragment::plain_text("H<sub>2 and more")]
+    );
+}
+
+#[test]
+fn test_parse_unmatched_subscript_close_is_literal() {
+    // A stray closing tag with no opener degrades to literal text.
+    assert_eq!(
+        parse_all("plain </sub> text", parse_inline),
+        vec![FormattedTextFragment::plain_text("plain </sub> text")]
+    );
+}
+
+#[test]
+fn test_parse_superscript_nested_in_subscript_innermost_wins() {
+    // Invariant 7: nesting does not panic; the innermost tag's alignment applies to the
+    // overlapping span, and outer-only spans keep the outer alignment. No compounding.
+    assert_eq!(
+        parse_all("<sub>a<sup>b</sup>c</sub>", parse_inline),
+        vec![
+            FormattedTextFragment::subscript("a"),
+            FormattedTextFragment::superscript("b"),
+            FormattedTextFragment::subscript("c"),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_subscript_ignores_attributes() {
+    // Invariant 9: `<sub>` with attributes is not recognized by the file-viewer inline
+    // tokenizer (only the bare tag is), so it degrades to literal text rather than
+    // mis-parsing the attribute. (The paste path's HTML parser handles attributes; this
+    // tokenizer intentionally matches only the exact `<sub>`/`<sup>` literals.)
+    assert_eq!(
+        parse_all("<sub class=\"foo\">2</sub>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sub class=\"foo\">2</sub>"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_empty_subscript() {
+    assert_eq!(
+        parse_all("a<sub></sub>b", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("a"),
+            FormattedTextFragment::subscript(""),
+            FormattedTextFragment::plain_text("b"),
+        ]
+    );
 }
 
 #[test]

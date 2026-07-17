@@ -480,6 +480,11 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
         if fragment.styles.underline {
             text = format!("<u>{text}</u>");
         }
+        match fragment.styles.vertical_align {
+            Some(VerticalAlign::Sub) => text = format!("<sub>{text}</sub>"),
+            Some(VerticalAlign::Sup) => text = format!("<sup>{text}</sup>"),
+            None => {}
+        }
         let is_bold = fragment
             .styles
             .weight
@@ -540,6 +545,19 @@ impl PartialEq for Hyperlink {
 
 impl Eq for Hyperlink {}
 
+/// Vertical alignment for a fragment, expressing subscript or superscript.
+///
+/// A fragment can be at most one of these at a time; nesting resolves to the innermost tag
+/// (see the markdown parser's `parse_sub`/`parse_sup`), so a single `Option<VerticalAlign>`
+/// rather than two independent booleans captures the supported behavior exactly.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum VerticalAlign {
+    /// Rendered below the surrounding baseline (`<sub>`).
+    Sub,
+    /// Rendered above the surrounding baseline (`<sup>`).
+    Sup,
+}
+
 /// Formatted text styling, with no attached content.
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct FormattedTextStyles {
@@ -549,6 +567,7 @@ pub struct FormattedTextStyles {
     pub strikethrough: bool,
     pub inline_code: bool,
     pub hyperlink: Option<Hyperlink>,
+    pub vertical_align: Option<VerticalAlign>,
 }
 
 impl FormattedTextFragment {
@@ -656,6 +675,26 @@ impl FormattedTextFragment {
         }
     }
 
+    pub fn subscript(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            styles: FormattedTextStyles {
+                vertical_align: Some(VerticalAlign::Sub),
+                ..Default::default()
+            },
+        }
+    }
+
+    pub fn superscript(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            styles: FormattedTextStyles {
+                vertical_align: Some(VerticalAlign::Sup),
+                ..Default::default()
+            },
+        }
+    }
+
     pub fn raw_text(&self) -> &String {
         &self.text
     }
@@ -695,6 +734,17 @@ impl fmt::Debug for FormattedTextStyles {
                 f.write_str(" | ")?;
             }
             f.write_str("InlineCode")?;
+            first = false;
+        }
+
+        if let Some(vertical_align) = self.vertical_align {
+            if !first {
+                f.write_str(" | ")?;
+            }
+            match vertical_align {
+                VerticalAlign::Sub => f.write_str("Sub")?,
+                VerticalAlign::Sup => f.write_str("Sup")?,
+            }
             first = false;
         }
 
