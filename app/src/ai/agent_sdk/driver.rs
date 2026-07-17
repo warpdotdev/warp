@@ -927,40 +927,52 @@ impl AgentDriver {
                             }
                         });
 
-                    // Timer future: fires at deadline minus warning window; pending
-                    // (never fires) for local and self-hosted runs without a deadline.
+                    // Timer future: fires at deadline minus warning window, mapped to
+                    // () to avoid std::time::Instant which is disallowed on wasm targets.
+                    // Pending forever (never fires) when no deadline is set.
                     let timer_fut = maybe_wait
-                        .map(|w| Either::Left(Timer::after(w)))
-                        .unwrap_or_else(|| Either::Right(future::pending::<std::time::Instant>()));
+                        .map(|w| Either::Left(Timer::after(w).map(|_| ())))
+                        .unwrap_or_else(|| Either::Right(future::pending::<()>()));
 
-                    // SIGTERM backup future: wakes immediately on signal receipt via an
-                    // async stream (no polling). Dropped after tokio::select! completes,
-                    // which automatically deregisters the signal handler. Pending forever
-                    // on non-Unix platforms where SIGTERM is not applicable.
+                    // SIGTERM backup: catches provider-sent SIGTERM before SIGKILL.
+                    // Uses signal_hook::flag polling (100ms async sleep, no CPU cost)
+                    // on Unix; pending forever on non-Unix platforms. In practice this
+                    // arm should never fire — the primary timer provides 5 minutes of
+                    // cleanup time before SIGTERM arrives. The sig_id is held to
+                    // restore the default SIGTERM disposition after select! resolves.
                     #[cfg(unix)]
-                    let sigterm_fut = {
-                        use futures::StreamExt as _;
-                        match signal_hook_tokio::Signals::new([signal_hook::consts::SIGTERM]) {
-                            Ok(signals) => {
-                                let mut signals = signals;
-                                Either::Left(async move { signals.next().await; })
+                    let (sigterm_fut, sigterm_sig_id) = {
+                        use std::sync::atomic::{AtomicBool, Ordering};
+                        let flag = std::sync::Arc::new(AtomicBool::new(false));
+                        let sig_id = signal_hook::flag::register(
+                            signal_hook::consts::SIGTERM,
+                            std::sync::Arc::clone(&flag),
+                        )
+                        .ok();
+                        let flag_clone = flag.clone();
+                        let fut = async move {
+                            loop {
+                                if flag_clone.load(Ordering::Acquire) {
+                                    break;
+                                }
+                                Timer::after(Duration::from_millis(100)).await;
                             }
-                            Err(_) => Either::Right(future::pending::<()>()),
-                        }
+                        };
+                        (fut, sig_id)
                     };
                     #[cfg(not(unix))]
                     let sigterm_fut = future::pending::<()>();
 
-                    tokio::select! {
-                        r = Self::run_internal(task, foreground.clone()) => r,
-                        _ = timer_fut => {
+                    let result = futures::select! {
+                        r = Self::run_internal(task, foreground.clone()).fuse() => r,
+                        _ = timer_fut.fuse() => {
                             log::info!(
                                 "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); \
                                  aborting run_internal to allow recording finalization"
                             );
                             Ok(())
                         }
-                        _ = sigterm_fut => {
+                        _ = sigterm_fut.fuse() => {
                             // Backup path — should not fire in normal operation.
                             // The primary timer provides 5 minutes of cleanup time;
                             // SIGTERM only arrives ~10-20s before SIGKILL.
@@ -970,7 +982,14 @@ impl AgentDriver {
                             );
                             Ok(())
                         }
+                    };
+                    // Restore the default SIGTERM disposition now that run_internal
+                    // has finished, so any subsequent SIGTERM terminates normally.
+                    #[cfg(unix)]
+                    if let Some(sig_id) = sigterm_sig_id {
+                        signal_hook::low_level::unregister(sig_id);
                     }
+                    result
                 };
 
                 // Stop accepting CLI session status updates now that the run
