@@ -9,8 +9,8 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
-use unicode_segmentation::UnicodeSegmentation;
 
+use unicode_segmentation::UnicodeSegmentation;
 use warpui_core::elements::tui::{
     text_width, Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex,
     TuiHoverable, TuiParentElement, TuiSizeConstraintCondition, TuiSizeConstraintSwitch, TuiStyle,
