@@ -4,11 +4,11 @@
 //! This module provides a singleton model that manages repository metadata across
 //! all repositories tracked by Warp.
 
-#[cfg(feature = "local_fs")]
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 #[cfg(feature = "local_fs")]
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -42,9 +42,11 @@ pub struct RepoContents<'a> {
 
 use warp_util::standardized_path::StandardizedPath;
 
+#[cfg(feature = "local_fs")]
+use crate::entry::LAZY_LOAD_FILE_LIMIT;
 use crate::entry::{
     matches_force_included_path, BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry,
-    FileId, IgnoredPathStrategy, LAZY_LOAD_FILE_LIMIT,
+    FileId, IgnoredPathStrategy,
 };
 use crate::repository::Repository;
 use crate::standing_queries::{
