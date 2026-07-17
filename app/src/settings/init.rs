@@ -325,7 +325,7 @@ pub fn init_private_user_preferences() -> settings::PrivatePreferences {
 pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_preferences::Error>)
 {
     cfg_if::cfg_if! {
-        if #[cfg(any(test, feature = "test-util"))] {
+        if #[cfg(test)] {
             (Box::<user_preferences::in_memory::InMemoryPreferences>::default(), None)
         } else if #[cfg(target_family = "wasm")] {
             (Box::<user_preferences::local_storage::LocalStoragePreferences>::default(), None)

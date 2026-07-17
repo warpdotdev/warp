@@ -56,7 +56,7 @@ pub use action_model::{
     BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 // Consumed by `tui_export` for the `warp_tui` frontend.
-#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+#[cfg(feature = "tui")]
 pub use action_model::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawningSnapshot};
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
