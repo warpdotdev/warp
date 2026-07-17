@@ -617,8 +617,8 @@ fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &Orchestr
     // The approved plan config is the source of truth for these run-wide fields,
     // so callers pass a mutable request and continue with the normalized value.
     let mut config_state = OrchestrationConfigState::from_run_agents_fields(
-        &request.model_id,
-        &request.harness_type,
+        Some(&request.model_id),
+        Some(&request.harness_type),
         &request.execution_mode,
     );
     config_state.override_from_approved_config(config);

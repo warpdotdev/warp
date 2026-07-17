@@ -1114,9 +1114,6 @@ impl SettingsWidget for IapCredentialsWidget {
                 (format!("Loaded (refreshes in ~{mins}m)"), active)
             }
             IapCredentialsState::Failed { message, .. } => (format!("Failed: {message}"), ansi_red),
-            IapCredentialsState::EnvInjected { .. } => {
-                ("Using injected token (WARP_IAP_TOKEN)".to_string(), active)
-            }
         };
 
         let is_refreshing = matches!(state, IapCredentialsState::Refreshing { .. });

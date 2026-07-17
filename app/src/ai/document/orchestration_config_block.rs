@@ -175,8 +175,8 @@ impl OrchestrationConfigBlockView {
             .unwrap_or_else(|| {
                 (
                     OrchestrationConfigState::from_run_agents_fields(
-                        "auto",
-                        "oz",
+                        Some("auto"),
+                        Some("oz"),
                         &RunAgentsExecutionMode::Local,
                     ),
                     false,

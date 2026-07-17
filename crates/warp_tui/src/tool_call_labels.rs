@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+pub(crate) use ai::agent::document_action_presentation::ToolCallDisplayState;
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType,
     AskUserQuestionResult, FileGlobV2Result, GrepResult, RequestCommandOutputResult,
@@ -41,29 +42,6 @@ pub(crate) struct ResolvedCommandBlock {
 /// Longest rendered length for interpolated values (commands, queries, paths)
 /// so tool-call rows stay scannable one-liners.
 const MAX_INLINE_LEN: usize = 80;
-
-/// The coarse display state of a tool call, derived from its action status.
-///
-/// TUI-local presentation collapse of the shared [`AIActionStatus`]; the GUI
-/// has no equivalent enum — its per-tool views consume `AIActionStatus`
-/// directly and re-derive per-site booleans (queued/cancelled/streaming).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ToolCallDisplayState {
-    /// The tool call's arguments are still streaming in: it has no action
-    /// status yet and the exchange output is still streaming, so argument
-    /// fields may be empty or partial and must not be interpolated.
-    Constructing,
-    /// No status yet (stream finished), preprocessing, or queued behind
-    /// other actions.
-    Pending,
-    /// Blocked on user confirmation.
-    AwaitingApproval,
-    /// Executing asynchronously.
-    Running,
-    Succeeded,
-    Failed,
-    Cancelled,
-}
 
 /// Collapses an optional action status into the coarse display state.
 /// `output_streaming` is whether the exchange output is still streaming;
@@ -119,7 +97,7 @@ pub(crate) fn tool_call_glyph(state: ToolCallDisplayState) -> &'static str {
         State::AwaitingApproval | State::Cancelled => "■",
         State::Running => "●",
         State::Succeeded => "✓",
-        State::Failed => "✗",
+        State::Failed => "×",
     }
 }
 

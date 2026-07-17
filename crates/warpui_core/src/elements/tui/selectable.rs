@@ -15,8 +15,8 @@ use string_offset::{ByteOffset, CharOffset};
 
 use super::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint, TuiLayoutContext,
-    TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiScreenPoint,
-    TuiScreenPosition, TuiScrollableElement, TuiSize, TuiViewMapContext,
+    TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiPresentationContext,
+    TuiScreenPoint, TuiScreenPosition, TuiScrollableElement, TuiSize, TuiViewMapContext, TuiZIndex,
 };
 use crate::elements::SmartSelectFn;
 use crate::text::word_boundaries::WordBoundariesPolicy;
@@ -94,6 +94,7 @@ pub struct TuiSelectable<Child> {
     smart_select_fn: Option<SmartSelectFn>,
     on_selection_start: Option<SelectionCallback>,
     on_copy: Option<CopyCallback>,
+    child_max_z_index: Option<TuiZIndex>,
 }
 
 impl<Child> TuiSelectable<Child>
@@ -109,6 +110,7 @@ where
             smart_select_fn: None,
             on_selection_start: None,
             on_copy: None,
+            child_max_z_index: None,
         }
     }
 
@@ -204,6 +206,28 @@ where
         self.on_copy = Some(Box::new(callback));
         self
     }
+
+    /// Returns whether `position` is inside the visible child bounds without
+    /// being covered by a layer painted after the child's own descendants.
+    fn is_mouse_over_child(
+        &self,
+        origin: TuiScreenPoint,
+        size: TuiSize,
+        position: TuiPoint,
+        event_ctx: &TuiEventContext<'_>,
+    ) -> bool {
+        let Some(child_max_z_index) = self.child_max_z_index else {
+            return false;
+        };
+        event_ctx
+            .visible_rect(origin, size)
+            .is_some_and(|rect| rect.contains(position))
+            && !event_ctx.is_covered(TuiScreenPoint::new(
+                i32::from(position.x),
+                i32::from(position.y),
+                child_max_z_index,
+            ))
+    }
 }
 
 impl<Child> TuiElement for TuiSelectable<Child>
@@ -237,6 +261,7 @@ where
         ctx: &mut TuiPaintContext,
     ) {
         self.child.render(origin, surface, ctx);
+        self.child_max_z_index = Some(ctx.scene.max_active_z_index());
         let Some(size) = self.child.size() else {
             return;
         };
@@ -280,7 +305,9 @@ where
                 click_count,
                 is_first_mouse,
                 ..
-            } if !*is_first_mouse && event_ctx.hit_test(origin, size, *position) => {
+            } if !*is_first_mouse
+                && self.is_mouse_over_child(origin, size, *position, event_ctx) =>
+            {
                 let selection_type = SelectionType::from_click_count(*click_count);
                 let local_position = event_ctx.local_point(origin, *position);
                 let anchor_span = {

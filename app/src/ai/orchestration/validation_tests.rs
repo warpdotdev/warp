@@ -24,7 +24,8 @@ fn state(
     mode: RunAgentsExecutionMode,
     auth: AuthSecretSelection,
 ) -> OrchestrationConfigState {
-    let mut state = OrchestrationConfigState::from_run_agents_fields("auto", harness, &mode);
+    let mut state =
+        OrchestrationConfigState::from_run_agents_fields(Some("auto"), Some(harness), &mode);
     state.auth_secret_selection = auth;
     state
 }

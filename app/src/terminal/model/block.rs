@@ -3123,6 +3123,10 @@ impl ansi::Handler for Block {
         delegate!(self.input(c));
     }
 
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        delegate!(self.set_hyperlink(hyperlink));
+    }
+
     fn goto(&mut self, row: VisibleRow, column: usize) {
         // Only apply this correction for ConPTY.
         #[cfg(windows)]

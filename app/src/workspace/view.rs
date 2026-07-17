@@ -278,7 +278,10 @@ use crate::env_vars::CloudEnvVarCollection;
 use crate::experiments::{BlockOnboarding, Experiment};
 use crate::launch_configs::launch_config::WindowTemplate;
 use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
-use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource};
+use crate::menu::{
+    Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource, MenuVariant,
+    MENU_VERTICAL_PADDING,
+};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
 use crate::notebooks::manager::{NotebookManager, NotebookSource};
@@ -603,6 +606,14 @@ const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_
 /// Shared position ID for the new-session sidecar overlay. Used for both the
 /// `SavePosition` wrapper and the safe-zone rect lookup.
 const NEW_SESSION_SIDECAR_POSITION_ID: &str = "new_session_sidecar";
+const NEW_SESSION_MENU_WIDTH: f32 = 300.;
+const NEW_SESSION_MENU_WINDOW_MARGIN: f32 = 8.;
+const NEW_SESSION_MENU_FALLBACK_MAX_HEIGHT: f32 = 480.;
+const NEW_SESSION_MENU_MIN_HEIGHT: f32 = 120.;
+const NEW_SESSION_MENU_VERTICAL_BUTTON_OFFSET_Y: f32 = 4.;
+const NEW_SESSION_MENU_BORDER_WIDTH: f32 = 1.;
+const NEW_SESSION_MENU_CHROME_HEIGHT: f32 =
+    MENU_VERTICAL_PADDING * 2. + NEW_SESSION_MENU_BORDER_WIDTH * 2.;
 const NEW_SESSION_SIDECAR_WIDTH: f32 = 300.;
 
 /// Shared position ID for the move-to-group sidecar overlay, used by both the
@@ -1984,12 +1995,12 @@ impl Workspace {
         // don't. Going forward we may want to enhance the menu to allow for a
         // `max_width` and `min_width` instead, so we can allow the menu to
         // grow as needed.
-        const NEW_SESSION_MENU_WIDTH: f32 = 300.;
         let new_session_menu = ctx.add_typed_action_view(|ctx| {
             if FeatureFlag::ShellSelector.is_enabled() {
                 let theme = Appearance::as_ref(ctx).theme();
                 Menu::new()
                     .with_width(NEW_SESSION_MENU_WIDTH)
+                    .with_menu_variant(MenuVariant::scrollable())
                     .with_border(Border::all(1.).with_border_color(theme.outline().into()))
                     .with_drop_shadow()
                     .with_safe_triangle()
@@ -1997,6 +2008,7 @@ impl Workspace {
                     .prevent_interaction_with_other_elements()
             } else {
                 Menu::new()
+                    .with_menu_variant(MenuVariant::scrollable())
                     .with_safe_triangle()
                     .with_ignore_hover_when_covered()
                     .prevent_interaction_with_other_elements()
@@ -2010,7 +2022,7 @@ impl Workspace {
             let mut menu = Menu::new()
                 .without_item_action_dispatch()
                 .with_width(NEW_SESSION_SIDECAR_WIDTH)
-                .with_menu_variant(crate::menu::MenuVariant::scrollable());
+                .with_menu_variant(MenuVariant::scrollable());
             menu.set_height(400.);
             menu
         });
@@ -2024,7 +2036,7 @@ impl Workspace {
             let mut menu = Menu::new()
                 .with_width(MOVE_TO_GROUP_SIDECAR_WIDTH)
                 .with_drop_shadow()
-                .with_menu_variant(crate::menu::MenuVariant::scrollable());
+                .with_menu_variant(MenuVariant::scrollable());
             menu.set_height(300.);
             menu
         });
@@ -6757,9 +6769,11 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         let menu_items = self.unified_new_session_menu_items(ctx);
+        let menu_height = self.new_session_menu_max_height(anchor, ctx);
         ctx.update_view(&self.new_session_dropdown_menu, |context_menu, view_ctx| {
             // Match the Figma mock width (OptionMenuItem component is 268px).
             context_menu.set_width(268.);
+            context_menu.set_height(menu_height);
             context_menu.set_items(menu_items, view_ctx);
             match open_source {
                 TabConfigsMenuOpenSource::KeyboardShortcut => {
@@ -6773,6 +6787,47 @@ impl Workspace {
         self.show_new_session_dropdown_menu = Some(anchor);
         ctx.focus(&self.new_session_dropdown_menu);
         ctx.notify();
+    }
+
+    fn new_session_menu_max_height(
+        &self,
+        anchor: NewSessionMenuAnchor,
+        ctx: &ViewContext<Self>,
+    ) -> f32 {
+        let Some(window) = ctx.windows().platform_window(ctx.window_id()) else {
+            return NEW_SESSION_MENU_FALLBACK_MAX_HEIGHT;
+        };
+        let anchor_y = self.new_session_menu_height_anchor_y(anchor, ctx);
+        let available_height = window.size().y()
+            - anchor_y
+            - NEW_SESSION_MENU_WINDOW_MARGIN
+            - NEW_SESSION_MENU_CHROME_HEIGHT;
+        available_height.max(NEW_SESSION_MENU_MIN_HEIGHT)
+    }
+
+    fn new_session_menu_height_anchor_y(
+        &self,
+        anchor: NewSessionMenuAnchor,
+        ctx: &ViewContext<Self>,
+    ) -> f32 {
+        let use_vertical_tabs =
+            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        match anchor {
+            NewSessionMenuAnchor::AddTabButton(position)
+                if use_vertical_tabs && self.vertical_tabs_panel_open =>
+            {
+                ctx.element_position_by_id_at_last_frame(
+                    self.window_id,
+                    vertical_tabs::VERTICAL_TABS_ADD_TAB_POSITION_ID,
+                )
+                .map(|position| {
+                    position.lower_left().y() + NEW_SESSION_MENU_VERTICAL_BUTTON_OFFSET_Y
+                })
+                .unwrap_or_else(|| position.y().max(TOTAL_TAB_BAR_HEIGHT))
+            }
+            NewSessionMenuAnchor::AddTabButton(position)
+            | NewSessionMenuAnchor::Pointer(position) => position.y(),
+        }
     }
 
     pub fn open_new_session_dropdown_menu(
@@ -15813,7 +15868,7 @@ impl Workspace {
 
         // Mark handoff from any orchestrated source so the server can inject
         // the universal first-turn orchestration handoff message.
-        let orchestration_handoff = (source_conversation.has_parent_agent()
+        let orchestration_handoff = (source_conversation.is_child_agent_conversation()
             || !history_model
                 .as_ref(ctx)
                 .child_conversation_ids_of(&source_conversation.id())
@@ -26770,7 +26825,7 @@ impl View for Workspace {
                         ChildView::new(&self.new_session_dropdown_menu).finish(),
                         OffsetPositioning::offset_from_save_position_element(
                             vertical_tabs::VERTICAL_TABS_ADD_TAB_POSITION_ID,
-                            vec2f(0., 4.),
+                            vec2f(0., NEW_SESSION_MENU_VERTICAL_BUTTON_OFFSET_Y),
                             PositionedElementOffsetBounds::WindowBySize,
                             anchor,
                             child_anchor,

@@ -15710,7 +15710,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=2d0e8ddf5a946a663f7e0952144ccbced0068a81#2d0e8ddf5a946a663f7e0952144ccbced0068a81"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=60d3132feffaca7e3abfe465e38ba0b72d32dee0#60d3132feffaca7e3abfe465e38ba0b72d32dee0"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -15850,6 +15850,7 @@ dependencies = [
  "serde_json",
  "session-sharing-protocol",
  "settings_value",
+ "tempfile",
  "thiserror 2.0.17",
  "url",
  "uuid",

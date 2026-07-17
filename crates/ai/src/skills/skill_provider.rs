@@ -40,6 +40,7 @@ pub enum SkillProvider {
     Droid,
     Github,
     OpenCode,
+    Kiro,
 }
 
 /// Represents the scope of a skill (home directory vs project directory).
@@ -88,7 +89,8 @@ impl SkillProvider {
             | SkillProvider::Agents
             | SkillProvider::Cursor
             | SkillProvider::Copilot
-            | SkillProvider::Github => Icon::WarpLogoLight,
+            | SkillProvider::Github
+            | SkillProvider::Kiro => Icon::WarpLogoLight,
         }
     }
 
@@ -149,6 +151,10 @@ pub static SKILL_PROVIDER_DEFINITIONS: LazyLock<Vec<SkillProviderDefinition>> =
             SkillProviderDefinition {
                 provider: SkillProvider::OpenCode,
                 skills_path: PathBuf::from(".opencode").join("skills"),
+            },
+            SkillProviderDefinition {
+                provider: SkillProvider::Kiro,
+                skills_path: PathBuf::from(".kiro").join("skills"),
             },
         ]
     });

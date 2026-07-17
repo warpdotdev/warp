@@ -970,19 +970,7 @@ impl<'a> TabComponent<'a> {
             .pane_group
             .as_ref(ctx)
             .active_session_view(ctx)
-            .map(|view| {
-                let view = view.as_ref(ctx);
-                view.is_ambient_agent_session(ctx) || {
-                    let model = view.model.lock();
-                    model.is_shared_ambient_agent_session()
-                        || matches!(
-                            model.conversation_transcript_viewer_status(),
-                            Some(
-                                crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus::ViewingAmbientConversation(_)
-                            )
-                        )
-                }
-            })
+            .map(|view| view.as_ref(ctx).is_cloud_agent_session(ctx))
             .unwrap_or(false);
         let active_pane_has_unsaved_code_changes = tab
             .pane_group

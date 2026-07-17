@@ -2086,4 +2086,16 @@ mod char_cell_scroll {
         state.follow_cursor(CharOffset::zero(), 2, &[]);
         assert_eq!(state.scroll_offset(), 0);
     }
+
+    #[test]
+    fn clamp_scroll_offset_repairs_stale_offset_without_following_cursor() {
+        let state = CharCellState::new(3, None);
+        state.update_text("abcdef");
+        state.scroll_by(100, 1, CharOffset::from(6), &[]);
+        assert_eq!(state.scroll_offset(), 2);
+
+        state.set_terminal_width(10);
+        state.clamp_scroll_offset(CharOffset::from(6), 1, &[]);
+        assert_eq!(state.scroll_offset(), 0);
+    }
 }

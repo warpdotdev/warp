@@ -8,10 +8,10 @@ use super::{
     TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
 };
 use crate::elements::tui::{
-    Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPoint,
-    TuiScreenPosition, TuiScrollable, TuiScrollableElement, TuiSelectable, TuiSelectionHandle,
-    TuiSelectionSpan, TuiSize, TuiText,
+    Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiContainer, TuiElement, TuiEvent,
+    TuiEventContext, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect,
+    TuiScreenPoint, TuiScreenPosition, TuiScrollable, TuiScrollableElement, TuiSelectable,
+    TuiSelectionHandle, TuiSelectionSpan, TuiSize, TuiText,
 };
 use crate::event::ModifiersState;
 use crate::presenter::tui::TuiPresenter;
@@ -148,6 +148,37 @@ impl TuiElement for LayoutCountingElement {
 
 struct LayoutCountingContent {
     layout_count: Rc<Cell<usize>>,
+}
+struct OpaqueContent;
+
+impl TuiViewportedElement for OpaqueContent {
+    fn visible_items(
+        &self,
+        window: TuiViewportWindow,
+        _available_width: u16,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiViewportContent {
+        let viewport_bottom = window
+            .scroll_top
+            .saturating_add(usize::from(window.viewport_height));
+        let items = [0usize, 3]
+            .into_iter()
+            .filter(|origin_y| {
+                origin_y.saturating_add(3) > window.scroll_top && *origin_y < viewport_bottom
+            })
+            .map(|origin_y| TuiVisibleViewportItem {
+                origin_y,
+                element: TuiContainer::new(TuiText::new("opaque").finish())
+                    .with_border()
+                    .finish(),
+            })
+            .collect();
+        TuiViewportContent {
+            content_height: 6,
+            items,
+        }
+    }
 }
 
 impl TuiViewportedElement for LayoutCountingContent {
@@ -504,6 +535,21 @@ fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
     });
 }
 
+#[test]
+fn scrolling_up_works_over_opaque_content_in_a_clipped_layer() {
+    App::test((), |app| async move {
+        let state = TuiViewportedListState::new_at_end();
+        let viewport = TuiViewportedList::new(state.clone(), OpaqueContent);
+        let mut scrollable = TuiScrollable::new(viewport.finish_scrollable());
+        let size = TuiSize::new(10, 3);
+
+        render_viewport(&app, &mut scrollable, size);
+        assert!(state.is_at_end());
+
+        assert!(wheel(&app, &mut scrollable, size, 1.0));
+        assert_eq!(state.position(), TuiViewportPosition::RowsFromTop(1));
+    });
+}
 #[test]
 fn scrolling_down_pins_to_bottom_without_overscrolling() {
     App::test((), |app| async move {

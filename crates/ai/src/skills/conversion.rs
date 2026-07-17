@@ -195,6 +195,7 @@ impl From<SkillProvider> for api::skill_descriptor::Provider {
             SkillProvider::Droid => api::skill_descriptor::provider::Type::Droid(()),
             SkillProvider::Github => api::skill_descriptor::provider::Type::Github(()),
             SkillProvider::OpenCode => api::skill_descriptor::provider::Type::OpenCode(()),
+            SkillProvider::Kiro => api::skill_descriptor::provider::Type::Kiro(()),
         };
 
         api::skill_descriptor::Provider {
@@ -289,6 +290,7 @@ fn convert_provider(
         api::skill_descriptor::provider::Type::Droid(_) => Ok(SkillProvider::Droid),
         api::skill_descriptor::provider::Type::Github(_) => Ok(SkillProvider::Github),
         api::skill_descriptor::provider::Type::OpenCode(_) => Ok(SkillProvider::OpenCode),
+        api::skill_descriptor::provider::Type::Kiro(_) => Ok(SkillProvider::Kiro),
     }
 }
 

@@ -44,8 +44,8 @@ fn make_config_state_with_orch_fields(
     let request = make_request(harness, mode);
     RunAgentsEditState {
         orchestration_config_state: OrchestrationConfigState::from_run_agents_fields(
-            &request.model_id,
-            &request.harness_type,
+            Some(&request.model_id),
+            Some(&request.harness_type),
             &request.execution_mode,
         ),
         card: RunAgentsCardFields {

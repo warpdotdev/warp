@@ -14,8 +14,8 @@ fn local_config(harness_type: &str, model_id: &str) -> OrchestrationConfig {
 #[test]
 fn toggle_to_local_sanitizes_disabled_codex() {
     let mut state = OrchestrationConfigState::from_run_agents_fields(
-        "gpt-5",
-        "codex",
+        Some("gpt-5"),
+        Some("codex"),
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
@@ -36,8 +36,8 @@ fn toggle_to_local_sanitizes_disabled_codex() {
 #[test]
 fn toggle_to_local_preserves_claude() {
     let mut state = OrchestrationConfigState::from_run_agents_fields(
-        "sonnet",
-        "claude",
+        Some("sonnet"),
+        Some("claude"),
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
@@ -57,8 +57,11 @@ fn toggle_to_local_preserves_claude() {
 
 #[test]
 fn resolve_from_config_preserves_local_claude() {
-    let mut state =
-        OrchestrationConfigState::from_run_agents_fields("", "", &RunAgentsExecutionMode::Local);
+    let mut state = OrchestrationConfigState::from_run_agents_fields(
+        None,
+        None,
+        &RunAgentsExecutionMode::Local,
+    );
 
     state.resolve_from_config(&local_config("claude", "sonnet"));
     assert_eq!(state.harness_type, "claude");
@@ -71,8 +74,11 @@ fn resolve_from_config_preserves_local_claude() {
 
 #[test]
 fn resolve_from_config_sanitizes_disabled_local_codex() {
-    let mut state =
-        OrchestrationConfigState::from_run_agents_fields("", "", &RunAgentsExecutionMode::Local);
+    let mut state = OrchestrationConfigState::from_run_agents_fields(
+        None,
+        None,
+        &RunAgentsExecutionMode::Local,
+    );
 
     state.resolve_from_config(&local_config("codex", "gpt-5"));
 

@@ -1024,6 +1024,7 @@ cloud_mode_input_v2 = ["cloud_mode"]
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
 prompt_cache_expiry_warning = []
+osc_hyperlinks = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"
