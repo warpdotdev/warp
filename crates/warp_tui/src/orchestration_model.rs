@@ -17,12 +17,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use warp::tui_export::{
-    apply_child_agent_model_override, descendant_conversation_ids_in_pill_order,
-    descendant_conversation_ids_in_spawn_order, inherit_child_agent_settings,
-    orchestration_root_conversation_id, prepare_local_oz_child_launch,
-    register_agent_event_consumer, unregister_agent_event_consumer, AIConversationId,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus, Harness,
-    RenderableAIError, StartAgentExecutionMode, StartAgentRequest,
+    apply_child_agent_model_override, descendant_conversations_in_pill_order,
+    inherit_child_agent_settings, orchestration_root_conversation_id,
+    prepare_local_oz_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
+    AIConversationId, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus,
+    Harness, RenderableAIError, StartAgentExecutionMode, StartAgentRequest,
 };
 use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
@@ -149,29 +148,14 @@ impl TuiOrchestrationModel {
         let root_conversation_id =
             orchestration_root_conversation_id(history, selected_conversation_id)?;
         let sessions = TuiSessions::as_ref(ctx);
-        sessions.session_id_for_conversation(history, root_conversation_id)?;
+        let session_ids_by_conversation = sessions.session_ids_by_conversation(history);
+        session_ids_by_conversation.get(&root_conversation_id)?;
 
-        let spawn_order = descendant_conversation_ids_in_spawn_order(history, root_conversation_id)
+        let tabs = descendant_conversations_in_pill_order(history, root_conversation_id)
             .into_iter()
-            .filter(|conversation_id| {
-                sessions
-                    .session_id_for_conversation(history, *conversation_id)
-                    .is_some()
-            })
-            .collect::<Vec<_>>();
-        if spawn_order.is_empty() {
-            return None;
-        }
-        let spawn_index_by_conversation = spawn_order
-            .iter()
-            .enumerate()
-            .map(|(index, conversation_id)| (*conversation_id, index))
-            .collect::<HashMap<_, _>>();
-
-        let tabs = descendant_conversation_ids_in_pill_order(history, root_conversation_id)
-            .into_iter()
-            .filter_map(|conversation_id| {
-                sessions.session_id_for_conversation(history, conversation_id)?;
+            .filter_map(|descendant| {
+                let conversation_id = descendant.conversation_id;
+                session_ids_by_conversation.get(&conversation_id)?;
                 let conversation = history.conversation(&conversation_id)?;
                 Some(TuiOrchestrationTab {
                     conversation_id,
@@ -180,7 +164,7 @@ impl TuiOrchestrationModel {
                         .filter(|name| !name.is_empty())
                         .unwrap_or("Agent")
                         .to_owned(),
-                    spawn_index: *spawn_index_by_conversation.get(&conversation_id)?,
+                    spawn_index: descendant.spawn_index,
                 })
             })
             .collect::<Vec<_>>();
@@ -224,15 +208,15 @@ impl TuiOrchestrationModel {
     ) -> Option<TuiSessionId> {
         let history = BlocklistAIHistoryModel::as_ref(ctx);
         let root_conversation_id = orchestration_root_conversation_id(history, conversation_id)?;
-        let session_id =
-            TuiSessions::as_ref(ctx).session_id_for_conversation(history, conversation_id)?;
+        let session_id = *TuiSessions::as_ref(ctx)
+            .session_ids_by_conversation(history)
+            .get(&conversation_id)?;
         self.page_root_conversation_id = Some(root_conversation_id);
         self.page_anchor = None;
         self.explicitly_paged = false;
         TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
             sessions.focus_session(session_id, ctx);
         });
-        ctx.notify();
         Some(session_id)
     }
 

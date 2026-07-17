@@ -4,7 +4,9 @@ use warp::tui_export::{
     PtyIntentEvent, SizeInfo, SizeUpdate,
 };
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, SingletonEntity, ViewHandle};
+use warpui::{
+    AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, SingletonEntity, UpdateModel, ViewHandle,
+};
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
@@ -274,11 +276,11 @@ fn alternate_screen_clears_orchestration_tab_focus_and_bindings() {
 }
 
 #[test]
-fn background_model_notification_never_moves_responder_focus() {
+fn orchestration_updates_refresh_only_the_focused_session() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (foreground, foreground_id) = add_focus_test_session(&mut app, &fixture, true);
-        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let (background, background_id) = add_focus_test_session(&mut app, &fixture, false);
 
         background.update(&mut app, |view, _| {
             view.orchestration_tabs_focused = true;
@@ -297,6 +299,23 @@ fn background_model_notification_never_moves_responder_focus() {
         );
         assert!(app
             .read(|ctx| { ctx.check_view_or_child_focused(fixture.window_id, &foreground.id()) }));
+        assert!(background.read(&app, |view, _| view.orchestration_tabs_focused));
+
+        app.update_model(&fixture.sessions, |sessions, ctx| {
+            assert!(sessions.focus_session(background_id, ctx));
+        });
         assert!(!background.read(&app, |view, _| view.orchestration_tabs_focused));
+    });
+}
+
+#[test]
+fn terminal_wakeup_redraws_only_the_focused_session() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+
+        assert!(foreground.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
+        assert!(!background.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
     });
 }

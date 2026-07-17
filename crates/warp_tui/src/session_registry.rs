@@ -194,6 +194,34 @@ impl TuiSessions {
         orchestration: &ModelHandle<TuiOrchestrationModel>,
         ctx: &mut AppContext,
     ) {
+        let sessions_for_model_updates = sessions.clone();
+        ctx.observe_model(orchestration, move |_, ctx| {
+            let focused_view = sessions_for_model_updates
+                .as_ref(ctx)
+                .focused_session()
+                .map(|session| session.view().clone());
+            if let Some(focused_view) = focused_view {
+                focused_view.update(ctx, |view, ctx| {
+                    view.refresh_orchestration_tab_state(ctx);
+                });
+            }
+        });
+
+        let sessions_for_focus_updates = sessions.clone();
+        ctx.subscribe_to_model(sessions, move |_, event, ctx| {
+            let TuiSessionsEvent::FocusChanged(session_id) = event else {
+                return;
+            };
+            let focused_view = sessions_for_focus_updates
+                .as_ref(ctx)
+                .session(*session_id)
+                .map(|session| session.view().clone());
+            if let Some(focused_view) = focused_view {
+                focused_view.update(ctx, |view, ctx| {
+                    view.refresh_orchestration_tab_state(ctx);
+                });
+            }
+        });
         let sessions = sessions.clone();
         let orchestration_for_events = orchestration.clone();
         ctx.subscribe_to_model(orchestration, move |_, event, ctx| match event {
@@ -325,16 +353,19 @@ impl TuiSessions {
         self.sessions.iter().find(|session| session.id == id)
     }
 
-    /// Resolves a loaded conversation to the retained session that owns it.
-    pub(crate) fn session_id_for_conversation(
+    /// Builds the loaded conversation-to-session index used by one topology snapshot.
+    pub(crate) fn session_ids_by_conversation(
         &self,
         history: &BlocklistAIHistoryModel,
-        conversation_id: AIConversationId,
-    ) -> Option<TuiSessionId> {
-        let surface_id = history.terminal_surface_id_for_conversation(&conversation_id)?;
+    ) -> HashMap<AIConversationId, TuiSessionId> {
         self.sessions
             .iter()
-            .find_map(|session| (session.id.surface_id() == surface_id).then_some(session.id))
+            .flat_map(|session| {
+                history
+                    .all_live_conversations_for_terminal_surface(session.id.surface_id())
+                    .map(move |conversation| (conversation.id(), session.id))
+            })
+            .collect()
     }
 
     /// Whether no session has been registered.

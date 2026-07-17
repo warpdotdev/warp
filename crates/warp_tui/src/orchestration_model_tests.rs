@@ -236,6 +236,14 @@ fn snapshot_is_shared_across_tree_and_filters_conversations_without_sessions() {
                     .collect::<Vec<_>>(),
                 vec![first_child_id, second_child_id]
             );
+            assert_eq!(
+                parent
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.spawn_index)
+                    .collect::<Vec<_>>(),
+                vec![0, 1]
+            );
         });
 
         app.update(|ctx| {

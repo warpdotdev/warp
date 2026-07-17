@@ -24,7 +24,7 @@ const DIVIDER_PADDING_RIGHT: u16 = 2;
 const ELLIPSIS: &str = "...";
 
 /// Stable tab data rendered by [`TuiTabBarView`].
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct TuiTab {
     pub key: String,
     pub label: String,
@@ -32,7 +32,7 @@ pub struct TuiTab {
 }
 
 /// Styled text rendered before a tab label.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct TuiTabLeading {
     text: String,
     style: TuiStyle,
@@ -59,7 +59,7 @@ impl TuiTab {
 }
 
 /// Caller-supplied styles for the tab bar and its semantic states.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TuiTabBarStyles {
     pub background: Option<Color>,
     pub leading: TuiStyle,
@@ -70,7 +70,7 @@ pub struct TuiTabBarStyles {
 }
 
 /// Caller-owned semantic state and presentation options for a tab bar.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct TuiTabBarConfig {
     pub leading: Option<String>,
     pub main_tab: Option<TuiTab>,
@@ -210,6 +210,9 @@ impl TuiTabBarView {
         config: TuiTabBarConfig,
         ctx: &mut ViewContext<Self>,
     ) -> Result<(), TuiTabBarConfigError> {
+        if self.config == config {
+            return Ok(());
+        }
         let live_keys = validated_live_keys(&config)?;
         self.config = config;
         self.reconcile_mouse_states(live_keys);
