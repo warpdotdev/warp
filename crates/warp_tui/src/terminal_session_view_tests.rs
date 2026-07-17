@@ -126,10 +126,7 @@ fn user_input_event_projects_to_raw_user_bytes() {
 #[test]
 fn plan_toggle_uses_contextual_ctrl_p_and_ctrl_shift_p() {
     App::test((), |mut app| async move {
-        app.update(|ctx| {
-            super::init(ctx);
-            crate::input::init(ctx);
-        });
+        app.update(crate::keybindings::init);
         app.read(|ctx| {
             let toggle = ctx
                 .get_binding_by_name(PLAN_TOGGLE_BINDING_NAME)
