@@ -52,6 +52,7 @@ use super::session::{BootstrapSessionType, InBandCommandOutputReceiver, SessionI
 use super::{Secret, SecretHandle};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::SerializedBlockListItem;
+use crate::safe_warn;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
@@ -3162,9 +3163,9 @@ impl ansi::Handler for TerminalModel {
                         uname: data.uname,
                     }))
             }
-            None => log::warn!(
-                "Received invalid shell name in init_subshell: {}",
-                data.shell
+            None => safe_warn!(
+                safe: ("Received invalid shell name in init_subshell"),
+                full: ("Received invalid shell name in init_subshell: {}", data.shell)
             ),
         }
     }
@@ -3186,9 +3187,12 @@ impl ansi::Handler for TerminalModel {
                         ))
                 }
                 None => {
-                    log::warn!(
-                        "Received invalid shell name in SourcedRCFileForWarpValue: {}",
-                        data.shell
+                    safe_warn!(
+                        safe: ("Received invalid shell name in SourcedRCFileForWarpValue"),
+                        full: (
+                            "Received invalid shell name in SourcedRCFileForWarpValue: {}",
+                            data.shell
+                        )
                     );
                 }
             }
