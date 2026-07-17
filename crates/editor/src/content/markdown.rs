@@ -237,6 +237,8 @@ impl<'a> BufferMarkdownParser<'a> {
         let end_italic = prev_styles.is_italic() && !next_styles.is_italic();
         let end_strikethrough = prev_styles.is_strikethrough() && !next_styles.is_strikethrough();
         let end_underline = prev_styles.is_underlined() && !next_styles.is_underlined();
+        let end_subscript = prev_styles.is_subscript() && !next_styles.is_subscript();
+        let end_superscript = prev_styles.is_superscript() && !next_styles.is_superscript();
 
         // This, and the parallel logic below, is an unfortunate workaround for the CommonMark
         // rules about space before/after bold and italic formatting markers
@@ -253,6 +255,14 @@ impl<'a> BufferMarkdownParser<'a> {
             // Panic safety: iterating over `char_indices` means that `idx` must be in-bounds and a
             // code point boundary.
             .map(|(idx, _)| buf.split_off(idx));
+
+        if end_subscript {
+            buf.push_str("</sub>")
+        }
+
+        if end_superscript {
+            buf.push_str("</sup>")
+        }
 
         if end_underline {
             buf.push_str("</u>")
@@ -293,6 +303,8 @@ impl<'a> BufferMarkdownParser<'a> {
         let start_italic = !prev_styles.is_italic() && next_styles.is_italic();
         let start_strikethrough = !prev_styles.is_strikethrough() && next_styles.is_strikethrough();
         let start_underline = !prev_styles.is_underlined() && next_styles.is_underlined();
+        let start_subscript = !prev_styles.is_subscript() && next_styles.is_subscript();
+        let start_superscript = !prev_styles.is_superscript() && next_styles.is_superscript();
 
         // In order to parse correctly, Markdown emphasis markers must be after whitespace. If the
         // next run of content starts with whitespace, we write that and then the markers, and then
@@ -321,6 +333,14 @@ impl<'a> BufferMarkdownParser<'a> {
 
         if start_underline {
             buf.push_str("<u>");
+        }
+
+        if start_superscript {
+            buf.push_str("<sup>");
+        }
+
+        if start_subscript {
+            buf.push_str("<sub>");
         }
 
         if !prev_styles.is_inline_code() && next_styles.is_inline_code() {
@@ -1168,6 +1188,12 @@ where
         if styles.is_underlined() {
             serializer.start_elem(QualName::new(None, ns!(html), "u".into()), iter::empty())?;
         }
+        if styles.is_subscript() {
+            serializer.start_elem(QualName::new(None, ns!(html), "sub".into()), iter::empty())?;
+        }
+        if styles.is_superscript() {
+            serializer.start_elem(QualName::new(None, ns!(html), "sup".into()), iter::empty())?;
+        }
         if styles.is_inline_code() {
             serializer.start_elem(QualName::new(None, ns!(html), "code".into()), iter::empty())?;
         }
@@ -1176,6 +1202,12 @@ where
 
         if styles.is_inline_code() {
             serializer.end_elem(QualName::new(None, ns!(html), "code".into()))?;
+        }
+        if styles.is_superscript() {
+            serializer.end_elem(QualName::new(None, ns!(html), "sup".into()))?;
+        }
+        if styles.is_subscript() {
+            serializer.end_elem(QualName::new(None, ns!(html), "sub".into()))?;
         }
         if styles.is_underlined() {
             serializer.end_elem(QualName::new(None, ns!(html), "u".into()))?;

@@ -259,3 +259,35 @@ fn test_table_cell_offset_map_handles_nested_styles() {
         );
     }
 }
+
+#[test]
+fn test_table_cell_offset_map_handles_sub_sup_markers() {
+    // Issue #13734: `<sub>`/`<sup>` are source-only markers absent from rendered text, so the
+    // marker-agnostic char-walk must map rendered offsets back across them, exactly as it does
+    // for `<u>` and emphasis. No hardcoding of the new tags is required.
+    let source = "H<sub>2</sub>O and x<sup>2</sup>";
+    let inline = parse_inline_markdown(source);
+    let rendered_text: String = inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect();
+    assert_eq!(rendered_text, "H2O and x2");
+
+    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+    assert_eq!(
+        map.source_length(),
+        CharOffset::from(source.chars().count())
+    );
+    assert_eq!(
+        map.rendered_length(),
+        CharOffset::from(rendered_text.chars().count())
+    );
+    for (rendered_idx, rendered_char) in rendered_text.chars().enumerate() {
+        let source_pos = map.rendered_to_source(CharOffset::from(rendered_idx));
+        assert_eq!(
+            source.chars().nth(source_pos.as_usize()),
+            Some(rendered_char),
+            "rendered {rendered_idx} ({rendered_char:?}) should map to same char in source",
+        );
+    }
+}

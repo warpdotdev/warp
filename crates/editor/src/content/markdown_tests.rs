@@ -151,6 +151,66 @@ fn test_table_html_serialization() {
 }
 
 #[test]
+fn test_table_cell_sub_sup_html_serialization() {
+    // Issue #13734: sub/superscript in a table cell round-trips through the HTML table
+    // serializer, emitting `<sub>`/`<sup>` around the affected fragment.
+    App::test((), |mut app| async move {
+        let markdown = format!(
+            "```{}\nH<sub>2</sub>O\tx<sup>2</sup>\n```\n",
+            TABLE_BLOCK_MARKDOWN_LANG
+        );
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let html = app.read_model(&buffer, |buffer, ctx| {
+            let range = CharOffset::from(1)..buffer.max_charoffset();
+            buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+        });
+
+        let html = html.expect("table should serialize to HTML");
+        assert!(
+            html.contains("H<sub>2</sub>O"),
+            "expected subscript markup in table HTML, got: {html}"
+        );
+        assert!(
+            html.contains("x<sup>2</sup>"),
+            "expected superscript markup in table HTML, got: {html}"
+        );
+    });
+}
+
+#[test]
+fn test_table_cell_sub_sup_markdown_round_trip() {
+    // The GFM-table Markdown serializer re-emits `<sub>`/`<sup>` for aligned fragments.
+    App::test((), |mut app| async move {
+        let markdown = format!(
+            "```{}\nH<sub>2</sub>O\tfoot<sup>1</sup>\n```\n",
+            TABLE_BLOCK_MARKDOWN_LANG
+        );
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert!(
+            exported_markdown.contains("H<sub>2</sub>O"),
+            "expected subscript tags preserved on export, got: {exported_markdown}"
+        );
+        assert!(
+            exported_markdown.contains("foot<sup>1</sup>"),
+            "expected superscript tags preserved on export, got: {exported_markdown}"
+        );
+    });
+}
+
+#[test]
 fn test_gfm_table_html_serialization() {
     App::test((), |mut app| async move {
         let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);

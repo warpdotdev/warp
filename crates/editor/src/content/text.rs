@@ -15,7 +15,7 @@ use markdown_parser::markdown_parser::{
 use markdown_parser::weight::CustomWeight;
 use markdown_parser::{
     CodeBlockText, FormattedImage, FormattedTextLine, FormattedTextStyles, Hyperlink,
-    parse_markdown,
+    VerticalAlign, parse_markdown,
 };
 pub use markdown_parser::{
     FormattedTable, FormattedTableAlignment, FormattedTextFragment, FormattedTextInline,
@@ -1090,6 +1090,7 @@ pub struct TextStylesWithMetadata {
     strikethrough: bool,
     link: Option<String>,
     color: Option<ColorU>,
+    vertical_align: Option<VerticalAlign>,
 }
 
 impl TextStylesWithMetadata {
@@ -1205,6 +1206,14 @@ impl TextStylesWithMetadata {
         self.underline
     }
 
+    pub fn is_subscript(&self) -> bool {
+        self.vertical_align == Some(VerticalAlign::Sub)
+    }
+
+    pub fn is_superscript(&self) -> bool {
+        self.vertical_align == Some(VerticalAlign::Sup)
+    }
+
     pub fn is_link(&self) -> bool {
         self.link.is_some()
     }
@@ -1235,6 +1244,9 @@ impl TextStylesWithMetadata {
             strikethrough: text_styles.strikethrough,
             link,
             color,
+            // The editor's compact `TextStyles` doesn't track vertical alignment (there's no
+            // buffer-level toggle for sub/superscript), so it can't carry one here.
+            vertical_align: None,
         }
     }
 
@@ -1274,6 +1286,13 @@ impl TextStylesWithMetadata {
             Default::default()
         };
 
+        // Only a shared vertical alignment survives; differing (or absent) alignment yields none.
+        let vertical_align = if self.vertical_align == other.vertical_align {
+            self.vertical_align
+        } else {
+            None
+        };
+
         Self {
             weight,
             italic: self.italic && other.italic,
@@ -1283,6 +1302,7 @@ impl TextStylesWithMetadata {
             link,
             color,
             placeholder: self.placeholder && other.placeholder,
+            vertical_align,
         }
     }
 }
@@ -1298,6 +1318,7 @@ impl From<FormattedTextStyles> for TextStylesWithMetadata {
             placeholder: false,
             link: styles.hyperlink.and_then(Hyperlink::url),
             color: None, // TODO: Update this when adding strikethrough support.
+            vertical_align: styles.vertical_align,
         }
     }
 }
@@ -1311,6 +1332,7 @@ impl From<TextStylesWithMetadata> for FormattedTextStyles {
             strikethrough: styles.strikethrough,
             hyperlink: styles.link.map(Hyperlink::Url),
             inline_code: styles.inline_code,
+            vertical_align: styles.vertical_align,
         }
     }
 }
