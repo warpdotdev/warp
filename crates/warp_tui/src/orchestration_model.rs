@@ -64,7 +64,6 @@ impl Entity for TuiOrchestrationModel {
 impl SingletonEntity for TuiOrchestrationModel {}
 
 impl TuiOrchestrationModel {
-
     /// Registers the singleton before sessions are created and wired to it.
     pub(crate) fn register(ctx: &mut AppContext) -> ModelHandle<Self> {
         ctx.add_singleton_model(|_| Self {

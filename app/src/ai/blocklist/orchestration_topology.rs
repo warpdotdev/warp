@@ -16,11 +16,21 @@ pub enum OrchestrationNavigationDirection {
 }
 
 /// Semantic role of a participant in an orchestration transcript.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OrchestrationParticipantKind {
     Orchestrator,
-    Agent,
+    Agent { name: String },
     Unknown,
+}
+
+impl OrchestrationParticipantKind {
+    pub(super) fn display_name(&self) -> &str {
+        match self {
+            Self::Orchestrator => "Orchestrator",
+            Self::Agent { name } => name,
+            Self::Unknown => "Unknown agent",
+        }
+    }
 }
 
 /// Frontend-independent identity for an orchestration participant.
@@ -28,7 +38,6 @@ pub enum OrchestrationParticipantKind {
 pub struct ResolvedOrchestrationParticipant {
     pub kind: OrchestrationParticipantKind,
     pub conversation_id: Option<AIConversationId>,
-    pub display_name: String,
 }
 
 impl ResolvedOrchestrationParticipant {
@@ -36,7 +45,6 @@ impl ResolvedOrchestrationParticipant {
         Self {
             kind: OrchestrationParticipantKind::Orchestrator,
             conversation_id,
-            display_name: "Orchestrator".to_string(),
         }
     }
 
@@ -44,7 +52,6 @@ impl ResolvedOrchestrationParticipant {
         Self {
             kind: OrchestrationParticipantKind::Unknown,
             conversation_id: None,
-            display_name: "Unknown agent".to_string(),
         }
     }
 }
@@ -82,14 +89,14 @@ pub fn resolve_orchestration_participant(
     let Some(conversation) = history.conversation(&conversation_id) else {
         return ResolvedOrchestrationParticipant::unknown();
     };
+    let name = conversation
+        .agent_name()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Agent")
+        .to_string();
     ResolvedOrchestrationParticipant {
-        kind: OrchestrationParticipantKind::Agent,
+        kind: OrchestrationParticipantKind::Agent { name },
         conversation_id: Some(conversation_id),
-        display_name: conversation
-            .agent_name()
-            .filter(|name| !name.is_empty())
-            .unwrap_or("Agent")
-            .to_string(),
     }
 }
 

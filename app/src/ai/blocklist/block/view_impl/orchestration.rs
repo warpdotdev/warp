@@ -91,20 +91,21 @@ fn participant_for_agent_id(
         agent_id,
         orchestrator_agent_id,
     );
-    let avatar = match participant.kind {
+    let display_name = participant.kind.display_name().to_string();
+    let avatar = match &participant.kind {
         OrchestrationParticipantKind::Orchestrator => OrchestrationAvatar::Orchestrator,
-        OrchestrationParticipantKind::Agent | OrchestrationParticipantKind::Unknown => {
-            OrchestrationAvatar::agent(participant.display_name.clone())
+        OrchestrationParticipantKind::Agent { .. } | OrchestrationParticipantKind::Unknown => {
+            OrchestrationAvatar::agent(display_name.clone())
         }
     };
     OrchestrationParticipant {
-        display_name: participant.display_name,
+        display_name,
         avatar,
-        conversation_id: match participant.kind {
+        conversation_id: match &participant.kind {
             OrchestrationParticipantKind::Orchestrator | OrchestrationParticipantKind::Unknown => {
                 None
             }
-            OrchestrationParticipantKind::Agent => participant.conversation_id,
+            OrchestrationParticipantKind::Agent { .. } => participant.conversation_id,
         },
     }
 }

@@ -69,15 +69,15 @@ fn participant_resolution_uses_the_direct_parent_as_orchestrator() {
                 ResolvedOrchestrationParticipant {
                     kind: OrchestrationParticipantKind::Orchestrator,
                     conversation_id: Some(child_id),
-                    display_name: "Orchestrator".to_string(),
                 }
             );
             assert_eq!(
                 resolve_orchestration_participant(history, &root_run_id, Some(&child_run_id)),
                 ResolvedOrchestrationParticipant {
-                    kind: OrchestrationParticipantKind::Agent,
+                    kind: OrchestrationParticipantKind::Agent {
+                        name: "Agent".to_string(),
+                    },
                     conversation_id: Some(root_id),
-                    display_name: "Agent".to_string(),
                 }
             );
         });
