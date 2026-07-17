@@ -550,7 +550,7 @@ impl Eq for Hyperlink {}
 /// A fragment can be at most one of these at a time; nesting resolves to the innermost tag
 /// (see the markdown parser's `parse_sub`/`parse_sup`), so a single `Option<VerticalAlign>`
 /// rather than two independent booleans captures the supported behavior exactly.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum VerticalAlign {
     /// Rendered below the surrounding baseline (`<sub>`).
     Sub,

@@ -13,6 +13,8 @@ use rangemap::RangeMap;
 use smallvec::SmallVec;
 use vec1::{vec1, Vec1};
 
+use markdown_parser::VerticalAlign;
+
 use crate::elements::{Fill, DEFAULT_UI_LINE_HEIGHT_RATIO};
 use crate::fonts::{
     Cache as FontCache, FamilyId, FontId, GlyphId, Properties, RequestedFallbackFontSource,
@@ -571,6 +573,10 @@ pub struct TextStyle {
     pub underline_color: Option<ColorU>,
     // Unique id for each hyperlink in a frame, used to group parts of a hyperlink together if a hyperlink is soft-wrapped.
     pub hyperlink_id: Option<i32>,
+    // Sub/superscript vertical alignment for this run. Applied as a post-shape vertical glyph
+    // translation at paint time (see `Line::paint_internal`); the shaper still positions glyphs at
+    // the line's single baseline, so this does not change per-line metrics.
+    pub vertical_align: Option<VerticalAlign>,
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -618,6 +624,7 @@ impl TextStyle {
             show_strikethrough: false,
             underline_color: None,
             hyperlink_id: None,
+            vertical_align: None,
         }
     }
 
@@ -659,6 +666,27 @@ impl TextStyle {
     pub fn with_hyperlink_id(mut self, hyperlink_id: i32) -> Self {
         self.hyperlink_id = Some(hyperlink_id);
         self
+    }
+
+    pub fn with_vertical_align(mut self, vertical_align: VerticalAlign) -> Self {
+        self.vertical_align = Some(vertical_align);
+        self
+    }
+
+    /// The vertical paint offset (in pixels, positive = downward on screen) to apply to this
+    /// run's glyphs for sub/superscript, given the line's `font_size`. Sub shifts down, sup
+    /// shifts up, by a fixed fraction of the font size (matching typical CSS `vertical-align:
+    /// sub`/`super`). Returns `0.0` when the run has no vertical alignment.
+    pub fn baseline_offset(&self, font_size: f32) -> f32 {
+        // Fraction of the em to shift. Kept within the line's normal ascent/descent slack so a
+        // `<sup>` doesn't clip into the line above nor a `<sub>` into the line below at default
+        // line spacing.
+        const VERTICAL_ALIGN_EM_FRACTION: f32 = 0.25;
+        match self.vertical_align {
+            Some(VerticalAlign::Sub) => font_size * VERTICAL_ALIGN_EM_FRACTION,
+            Some(VerticalAlign::Sup) => -font_size * VERTICAL_ALIGN_EM_FRACTION,
+            None => 0.0,
+        }
     }
 }
 
@@ -1571,6 +1599,11 @@ impl Line {
             } else {
                 itertools::Either::Right(run.glyphs.iter())
             };
+            // Sub/superscript shifts this run's glyphs vertically after shaping (see Option A in
+            // the #13734 tech spec). Applied to glyph paint positions only, so selection and caret
+            // hit-testing keep operating on the shaped, un-shifted positions.
+            let run_baseline_offset = run.styles.baseline_offset(self.font_size);
+
             let mut should_stop_after_run = false;
             for glyph in glyph_iter {
                 let index = glyph.index;
@@ -1614,10 +1647,10 @@ impl Line {
                     line_origin
                         + vec2f(
                             remaining_width + start_ellipsis_offset,
-                            glyph.position_along_baseline.y(),
+                            glyph.position_along_baseline.y() + run_baseline_offset,
                         )
                 } else {
-                    line_origin + glyph.position_along_baseline
+                    line_origin + glyph.position_along_baseline + vec2f(0., run_baseline_offset)
                 };
 
                 scene

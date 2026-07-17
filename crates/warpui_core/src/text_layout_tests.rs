@@ -5,6 +5,34 @@ use crate::fonts::Weight;
 use crate::{rendering, App, Scene};
 
 #[test]
+fn test_text_style_baseline_offset_sub_sup() {
+    // Issue #13734: sub shifts glyphs down (positive y, screen-down), sup shifts them up
+    // (negative y), by a fixed fraction of the font size; no alignment means no shift.
+    let font_size = 20.0;
+
+    let plain = TextStyle::new();
+    assert_approx_eq!(f32, plain.baseline_offset(font_size), 0.0);
+
+    let sub = TextStyle::new().with_vertical_align(VerticalAlign::Sub);
+    let sub_offset = sub.baseline_offset(font_size);
+    assert!(sub_offset > 0.0, "sub should shift down, got {sub_offset}");
+
+    let sup = TextStyle::new().with_vertical_align(VerticalAlign::Sup);
+    let sup_offset = sup.baseline_offset(font_size);
+    assert!(sup_offset < 0.0, "sup should shift up, got {sup_offset}");
+
+    // Symmetric magnitude, and scales with font size.
+    assert_approx_eq!(f32, sub_offset, -sup_offset);
+    assert_approx_eq!(
+        f32,
+        TextStyle::new()
+            .with_vertical_align(VerticalAlign::Sub)
+            .baseline_offset(40.0),
+        sub_offset * 2.0
+    );
+}
+
+#[test]
 fn test_empty_line() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
@@ -445,6 +473,94 @@ fn test_run_background_painted_before_underline() {
                 bg_index < underline_index,
                 "background rect (index {bg_index}) must be painted before the underline rect \
                  (index {underline_index}) so the underline renders on top of the background",
+            );
+        });
+    });
+}
+
+/// Issue #13734: a `<sub>`/`<sup>`-flagged run has its glyphs painted with a vertical
+/// offset (down for sub, up for sup) relative to a plain run on the same line, without
+/// touching the shaper or the line's single baseline.
+#[test]
+fn test_sub_sup_run_glyphs_painted_with_vertical_offset() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let glyph_width = 12.0;
+            let font_size = 12.0;
+
+            // Build one plain run and, immediately after it, one sub run and one sup run —
+            // all glyphs shaped at baseline y=0. Only the vertical alignment differs.
+            let make_glyphs = |start: usize, count: usize| -> Vec<Glyph> {
+                (0..count)
+                    .map(|i| Glyph {
+                        id: 0,
+                        position_along_baseline: vec2f(glyph_width * (start + i) as f32, 0.),
+                        index: start + i,
+                        width: glyph_width,
+                    })
+                    .collect()
+            };
+
+            let plain_run = Run {
+                font_id: FontId(0),
+                glyphs: make_glyphs(0, 1),
+                styles: TextStyle::default(),
+                width: glyph_width,
+            };
+            let sub_run = Run {
+                font_id: FontId(0),
+                glyphs: make_glyphs(1, 1),
+                styles: TextStyle::default().with_vertical_align(VerticalAlign::Sub),
+                width: glyph_width,
+            };
+            let sup_run = Run {
+                font_id: FontId(0),
+                glyphs: make_glyphs(2, 1),
+                styles: TextStyle::default().with_vertical_align(VerticalAlign::Sup),
+                width: glyph_width,
+            };
+            let line = Line {
+                width: glyph_width * 3.,
+                trailing_whitespace_width: 0.,
+                runs: vec![plain_run, sub_run, sup_run],
+                font_size,
+                line_height_ratio: 1.,
+                baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                clip_config: None,
+                ascent: 10.,
+                descent: 2.,
+                caret_positions: Vec::new(),
+                chars_with_missing_glyphs: Vec::new(),
+            };
+
+            let mut scene = Scene::new(1., rendering::Config::default());
+            line.paint(
+                RectF::new(Vector2F::zero(), Vector2F::new(1000., 50.)),
+                &PaintStyleOverride::default(),
+                ColorU::black(),
+                ctx.font_cache(),
+                &mut scene,
+            );
+
+            // Drawn glyphs are ordered by x, so index 0 = plain, 1 = sub, 2 = sup.
+            let mut glyphs: Vec<_> = scene
+                .layers()
+                .flat_map(|layer| layer.glyphs.iter().cloned())
+                .collect();
+            glyphs.sort_by(|a, b| a.position.x().partial_cmp(&b.position.x()).unwrap());
+            assert_eq!(glyphs.len(), 3, "expected three painted glyphs");
+
+            let plain_y = glyphs[0].position.y();
+            let sub_y = glyphs[1].position.y();
+            let sup_y = glyphs[2].position.y();
+
+            assert!(
+                sub_y > plain_y,
+                "subscript glyph (y={sub_y}) should paint below the plain glyph (y={plain_y})",
+            );
+            assert!(
+                sup_y < plain_y,
+                "superscript glyph (y={sup_y}) should paint above the plain glyph (y={plain_y})",
             );
         });
     });
