@@ -27,6 +27,7 @@ use warpui::platform::OperatingSystem;
 use warpui::platform::keyboard::KeyCode;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
+use crate::ai::execution_profiles::ExecutionProfilesConfig;
 use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
 use crate::settings::PrivacySettings;
@@ -1111,6 +1112,20 @@ define_settings_group!(AISettings, settings: [
         private: false,
         toml_path: "agents.model",
         description: "The default model the TUI agent uses.",
+    }
+    // The complete execution-profile collection shared by GUI and TUI.
+    // GUI cloud synchronization respects the user's settings-sync preference;
+    // TUI settings mode keeps this value local.
+    execution_profiles: ExecutionProfiles {
+        type: ExecutionProfilesConfig,
+        default: ExecutionProfilesConfig::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
+        private: false,
+        toml_path: "agents.execution_profiles",
+        max_table_depth: 2,
+        description: "AI execution profiles and their permissions.",
     }
     // Which unit the TUI footer's usage entry displays (credits or provider
     // cost), flipped by clicking the entry.

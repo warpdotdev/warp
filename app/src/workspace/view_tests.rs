@@ -460,9 +460,9 @@ fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default()
             let profiles = AIExecutionProfilesModel::handle(ctx);
             let default_profile_id = profiles.read(ctx, |p, _| p.default_profile_id());
             profiles.update(ctx, |p, ctx| {
-                p.set_base_model(default_profile_id, Some(m.clone()), ctx);
+                p.set_base_model(&default_profile_id, Some(m.clone()), ctx);
                 let source_profile_id = p.create_profile(ctx).expect("create source profile");
-                p.set_base_model(source_profile_id, Some(d.clone()), ctx);
+                p.set_base_model(&source_profile_id, Some(d.clone()), ctx);
                 p.set_active_profile(source_id, source_profile_id, ctx);
             });
 

@@ -1331,7 +1331,7 @@ impl LLMPreferences {
 
         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
             for profile_id in profiles.get_all_profile_ids() {
-                let Some(profile) = profiles.get_profile_by_id(profile_id, ctx) else {
+                let Some(profile) = profiles.get_profile_by_id(&profile_id, ctx) else {
                     continue;
                 };
                 let profile_data = profile.data();
@@ -1340,8 +1340,8 @@ impl LLMPreferences {
                         && !valid_local.contains(id)
                 });
                 if base_stale {
-                    profiles.set_base_model(profile_id, None, ctx);
-                    profiles.set_context_window_limit(profile_id, None, ctx);
+                    profiles.set_base_model(&profile_id, None, ctx);
+                    profiles.set_context_window_limit(&profile_id, None, ctx);
                     updated_agent_mode = true;
                 }
                 let coding_stale = profile_data.coding_model.as_ref().is_some_and(|id| {
@@ -1349,7 +1349,7 @@ impl LLMPreferences {
                         && !valid_local.contains(id)
                 });
                 if coding_stale {
-                    profiles.set_coding_model(profile_id, None, ctx);
+                    profiles.set_coding_model(&profile_id, None, ctx);
                     updated_coding = true;
                 }
             }
@@ -1393,7 +1393,7 @@ impl LLMPreferences {
 
         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
             for profile_id in profiles.get_all_profile_ids() {
-                let Some(profile) = profiles.get_profile_by_id(profile_id, ctx) else {
+                let Some(profile) = profiles.get_profile_by_id(&profile_id, ctx) else {
                     continue;
                 };
                 let profile_data = profile.data();
@@ -1403,8 +1403,8 @@ impl LLMPreferences {
                     .as_ref()
                     .is_some_and(|id| custom_ids.contains(id))
                 {
-                    profiles.set_base_model(profile_id, None, ctx);
-                    profiles.set_context_window_limit(profile_id, None, ctx);
+                    profiles.set_base_model(&profile_id, None, ctx);
+                    profiles.set_context_window_limit(&profile_id, None, ctx);
                     updated_agent_mode = true;
                 }
                 if profile_data
@@ -1412,7 +1412,7 @@ impl LLMPreferences {
                     .as_ref()
                     .is_some_and(|id| custom_ids.contains(id))
                 {
-                    profiles.set_coding_model(profile_id, None, ctx);
+                    profiles.set_coding_model(&profile_id, None, ctx);
                     updated_coding = true;
                 }
                 if profile_data
@@ -1420,7 +1420,7 @@ impl LLMPreferences {
                     .as_ref()
                     .is_some_and(|id| custom_ids.contains(id))
                 {
-                    profiles.set_cli_agent_model(profile_id, None, ctx);
+                    profiles.set_cli_agent_model(&profile_id, None, ctx);
                     updated_other = true;
                 }
                 if profile_data
@@ -1428,7 +1428,7 @@ impl LLMPreferences {
                     .as_ref()
                     .is_some_and(|id| custom_ids.contains(id))
                 {
-                    profiles.set_computer_use_model(profile_id, None, ctx);
+                    profiles.set_computer_use_model(&profile_id, None, ctx);
                     updated_other = true;
                 }
             }
@@ -1594,7 +1594,7 @@ impl LLMPreferences {
             let profile = profiles.active_profile(terminal_view_id, ctx);
 
             if profile.data().coding_model != new_value {
-                profiles.set_coding_model(*profile.id(), new_value, ctx);
+                profiles.set_coding_model(profile.id(), new_value, ctx);
                 changed = true;
             }
         });
@@ -1776,7 +1776,7 @@ impl LLMPreferences {
         let profiles_model = AIExecutionProfilesModel::handle(ctx);
         profiles_model.update(ctx, |profiles, ctx| {
             for profile_id in profiles.get_all_profile_ids() {
-                if let Some(profile) = profiles.get_profile_by_id(profile_id, ctx) {
+                if let Some(profile) = profiles.get_profile_by_id(&profile_id, ctx) {
                     let profile_data = profile.data();
                     let preferred_base_model = profile_data.base_model.clone();
                     let effective_base_model_id = preferred_base_model
@@ -1814,13 +1814,13 @@ impl LLMPreferences {
                         && preferred_base_model_is_recognized
                         && effective_base_model_unusable
                     {
-                        profiles.set_base_model(profile_id, None, ctx);
+                        profiles.set_base_model(&profile_id, None, ctx);
                     }
                     if has_context_window_limit
                         && preferred_base_model_is_recognized
                         && (effective_base_model_unusable || !effective_base_model_is_configurable)
                     {
-                        profiles.set_context_window_limit(profile_id, None, ctx);
+                        profiles.set_context_window_limit(&profile_id, None, ctx);
                     }
                     if let Some(preferred_llm_id) = &profile.data().coding_model {
                         // Same guard: only clear recognized IDs.
@@ -1840,7 +1840,7 @@ impl LLMPreferences {
                                 })
                                 .is_none()
                         {
-                            profiles.set_coding_model(profile_id, None, ctx);
+                            profiles.set_coding_model(&profile_id, None, ctx);
                         }
                     }
                     if let Some(preferred_llm_id) = &profile.data().cli_agent_model {
@@ -1859,7 +1859,7 @@ impl LLMPreferences {
                                 })
                                 .is_none()
                         {
-                            profiles.set_cli_agent_model(profile_id, None, ctx);
+                            profiles.set_cli_agent_model(&profile_id, None, ctx);
                         }
                     }
                     if let Some(preferred_llm_id) = &profile.data().computer_use_model
@@ -1868,7 +1868,7 @@ impl LLMPreferences {
                             .usable_info_for_id(preferred_llm_id, ctx)
                             .is_none()
                     {
-                        profiles.set_computer_use_model(profile_id, None, ctx);
+                        profiles.set_computer_use_model(&profile_id, None, ctx);
                     }
                 }
             }

@@ -165,28 +165,21 @@ fn apply_agent_settings(agent_settings: &AgentDevelopmentSettings, app: &mut App
 
     AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
         let default_profile_info = profiles.default_profile(ctx);
-        let default_profile_id = *default_profile_info.id();
+        let default_profile_id = default_profile_info.id().clone();
 
-        // Preserve the existing cloud default profile for users who are
-        // already logged in (or who log in at the end of onboarding). A
-        // `Some` sync_id means the profile is backed by a cloud object that
-        // was either loaded at startup or reconciled during the post-login
-        // initial load, and its values represent what the user has stored
-        // previously. Overwriting those with the onboarding-selected
-        // base_model / autonomy would silently discard their prior
-        // customizations. Fresh `Unsynced` default profiles (brand-new
-        // users, or users without any cloud default yet) still receive the
-        // onboarding values.
-        if default_profile_info.sync_id().is_some() {
+        // Preserve profiles loaded for an existing account, regardless of
+        // whether the active source is legacy cloud objects or the settings
+        // collection. Fresh local profiles still receive onboarding values.
+        if profiles.should_preserve_onboarding_profile(ctx) {
             log::info!(
-                "Preserving existing cloud default execution profile; skipping \
+                "Preserving existing account execution profile; skipping \
                  onboarding-driven overrides for profile {default_profile_id:?}"
             );
             return;
         }
 
         profiles.set_base_model(
-            default_profile_id,
+            &default_profile_id,
             Some(agent_settings.selected_model_id.clone()),
             ctx,
         );
@@ -200,18 +193,18 @@ fn apply_agent_settings(agent_settings: &AgentDevelopmentSettings, app: &mut App
 
         // Only set permissions that are not enforced by the workspace
         if !workspace_autonomy_settings.has_override_for_code_diffs() {
-            profiles.set_apply_code_diffs(default_profile_id, &permissions.apply_code_diffs, ctx);
+            profiles.set_apply_code_diffs(&default_profile_id, &permissions.apply_code_diffs, ctx);
         }
         if !workspace_autonomy_settings.has_override_for_read_files() {
-            profiles.set_read_files(default_profile_id, &permissions.read_files, ctx);
+            profiles.set_read_files(&default_profile_id, &permissions.read_files, ctx);
         }
         if !workspace_autonomy_settings.has_override_for_execute_commands() {
-            profiles.set_execute_commands(default_profile_id, &permissions.execute_commands, ctx);
+            profiles.set_execute_commands(&default_profile_id, &permissions.execute_commands, ctx);
         }
         // Note: MCP permissions don't have a workspace-level override, so always set them
-        profiles.set_mcp_permissions(default_profile_id, &permissions.mcp_permissions, ctx);
+        profiles.set_mcp_permissions(&default_profile_id, &permissions.mcp_permissions, ctx);
         if !workspace_autonomy_settings.has_override_for_write_to_pty() {
-            profiles.set_write_to_pty(default_profile_id, &permissions.write_to_pty, ctx);
+            profiles.set_write_to_pty(&default_profile_id, &permissions.write_to_pty, ctx);
         }
     });
 }

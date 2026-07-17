@@ -270,7 +270,8 @@ use crate::ai::blocklist::{
 use crate::ai::conversation_details_panel::ConversationDetailsPanelEvent;
 use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
-use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
+use crate::ai::execution_profiles::ExecutionProfileId;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 use crate::ai::llms::{LLMId, LLMModelHost, LLMPreferences};
 use crate::ai::loading::shimmering_warp_loading_text;
@@ -1960,7 +1961,7 @@ pub enum Event {
     },
     SlowBootstrap,
     OpenAgentProfileEditor {
-        profile_id: ClientProfileId,
+        profile_id: ExecutionProfileId,
     },
     OpenAutoReloadModal {
         purchased_credits: i32,
@@ -20370,7 +20371,7 @@ impl TerminalView {
                 let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
                 let active_profile = profiles_model.active_profile(Some(self.view_id), ctx);
                 ctx.emit(Event::OpenAgentProfileEditor {
-                    profile_id: *active_profile.id(),
+                    profile_id: active_profile.id().clone(),
                 });
             }
             AIBlockEvent::OpenThemeChooser => {

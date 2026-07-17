@@ -63,11 +63,11 @@ use crate::ai::blocklist::agent_view::agent_input_footer::editor::{
 };
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::execution_profiles::profiles::{
-    AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
+    AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
 };
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, AIExecutionProfileAppExt, ActionPermission, WriteToPtyPermission,
-    long_context_pricing_warning_title,
+    AIExecutionProfile, AIExecutionProfileAppExt, ActionPermission, ExecutionProfileId,
+    WriteToPtyPermission, long_context_pricing_warning_title,
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::geap_credentials::force_refresh_geap_credentials;
@@ -1640,7 +1640,7 @@ impl AISettingsPageView {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
 
-                    model.add_to_directory_allowlist(*profile_id, &PathBuf::from(expanded), ctx);
+                    model.add_to_directory_allowlist(profile_id, &PathBuf::from(expanded), ctx);
                 });
                 ctx.notify();
             }
@@ -1681,7 +1681,7 @@ impl AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.add_to_command_denylist(*profile_id, &predicate, ctx);
+                    model.add_to_command_denylist(profile_id, &predicate, ctx);
                 });
                 ctx.notify();
             }
@@ -1720,7 +1720,7 @@ impl AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.add_to_command_allowlist(*profile_id, &predicate, ctx);
+                    model.add_to_command_allowlist(profile_id, &predicate, ctx);
                 });
                 ctx.notify();
             }
@@ -2065,9 +2065,9 @@ impl AISettingsPageView {
                 // Mirror `AISettingsPageAction::SetBaseModel`: set the active
                 // profile's base model and clear any stale context-window limit.
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    let profile_id = *profiles_model.active_profile(None, ctx).id();
-                    profiles_model.set_base_model(profile_id, Some(id.clone()), ctx);
-                    profiles_model.set_context_window_limit(profile_id, None, ctx);
+                    let profile_id = profiles_model.active_profile(None, ctx).id().clone();
+                    profiles_model.set_base_model(&profile_id, Some(id.clone()), ctx);
+                    profiles_model.set_context_window_limit(&profile_id, None, ctx);
                 });
                 self.sync_context_window_editor(ctx, true);
                 self.hide_set_default_model_modal(ctx);
@@ -2937,9 +2937,10 @@ impl AISettingsPageView {
                             AIExecutionProfilesModel::handle(ctx).update(
                                 ctx,
                                 |profiles_model, ctx| {
-                                    let profile_id = *profiles_model.active_profile(None, ctx).id();
+                                    let profile_id =
+                                        profiles_model.active_profile(None, ctx).id().clone();
                                     profiles_model.set_context_window_limit(
-                                        profile_id,
+                                        &profile_id,
                                         Some(clamped),
                                         ctx,
                                     );
@@ -3463,13 +3464,18 @@ impl AISettingsPageView {
 
         profile_ids
             .iter()
-            .map(|&profile_id| {
-                let profile_view =
-                    ctx.add_typed_action_view(|ctx| ExecutionProfileView::new(profile_id, ctx));
+            .map(|profile_id| {
+                let profile_id = profile_id.clone();
+                let profile_view = ctx.add_typed_action_view(|ctx| {
+                    ExecutionProfileView::new(profile_id.clone(), ctx)
+                });
+                let profile_id_for_event = profile_id.clone();
 
                 ctx.subscribe_to_view(&profile_view, move |_me, _, event, ctx| match event {
                     ExecutionProfileViewEvent::EditProfile => {
-                        ctx.emit(AISettingsPageEvent::OpenExecutionProfileEditor(profile_id));
+                        ctx.emit(AISettingsPageEvent::OpenExecutionProfileEditor(
+                            profile_id_for_event.clone(),
+                        ));
                     }
                 });
 
@@ -3585,7 +3591,7 @@ pub enum AISettingsPageEvent {
     OpenCustomRouterEditor(Option<crate::ai::custom_model_routers::CustomModelRouter>),
     #[cfg(feature = "local_fs")]
     OpenCustomRouterFile(PathBuf),
-    OpenExecutionProfileEditor(ClientProfileId),
+    OpenExecutionProfileEditor(ExecutionProfileId),
     SignupAnonymousUser,
     ShowModal,
     HideModal,
@@ -3628,7 +3634,7 @@ pub enum AISettingsPageAction {
     RemoveFromCommandExecutionDenylist(AgentModeCommandExecutionPredicate),
     OpenAIFactCollection,
     OpenMCPServerCollection,
-    OpenExecutionProfileEditor(ClientProfileId),
+    OpenExecutionProfileEditor(ExecutionProfileId),
     SetBaseModel(LLMId),
     SetCodingModel(LLMId),
     /// Called while the user is actively dragging the context window slider.
@@ -4163,14 +4169,14 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::OpenMCPServerCollection => {
                 ctx.emit(AISettingsPageEvent::OpenMCPServerCollection)
             }
-            AISettingsPageAction::OpenExecutionProfileEditor(profile_id) => {
-                ctx.emit(AISettingsPageEvent::OpenExecutionProfileEditor(*profile_id))
-            }
+            AISettingsPageAction::OpenExecutionProfileEditor(profile_id) => ctx.emit(
+                AISettingsPageEvent::OpenExecutionProfileEditor(profile_id.clone()),
+            ),
             AISettingsPageAction::SetBaseModel(id) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    let profile_id = *profiles_model.active_profile(None, ctx).id();
-                    profiles_model.set_base_model(profile_id, Some(id.clone()), ctx);
-                    profiles_model.set_context_window_limit(profile_id, None, ctx);
+                    let profile_id = profiles_model.active_profile(None, ctx).id().clone();
+                    profiles_model.set_base_model(&profile_id, Some(id.clone()), ctx);
+                    profiles_model.set_context_window_limit(&profile_id, None, ctx);
                 });
                 self.sync_context_window_editor(ctx, true);
                 ctx.notify();
@@ -4205,8 +4211,8 @@ impl TypedActionView for AISettingsPageView {
                 };
                 let clamped = (*value).clamp(cw.min, cw.max);
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    let profile_id = *profiles_model.active_profile(None, ctx).id();
-                    profiles_model.set_context_window_limit(profile_id, Some(clamped), ctx);
+                    let profile_id = profiles_model.active_profile(None, ctx).id().clone();
+                    profiles_model.set_context_window_limit(&profile_id, Some(clamped), ctx);
                 });
                 self.sync_context_window_editor(ctx, true);
                 ctx.notify();
@@ -4253,35 +4259,35 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::SetApplyCodeDiffs(permission) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
-                    model.set_apply_code_diffs(*profile.id(), permission, ctx);
+                    model.set_apply_code_diffs(profile.id(), permission, ctx);
                 });
                 ctx.notify();
             }
             AISettingsPageAction::SetReadFiles(permission) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
-                    model.set_read_files(*profile.id(), permission, ctx);
+                    model.set_read_files(profile.id(), permission, ctx);
                 });
                 ctx.notify();
             }
             AISettingsPageAction::SetExecuteCommands(permission) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
-                    model.set_execute_commands(*profile.id(), permission, ctx);
+                    model.set_execute_commands(profile.id(), permission, ctx);
                 });
                 ctx.notify();
             }
             AISettingsPageAction::SetWriteToPty(permission) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
-                    model.set_write_to_pty(*profile.id(), permission, ctx);
+                    model.set_write_to_pty(profile.id(), permission, ctx);
                 });
                 ctx.notify();
             }
             AISettingsPageAction::SetMCPPermissions(permission) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
-                    model.set_mcp_permissions(*profile.id(), permission, ctx);
+                    model.set_mcp_permissions(profile.id(), permission, ctx);
                 });
                 ctx.notify();
             }
@@ -4319,7 +4325,7 @@ impl TypedActionView for AISettingsPageView {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
                     model.remove_from_directory_allowlist(
-                        *profile_id,
+                        profile_id,
                         &PathBuf::from(path_buf),
                         ctx,
                     );
@@ -4331,7 +4337,7 @@ impl TypedActionView for AISettingsPageView {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
 
-                    model.remove_from_command_denylist(*profile_id, cmd, ctx);
+                    model.remove_from_command_denylist(profile_id, cmd, ctx);
                 });
                 ctx.notify();
             }
@@ -4340,7 +4346,7 @@ impl TypedActionView for AISettingsPageView {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
 
-                    model.remove_from_command_allowlist(*profile_id, command, ctx);
+                    model.remove_from_command_allowlist(profile_id, command, ctx);
                 });
                 ctx.notify();
             }
@@ -4361,7 +4367,7 @@ impl TypedActionView for AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.add_to_mcp_allowlist(*profile_id, id, ctx);
+                    model.add_to_mcp_allowlist(profile_id, id, ctx);
                 });
                 ctx.notify();
             }
@@ -4369,7 +4375,7 @@ impl TypedActionView for AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.remove_from_mcp_allowlist(*profile_id, id, ctx);
+                    model.remove_from_mcp_allowlist(profile_id, id, ctx);
                 });
                 ctx.notify();
             }
@@ -4377,7 +4383,7 @@ impl TypedActionView for AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.add_to_mcp_denylist(*profile_id, id, ctx);
+                    model.add_to_mcp_denylist(profile_id, id, ctx);
                 });
                 ctx.notify();
             }
@@ -4385,7 +4391,7 @@ impl TypedActionView for AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.remove_from_mcp_denylist(*profile_id, id, ctx);
+                    model.remove_from_mcp_denylist(profile_id, id, ctx);
                 });
                 ctx.notify();
             }
@@ -4394,7 +4400,6 @@ impl TypedActionView for AISettingsPageView {
                     .update(ctx, |model, ctx| model.create_profile(ctx));
 
                 if let Some(profile_id) = new_profile_id {
-                    self.profile_views = Self::create_profile_views(ctx);
                     ctx.emit(AISettingsPageEvent::OpenExecutionProfileEditor(profile_id));
                 }
                 ctx.notify();

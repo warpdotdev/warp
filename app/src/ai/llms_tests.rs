@@ -709,9 +709,9 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
         let default_profile_id =
             profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
         profiles_model.update(&mut app, |profiles, ctx| {
-            profiles.set_base_model(default_profile_id, Some(custom_model_id.clone()), ctx);
-            profiles.set_coding_model(default_profile_id, Some(custom_model_id.clone()), ctx);
-            profiles.set_cli_agent_model(default_profile_id, Some(custom_model_id.clone()), ctx);
+            profiles.set_base_model(&default_profile_id, Some(custom_model_id.clone()), ctx);
+            profiles.set_coding_model(&default_profile_id, Some(custom_model_id.clone()), ctx);
+            profiles.set_cli_agent_model(&default_profile_id, Some(custom_model_id.clone()), ctx);
         });
 
         llm_preferences.update(&mut app, |preferences, ctx| {
@@ -775,22 +775,22 @@ fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
         let preserved_context_window_limit: u32 = 200_000;
         profiles_model.update(&mut app, |profiles, ctx| {
             profiles.set_base_model(
-                default_profile_id,
+                &default_profile_id,
                 Some(remote_custom_model_id.clone()),
                 ctx,
             );
             profiles.set_coding_model(
-                default_profile_id,
+                &default_profile_id,
                 Some(remote_custom_model_id.clone()),
                 ctx,
             );
             profiles.set_cli_agent_model(
-                default_profile_id,
+                &default_profile_id,
                 Some(remote_custom_model_id.clone()),
                 ctx,
             );
             profiles.set_context_window_limit(
-                default_profile_id,
+                &default_profile_id,
                 Some(preserved_context_window_limit),
                 ctx,
             );
@@ -1011,8 +1011,8 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
         });
 
         profiles.update(&mut app, |profiles, ctx| {
-            let profile_id = *profiles.active_profile(Some(surface_id), ctx).id();
-            profiles.set_base_model(profile_id, Some(LLMId::from("claude-opus")), ctx);
+            let profile_id = profiles.active_profile(Some(surface_id), ctx).id().clone();
+            profiles.set_base_model(&profile_id, Some(LLMId::from("claude-opus")), ctx);
         });
         preferences.read(&app, |preferences, ctx| {
             assert_eq!(
