@@ -363,11 +363,13 @@ fn orchestration_outputs_render_without_wait_for_events_tool_row() {
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
-                    TuiAIBlockSection::PlainText(
+                    TuiAIBlockSection::RichText(TuiRichTextSection::PlainText(
                         "Received message from agent researcher: Investigation complete"
                             .to_string(),
-                    ),
-                    TuiAIBlockSection::PlainText("Received 2 agent lifecycle events".to_string(),),
+                    )),
+                    TuiAIBlockSection::RichText(TuiRichTextSection::PlainText(
+                        "Received 2 agent lifecycle events".to_string(),
+                    )),
                 ],
             );
             assert_eq!(

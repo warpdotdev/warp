@@ -231,10 +231,8 @@ impl TuiOrchestrationModel {
         message: String,
         ctx: &mut ModelContext<Self>,
     ) {
-        log::warn!(
-            "Failing TUI child agent request '{}': {message}",
-            request.name
-        );
+        let request_id = request.id;
+        log::warn!("Failing TUI child agent request: request_id={request_id:?}");
         let surface_id = EntityId::new();
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             let conversation_id = history.start_new_child_conversation(

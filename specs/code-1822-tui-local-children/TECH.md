@@ -105,8 +105,8 @@ types remain behind the shared launch API.
   counts while asserting that `WaitForEvents` contributes no tool row.
 - `app/src/ai/llms_tests.rs (936-1035)` verifies explicit child pins preserve GUI pane behavior,
   suppress redundant model-change events, and precede the TUI file-backed default.
-- `app/src/ai/blocklist/history_model_tests.rs (1872-1897)` verifies that removing a child
-  conversation cleans the parent index.
+- `app/src/ai/blocklist/history_model_tests.rs (1930-1991)` verifies that removing a conversation
+  cleans both its incoming child reference and its outgoing parent index.
 - `cargo check -p warp_tui` passes.
 - `cargo clippy -p warp_tui --all-targets --all-features --tests -- -D warnings` passes.
 - `cargo clippy -p warp --lib --tests --features tui,test-util -- -D warnings` passes.
