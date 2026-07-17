@@ -534,7 +534,7 @@ fn test_to_pty_bytes_layers_fallbacks_over_the_encoder() {
         .to_pty_bytes(&mock)
     };
     // A key with no `chars` and no encoder mapping, built the way the
-    // crossterm→key-event conversion supplies named keys (tab is "\t").
+    // crossterm→key-event conversion supplies named keys.
     let named = |key: &str| Keystroke {
         ctrl: false,
         alt: false,
@@ -581,7 +581,7 @@ fn test_to_pty_bytes_layers_fallbacks_over_the_encoder() {
     // 4. Named control keys with no `chars` -> their C0 bytes.
     assert_eq!(pty_bytes(&named("enter"), None), Some(vec![C0::CR]));
     assert_eq!(pty_bytes(&named("escape"), None), Some(vec![C0::ESC]));
-    assert_eq!(pty_bytes(&named("\t"), None), Some(vec![C0::HT]));
+    assert_eq!(pty_bytes(&named("tab"), None), Some(vec![C0::HT]));
 
     // Nothing to send.
     assert_eq!(pty_bytes(&named("insert"), None), None);

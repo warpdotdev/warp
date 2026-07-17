@@ -69,8 +69,9 @@ State/API surface for the embedding host:
   While search owns focus, confirmation selects the first enabled filtered row,
   skipping disabled matches.
 - `handle_back(ctx) -> bool` — the host's Escape path: cancels active custom-text
-  editing and reports whether the key was consumed, so the host only leaves the page
-  when the selector had nothing to unwind.
+  editing or clears a non-empty search while search owns focus, and reports whether
+  the key was consumed so the host only leaves the page when the selector had
+  nothing to unwind.
 - `TuiOptionSelectorEvent::LayoutInvalidated` — tells hosts with separately cached
   measurements to remeasure after scrolling changes overflow markers, a catalog
   refresh changes the row set, search changes the rendered rows, or the custom-text
@@ -98,8 +99,9 @@ while the selector is rendered as the blocking interaction):
 - Search and custom text use the shared `TuiEditorView`; printable characters, cursor,
   selection, single-line paste, horizontal/word/line navigation, undo/redo, and
   kill/yank come from the shared editor layer. Escape remains host policy with a
-  selector fallback: it clears a non-empty search first, cancels custom editing, or
-  leaves the page.
+  selector fallback: it cancels active custom editing; otherwise, it clears a
+  non-empty search only while search owns focus. When neither editor has an
+  interaction to unwind, it leaves the page.
 - An element-level Escape fallback emits `Dismissed` for hosts without their own
   Escape binding; the embedding card's keymap normally consumes Escape first.
 

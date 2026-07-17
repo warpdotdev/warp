@@ -302,12 +302,12 @@ fn ctrl_letter_to_c0(keystroke: &Keystroke) -> Option<Vec<u8>> {
 
 /// C0 bytes for named control keys that carry no `chars` and that the
 /// escape-sequence encoder leaves unmapped without the kitty protocol. The key
-/// strings match the crossterm→key-event conversion (tab is `"\t"`).
+/// strings match the crossterm→key-event conversion.
 fn named_control_key_to_c0(key: &str) -> Option<Vec<u8>> {
     match key {
         "enter" => Some(vec![C0::CR]),
         "escape" => Some(vec![C0::ESC]),
-        "\t" => Some(vec![C0::HT]),
+        "tab" => Some(vec![C0::HT]),
         "backspace" => Some(vec![C0::DEL]),
         _ => None,
     }

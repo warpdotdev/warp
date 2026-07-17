@@ -101,8 +101,8 @@ pub(crate) enum TuiOptionSelectorAction {
     ScrollBy(isize),
     /// Move focus from the option list to search and seed its query.
     FocusSearchAndInsert(char),
-    /// Element-level Escape fallback (see [`TuiOptionSelectorEvent::Dismissed`]).
-    Dismiss,
+    /// Handle contextual Escape behavior, falling back to dismissal.
+    HandleEscape,
 }
 
 /// One navigable entry in the selector, in display order.
@@ -1052,7 +1052,7 @@ impl TypedActionView for TuiOptionSelector {
                     self.invalidate_layout(ctx);
                 }
             }
-            TuiOptionSelectorAction::Dismiss => {
+            TuiOptionSelectorAction::HandleEscape => {
                 if !self.handle_back(ctx) {
                     ctx.emit(TuiOptionSelectorEvent::Dismissed);
                 }
@@ -1128,7 +1128,7 @@ impl TuiElement for SelectorInputElement {
                         // Escape fallback for hosts without their own
                         // Escape keymap binding; the embedding card's
                         // `escape` binding normally consumes the key first.
-                        event_ctx.dispatch_typed_action(TuiOptionSelectorAction::Dismiss);
+                        event_ctx.dispatch_typed_action(TuiOptionSelectorAction::HandleEscape);
                         true
                     }
                     "up" => {
