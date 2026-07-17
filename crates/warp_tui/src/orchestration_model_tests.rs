@@ -9,9 +9,7 @@ use warpui_core::{App, WindowId};
 use super::TuiOrchestrationModel;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
-use crate::test_fixtures::{
-    add_active_test_conversation, add_test_semantic_selection, add_test_terminal_session,
-};
+use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 
 struct OrchestrationFixture {
     sessions: ModelHandle<TuiSessions>,
@@ -54,7 +52,6 @@ fn add_dispatching_session(
     let session_id = app.update(|ctx| {
         TuiSessions::register_session(&fixture.sessions, session, manager, focus, ctx)
     });
-    add_active_test_conversation(app, session_id.surface_id());
     session_id
 }
 
