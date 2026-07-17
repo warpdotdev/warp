@@ -985,6 +985,7 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 ) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
     // We're parsing inline tokens "by hand" instead of using `fold_many0` to allow lookahead.
     let mut state = InlineState::default();
+    let mut ends_with_hard_break = false;
     while !input.is_empty() {
         let (remaining, token) = parse_inline_token(input)?;
         input = remaining;
@@ -992,9 +993,13 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
         match token {
             InlineToken::CodeSpan(text) => {
                 state.push_closed_node(FormattedTextFragment::inline_code(text));
+                ends_with_hard_break = false;
             }
             InlineToken::Text(text) => {
                 state.push_text(text);
+                if !text.chars().all(char::is_whitespace) {
+                    ends_with_hard_break = false;
+                }
             }
             InlineToken::AutoLink(url) => {
                 // Per GFM spec, autolinks can follow whitespace, line beginning, or formatting
@@ -1012,9 +1017,11 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                 } else {
                     state.push_text(url);
                 }
+                ends_with_hard_break = false;
             }
             InlineToken::BackslashEscape(ch) | InlineToken::HtmlEntity(ch) => {
                 state.push_text(ch);
+                ends_with_hard_break = false;
             }
             InlineToken::Delimiter { kind, count } => {
                 let node_index = state.nodes.len();
@@ -1028,12 +1035,20 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                     Delimiter::new(node_index, kind, count, preceding_char, following_char);
                 state.push_closed_node(FormattedTextFragment::plain_text(delimiter.to_text()));
                 state.delimiters.push(delimiter);
+                ends_with_hard_break = false;
             }
             InlineToken::LinkEnd => {
                 input = parse_link(&mut state, remaining);
+                ends_with_hard_break = false;
             }
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
+                ends_with_hard_break = false;
+            }
+            InlineToken::HardLineBreak => {
+                state.push_text("\n");
+                state.last_node_closed = true;
+                ends_with_hard_break = true;
             }
         }
     }
@@ -1042,7 +1057,39 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
     assert!(state.delimiters.is_empty()); // All delimiters should have been processed.
 
-    Ok((input, consolidate_fragments(state.nodes)))
+    let mut fragments = consolidate_fragments(state.nodes);
+    if ends_with_hard_break {
+        strip_trailing_hard_break(&mut fragments);
+    }
+    Ok((input, fragments))
+}
+
+/// Strip a trailing hard line break from inline fragments when `<br>` appears
+/// at the end of a physical line.
+///
+/// The block-level parser already separates physical lines into distinct
+/// `FormattedTextLine::Line` entries, so the trailing `\n` from a `<br>` at
+/// end-of-line would create an unwanted empty visual row. This removes the
+/// last newline (plus any trailing whitespace after it), while preserving
+/// preceding newlines from additional `<br>` tags.
+fn strip_trailing_hard_break(fragments: &mut Vec<FormattedTextFragment>) {
+    let Some(last) = fragments.last_mut() else {
+        return;
+    };
+    let trimmed_ws = last
+        .text
+        .trim_end_matches(|c: char| c.is_whitespace() && c != '\n');
+    if !trimmed_ws.ends_with('\n') {
+        last.text.truncate(trimmed_ws.len());
+        if last.text.is_empty() {
+            fragments.pop();
+        }
+        return;
+    }
+    last.text.truncate(trimmed_ws.len() - 1);
+    if last.text.is_empty() {
+        fragments.pop();
+    }
 }
 
 /// State for parsing inline Markdown.
@@ -1549,6 +1596,7 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             parse_inline_token_autolink,
             parse_inline_token_underline_start,
             parse_inline_token_underline_end,
+            parse_inline_token_br,
             whitespace,
             text,
             // This _must_ be the last parser in the chain. It unconditionally consumes a single
@@ -1654,6 +1702,24 @@ fn parse_inline_token_underline_end<'a, E: ContextError<&'a str> + ParseError<&'
     )(input)
 }
 
+/// Parse a hard line break tag: `<br>`, `<br/>`, `<br />`, case-insensitive.
+fn parse_inline_token_br<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "br_tag",
+        value(
+            InlineToken::HardLineBreak,
+            tuple((
+                tag("<"),
+                tag_no_case("br"),
+                space0,
+                alt((tag("/>"), tag(">"))),
+            )),
+        ),
+    )(input)
+}
+
 /// Helper to parse a run of delimiters.
 fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     kind: DelimiterKind,
@@ -1700,6 +1766,8 @@ enum InlineToken<'a> {
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
     UnderlineEnd,
+    /// A hard line break (`<br>`, `<br/>`, `<br />`).
+    HardLineBreak,
 }
 
 /// An entry in the [delimiter stack](https://spec.commonmark.org/0.30/#delimiter-stack)
