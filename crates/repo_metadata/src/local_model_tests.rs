@@ -876,7 +876,7 @@ fn test_should_include_path_respects_gitignore() {
 
         for path in excluded_paths {
             assert!(
-                LocalRepoMetadataModel::path_is_ignored(&path, &gitignores),
+                LocalRepoMetadataModel::path_matches_gitignore_set(&path, &gitignores),
                 "Path should be excluded by gitignore: {path:?}"
             );
         }
@@ -891,7 +891,7 @@ fn test_should_include_path_respects_gitignore() {
 
         for path in included_paths {
             assert!(
-                !LocalRepoMetadataModel::path_is_ignored(&path, &gitignores),
+                !LocalRepoMetadataModel::path_matches_gitignore_set(&path, &gitignores),
                 "Path should be included: {path:?}"
             );
         }
@@ -950,6 +950,7 @@ fn test_update_file_tree_entry_respects_gitignore() {
         let standing_query_definitions = Default::default();
         let (mutations, _, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
             &update,
+            repo_path,
             &gitignores,
             &[],
             &standing_query_definitions,
@@ -1091,7 +1092,7 @@ Thumbs.db
         ];
 
         for (path, should_include) in test_cases {
-            let actual = !LocalRepoMetadataModel::path_is_ignored(&path, &gitignores);
+            let actual = !LocalRepoMetadataModel::path_matches_gitignore_set(&path, &gitignores);
             assert_eq!(
                 actual, should_include,
                 "Path {path:?} - expected: {should_include}, actual: {actual}"
@@ -1115,21 +1116,21 @@ fn test_git_directory_exclusion() {
         let gitignores = vec![]; // Empty gitignore rules
 
         // .git directory and its contents should be excluded
-        assert!(LocalRepoMetadataModel::path_is_ignored(
+        assert!(LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join(".git"),
             &gitignores
         ));
-        assert!(LocalRepoMetadataModel::path_is_ignored(
+        assert!(LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join(".git").join("config"),
             &gitignores
         ));
-        assert!(LocalRepoMetadataModel::path_is_ignored(
+        assert!(LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join(".git").join("objects").join("abc123"),
             &gitignores
         ));
 
         // Regular files should be included
-        assert!(!LocalRepoMetadataModel::path_is_ignored(
+        assert!(!LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join("src").join("main.rs"),
             &gitignores
         ));
@@ -1162,15 +1163,15 @@ fn test_nested_gitignore_rules() {
         let gitignores = vec![root_gitignore, frontend_gitignore];
 
         // Test that nested gitignore rules are respected
-        assert!(LocalRepoMetadataModel::path_is_ignored(
+        assert!(LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join("frontend").join("dist").join("bundle.js"),
             &gitignores
         ));
-        assert!(LocalRepoMetadataModel::path_is_ignored(
+        assert!(LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join("backend").join("target").join("binary"),
             &gitignores
         ));
-        assert!(!LocalRepoMetadataModel::path_is_ignored(
+        assert!(!LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join("frontend").join("src").join("main.ts"),
             &gitignores
         ));
@@ -1430,6 +1431,7 @@ fn added_symlinked_skill_directory_refreshes_provider_without_canonical_tree_mut
         let (mutations, discovered, removed_roots) =
             block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                 &update,
+                &repo,
                 &[],
                 &[],
                 &definitions,
@@ -1472,6 +1474,7 @@ fn unrelated_skill_support_file_does_not_refresh_project_skills() {
         };
         let (_, discovered, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
             &update,
+            &repo,
             &[],
             &[],
             &definitions,
@@ -1496,6 +1499,7 @@ fn removed_direct_skill_child_refreshes_provider_for_possible_symlink_removal() 
         };
         let (_, discovered, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
             &update,
+            &dirs.tests().join("repo"),
             &[],
             &[],
             &definitions,
@@ -2362,6 +2366,7 @@ fn incremental_force_included_dir_under_ignored_parent_matches_initial_index() {
             let (mutations, _standing_results, _removed) =
                 block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                     &update,
+                    &repo_local,
                     &gitignores,
                     &force_included,
                     &definitions,
@@ -2442,6 +2447,7 @@ fn incremental_deep_event_under_unloaded_ignored_dir_is_collapsed() {
             let (mutations, _standing_results, _removed) =
                 block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                     &update,
+                    &repo_local,
                     &gitignores,
                     &[], /* force_included_paths */
                     &definitions,
@@ -2521,6 +2527,7 @@ fn incremental_event_under_expanded_ignored_dir_keeps_it_loaded() {
             let (mutations, _standing_results, _removed) =
                 block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                     &update,
+                    &repo_local,
                     &gitignores,
                     &[], /* force_included_paths */
                     &definitions,
@@ -2814,6 +2821,7 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
         let mut lazy_root = make_root();
         let (lazy_mutations, _, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
             &update,
+            repo_path,
             &[],
             &[],
             &definitions,
@@ -2843,6 +2851,7 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
         let (eager_mutations, _, _) =
             block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                 &update,
+                repo_path,
                 &[],
                 &[],
                 &definitions,
@@ -2861,6 +2870,177 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
         assert!(
             eager_root.get(&nested_std).is_some(),
             "eager root should materialize the subtree"
+        );
+    });
+}
+
+#[test]
+fn bugbash_incremental_add_respects_nested_gitignore() {
+    VirtualFS::test("bugbash_nested_gitignore", |dirs, mut vfs| {
+        vfs.mkdir("repo/sub").with_files(vec![
+            Stub::FileWithContent("repo/.gitignore", "build/\n"),
+            Stub::FileWithContent("repo/sub/.gitignore", "*.log\n"),
+            Stub::FileWithContent("repo/sub/new.log", "y"),
+        ]);
+
+        let repo_local = dirs.tests().join("repo");
+        let new_log_local = repo_local.join("sub").join("new.log");
+
+        let gitignores = crate::gitignores_for_directory(&repo_local);
+        let definitions = StandingQueryDefinitions::default();
+
+        let update = RepoUpdate {
+            added: vec![new_log_local.clone()],
+            ..Default::default()
+        };
+        let (mutations, _standing_results, _removed) =
+            block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &update,
+                &repo_local,
+                &gitignores,
+                &[], /* force_included_paths */
+                &definitions,
+                false, /* lazy_load */
+            ));
+
+        let incremental_ignored = mutations
+            .iter()
+            .find_map(|mutation| match mutation {
+                FileTreeMutation::AddFile {
+                    path, is_ignored, ..
+                } if path == &new_log_local => Some(*is_ignored),
+                _ => None,
+            })
+            .expect("incremental update should contain an AddFile for sub/new.log");
+
+        assert!(
+            incremental_ignored,
+            "sub/new.log is ignored by the nested sub/.gitignore (*.log), so the incremental \
+             watcher add should tag it ignored=true to match the initial index; got ignored=false"
+        );
+    });
+}
+
+#[test]
+fn bugbash_incremental_add_direct_child_of_root_ignored_dir() {
+    VirtualFS::test("bugbash_root_ignored_dir_child", |dirs, mut vfs| {
+        vfs.mkdir("repo/node_modules").with_files(vec![
+            Stub::FileWithContent("repo/.gitignore", "node_modules/\n"),
+            Stub::FileWithContent("repo/node_modules/zzz.js", "x"),
+        ]);
+
+        let repo_local = dirs.tests().join("repo");
+        let zzz_local = repo_local.join("node_modules").join("zzz.js");
+
+        let gitignores = crate::gitignores_for_directory(&repo_local);
+        let definitions = StandingQueryDefinitions::default();
+
+        let update = RepoUpdate {
+            added: vec![zzz_local.clone()],
+            ..Default::default()
+        };
+        let (mutations, _standing_results, _removed) =
+            block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &update,
+                &repo_local,
+                &gitignores,
+                &[], /* force_included_paths */
+                &definitions,
+                false, /* lazy_load */
+            ));
+
+        let incremental_ignored = mutations
+            .iter()
+            .find_map(|mutation| match mutation {
+                FileTreeMutation::AddFile {
+                    path, is_ignored, ..
+                } if path == &zzz_local => Some(*is_ignored),
+                _ => None,
+            })
+            .expect("incremental update should contain an AddFile for node_modules/zzz.js");
+
+        assert!(
+            incremental_ignored,
+            "node_modules/zzz.js sits under a root-gitignored directory, so the incremental \
+             watcher add should tag it ignored=true; got ignored=false"
+        );
+    });
+}
+
+/// BUG BASH regression: when a whole directory is live-added, descendants
+/// matched only by an ancestor nested `.gitignore` must materialize ignored.
+/// The subtree build is seeded with the added dir's ancestor nested
+/// `.gitignore` files, so `sub/newdir/file.log` under `sub/.gitignore = *.log`
+/// is tagged ignored=true (while a non-matching sibling stays un-ignored).
+#[test]
+fn bugbash_incremental_dir_add_respects_nested_ancestor_gitignore() {
+    fn find_file_ignored(entry: &Entry, file_name: &str) -> Option<bool> {
+        match entry {
+            Entry::File(f) => {
+                let matches = f
+                    .path
+                    .to_local_path_lossy()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    == Some(file_name);
+                matches.then_some(f.ignored)
+            }
+            Entry::Directory(dir) => dir
+                .children
+                .iter()
+                .find_map(|child| find_file_ignored(child, file_name)),
+        }
+    }
+
+    VirtualFS::test("bugbash_incremental_dir_add_nested", |dirs, mut vfs| {
+        vfs.mkdir("repo/sub/newdir").with_files(vec![
+            Stub::FileWithContent("repo/sub/.gitignore", "*.log\n"),
+            Stub::FileWithContent("repo/sub/newdir/file.log", "y"),
+            Stub::FileWithContent("repo/sub/newdir/keep.txt", "y"),
+        ]);
+
+        let repo_local = dirs.tests().join("repo");
+        let newdir_local = repo_local.join("sub").join("newdir");
+
+        let gitignores = crate::gitignores_for_directory(&repo_local);
+        let definitions = StandingQueryDefinitions::default();
+
+        let update = RepoUpdate {
+            added: vec![newdir_local.clone()],
+            ..Default::default()
+        };
+        let (mutations, _standing_results, _removed) =
+            block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &update,
+                &repo_local,
+                &gitignores,
+                &[], /* force_included_paths */
+                &definitions,
+                false, /* lazy_load */
+            ));
+
+        let subtree = mutations
+            .iter()
+            .find_map(|m| match m {
+                FileTreeMutation::AddDirectorySubtree { dir_path, subtree }
+                    if dir_path == &newdir_local =>
+                {
+                    Some(subtree)
+                }
+                _ => None,
+            })
+            .expect("expected an AddDirectorySubtree mutation for sub/newdir");
+
+        assert_eq!(
+            find_file_ignored(subtree, "file.log"),
+            Some(true),
+            "file.log under the live-added dir is matched by the ancestor nested sub/.gitignore \
+             (*.log), so it should materialize ignored=true"
+        );
+        assert_eq!(
+            find_file_ignored(subtree, "keep.txt"),
+            Some(false),
+            "keep.txt matches no gitignore rule and should materialize un-ignored"
         );
     });
 }
