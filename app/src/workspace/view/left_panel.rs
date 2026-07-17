@@ -56,6 +56,7 @@ use crate::workspace::view::conversation_list::view::{
 use crate::workspace::view::global_search::view::{
     Event as GlobalSearchViewEvent, GlobalSearchEntryFocus, GlobalSearchView,
 };
+use crate::workspace::view::source_control::{SourceControlEvent, SourceControlView};
 use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
     LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
@@ -71,6 +72,7 @@ struct MouseStateHandles {
     conversation_list_view_button: MouseStateHandle,
     global_search_button: MouseStateHandle,
     warp_drive_button: MouseStateHandle,
+    source_control_button: MouseStateHandle,
 }
 
 #[derive(Clone, Debug)]
@@ -79,6 +81,7 @@ pub enum LeftPanelAction {
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
     WarpDrive,
     ConversationListView,
+    SourceControl,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -98,6 +101,9 @@ pub enum LeftPanelEvent {
         conversation_title: String,
         terminal_view_id: Option<warpui::EntityId>,
     },
+    OpenCodeReview {
+        repo_path: LocalOrRemotePath,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +112,7 @@ pub enum ToolPanelView {
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
     WarpDrive,
     ConversationListView,
+    SourceControl,
 }
 
 /// Encapsulates the active view state to enforce that all mutations go through
@@ -146,6 +153,7 @@ mod active_view_state {
         }
 
         left_panel.update_active_file_tree_subscription_state(ctx);
+        left_panel.update_source_control_active_state(ctx);
     }
 }
 
@@ -173,6 +181,7 @@ pub struct LeftPanelView {
     close_button_mouse_state: MouseStateHandle,
     warp_drive_view: ViewHandle<DrivePanel>,
     conversation_list_view: ViewHandle<ConversationListView>,
+    source_control_view: ViewHandle<SourceControlView>,
     active_view: active_view_state::ActiveViewState,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
     active_pane_group: Option<WeakViewHandle<PaneGroup>>,
@@ -217,6 +226,7 @@ impl LeftPanelView {
         };
         let warp_drive_view = ctx.add_typed_action_view(DrivePanel::new);
         let conversation_list_view = ctx.add_typed_action_view(ConversationListView::new);
+        let source_control_view = ctx.add_typed_action_view(SourceControlView::new);
 
         ctx.subscribe_to_view(&warp_drive_view, |_me, _, event, ctx| {
             ctx.emit(LeftPanelEvent::WarpDrive(event.clone()));
@@ -235,6 +245,14 @@ impl LeftPanelView {
                     conversation_id: *conversation_id,
                     conversation_title: conversation_title.clone(),
                     terminal_view_id: *terminal_view_id,
+                });
+            }
+        });
+
+        ctx.subscribe_to_view(&source_control_view, |_me, _, event, ctx| match event {
+            SourceControlEvent::OpenCodeReview { repo_path } => {
+                ctx.emit(LeftPanelEvent::OpenCodeReview {
+                    repo_path: repo_path.clone(),
                 });
             }
         });
@@ -326,12 +344,44 @@ impl LeftPanelView {
             }
         });
 
+        ctx.subscribe_to_model(&working_directories_model, |me, _, event, ctx| {
+            let Some(active_pane_group) = &me.active_pane_group else {
+                return;
+            };
+            let Some(active_pane_group) = active_pane_group.upgrade(ctx) else {
+                return;
+            };
+            match event {
+                WorkingDirectoriesEvent::RepositoriesChanged {
+                    pane_group_id,
+                    repositories,
+                } if active_pane_group.id() == *pane_group_id => {
+                    me.source_control_view.update(ctx, |view, ctx| {
+                        view.set_available_repositories(repositories.clone(), None, ctx);
+                    });
+                }
+                WorkingDirectoriesEvent::FocusedRepoChanged {
+                    pane_group_id,
+                    focused_repo,
+                    repository_terminal_map: _,
+                } if active_pane_group.id() == *pane_group_id => {
+                    me.source_control_view.update(ctx, |view, ctx| {
+                        view.set_focused_repository(focused_repo.clone(), ctx);
+                    });
+                }
+                WorkingDirectoriesEvent::RepositoriesChanged { .. }
+                | WorkingDirectoriesEvent::FocusedRepoChanged { .. }
+                | WorkingDirectoriesEvent::DirectoriesChanged { .. } => {}
+            }
+        });
+
         let mut view = Self {
             resizable_state_handle,
             mouse_state_handles: Default::default(),
             close_button_mouse_state: Default::default(),
             warp_drive_view,
             conversation_list_view,
+            source_control_view,
             active_view: active_view_state::new(active_view),
             toolbelt_buttons,
             active_pane_group: None,
@@ -464,6 +514,15 @@ impl LeftPanelView {
                     tooltip_keybinding_names,
                 }
             }
+            ToolPanelView::SourceControl => ToolbeltButtonConfig {
+                icon: Icon::GitBranch,
+                active_icon: None,
+                tooltip_text: "Source control".to_string(),
+                action: LeftPanelAction::SourceControl,
+                render_with_active_state: false,
+                tooltip_keybinding_names: Vec::new(),
+                tooltip_keybinding: None,
+            },
         }
     }
 
@@ -557,6 +616,10 @@ impl LeftPanelView {
         self.active_view.get() == ToolPanelView::ProjectExplorer
     }
 
+    pub fn is_source_control_active(&self) -> bool {
+        self.active_view.get() == ToolPanelView::SourceControl
+    }
+
     pub fn warp_drive_view(&self) -> &ViewHandle<DrivePanel> {
         &self.warp_drive_view
     }
@@ -577,7 +640,26 @@ impl LeftPanelView {
         view: ToolPanelView,
         ctx: &mut ViewContext<Self>,
     ) {
-        active_view_state::set(self, view, ctx);
+        let is_available = self.toolbelt_buttons.iter().any(|button| {
+            matches!(
+                (&button.action, view),
+                (
+                    LeftPanelAction::ProjectExplorer,
+                    ToolPanelView::ProjectExplorer
+                ) | (
+                    LeftPanelAction::GlobalSearch { .. },
+                    ToolPanelView::GlobalSearch { .. }
+                ) | (LeftPanelAction::WarpDrive, ToolPanelView::WarpDrive)
+                    | (
+                        LeftPanelAction::ConversationListView,
+                        ToolPanelView::ConversationListView
+                    )
+                    | (LeftPanelAction::SourceControl, ToolPanelView::SourceControl)
+            )
+        });
+        if is_available {
+            active_view_state::set(self, view, ctx);
+        }
     }
 
     /// Updates the active pane group ID so we filter events correctly.
@@ -662,6 +744,16 @@ impl LeftPanelView {
             }
         });
 
+        let active_repositories = working_directories_model.read(ctx, |model, _| {
+            model
+                .most_recent_repositories_for_pane_group(pane_group_id)
+                .map(|repositories| repositories.collect())
+                .unwrap_or_default()
+        });
+        self.source_control_view.update(ctx, |view, ctx| {
+            view.set_available_repositories(active_repositories, None, ctx);
+        });
+
         self.on_left_panel_visibility_changed(left_panel_open, ctx);
 
         ctx.notify();
@@ -724,6 +816,7 @@ impl LeftPanelView {
                     view.on_left_panel_focused(ctx);
                 });
             }
+            ToolPanelView::SourceControl => ctx.focus(&self.source_control_view),
         }
     }
 
@@ -890,6 +983,9 @@ impl LeftPanelView {
                 LeftPanelAction::ConversationListView => {
                     self.active_view.get() == ToolPanelView::ConversationListView
                 }
+                LeftPanelAction::SourceControl => {
+                    self.active_view.get() == ToolPanelView::SourceControl
+                }
             };
         }
     }
@@ -1031,6 +1127,9 @@ impl LeftPanelView {
                 active_view_state::set(self, ToolPanelView::ConversationListView, ctx);
                 send_telemetry_from_ctx!(TelemetryEvent::ConversationListViewOpened, ctx);
             }
+            LeftPanelAction::SourceControl => {
+                active_view_state::set(self, ToolPanelView::SourceControl, ctx);
+            }
         }
     }
 
@@ -1040,6 +1139,7 @@ impl LeftPanelView {
         }
 
         self.update_active_file_tree_subscription_state(ctx);
+        self.update_source_control_active_state(ctx);
     }
 
     fn deactivate_file_tree_view_for_pane_group(
@@ -1079,6 +1179,19 @@ impl LeftPanelView {
                 view.set_is_active(is_visible, ctx);
             });
         }
+    }
+
+    fn update_source_control_active_state(&self, ctx: &mut ViewContext<Self>) {
+        let is_visible = self
+            .active_pane_group
+            .as_ref()
+            .and_then(|pane_group| pane_group.upgrade(ctx))
+            .is_some_and(|pane_group| {
+                pane_group.as_ref(ctx).left_panel_open && self.is_source_control_active()
+            });
+        self.source_control_view.update(ctx, |view, ctx| {
+            view.set_is_active(is_visible, ctx);
+        });
     }
 
     /// When the conversation list view's visibility changes,
@@ -1130,6 +1243,7 @@ impl View for LeftPanelView {
                 }
                 ToolPanelView::WarpDrive => ctx.focus(&self.warp_drive_view),
                 ToolPanelView::ConversationListView => ctx.focus(&self.conversation_list_view),
+                ToolPanelView::SourceControl => ctx.focus(&self.source_control_view),
             }
         }
     }
@@ -1144,6 +1258,7 @@ impl View for LeftPanelView {
                 .clone(),
             self.mouse_state_handles.global_search_button.clone(),
             self.mouse_state_handles.warp_drive_button.clone(),
+            self.mouse_state_handles.source_control_button.clone(),
         ];
 
         // If there is only one button in the toolbelt row,
@@ -1201,6 +1316,9 @@ impl View for LeftPanelView {
             .finish(),
             ToolPanelView::ConversationListView => {
                 Shrinkable::new(1.0, ChildView::new(&self.conversation_list_view).finish()).finish()
+            }
+            ToolPanelView::SourceControl => {
+                Shrinkable::new(1.0, ChildView::new(&self.source_control_view).finish()).finish()
             }
         };
 
