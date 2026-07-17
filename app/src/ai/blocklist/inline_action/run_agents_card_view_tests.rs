@@ -450,6 +450,7 @@ mod format_terminal_state_tests {
         assert!(matches!(kind, StatusKind::Cancelled));
     }
 }
+
 mod override_from_approved_config_tests {
     use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
 

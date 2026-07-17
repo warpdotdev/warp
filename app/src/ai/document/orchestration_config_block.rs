@@ -8,6 +8,7 @@ use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
+use warp_graphql::queries::get_runners::RunnerSortBy;
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
@@ -44,7 +45,6 @@ use crate::ai::harness_availability::{
 };
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
-#[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
@@ -698,9 +698,8 @@ impl OrchestrationConfigBlockView {
         self.fetch_runners(ctx);
     }
 
-    /// Fetches available runners via `getRunners` and repopulates the
-    /// Runner picker once they resolve. No-op on wasm (no `FactoryClient`).
-    #[cfg(not(target_family = "wasm"))]
+    /// Fetches available runners via `getRunners` (name-sorted server-side)
+    /// and repopulates the Runner picker once they resolve.
     fn fetch_runners(&mut self, ctx: &mut ViewContext<Self>) {
         if self.runners_loading || !self.runners.is_empty() {
             return;
@@ -708,17 +707,15 @@ impl OrchestrationConfigBlockView {
         self.runners_loading = true;
         let client = ServerApiProvider::as_ref(ctx).get_factory_client();
         ctx.spawn(
-            async move { client.get_runners(None).await },
+            async move { client.get_runners(Some(RunnerSortBy::Name)).await },
             |me, result, ctx| {
                 me.runners_loading = false;
                 match result {
                     Ok(runners) => {
-                        let mut list: Vec<(String, String)> = runners
+                        me.runners = runners
                             .into_iter()
                             .map(|r| (r.uid.inner().to_string(), r.config.name))
                             .collect();
-                        list.sort_by(|a, b| a.1.cmp(&b.1));
-                        me.runners = list;
                     }
                     Err(err) => {
                         log::warn!("Failed to fetch runners for plan-card runner picker: {err}");
@@ -739,9 +736,6 @@ impl OrchestrationConfigBlockView {
             },
         );
     }
-
-    #[cfg(target_family = "wasm")]
-    fn fetch_runners(&mut self, _ctx: &mut ViewContext<Self>) {}
 
     /// Re-applies the runner picker's selection from the current
     /// `runner_id` using the view-cached runner list. The runner picker

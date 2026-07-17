@@ -43,6 +43,7 @@ fn local_round_trip_preserves_remote_computer_use() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: true,
+            runner_id: String::new(),
         },
     );
 

@@ -10,6 +10,7 @@ use ai::agent::action::RunAgentsExecutionMode;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
@@ -1182,7 +1183,7 @@ pub fn render_picker_row_with_layout<A: OrchestrationControlAction>(
                     .as_ref()
                     .map(|p| ChildView::new(p).finish()),
             );
-            if warp_core::features::FeatureFlag::CloudAgentRunners.is_enabled() {
+            if FeatureFlag::CloudAgentRunners.is_enabled() {
                 add(
                     &mut column,
                     "Runner",
@@ -1239,7 +1240,7 @@ pub fn render_picker_row_with_layout<A: OrchestrationControlAction>(
                     .as_ref()
                     .map(|p| ChildView::new(p).finish()),
             );
-            if warp_core::features::FeatureFlag::CloudAgentRunners.is_enabled() {
+            if FeatureFlag::CloudAgentRunners.is_enabled() {
                 add_picker(
                     &mut row,
                     "Runner",

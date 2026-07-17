@@ -441,6 +441,7 @@ fn remote_arm_propagates_agent_identity_uid() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
         "oz",
         "auto",
