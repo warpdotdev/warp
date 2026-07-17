@@ -8,8 +8,6 @@ use base64::Engine;
 use flate2::read::ZlibDecoder;
 use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
-#[cfg(feature = "local_fs")]
-use warp_errors::report_error;
 use warpui::assets::asset_cache::Asset;
 use warpui::image_cache::{
     resize_dimensions, CustomHeaderCreationError, CustomImageFormat, CustomImageHeader, FitType,
@@ -18,6 +16,8 @@ use warpui::image_cache::{
 use warpui::util::{parse_i32, parse_u32};
 
 use super::escape_sequences::C1;
+#[cfg(feature = "local_fs")]
+use crate::safe_warn;
 
 /// Actions specified by the [Kitty Image Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 #[derive(Debug, Clone)]
@@ -764,9 +764,9 @@ fn read_file(decoded_payload: Vec<u8>, is_temp: bool) -> Result<Vec<u8>, Invalid
 fn safe_delete_temp_file(path: &str) {
     if is_path_in_temp_dir(path) && path.contains("tty-graphics-protocol") {
         if let Err(err) = fs::remove_file(path) {
-            report_error!(
-                anyhow::Error::new(err).context("Failed to delete kitty temporary file"),
-                extra: { "path" => %path }
+            safe_warn!(
+                safe: ("Failed to delete kitty temporary file"),
+                full: ("Failed to delete kitty temporary file (path = {path}): {err:#}")
             );
         }
     }

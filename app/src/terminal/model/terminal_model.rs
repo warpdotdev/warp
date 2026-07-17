@@ -52,6 +52,7 @@ use super::session::{BootstrapSessionType, InBandCommandOutputReceiver, SessionI
 use super::{Secret, SecretHandle};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::SerializedBlockListItem;
+use crate::safe_warn;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
@@ -3016,7 +3017,7 @@ impl ansi::Handler for TerminalModel {
                 // Not being able to read the value should not cause a full-app crash. Instead,
                 // bootstrapping should fail in the same way that it would if the DCS message
                 // were otherwise corrupted.
-                report_error!("Received bootstrap message with no pending session info.");
+                log::warn!("Received bootstrap message with no pending session info.");
                 return;
             }
         };
@@ -3162,9 +3163,9 @@ impl ansi::Handler for TerminalModel {
                         uname: data.uname,
                     }))
             }
-            None => report_error!(
-                "Received invalid shell name in init_subshell",
-                extra: { "shell" => %data.shell }
+            None => safe_warn!(
+                safe: ("Received invalid shell name in init_subshell"),
+                full: ("Received invalid shell name in init_subshell: {}", data.shell)
             ),
         }
     }
@@ -3186,9 +3187,12 @@ impl ansi::Handler for TerminalModel {
                         ))
                 }
                 None => {
-                    report_error!(
-                        "Received invalid shell name in SourcedRCFileForWarpValue",
-                        extra: { "shell" => %data.shell }
+                    safe_warn!(
+                        safe: ("Received invalid shell name in SourcedRCFileForWarpValue"),
+                        full: (
+                            "Received invalid shell name in SourcedRCFileForWarpValue: {}",
+                            data.shell
+                        )
                     );
                 }
             }
