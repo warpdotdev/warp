@@ -1390,6 +1390,15 @@ impl TypedActionView for RunAgentsCardView {
                     .orchestration_config_state
                     .set_runner_id(runner_id.clone());
                 self.refresh_accept_button_state(ctx);
+                // A menu click dispatches `SelectActionAndClose`, which does
+                // not update the dropdown's displayed selection, and we're
+                // mid-dispatch from the runner dropdown itself so we cannot
+                // repopulate it synchronously (that panics with "Circular
+                // view update"). Defer the re-sync so the closed dropdown
+                // reflects the runner the user just picked.
+                ctx.spawn(async {}, |me, _, ctx| {
+                    me.resync_runner_selection(ctx);
+                });
                 ctx.notify();
             }
             RunAgentsCardViewAction::WorkerHostChanged { worker_host } => {

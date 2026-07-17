@@ -1023,6 +1023,14 @@ impl TypedActionView for OrchestrationConfigBlockView {
                     .orchestration_config_state
                     .set_runner_id(runner_id.clone());
                 self.apply_field_change(ctx);
+                // Defer re-applying the picker selection: a menu click's
+                // `SelectActionAndClose` doesn't update the dropdown's
+                // displayed value, and we're mid-dispatch from the runner
+                // dropdown so we can't repopulate it synchronously without a
+                // "Circular view update" panic.
+                ctx.spawn(async {}, |me, _, ctx| {
+                    me.resync_runner_selection(ctx);
+                });
                 ctx.notify();
             }
             OrchestrationConfigBlockAction::WorkerHostChanged { worker_host } => {
