@@ -5895,9 +5895,9 @@ impl TerminalView {
                                         agent_view_visibility: agent_view_visibility.into(),
                                     },
                                 ) {
-                                    report_error!(anyhow::Error::new(e).context(
-                                        "Error sending UpdateBlockAgentViewVisibility event"
-                                    ));
+                                    log::warn!(
+                                        "Error sending UpdateBlockAgentViewVisibility event: {e:#}"
+                                    );
                                 }
                             }
                         }
@@ -5930,9 +5930,9 @@ impl TerminalView {
                                         agent_view_visibility: agent_view_visibility.into(),
                                     },
                                 ) {
-                                    report_error!(anyhow::Error::new(e).context(
-                                        "Error sending UpdateBlockAgentViewVisibility event"
-                                    ));
+                                    log::warn!(
+                                        "Error sending UpdateBlockAgentViewVisibility event: {e:#}"
+                                    );
                                 }
                             }
                         }
@@ -7413,7 +7413,7 @@ impl TerminalView {
 
         // Determine DiffMode from the base branch.
         if self.current_repo_path.is_none() {
-            report_error!("Cannot insert PR comments: not in a git repository");
+            log::warn!("Cannot insert PR comments: not in a git repository");
             return;
         }
 
@@ -10302,8 +10302,7 @@ impl TerminalView {
                         agent_view_visibility: agent_view_visibility.into(),
                     })
                 {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Error sending UpdateBlockAgentViewVisibility event"));
+                    log::warn!("Error sending UpdateBlockAgentViewVisibility event: {e:#}");
                 }
             }
         }
@@ -12508,8 +12507,9 @@ impl TerminalView {
                             },
                             move |_, res, _| {
                                 if let Err(err) = res {
-                                    report_error!(anyhow::Error::new(err)
-                                        .context("Error sending UpdateFinishedCommand event"));
+                                    log::warn!(
+                                        "Error sending UpdateFinishedCommand event: {err:#}"
+                                    );
                                 }
                             },
                         );
@@ -17940,7 +17940,7 @@ impl TerminalView {
             self.maybe_copy_selection_to_clipboard(ctx);
             ctx.notify();
         } else {
-            report_error!("end_selection dispatched with no pending selection");
+            log::error!("end_selection dispatched with no pending selection");
         }
     }
 
@@ -17976,7 +17976,7 @@ impl TerminalView {
 
             ctx.notify();
         } else {
-            report_error!("end_selection dispatched with no pending selection");
+            log::error!("end_selection dispatched with no pending selection");
         }
     }
 
@@ -25895,7 +25895,7 @@ impl TerminalView {
         #[cfg(feature = "local_fs")]
         {
             let Some(working_directory_str) = self.pwd() else {
-                report_error!("No working directory found for terminal session");
+                log::warn!("No working directory found for terminal session");
                 return;
             };
 
