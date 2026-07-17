@@ -168,7 +168,8 @@ impl<'a> TextLayout<'a> {
         text_styles: &TextStylesWithMetadata,
     ) -> StyleAndFont {
         let font_properties = text_styles.apply_properties(paragraph_styles.properties());
-        let font_family = if text_styles.is_inline_code() {
+        // `<kbd>` reuses inline code's monospace keycap treatment (issue #13733).
+        let font_family = if text_styles.is_inline_code() || text_styles.is_kbd() {
             self.rich_text_styles.inline_code_style.font_family
         } else {
             paragraph_styles.font_family
@@ -187,7 +188,10 @@ impl<'a> TextLayout<'a> {
             styling = styling.with_underline_color(self.rich_text_styles.base_text.text_color);
         }
 
-        if text_styles.is_inline_code() {
+        // `<kbd>` reuses inline code's chip appearance (background + border) as the keycap
+        // treatment. Kept as a shared branch so a future differentiated keycap style can diverge
+        // here without touching inline code (issue #13733).
+        if text_styles.is_inline_code() || text_styles.is_kbd() {
             styling = styling
                 .with_foreground_color(self.rich_text_styles.inline_code_style.font_color)
                 .with_background_color(self.rich_text_styles.inline_code_style.background)
@@ -278,7 +282,7 @@ pub(crate) fn markdown_inline_to_text_and_style_runs(
         if fragment.styles.underline {
             text_style = text_style.with_underline_color(paragraph_style.text_color);
         }
-        if fragment.styles.inline_code
+        if (fragment.styles.inline_code || fragment.styles.kbd)
             && let Some(background) = inline_code_background
         {
             text_style = text_style.with_background_color(background);

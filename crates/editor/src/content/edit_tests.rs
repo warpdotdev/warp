@@ -997,6 +997,44 @@ fn test_table_inline_style_runs_preserve_markdown_cell_styles() {
     });
 }
 
+/// A `<kbd>` cell picks up the same background chip as an inline-code cell (issue #13733).
+#[test]
+fn test_table_inline_style_runs_apply_kbd_background() {
+    App::test((), |app| async move {
+        let layout_cache = LayoutCache::new();
+        app.read(|ctx| {
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let body_style = text_layout.paragraph_styles(&BufferBlockStyle::table(Vec::new()));
+            let table = crate::content::text::table_from_internal_format_with_inline_markdown(
+                "Header\tValue\nText\t<kbd>Cmd</kbd>\n",
+                Vec::new(),
+            );
+
+            let layout_input = markdown_inline_to_text_and_style_runs(
+                &table.rows[0][1],
+                &body_style,
+                Some(body_style.text_color),
+                Some(TEST_STYLES.table_style.cell_background),
+            );
+
+            assert_eq!(layout_input.text, "Cmd");
+            assert_eq!(layout_input.style_runs.len(), 1);
+            assert!(
+                layout_input.style_runs[0]
+                    .1
+                    .style
+                    .background_color
+                    .is_some()
+            );
+        });
+    });
+}
+
 #[test]
 fn test_layout_code_block_urls() {
     // Regression test for laying out URLs in a code block, which contains multiple lines.
