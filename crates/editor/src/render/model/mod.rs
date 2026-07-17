@@ -859,6 +859,18 @@ impl CharCellState {
         self.scroll_offset.get()
     }
 
+    /// Clamps the retained viewport offset to the current display-row count.
+    pub fn clamp_scroll_offset(
+        &self,
+        cursor_char_offset: CharOffset,
+        viewport_rows: u32,
+        hidden_line_ranges: &[Range<usize>],
+    ) {
+        let (_, total_rows) = self.display_geometry(cursor_char_offset, hidden_line_ranges);
+        let (offset, _) = self.clamped_scroll_window(total_rows, viewport_rows);
+        self.scroll_offset.set(offset);
+    }
+
     /// Scrolls the viewport by `rows` display rows (negative scrolls toward
     /// the top), clamped to `[0, total_rows - visible_rows]`. Independent of
     /// the cursor: wheel scrolling must not snap the viewport back to it.
@@ -892,14 +904,7 @@ impl CharCellState {
     ) {
         let (cursor_row, total_rows) =
             self.display_geometry(cursor_char_offset, hidden_line_ranges);
-        let visible_rows = total_rows.min(viewport_rows).max(1);
-        // A stale offset can point past the last remaining row (e.g. after a
-        // deletion shrank the content); clamp it so the visible window always
-        // overlaps real rows before following the cursor.
-        let mut offset = self
-            .scroll_offset
-            .get()
-            .min(total_rows.saturating_sub(visible_rows));
+        let (mut offset, visible_rows) = self.clamped_scroll_window(total_rows, viewport_rows);
         let Some(cursor_row) = cursor_row else {
             self.scroll_offset.set(offset);
             return;
@@ -910,6 +915,16 @@ impl CharCellState {
             offset = cursor_row.saturating_sub(visible_rows - 1);
         }
         self.scroll_offset.set(offset);
+    }
+
+    /// Returns the clamped first row and visible-row count for a viewport.
+    fn clamped_scroll_window(&self, total_rows: u32, viewport_rows: u32) -> (u32, u32) {
+        let visible_rows = total_rows.min(viewport_rows).max(1);
+        let offset = self
+            .scroll_offset
+            .get()
+            .min(total_rows.saturating_sub(visible_rows));
+        (offset, visible_rows)
     }
 
     /// The cursor's display row and the total display-row count — including

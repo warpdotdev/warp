@@ -414,13 +414,28 @@ impl TuiTerminal for CrosstermTerminal {
 /// restoring the terminal on drop. Held by [`TuiRuntime::enter`] (so the
 /// `run_until` path restores when the runtime drops) or by a [`TuiDriverHandle`]
 /// (so a headless app restores deterministically when its session is dropped).
-pub struct TuiTerminalGuard(RawModeGuard<CrosstermModeControl>);
+pub struct TuiTerminalGuard {
+    _guard: RawModeGuard<CrosstermModeControl>,
+    keyboard_enhancement_supported: bool,
+}
 
 impl TuiTerminalGuard {
     /// Enables raw mode and switches to the alternate screen, restoring both
     /// when the guard is dropped.
     pub fn enter() -> io::Result<Self> {
-        Ok(Self(RawModeGuard::enter(CrosstermModeControl)?))
+        let keyboard_enhancement_supported =
+            matches!(terminal::supports_keyboard_enhancement(), Ok(true));
+        Ok(Self {
+            _guard: RawModeGuard::enter(CrosstermModeControl {
+                keyboard_enhancement_supported,
+            })?,
+            keyboard_enhancement_supported,
+        })
+    }
+
+    /// Whether the host terminal supports the Kitty keyboard-enhancement protocol.
+    pub fn keyboard_enhancement_supported(&self) -> bool {
+        self.keyboard_enhancement_supported
     }
 }
 
@@ -444,6 +459,13 @@ pub struct TuiDriverHandle {
     _repaint_timer: Rc<RefCell<Option<ForegroundTask>>>,
     _reader: thread::JoinHandle<()>,
     _guard: TuiTerminalGuard,
+}
+
+impl TuiDriverHandle {
+    /// Whether the host terminal supports the Kitty keyboard-enhancement protocol.
+    pub fn keyboard_enhancement_supported(&self) -> bool {
+        self._guard.keyboard_enhancement_supported()
+    }
 }
 
 /// Starts a headless TUI session that draws `root_view` and feeds terminal input
@@ -614,8 +636,14 @@ trait TerminalModeControl {
     fn leave(&mut self);
 }
 
-struct CrosstermModeControl;
-fn enter_terminal_screen(out: &mut impl Write) -> io::Result<()> {
+struct CrosstermModeControl {
+    keyboard_enhancement_supported: bool,
+}
+
+fn enter_terminal_screen(
+    out: &mut impl Write,
+    keyboard_enhancement_supported: bool,
+) -> io::Result<()> {
     execute!(
         out,
         EnterAlternateScreen,
@@ -625,24 +653,27 @@ fn enter_terminal_screen(out: &mut impl Write) -> io::Result<()> {
     )?;
 
     // Opt into the Kitty keyboard protocol so protocol-aware terminals (Ghostty,
-    // kitty, foot, WezTerm) report Shift+Enter distinctly from Enter; without it
-    // both arrive as a bare CR and the input can't tell "submit" from "insert
-    // newline". This only affects the TUI's own host terminal — the GUI never
-    // enters raw mode / the alt screen and never runs this. Best-effort: a no-op
-    // on terminals lacking the protocol, and it errors on the legacy Windows
-    // console (crossterm), so a failed push never aborts terminal setup.
-    let _ = execute!(
-        out,
-        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-    );
+    // kitty, foot, WezTerm) report modified keys distinctly. This only affects
+    // the TUI's own host terminal — the GUI never enters raw mode / the alt
+    // screen and never runs this. The capability query happens before the input
+    // reader starts because crossterm's query cannot run concurrently with
+    // event polling.
+    if keyboard_enhancement_supported {
+        let _ = execute!(
+            out,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
     Ok(())
 }
 
-fn leave_terminal_screen(out: &mut impl Write) -> io::Result<()> {
-    // Best-effort pop, mirroring the best-effort push in `enter_terminal_screen`
-    // (see the note there): ignore the error so restoring the terminal never
-    // fails on a terminal/platform that didn't accept the push.
-    let _ = execute!(out, PopKeyboardEnhancementFlags);
+fn leave_terminal_screen(
+    out: &mut impl Write,
+    keyboard_enhancement_supported: bool,
+) -> io::Result<()> {
+    if keyboard_enhancement_supported {
+        let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
     execute!(
         out,
         Show,
@@ -656,8 +687,8 @@ impl TerminalModeControl for CrosstermModeControl {
     fn enter(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut out = stdout();
-        if let Err(error) = enter_terminal_screen(&mut out) {
-            let _ = leave_terminal_screen(&mut out);
+        if let Err(error) = enter_terminal_screen(&mut out, self.keyboard_enhancement_supported) {
+            let _ = leave_terminal_screen(&mut out, self.keyboard_enhancement_supported);
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
@@ -666,7 +697,7 @@ impl TerminalModeControl for CrosstermModeControl {
 
     fn leave(&mut self) {
         let mut out = stdout();
-        let _ = leave_terminal_screen(&mut out);
+        let _ = leave_terminal_screen(&mut out, self.keyboard_enhancement_supported);
         let _ = terminal::disable_raw_mode();
     }
 }

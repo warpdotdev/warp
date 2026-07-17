@@ -45,7 +45,7 @@ const WHEEL_STEP: isize = 2;
 /// owning view translates them into its own typed actions and applies them to
 /// the editor model (mirroring how the GUI's element dispatches into its view).
 #[derive(Debug, Clone)]
-pub(crate) enum TuiEditorAction {
+pub enum TuiEditorAction {
     /// Insert a printable character (only emitted when the element is
     /// [`editable`](TuiEditorElement::editable)).
     InsertChar(char),
@@ -312,10 +312,18 @@ impl TuiEditorElement {
             0
         };
         let content_width = full_width.saturating_sub(self.gutter_cols);
+        let width_changed = char_cell.terminal_width() != content_width;
         char_cell.set_terminal_width(content_width);
 
         let chars: Vec<char> = self.text.chars().collect();
         let cursor_offset = CharOffset::from(self.cursor_offset.as_usize().saturating_sub(1));
+        if let Some(viewport_rows) = self.viewport_rows {
+            if width_changed {
+                char_cell.follow_cursor(cursor_offset, viewport_rows, &hidden);
+            } else {
+                char_cell.clamp_scroll_offset(cursor_offset, viewport_rows, &hidden);
+            }
+        }
         // The first visible row is model-side scroll state; unwindowed
         // consumers always render from the top.
         let first_visible_row = if self.viewport_rows.is_some() {

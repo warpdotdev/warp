@@ -44,7 +44,7 @@ use warpui_core::elements::tui::{
     TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::keymap::macros::*;
-use warpui_core::keymap::{self, FixedBinding};
+use warpui_core::keymap::{self, EditableBinding, FixedBinding};
 use warpui_core::platform::TerminationMode;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::{
@@ -61,7 +61,10 @@ use crate::inline_menu::{active_inline_menu, TuiInlineMenu, MAX_INLINE_MENU_ROWS
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
-use crate::keybindings::TUI_BINDING_GROUP;
+use crate::keybindings::{
+    CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
+    PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME, TUI_BINDING_GROUP,
+};
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::resume::TuiExitSummaryHandle;
@@ -222,6 +225,8 @@ pub(crate) enum TuiTerminalSessionAction {
     ToggleUsageDisplay,
     /// Raw user bytes to forward to the foreground PTY process.
     ForwardUserPtyBytes(Vec<u8>),
+    /// Toggle the latest exposed inline plan.
+    TogglePlan,
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -254,6 +259,7 @@ pub(crate) struct TuiTerminalSessionView {
     exit_confirmation: ExitConfirmation,
     /// Credits⇄cost display state for the footer's clickable usage entry.
     usage_toggle: UsageToggle,
+    keyboard_enhancement_supported: bool,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     input_detection: InputDetectionState,
@@ -298,6 +304,28 @@ pub(crate) fn init(app: &mut AppContext) {
             id!(SESSION_CAN_HAND_BACK_CONTROL_FLAG),
         )
         .with_group(TUI_BINDING_GROUP),
+    ]);
+    app.register_editable_bindings([
+        EditableBinding::new(
+            PLAN_TOGGLE_BINDING_NAME,
+            "Toggle the latest plan",
+            TuiTerminalSessionAction::TogglePlan,
+        )
+        .with_context_predicate(id!(TuiTerminalSessionView::ui_name()))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-shift-P"),
+        EditableBinding::new(
+            CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME,
+            "Toggle the latest visible plan",
+            TuiTerminalSessionAction::TogglePlan,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
+                & id!(PLAN_TOGGLE_AVAILABLE_FLAG)
+                & !id!(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-p"),
     ]);
 }
 
@@ -521,6 +549,7 @@ impl TuiTerminalSessionView {
     pub(crate) fn new(
         surface_init: TerminalSurfaceInit,
         exit_summary: TuiExitSummaryHandle,
+        keyboard_enhancement_supported: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let TerminalSurfaceInit {
@@ -737,14 +766,17 @@ impl TuiTerminalSessionView {
         ];
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
+        let transcript_for_input = transcript.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
             TuiInputView::new(
                 input_editor_model,
                 input_mode_for_input_view,
                 suggestions_mode_for_input,
                 inline_menus_for_input,
+                transcript_for_input,
                 ctx,
             )
+            .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
         });
 
         ctx.subscribe_to_view(&transcript, |view, _, event, ctx| match event {
@@ -990,6 +1022,7 @@ impl TuiTerminalSessionView {
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
             usage_toggle: UsageToggle::default(),
+            keyboard_enhancement_supported,
             ai_context_model: context_model,
             ai_input_model,
             input_detection: InputDetectionState::default(),
@@ -2149,6 +2182,12 @@ impl TuiView for TuiTerminalSessionView {
         if self.active_user_controlled_target(ctx).is_some() {
             context.set.insert(SESSION_CAN_HAND_BACK_CONTROL_FLAG);
         }
+        if self.transcript.as_ref(ctx).has_toggleable_plan(ctx) {
+            context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
+        }
+        if self.keyboard_enhancement_supported {
+            context.set.insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
+        }
         context
     }
 
@@ -2317,6 +2356,7 @@ impl TuiView for TuiTerminalSessionView {
         TuiContainer::new(terminal_content.finish())
             .with_padding_x(2)
             .with_padding_top(2)
+            .with_padding_bottom(1)
             .finish()
     }
 }
@@ -2340,6 +2380,10 @@ impl TypedActionView for TuiTerminalSessionView {
                 ctx.emit(TuiTerminalSessionEvent::WriteUserInput(Cow::Owned(
                     bytes.clone(),
                 )));
+            }
+            TuiTerminalSessionAction::TogglePlan => {
+                self.transcript
+                    .update(ctx, |transcript, ctx| transcript.toggle_latest_plan(ctx));
             }
         }
     }

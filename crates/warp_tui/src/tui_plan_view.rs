@@ -18,6 +18,7 @@ use warpui_core::{
 };
 
 use crate::agent_block_sections::tool_call_glyph_style;
+use crate::keybindings::plan_toggle_hint;
 use crate::tool_call_labels::{tool_call_display_state, tool_call_glyph, ToolCallDisplayState};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
@@ -105,6 +106,14 @@ impl TuiPlanView {
 
     pub(super) fn renders_rich_body(&self) -> bool {
         !self.documents.is_empty()
+    }
+    pub(super) fn toggle_collapsed(&mut self, ctx: &mut ViewContext<Self>) {
+        self.set_collapsed(!self.collapsed, ctx);
+    }
+
+    fn set_collapsed(&mut self, collapsed: bool, ctx: &mut ViewContext<Self>) {
+        self.collapsed = collapsed;
+        self.invalidate_layout(ctx);
     }
 
     fn sync_documents(&mut self, ctx: &mut ViewContext<Self>) -> bool {
@@ -318,7 +327,7 @@ impl TuiView for TuiPlanView {
             ));
         }
         let collapsed = self.collapsed;
-        tui_collapsible(
+        let collapsible = tui_collapsible(
             collapsed,
             header,
             header_style,
@@ -327,7 +336,19 @@ impl TuiView for TuiPlanView {
             move |event_ctx, _app| {
                 event_ctx.dispatch_typed_action(TuiPlanViewAction::SetCollapsed(!collapsed));
             },
-        )
+        );
+        if collapsed {
+            return collapsible;
+        }
+        let mut content = TuiFlex::column().child(collapsible);
+        if let Some(binding) = plan_toggle_hint(app) {
+            content = content.child(
+                TuiText::new(format!("{binding} to collapse plan"))
+                    .with_style(builder.muted_text_style())
+                    .finish(),
+            );
+        }
+        content.finish()
     }
 }
 
@@ -337,8 +358,7 @@ impl TypedActionView for TuiPlanView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             TuiPlanViewAction::SetCollapsed(collapsed) => {
-                self.collapsed = *collapsed;
-                self.invalidate_layout(ctx);
+                self.set_collapsed(*collapsed, ctx);
             }
         }
     }

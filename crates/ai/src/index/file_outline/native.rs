@@ -57,7 +57,8 @@ pub async fn build_outline(
         0,
         &IgnoredPathStrategy::Exclude, // override_ignore_for_files
         BudgetExceededBehavior::StopAndLazyLoad,
-    )?;
+    )
+    .await?;
 
     let (sender, receiver) = oneshot::channel();
 

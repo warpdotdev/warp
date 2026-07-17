@@ -543,6 +543,34 @@ impl TuiAIBlock {
         true
     }
 
+    fn latest_exposed_plan(&self, ctx: &AppContext) -> Option<ViewHandle<TuiPlanView>> {
+        let status = self.block_model.status(ctx);
+        let output = status.output_to_render()?;
+        let plan = output.get().messages.iter().rev().find_map(|message| {
+            let AIAgentOutputMessageType::Action(action) = &message.message else {
+                return None;
+            };
+            let Some(TuiToolCallView::Plan(view)) = self.action_views.get(&action.id) else {
+                return None;
+            };
+            view.as_ref(ctx).renders_rich_body().then(|| view.clone())
+        });
+        plan
+    }
+    pub(super) fn has_exposed_plan(&self, ctx: &AppContext) -> bool {
+        self.latest_exposed_plan(ctx).is_some()
+    }
+
+    pub(super) fn toggle_latest_plan(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let Some(plan) = self.latest_exposed_plan(ctx) else {
+            return false;
+        };
+        plan.update(ctx, |plan, ctx| {
+            plan.toggle_collapsed(ctx);
+        });
+        true
+    }
+
     /// Invalidates this block and its stateful command child after an owned
     /// action status or backing terminal block changes.
     fn invalidate_action(&mut self, action_id: &AIAgentActionId, ctx: &mut ViewContext<Self>) {

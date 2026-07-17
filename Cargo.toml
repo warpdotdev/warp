@@ -272,7 +272,7 @@ serde_bytes = "0.11"
 serde-bytes-repr = "0.3"
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_urlencoded = "0.7"
-serde_with = "2.0.1"
+serde_with = "^3.21"
 serde_yaml = "0.8"
 session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "b30fdd06379a3d073b398eabd106abed5b443aae" }
 similar = { version = "2.7", features = ["inline"] }
@@ -386,7 +386,7 @@ dirs = "6.0.0"
 rayon = "1.10.0"
 sha2 = "0.10"
 shellexpand = "3.1.1"
-warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "ec1ae8e84277b0caf46bb028c21ee592a494dc97", default-features = false }
+warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "29cd61c3a9a96d8bde92e90f926e89d340e74cb6", default-features = false }
 winit = { git = "https://github.com/warpdotdev/winit.git", rev = "a4e0ecb5f9626ccac9445a73dc28354b52423abc" }
 x11rb = "0.13.0"
 mockito = "1.7.0"

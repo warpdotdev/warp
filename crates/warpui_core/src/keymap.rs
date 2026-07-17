@@ -1033,9 +1033,44 @@ impl Keystroke {
             s.push("Meta".into());
         }
 
+        s.push(self.displayed_key());
+
+        if OperatingSystem::get().is_mac() {
+            // On mac, we want to display compactly as "⌘I"
+            s.join("")
+        } else {
+            // On windows and linux, we want to display "Ctrl Shift I" instead of "CtrlShiftI"
+            s.join(" ")
+        }
+    }
+
+    /// Returns a platform-independent keybinding label with expanded modifier
+    /// names, such as `Ctrl + Shift + P`.
+    pub fn displayed_expanded(&self) -> String {
+        let mut parts = Vec::new();
+        if self.ctrl {
+            parts.push("Ctrl".to_owned());
+        }
+        if self.alt {
+            parts.push("Alt".to_owned());
+        }
+        if self.shift {
+            parts.push("Shift".to_owned());
+        }
+        if self.cmd {
+            parts.push("Cmd".to_owned());
+        }
+        if self.meta {
+            parts.push("Meta".to_owned());
+        }
+        parts.push(self.displayed_key());
+        parts.join(" + ")
+    }
+
+    fn displayed_key(&self) -> String {
         // Always treat the key as uppercase--this matches how operating systems and most
         // applications display keybindings.
-        s.push(match self.key.as_str() {
+        match self.key.as_str() {
             "up" => "↑".into(),
             "down" => "↓".into(),
             "left" => "←".into(),
@@ -1051,16 +1086,8 @@ impl Keystroke {
                     .map(|c| c.to_ascii_uppercase())
                     .into_iter()
                     .chain(key.chars().skip(1))
-                    .collect::<String>()
+                    .collect()
             }
-        });
-
-        if OperatingSystem::get().is_mac() {
-            // On mac, we want to display compactly as "⌘I"
-            s.join("")
-        } else {
-            // On windows and linux, we want to display "Ctrl Shift I" instead of "CtrlShiftI"
-            s.join(" ")
         }
     }
 }

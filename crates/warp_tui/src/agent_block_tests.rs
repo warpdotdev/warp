@@ -553,6 +553,59 @@ fn plan_collapse_invalidates_agent_block_layout() {
         });
     });
 }
+
+#[test]
+fn keyboard_toggle_targets_latest_exposed_plan_in_message_order() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let first = test_create_documents_action(
+            "create-1",
+            vec![DocumentToCreate {
+                title: "First".to_owned(),
+                content: "first body".to_owned(),
+            }],
+        );
+        let second = test_create_documents_action(
+            "create-2",
+            vec![DocumentToCreate {
+                title: "Second".to_owned(),
+                content: "second body".to_owned(),
+            }],
+        );
+        let first_id = first.id.clone();
+        let second_id = second.id.clone();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    action_message("message-1", first),
+                    action_message("message-2", second),
+                ]),
+            },
+        );
+
+        app.read(|ctx| assert!(block.as_ref(ctx).has_exposed_plan(ctx)));
+        assert!(block.update(&mut app, |block, ctx| block.toggle_latest_plan(ctx)));
+
+        app.read(|ctx| {
+            let block = block.as_ref(ctx);
+            let Some(TuiToolCallView::Plan(first)) = block.action_views.get(&first_id) else {
+                panic!("first action has a plan child");
+            };
+            let Some(TuiToolCallView::Plan(second)) = block.action_views.get(&second_id) else {
+                panic!("second action has a plan child");
+            };
+            assert!(render_tui_view_lines(first.as_ref(ctx), 40, 8, ctx)
+                .iter()
+                .any(|line| line.trim() == "first body"));
+            assert_eq!(
+                render_tui_view_lines(second.as_ref(ctx), 40, 8, ctx),
+                vec!["○ Create plan ▸"]
+            );
+        });
+    });
+}
 #[test]
 fn agent_block_ignores_unsupported_message_variants() {
     App::test((), |mut app| async move {

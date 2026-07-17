@@ -55,6 +55,7 @@ fn parse_resume_token(token: String) -> Result<ServerConversationToken> {
 struct TuiSession {
     #[expect(dead_code, reason = "keeps the TUI driver alive for the TUI session")]
     driver: TuiDriverHandle,
+    keyboard_enhancement_supported: bool,
     manager: Option<ModelHandle<Box<dyn TerminalManagerTrait>>>,
     resume_token: Option<ServerConversationToken>,
 }
@@ -136,8 +137,10 @@ fn init(
     );
     match spawn_tui_driver(ctx, window_id, root.clone()) {
         Ok(driver) => {
+            let keyboard_enhancement_supported = driver.keyboard_enhancement_supported();
             let session = ctx.add_singleton_model(|_| TuiSession {
                 driver,
+                keyboard_enhancement_supported,
                 manager: None,
                 resume_token,
             });
@@ -180,7 +183,12 @@ fn create_terminal_session_after_login(
     }
 
     let root = root.clone();
-    let resume_token = session.read(ctx, |session, _| session.resume_token.clone());
+    let (resume_token, keyboard_enhancement_supported) = session.read(ctx, |session, _| {
+        (
+            session.resume_token.clone(),
+            session.keyboard_enhancement_supported,
+        )
+    });
     let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(
         std::env::current_dir().ok(),
         HashMap::<OsString, OsString>::from_iter(std::env::vars_os()),
@@ -194,7 +202,8 @@ fn create_terminal_session_after_login(
         ctx,
         move |surface_init, ctx| {
             let surface = root.update(ctx, |root, ctx| {
-                let surface = root.create_terminal_session(surface_init, ctx);
+                let surface =
+                    root.create_terminal_session(surface_init, keyboard_enhancement_supported, ctx);
                 // Re-render the root so it swaps the login placeholder for the session.
                 ctx.notify();
                 surface
