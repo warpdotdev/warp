@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use line_ending::LineEnding;
 use markdown_parser::{
-    FormattedIndentTextInline, FormattedText, FormattedTextFragment, FormattedTextLine, parse_html,
-    parse_markdown,
+    FormattedIndentTextInline, FormattedText, FormattedTextFragment, FormattedTextLine,
+    VerticalAlign, parse_html, parse_markdown,
 };
 use pathfinder_color::ColorU;
 use rand::SeedableRng;
@@ -16,6 +16,7 @@ use vec1::{Vec1, vec1};
 use warp_util::content_version::ContentVersion;
 use warpui_core::elements::ListIndentLevel;
 use warpui_core::text::point::Point;
+use warpui_core::text_layout::LayoutCache;
 use warpui_core::{App, AppContext, ModelContext, ModelHandle, ReadModel};
 
 use super::{BufferEvent, EditResult, ToBufferCharOffset};
@@ -39,6 +40,7 @@ use crate::content::undo::{
     NonAtomicType, ReversibleEditorActions, ReversibleSelectionState, UndoActionType, UndoArg,
 };
 use crate::render::layout::TextLayout;
+use crate::render::model::test_utils::TEST_STYLES;
 use crate::render::model::{
     EmbeddedItem, EmbeddedItemHTMLRepresentation, EmbeddedItemRichFormat, LaidOutEmbeddedItem,
     RenderedSelectionSet,
@@ -2865,6 +2867,122 @@ fn test_styled_runs_multiple_styles() {
                     style: BufferBlockStyle::PlainText,
                     content_length: CharOffset::from(11)
                 })]
+            );
+        });
+    });
+}
+
+/// The file/tab Markdown viewer paints from `styled_blocks_in_range` — the render data path, one
+/// layer below `range_text_styles`. This drives real `<sub>`/`<sup>` markdown through it and asserts
+/// the emitted `StyledBufferRun`s carry the vertical alignment that `layout_run`/`style_and_font`
+/// reads to offset glyphs (issue #13734).
+#[test]
+fn test_sub_sup_reach_styled_blocks_render_runs() {
+    App::test((), |mut app| async move {
+        let markdown = "H<sub>2</sub>O and x<sup>2</sup>\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let (found_sub, found_sup) = app.read_model(&buffer, |buffer, _| {
+            let blocks = buffer.styled_blocks_in_range(
+                CharOffset::from(1)..buffer.max_charoffset(),
+                StyledBlockBoundaryBehavior::Exclusive,
+            );
+            let mut found_sub = false;
+            let mut found_sup = false;
+            for block in &blocks {
+                if let StyledBufferBlock::Text(text_block) = block {
+                    for run in &text_block.block {
+                        found_sub |= run.text_styles.is_subscript();
+                        found_sup |= run.text_styles.is_superscript();
+                    }
+                }
+            }
+            (found_sub, found_sup)
+        });
+
+        assert!(
+            found_sub,
+            "expected a subscript render run from styled_blocks_in_range"
+        );
+        assert!(
+            found_sup,
+            "expected a superscript render run from styled_blocks_in_range"
+        );
+    });
+}
+
+/// Binary-searches the seam between `styled_blocks_in_range` (proven to carry `vertical_align`,
+/// see `test_sub_sup_reach_styled_blocks_render_runs` above) and `Line::paint`'s glyph offset
+/// (proven correct given a `TextStyle` that already has `vertical_align` set, see
+/// `crates/warpui_core/src/text_layout_tests.rs`). Feeds a REAL `StyledBufferRun.text_styles`
+/// (sourced from actual parsed markdown, not a hand-built `TextStylesWithMetadata`) into the real
+/// production `TextLayout::style_and_font` and asserts the resulting `StyleAndFont.style.vertical_align`
+/// is set — the exact input/output pair `render/layout.rs`'s `layout_run` relies on at paint time
+/// (issue #13734).
+#[test]
+fn test_sub_sup_style_and_font_from_real_styled_run() {
+    App::test((), |mut app| async move {
+        let markdown = "H<sub>2</sub>O and x<sup>2</sup>\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let (sub_run_styles, sup_run_styles) = app.read_model(&buffer, |buffer, _| {
+            let blocks = buffer.styled_blocks_in_range(
+                CharOffset::from(1)..buffer.max_charoffset(),
+                StyledBlockBoundaryBehavior::Exclusive,
+            );
+            let mut sub_run_styles = None;
+            let mut sup_run_styles = None;
+            for block in &blocks {
+                if let StyledBufferBlock::Text(text_block) = block {
+                    for run in &text_block.block {
+                        if run.text_styles.is_subscript() {
+                            sub_run_styles = Some(run.text_styles.clone());
+                        }
+                        if run.text_styles.is_superscript() {
+                            sup_run_styles = Some(run.text_styles.clone());
+                        }
+                    }
+                }
+            }
+            (sub_run_styles, sup_run_styles)
+        });
+
+        let sub_run_styles = sub_run_styles.expect("expected a subscript StyledBufferRun to exist");
+        let sup_run_styles =
+            sup_run_styles.expect("expected a superscript StyledBufferRun to exist");
+
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let paragraph = text_layout.paragraph_styles(&BufferBlockStyle::PlainText);
+
+            let sub_style_and_font = text_layout.style_and_font(&paragraph, &sub_run_styles);
+            let sup_style_and_font = text_layout.style_and_font(&paragraph, &sup_run_styles);
+
+            assert_eq!(
+                sub_style_and_font.style.vertical_align,
+                Some(VerticalAlign::Sub),
+                "expected style_and_font to carry Sub through from a real StyledBufferRun"
+            );
+            assert_eq!(
+                sup_style_and_font.style.vertical_align,
+                Some(VerticalAlign::Sup),
+                "expected style_and_font to carry Sup through from a real StyledBufferRun"
             );
         });
     });
