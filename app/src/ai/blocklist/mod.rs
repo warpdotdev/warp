@@ -82,9 +82,9 @@ pub use child_agent_launch::{
 pub(crate) use context_model::block_context_from_terminal_model;
 #[cfg(feature = "tui")]
 pub use context_model::block_context_from_terminal_model;
-pub use context_model::{
-    AttachmentType, BlocklistAIContextEvent, BlocklistAIContextModel, PendingAttachmentSummary,
-};
+#[cfg(feature = "tui")]
+pub use context_model::PendingAttachmentSummary;
+pub use context_model::{AttachmentType, BlocklistAIContextEvent, BlocklistAIContextModel};
 pub(crate) use context_model::{PendingAttachment, PendingFile};
 pub use controller::BlocklistAIController;
 pub use controller::input_context::{
