@@ -522,6 +522,64 @@ fn test_kbd_html_serialization() {
     });
 }
 
+/// Serialization must always round-trip the AUTHORED `<kbd>` text, never a rendered key glyph
+/// (issue #13733). Glyph substitution (e.g. `<kbd>Cmd</kbd>` displaying as ⌘) is a render-only
+/// concern: it must never leak into the data model or any export path. This test pins that
+/// invariant across every serializer so a future glyph-substitution change that accidentally
+/// mutated the buffer text (instead of only the render layer) would fail here.
+#[test]
+fn test_kbd_serialization_preserves_authored_text_not_glyph() {
+    App::test((), |mut app| async move {
+        let markdown = "Press <kbd>Cmd</kbd> to run\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        // The glyph a renderer might substitute for "Cmd" on macOS.
+        let key_glyph = "\u{2318}"; // ⌘
+
+        // Every export path must emit the authored "Cmd", never the glyph.
+        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert!(
+            exported_markdown.contains("<kbd>Cmd</kbd>"),
+            "markdown export must preserve authored text, was: {exported_markdown}"
+        );
+        assert!(
+            !exported_markdown.contains(key_glyph),
+            "markdown export must not contain the rendered key glyph, was: {exported_markdown}"
+        );
+
+        let html = app
+            .read_model(&buffer, |buffer, ctx| {
+                let range = CharOffset::from(1)..buffer.max_charoffset();
+                buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+            })
+            .unwrap();
+        assert!(
+            html.contains("<kbd>Cmd</kbd>"),
+            "html export must preserve authored text, was: {html}"
+        );
+        assert!(
+            !html.contains(key_glyph),
+            "html export must not contain the rendered key glyph, was: {html}"
+        );
+
+        // The buffer's own plain-text content must also hold the authored text, not the glyph.
+        let plain_text = app.read_model(&buffer, |buffer, _| buffer.text().as_str().to_string());
+        assert!(
+            plain_text.contains("Cmd"),
+            "buffer text must preserve authored text, was: {plain_text}"
+        );
+        assert!(
+            !plain_text.contains(key_glyph),
+            "buffer text must not contain the rendered key glyph, was: {plain_text}"
+        );
+    });
+}
+
 /// `<kbd>` inside a GFM table cell round-trips through both the Markdown and HTML export paths.
 #[test]
 fn test_kbd_in_table_cell_serialization() {
