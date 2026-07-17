@@ -34,6 +34,7 @@ fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRe
             name: "researcher".to_string(),
             prompt: "research".to_string(),
             title: "Researcher".to_string(),
+            agent_identity_uid: String::new(),
         }],
         plan_id: "plan-1".to_string(),
         harness_auth_secret_name: None,
