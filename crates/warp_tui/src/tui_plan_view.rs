@@ -18,8 +18,7 @@ use warpui_core::{
 };
 
 use crate::keybindings::plan_toggle_hint;
-use crate::status::TuiStatusState;
-use crate::tool_call_labels::tool_call_display_state;
+use crate::tool_call_labels::{tool_call_display_state, ToolCallDisplayState};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
 use crate::tui_markdown::{render_formatted_text, TuiMarkdownBlockHooks, TuiMarkdownPalette};
@@ -193,7 +192,7 @@ impl TuiPlanView {
         }
     }
 
-    fn display_state(&self, app: &AppContext) -> TuiStatusState {
+    fn display_state(&self, app: &AppContext) -> ToolCallDisplayState {
         let status = self
             .action_model
             .as_ref(app)
@@ -209,16 +208,18 @@ impl TuiPlanView {
         }
     }
 
-    fn header_label(&self, state: TuiStatusState) -> (&'static str, Option<String>) {
+    fn header_label(&self, state: ToolCallDisplayState) -> (&'static str, Option<String>) {
         if matches!(&self.action.action, AIAgentActionType::CreateDocuments(_)) {
             match state {
-                TuiStatusState::Constructing | TuiStatusState::Running => {
+                ToolCallDisplayState::Constructing | ToolCallDisplayState::Running => {
                     ("Creating ", Some(self.document_subject()))
                 }
-                TuiStatusState::Pending | TuiStatusState::Blocked => ("Create plan", None),
-                TuiStatusState::Succeeded => ("Created ", Some(self.document_subject())),
-                TuiStatusState::Failed => ("Failed to create plan", None),
-                TuiStatusState::Cancelled => ("Create plan cancelled", None),
+                ToolCallDisplayState::Pending | ToolCallDisplayState::Blocked => {
+                    ("Create plan", None)
+                }
+                ToolCallDisplayState::Succeeded => ("Created ", Some(self.document_subject())),
+                ToolCallDisplayState::Failed => ("Failed to create plan", None),
+                ToolCallDisplayState::Cancelled => ("Create plan cancelled", None),
             }
         } else {
             debug_assert!(matches!(
@@ -226,11 +227,15 @@ impl TuiPlanView {
                 AIAgentActionType::EditDocuments(_)
             ));
             match state {
-                TuiStatusState::Constructing | TuiStatusState::Running => ("Updating plan", None),
-                TuiStatusState::Pending | TuiStatusState::Blocked => ("Update plan", None),
-                TuiStatusState::Succeeded => ("Updated plan", None),
-                TuiStatusState::Failed => ("Failed to update plan", None),
-                TuiStatusState::Cancelled => ("Update plan cancelled", None),
+                ToolCallDisplayState::Constructing | ToolCallDisplayState::Running => {
+                    ("Updating plan", None)
+                }
+                ToolCallDisplayState::Pending | ToolCallDisplayState::Blocked => {
+                    ("Update plan", None)
+                }
+                ToolCallDisplayState::Succeeded => ("Updated plan", None),
+                ToolCallDisplayState::Failed => ("Failed to update plan", None),
+                ToolCallDisplayState::Cancelled => ("Update plan cancelled", None),
             }
         }
     }
