@@ -12668,18 +12668,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "signal-hook-tokio"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "213241f76fb1e37e27de3b6aa1b068a2c333233b59cca6634f634b80a27ecf1e"
-dependencies = [
- "futures-core",
- "libc",
- "signal-hook",
- "tokio",
-]
-
-[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15233,7 +15221,6 @@ dependencies = [
  "shlex",
  "signal-hook",
  "signal-hook-mio",
- "signal-hook-tokio",
  "similar",
  "simple_logger",
  "siphasher 0.3.11",
