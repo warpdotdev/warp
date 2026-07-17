@@ -49,7 +49,9 @@ use crate::settings::CloudPreferencesSettings;
 use crate::themes::theme::Fill;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use crate::view_components::{Dropdown, DropdownItemAction, SubmittableTextInput};
+use crate::view_components::{
+    Dropdown, DropdownItemAction, FilterableDropdown, SubmittableTextInput,
+};
 
 pub const TOGGLE_BUTTON_RIGHT_PADDING: f32 = 5.;
 pub const HEADER_PADDING: f32 = 15.;
@@ -921,6 +923,49 @@ pub(crate) fn render_dropdown_item<T: DropdownItemAction>(
     local_only_icon_state: LocalOnlyIconState,
     color_override: Option<Fill>,
     handle: &ViewHandle<Dropdown<T>>,
+) -> Box<dyn Element> {
+    let row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+
+    let dropdown_item_label = Align::new(render_dropdown_item_label(
+        label.to_string(),
+        secondary_text.map(|secondary_text| secondary_text.to_string()),
+        local_only_icon_state,
+        color_override,
+        appearance,
+    ))
+    .left()
+    .finish();
+
+    let mut dropdown = Flex::column().with_child(ChildView::new(handle).finish());
+    if let Some(dropdown_subtext) = dropdown_subtext {
+        dropdown.add_child(dropdown_subtext);
+    }
+
+    row.with_child(
+        Shrinkable::new(
+            1.0,
+            Container::new(dropdown_item_label)
+                .with_margin_bottom(4.)
+                .with_padding_right(16.)
+                .finish(),
+        )
+        .finish(),
+    )
+    .with_child(dropdown.finish())
+    .finish()
+}
+
+/// Like [`render_dropdown_item`], but for a [`FilterableDropdown`] (a dropdown
+/// with a built-in search box). Used for long option lists such as the
+/// voice-input Speech Language picker.
+pub(crate) fn render_filterable_dropdown_item<T: DropdownItemAction>(
+    appearance: &Appearance,
+    label: &str,
+    secondary_text: Option<&str>,
+    dropdown_subtext: Option<Box<dyn Element>>,
+    local_only_icon_state: LocalOnlyIconState,
+    color_override: Option<Fill>,
+    handle: &ViewHandle<FilterableDropdown<T>>,
 ) -> Box<dyn Element> {
     let row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 

@@ -48,8 +48,8 @@ use super::settings_page::{
     SettingsPageViewHandle, SettingsWidget, TOGGLE_BUTTON_RIGHT_PADDING, ToggleState,
     build_sub_header, build_toggle_element, render_body_item_label,
     render_body_item_label_with_icon, render_custom_size_header, render_dropdown_item,
-    render_dropdown_item_label, render_full_pane_width_ai_button, render_input_list,
-    render_separator, render_settings_info_banner,
+    render_dropdown_item_label, render_filterable_dropdown_item, render_full_pane_width_ai_button,
+    render_input_list, render_separator, render_settings_info_banner,
 };
 use super::{
     SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction, SettingsSection,
@@ -157,7 +157,9 @@ use crate::server::telemetry::{
     AgentModeAutoDetectionSettingOrigin, AutonomySettingToggleSource,
     ToggleCodeSuggestionsSettingSource,
 };
-use crate::settings::{AISettings, VoiceInputLanguage, VoiceInputToggleKey};
+use crate::settings::{
+    AISettings, VoiceInputLanguage, VoiceInputToggleKey, VOICE_INPUT_LANGUAGES,
+};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings;
@@ -692,7 +694,7 @@ pub struct AISettingsPageView {
     page: PageType<Self>,
     active_subpage: Option<AISubpage>,
     voice_input_toggle_key_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
-    voice_input_language_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    voice_input_language_dropdown: ViewHandle<FilterableDropdown<AISettingsPageAction>>,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
     autodetection_denylist_editor: ViewHandle<EditorView>,
     autonomy_dropdown_menu: ViewHandle<Dropdown<AISettingsPageAction>>,
@@ -861,38 +863,33 @@ impl AISettingsPageView {
         });
 
         let voice_input_language_dropdown = ctx.add_typed_action_view(|ctx| {
-            let mut dropdown = Dropdown::new(ctx);
+            let mut dropdown = FilterableDropdown::new(ctx);
             dropdown.set_top_bar_max_width(AI_SETTINGS_DROPDOWN_WIDTH);
-            dropdown.set_menu_max_height(AI_SETTINGS_DROPDOWN_MAX_HEIGHT, ctx);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
             if !AISettings::as_ref(ctx).is_voice_input_enabled(ctx) {
                 dropdown.set_disabled(ctx);
             }
 
-            let values = VoiceInputLanguage::all_possible_values();
-            let current_value = AISettings::as_ref(ctx).voice_input_language.value();
-            let selected_index = values
-                .iter()
-                .position(|val| val == current_value)
-                .unwrap_or_else(|| {
-                    log::warn!(
-                        "Could not find current VoiceInputLanguage value in dropdown option list"
-                    );
-                    0
-                });
-
             dropdown.add_items(
-                values
-                    .into_iter()
-                    .map(|val| {
+                VOICE_INPUT_LANGUAGES
+                    .iter()
+                    .map(|&(code, name)| {
                         DropdownItem::new(
-                            val.display_name(),
-                            AISettingsPageAction::SetVoiceInputLanguage(val),
+                            name,
+                            AISettingsPageAction::SetVoiceInputLanguage(code.to_string()),
                         )
                     })
                     .collect(),
                 ctx,
             );
-            dropdown.set_selected_by_index(selected_index, ctx);
+            let current_code = AISettings::as_ref(ctx)
+                .voice_input_language_code()
+                .unwrap_or("")
+                .to_string();
+            dropdown.set_selected_by_action(
+                AISettingsPageAction::SetVoiceInputLanguage(current_code),
+                ctx,
+            );
 
             dropdown
         });
@@ -1349,13 +1346,16 @@ impl AISettingsPageView {
                         });
                 }
                 AISettingsChangedEvent::VoiceInputLanguage { .. } => {
-                    let current_value = AISettings::as_ref(ctx)
-                        .voice_input_language
-                        .value()
-                        .display_name();
+                    let current_code = AISettings::as_ref(ctx)
+                        .voice_input_language_code()
+                        .unwrap_or("")
+                        .to_string();
                     me.voice_input_language_dropdown
                         .update(ctx, |dropdown, ctx| {
-                            dropdown.set_selected_by_name(current_value, ctx)
+                            dropdown.set_selected_by_action(
+                                AISettingsPageAction::SetVoiceInputLanguage(current_code),
+                                ctx,
+                            )
                         });
                 }
                 AISettingsChangedEvent::AgentModeCommandExecutionAllowlist { .. } => {
@@ -3662,7 +3662,7 @@ impl Entity for AISettingsPageView {
 pub enum AISettingsPageAction {
     OpenUrl(String),
     SetVoiceInputToggleKey(VoiceInputToggleKey),
-    SetVoiceInputLanguage(VoiceInputLanguage),
+    SetVoiceInputLanguage(String),
     ToggleGlobalAI,
     ToggleActiveAI,
     ToggleIntelligentAutosuggestions,
@@ -3788,8 +3788,9 @@ impl TypedActionView for AISettingsPageView {
                 ctx.notify();
             }
             AISettingsPageAction::SetVoiceInputLanguage(language) => {
+                let language = language.clone();
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.voice_input_language.set_value(*language, ctx));
+                    report_if_error!(settings.voice_input_language.set_value(language, ctx));
                 });
                 ctx.notify();
             }
@@ -7261,7 +7262,7 @@ impl VoiceWidget {
                 None,
                 &view.voice_input_toggle_key_dropdown,
             ));
-            column.add_child(render_dropdown_item(
+            column.add_child(render_filterable_dropdown_item(
                 appearance,
                 "Speech Language",
                 Some("Language used when transcribing voice input."),
