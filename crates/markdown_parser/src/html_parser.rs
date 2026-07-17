@@ -24,7 +24,7 @@ const TOP_LEVEL_ELEMENT_TAGS_TO_SKIP: &[&str] = &[
     "head", "body", "html", "meta", "table", "b", "div", "ul", "ol", "li", "input",
 ];
 const PHRASING_ELEMENT_TAGS: &[&str] = &[
-    "span", "i", "code", "strong", "em", "br", "a", "s", "u", "ins",
+    "span", "i", "code", "strong", "em", "br", "a", "s", "u", "ins", "kbd",
 ];
 
 pub const WARP_EMBED_ATTRIBUTE_NAME: &str = "data-warp-embedded-item";
@@ -49,6 +49,7 @@ struct Styling {
     underline: bool,
     strikethrough: bool,
     inline_code: bool,
+    kbd: bool,
     link: Option<String>,
 }
 
@@ -444,6 +445,7 @@ fn parse_phrasing_content(nodes: &[Rc<Node>], text_styling: Styling) -> Formatte
                     "s" => decorated_styling.strikethrough = true,
                     "u" | "ins" => decorated_styling.underline = true,
                     "code" => decorated_styling.inline_code = true,
+                    "kbd" => decorated_styling.kbd = true,
                     // TODO: We need to add more phrasing styling we support (e.g. links) here.
                     // https://linear.app/warpdotdev/issue/CLD-335/add-html-parsing-for-headers-and-lists
                     _ => (),
@@ -476,6 +478,7 @@ fn phrasing_to_formatted_text(text: impl Into<String>, styling: &Styling) -> For
             strikethrough: styling.strikethrough,
             hyperlink: styling.link.clone().map(Hyperlink::Url),
             inline_code: styling.inline_code,
+            kbd: styling.kbd,
         },
     }
 }

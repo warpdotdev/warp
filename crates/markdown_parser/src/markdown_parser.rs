@@ -1035,6 +1035,9 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
             }
+            InlineToken::KbdEnd => {
+                input = parse_kbd(&mut state, remaining);
+            }
         }
     }
 
@@ -1316,6 +1319,43 @@ fn parse_underline<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
     remaining
 }
 
+/// Parses `<kbd>`-styled text using the same logic as [`parse_underline`].
+fn parse_kbd<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
+    let Some((kbd_start_index, kbd_start)) = state
+        .delimiters
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, delimiter)| delimiter.kind == DelimiterKind::KbdStart)
+    else {
+        // If there's no kbd start, treat this as a literal `</kbd>`.
+        state.push_text("</kbd>");
+        return remaining;
+    };
+
+    if !kbd_start.active {
+        // If the start is inactive, remove it - this prevents nested kbd elements.
+        state.delimiters.remove(kbd_start_index);
+        state.push_text("</kbd>");
+        return remaining;
+    }
+
+    let kbd_start_node = kbd_start.node_index;
+    state.backtrack_styles(kbd_start_node, |styles| styles.kbd = true);
+    process_emphasis(state, Some(kbd_start_index));
+
+    state.delimiters.remove(kbd_start_index);
+    for delimiter in &mut state.delimiters[..kbd_start_index] {
+        if delimiter.kind == DelimiterKind::KbdStart {
+            delimiter.active = false;
+        }
+    }
+
+    state.remove_node(kbd_start_node);
+    state.last_node_closed = true;
+    remaining
+}
+
 /// Process emphasis delimiters on the state's delimiter stack, bounded by `stack_bottom`.
 ///
 /// This is approximately equivalent to the CommonMark [process emphasis](https://spec.commonmark.org/0.30/#phase-2-inline-structure)
@@ -1367,15 +1407,17 @@ fn process_emphasis(state: &mut InlineState, stack_bottom: Option<usize>) {
                 // In each pass, process as many delimiters as possible. Paired `***` delimiters
                 // will take 2 passes, one for the bold and one for the italics. This is necessary
                 // so that we can pair part of a `***` with a `**` or `*` in the case of nested emphasis.
-                let (bold, italic, strikethrough, underline, consumed_delimiters) =
+                let (bold, italic, strikethrough, underline, kbd, consumed_delimiters) =
                     if opener.kind == DelimiterKind::Strikethrough {
-                        (false, false, true, false, opener.count)
+                        (false, false, true, false, false, opener.count)
                     } else if opener.kind == DelimiterKind::UnderlineStart {
-                        (false, false, false, true, 1)
+                        (false, false, false, true, false, 1)
+                    } else if opener.kind == DelimiterKind::KbdStart {
+                        (false, false, false, false, true, 1)
                     } else if opener.count >= 2 && closer.count >= 2 {
-                        (true, false, false, false, 2)
+                        (true, false, false, false, false, 2)
                     } else {
-                        (false, true, false, false, 1)
+                        (false, true, false, false, false, 1)
                     };
 
                 for fragment in &mut state.nodes[opener.node_index..closer.node_index] {
@@ -1389,6 +1431,7 @@ fn process_emphasis(state: &mut InlineState, stack_bottom: Option<usize>) {
                     }
                     fragment.styles.strikethrough |= strikethrough;
                     fragment.styles.underline |= underline;
+                    fragment.styles.kbd |= kbd;
                 }
 
                 let mut used_delimiters_start = opener_index + 1; // This index is inclusive.
@@ -1549,6 +1592,8 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             parse_inline_token_autolink,
             parse_inline_token_underline_start,
             parse_inline_token_underline_end,
+            parse_inline_token_kbd_start,
+            parse_inline_token_kbd_end,
             whitespace,
             text,
             // This _must_ be the last parser in the chain. It unconditionally consumes a single
@@ -1654,6 +1699,29 @@ fn parse_inline_token_underline_end<'a, E: ContextError<&'a str> + ParseError<&'
     )(input)
 }
 
+/// Parse a kbd-start delimiter. The tag is matched case-insensitively (`<kbd>`, `<KBD>`, …).
+fn parse_inline_token_kbd_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "kbd_start",
+        map(tag_no_case("<kbd>"), |_| InlineToken::Delimiter {
+            kind: DelimiterKind::KbdStart,
+            count: 1,
+        }),
+    )(input)
+}
+
+/// Parse a kbd-end delimiter. The tag is matched case-insensitively (`</kbd>`, `</KBD>`, …).
+fn parse_inline_token_kbd_end<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "kbd_end",
+        map(tag_no_case("</kbd>"), |_| InlineToken::KbdEnd),
+    )(input)
+}
+
 /// Helper to parse a run of delimiters.
 fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     kind: DelimiterKind,
@@ -1700,6 +1768,8 @@ enum InlineToken<'a> {
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
     UnderlineEnd,
+    /// A closing </kbd>, which triggers kbd parsing.
+    KbdEnd,
 }
 
 /// An entry in the [delimiter stack](https://spec.commonmark.org/0.30/#delimiter-stack)
@@ -1758,6 +1828,7 @@ impl Delimiter {
             // The GFM spec doesn't fully specify how strikethrough works, so treat it like asterisks.
             DelimiterKind::Strikethrough => left_flanking,
             DelimiterKind::UnderlineStart => left_flanking,
+            DelimiterKind::KbdStart => left_flanking,
         };
 
         let can_close = match kind {
@@ -1768,6 +1839,7 @@ impl Delimiter {
             }
             DelimiterKind::Strikethrough => right_flanking,
             DelimiterKind::UnderlineStart => right_flanking,
+            DelimiterKind::KbdStart => right_flanking,
         };
 
         Self {
@@ -1819,6 +1891,7 @@ enum DelimiterKind {
     LinkStart,
     Strikethrough,
     UnderlineStart,
+    KbdStart,
 }
 
 impl DelimiterKind {
@@ -1832,6 +1905,7 @@ impl DelimiterKind {
             // tildes do not create strikethrough.
             DelimiterKind::Strikethrough => count <= 2,
             DelimiterKind::UnderlineStart => count == 1,
+            DelimiterKind::KbdStart => count == 1,
         }
     }
 
@@ -1842,6 +1916,7 @@ impl DelimiterKind {
             DelimiterKind::LinkStart => "[",
             DelimiterKind::Strikethrough => "~",
             DelimiterKind::UnderlineStart => "<u>",
+            DelimiterKind::KbdStart => "<kbd>",
         }
     }
 }

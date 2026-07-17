@@ -565,3 +565,16 @@ fn test_confluence_code_block() {
         }),]
     );
 }
+
+/// Pasted `<kbd>` HTML maps to the `kbd` style, mirroring `<code>` paste handling (issue #13733).
+#[test]
+fn test_kbd_paste() {
+    assert_eq!(
+        test_parse_html("Press <kbd>Cmd</kbd> to run"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Press "),
+            FormattedTextFragment::kbd("Cmd"),
+            FormattedTextFragment::plain_text(" to run"),
+        ])]
+    );
+}

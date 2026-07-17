@@ -1982,6 +1982,127 @@ fn test_parse_empty_underline() {
 }
 
 #[test]
+fn test_basic_parse_kbd() {
+    let source = "Press <kbd>Cmd</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Press "),
+            FormattedTextFragment::kbd("Cmd"),
+        ])]
+    );
+}
+
+/// The motivating test case from issue #13733: two adjacent keycaps joined by a literal `+`.
+#[test]
+fn test_parse_kbd_issue_test_case() {
+    let source = "Press <kbd>Cmd</kbd>+<kbd>K</kbd> to open the command palette.";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Press "),
+            FormattedTextFragment::kbd("Cmd"),
+            FormattedTextFragment::plain_text("+"),
+            FormattedTextFragment::kbd("K"),
+            FormattedTextFragment::plain_text(" to open the command palette."),
+        ])]
+    );
+}
+
+/// `<kbd>` tags are recognized case-insensitively.
+#[test]
+fn test_parse_kbd_case_insensitive() {
+    let source = "Press <KBD>Cmd</KBD> and <Kbd>K</kBd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Press "),
+            FormattedTextFragment::kbd("Cmd"),
+            FormattedTextFragment::plain_text(" and "),
+            FormattedTextFragment::kbd("K"),
+        ])]
+    );
+}
+
+#[test]
+fn test_mixed_parse_kbd() {
+    let source = "This is ~~test~~ **with** <kbd>text</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("This is "),
+            FormattedTextFragment::strikethrough("test"),
+            FormattedTextFragment::plain_text(" "),
+            FormattedTextFragment::bold("with"),
+            FormattedTextFragment::plain_text(" "),
+            FormattedTextFragment::kbd("text"),
+        ])]
+    );
+}
+
+/// Bold nests inside `<kbd>`: the run carries both `kbd` and `weight`.
+#[test]
+fn test_parse_kbd_with_nested_bold() {
+    let fragments = parse_all("<kbd>**Cmd**</kbd>", parse_inline);
+    assert_eq!(fragments.len(), 1);
+    assert_eq!(fragments[0].text, "Cmd");
+    assert!(fragments[0].styles.kbd);
+    assert_eq!(fragments[0].styles.weight, Some(CustomWeight::Bold));
+}
+
+/// `<kbd>` nests inside bold: the run carries both `kbd` and `weight`.
+#[test]
+fn test_parse_bold_wrapping_kbd() {
+    let fragments = parse_all("**<kbd>Cmd</kbd>**", parse_inline);
+    assert_eq!(fragments.len(), 1);
+    assert_eq!(fragments[0].text, "Cmd");
+    assert!(fragments[0].styles.kbd);
+    assert_eq!(fragments[0].styles.weight, Some(CustomWeight::Bold));
+}
+
+#[test]
+fn test_multi_parse_kbd() {
+    let source = "<kbd>test1</kbd>\n<kbd>test2</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![
+            FormattedTextLine::Line(vec![FormattedTextFragment::kbd("test1")]),
+            FormattedTextLine::Line(vec![FormattedTextFragment::kbd("test2")]),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_empty_kbd() {
+    assert_eq!(
+        parse_all("some <kbd></kbd> text", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("some "),
+            FormattedTextFragment::kbd(""),
+            FormattedTextFragment::plain_text(" text"),
+        ]
+    );
+}
+
+/// An unmatched `</kbd>` (no opener) degrades to literal text, never a panic.
+#[test]
+fn test_parse_unmatched_kbd_end_is_literal() {
+    assert_eq!(
+        parse_all("no opener </kbd> here", parse_inline),
+        vec![FormattedTextFragment::plain_text("no opener </kbd> here")]
+    );
+}
+
+/// An unterminated `<kbd>` (missing closer) leaves the opening tag as literal text.
+#[test]
+fn test_parse_unterminated_kbd_is_literal() {
+    assert_eq!(
+        parse_all("dangling <kbd>Cmd here", parse_inline),
+        vec![FormattedTextFragment::plain_text("dangling <kbd>Cmd here")]
+    );
+}
+
+#[test]
 fn test_unordered_list_indentation_level_relative() {
     // Test that both 2-space and 4-space relative indentation produce the same structure
     let source_2space = "- top level\n  - sublevel\n    - subsublevel";
