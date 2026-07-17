@@ -1017,6 +1017,18 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                 state.push_text(ch);
             }
             InlineToken::Delimiter { kind, count } => {
+                // Flat-collapse nested `<kbd>` (issue #13733): once we're inside a `<kbd>`, a
+                // further `<kbd>` open is dropped entirely (no delimiter, no literal text) and only
+                // deepens the nesting counter. The matching inner `</kbd>` is dropped in the
+                // `KbdEnd` arm below, so the whole span renders as a single flat keycap. Depth-aware
+                // per-key badging is deferred to issue #13912.
+                if kind == DelimiterKind::KbdStart {
+                    state.kbd_depth += 1;
+                    if state.kbd_depth > 1 {
+                        continue;
+                    }
+                }
+
                 let node_index = state.nodes.len();
                 let preceding_char = state
                     .nodes
@@ -1036,7 +1048,16 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                 input = parse_underline(&mut state, remaining);
             }
             InlineToken::KbdEnd => {
-                input = parse_kbd(&mut state, remaining);
+                // Mirror the open-side flat-collapse (issue #13733): an inner `</kbd>` closing a
+                // dropped inner `<kbd>` is itself dropped, leaving only the outermost pair to form
+                // the keycap. A `</kbd>` with no open (`kbd_depth == 0`) still falls through to
+                // `parse_kbd`, which emits it as literal text.
+                if state.kbd_depth > 1 {
+                    state.kbd_depth -= 1;
+                } else {
+                    state.kbd_depth = 0;
+                    input = parse_kbd(&mut state, remaining);
+                }
             }
         }
     }
@@ -1060,6 +1081,10 @@ struct InlineState {
     /// The stack of not-yet used formatting delimiters.
     /// See https://spec.commonmark.org/0.30/#delimiter-stack.
     delimiters: Vec<Delimiter>,
+    /// Open-`<kbd>` nesting depth, used to flat-collapse nested `<kbd>` (issue #13733). Only the
+    /// outermost `<kbd>`…`</kbd>` pair produces a keycap; inner tags are dropped so the whole span
+    /// renders as one flat badge. Depth-aware per-key badging is deferred to issue #13912.
+    kbd_depth: usize,
 }
 
 impl InlineState {

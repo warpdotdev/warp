@@ -2060,6 +2060,72 @@ fn test_parse_bold_wrapping_kbd() {
     assert_eq!(fragments[0].styles.weight, Some(CustomWeight::Bold));
 }
 
+/// Nested `<kbd>` flat-collapses into a single keycap spanning the full inner content, rather than
+/// leaking literal `<kbd>`/`</kbd>` tags (the pre-fix behavior) or double-badging (issue #13733).
+/// Depth-aware per-key badging (outer keycap wrapping inner keycaps) is deferred to issue #13912.
+#[test]
+fn test_parse_nested_kbd_flat_collapses() {
+    let source = "<kbd><kbd>Ctrl</kbd>+<kbd>N</kbd></kbd>";
+    let fragments = test_parse_markdown(source);
+    assert_eq!(
+        fragments,
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment::kbd(
+            "Ctrl+N"
+        )])],
+        "nested kbd should collapse to a single flat keycap over the inner content"
+    );
+
+    // Guard against regressing to the tag-leak bug: no literal tag text survives.
+    let flattened: String = match &fragments[0] {
+        FormattedTextLine::Line(runs) => runs.iter().map(|f| f.text.as_str()).collect(),
+        other => panic!("expected a single line, got {other:?}"),
+    };
+    assert!(
+        !flattened.contains("<kbd>") && !flattened.contains("</kbd>"),
+        "nested kbd must not leak literal tag text, got: {flattened:?}"
+    );
+}
+
+/// Deep nesting collapses deterministically to a single keycap regardless of depth (issue #13733).
+#[test]
+fn test_parse_deeply_nested_kbd_flat_collapses() {
+    let source = "<kbd><kbd><kbd><kbd><kbd>Esc</kbd></kbd></kbd></kbd></kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment::kbd(
+            "Esc"
+        )])],
+        "arbitrarily deep kbd nesting should collapse to one flat keycap"
+    );
+}
+
+/// A stray `</kbd>` with no matching open still renders as literal text (issue #13733) — the
+/// flat-collapse depth counter must not swallow unbalanced closes.
+#[test]
+fn test_parse_unmatched_kbd_close_is_literal() {
+    let source = "no open</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("no open</kbd>"),
+        ])]
+    );
+}
+
+/// An unterminated OUTER `<kbd>` that still contains a balanced inner nested pair must not panic
+/// or leave a dangling delimiter — the inner pair flat-collapses (dropped) and the unmatched outer
+/// open degrades to literal text, same as any unterminated `<kbd>` (issue #13733).
+#[test]
+fn test_parse_unterminated_nested_kbd_is_literal() {
+    let source = "<kbd><kbd>Ctrl</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<kbd>Ctrl"),
+        ])]
+    );
+}
+
 #[test]
 fn test_multi_parse_kbd() {
     let source = "<kbd>test1</kbd>\n<kbd>test2</kbd>";

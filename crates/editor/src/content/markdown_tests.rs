@@ -580,6 +580,35 @@ fn test_kbd_serialization_preserves_authored_text_not_glyph() {
     });
 }
 
+/// Nested `<kbd>` flat-collapses in the parser (issue #13733), so it serializes to the CANONICAL
+/// FLAT form `<kbd>Ctrl+N</kbd>` — a single keycap over the inner content — rather than round-
+/// tripping the authored nested `<kbd><kbd>…</kbd></kbd>` markup. The nesting is discarded at parse
+/// time (the buffer model has no depth), so flat is the only faithful serialization; preserving the
+/// authored nesting is the depth-aware work deferred to issue #13912.
+#[test]
+fn test_nested_kbd_serializes_to_flat_form() {
+    App::test((), |mut app| async move {
+        let markdown = "Press <kbd><kbd>Ctrl</kbd>+<kbd>N</kbd></kbd> now\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert!(
+            exported.contains("<kbd>Ctrl+N</kbd>"),
+            "nested kbd should serialize to the flat form, was: {exported}"
+        );
+        // The flattened form must not re-emit the nested inner tags.
+        assert!(
+            !exported.contains("<kbd><kbd>") && !exported.contains("</kbd></kbd>"),
+            "serialization must not reproduce nested kbd tags, was: {exported}"
+        );
+    });
+}
+
 /// `<kbd>` inside a GFM table cell round-trips through both the Markdown and HTML export paths.
 #[test]
 fn test_kbd_in_table_cell_serialization() {
