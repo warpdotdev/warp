@@ -619,6 +619,32 @@ impl RunAgentsCardView {
                     ctx,
                 );
         }
+        // Preserve a non-empty runner across streamed updates. `update_request`
+        // runs on every stream chunk, but run_agents requests usually omit a
+        // `runner_id`; without this, a runner the user picked in the card (or a
+        // runner already resolved on the call) would be clobbered back to
+        // "use environment default" on the next chunk. A request that *does*
+        // carry a runner still wins.
+        if let (
+            RunAgentsExecutionMode::Remote {
+                runner_id: new_runner,
+                ..
+            },
+            RunAgentsExecutionMode::Remote {
+                runner_id: current_runner,
+                ..
+            },
+        ) = (
+            &mut new_state.orchestration_config_state.execution_mode,
+            &self
+                .orchestration_edit_state
+                .orchestration_config_state
+                .execution_mode,
+        ) {
+            if new_runner.is_empty() && !current_runner.is_empty() {
+                *new_runner = current_runner.clone();
+            }
+        }
         if self.config_state() != new_state {
             let harness_or_model_changed = self
                 .orchestration_edit_state
