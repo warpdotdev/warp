@@ -51,7 +51,7 @@ pub enum TuiEditorAction {
     InsertChar(char),
     /// Insert one complete paste payload (only emitted when the element is
     /// [`editable`](TuiEditorElement::editable)).
-    InsertText(String),
+    PasteText(String),
     /// Place the cursor / begin a character selection at `offset` (single click).
     SelectionStartAt { offset: CharOffset },
     /// Extend the active selection's head to `offset` (shift-click).
@@ -798,7 +798,7 @@ impl TuiElement for TuiEditorElement {
                     }
                 }
                 TuiEvent::Paste { text } => {
-                    handler(TuiEditorAction::InsertText(text.clone()), event_ctx);
+                    handler(TuiEditorAction::PasteText(text.clone()), event_ctx);
                     return true;
                 }
                 TuiEvent::ScrollWheel { .. }

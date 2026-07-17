@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::rc::Rc;
@@ -155,6 +155,29 @@ fn run_until_draws_view_text_and_exits_on_quit() {
             runtime.terminal().output_string().contains("hello"),
             "the view's text should be drawn to the in-memory terminal"
         );
+    });
+}
+
+#[test]
+fn draw_runs_next_frame_callback_after_terminal_flush() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let callback_ran = Rc::new(Cell::new(false));
+        let callback_ran_after_draw = callback_ran.clone();
+        app.update(|ctx| {
+            ctx.on_next_frame_drawn(window_id, move || {
+                callback_ran_after_draw.set(true);
+            });
+        });
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
+
+        assert!(!callback_ran.get());
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
+        assert!(callback_ran.get());
+        assert!(screen.terminal.output_string().contains("hello"));
     });
 }
 

@@ -104,7 +104,7 @@ impl TuiTerminalSessionView {
         }
     }
 
-    fn abort_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(super) fn abort_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(future) = self.input_detection.future.take() {
             future.abort();
         }

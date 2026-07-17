@@ -78,14 +78,14 @@ pub use child_agent_launch::inherit_child_agent_settings;
 pub use child_agent_launch::{
     PreparedLocalOzChildLaunch, apply_child_agent_model_override, prepare_local_oz_child_launch,
 };
-pub use context_model::BlocklistAIContextModel;
 #[cfg(not(feature = "tui"))]
 pub(crate) use context_model::block_context_from_terminal_model;
 #[cfg(feature = "tui")]
 pub use context_model::block_context_from_terminal_model;
-pub(crate) use context_model::{
-    AttachmentType, BlocklistAIContextEvent, PendingAttachment, PendingFile,
+pub use context_model::{
+    AttachmentType, BlocklistAIContextEvent, BlocklistAIContextModel, PendingAttachmentSummary,
 };
+pub(crate) use context_model::{PendingAttachment, PendingFile};
 pub use controller::BlocklistAIController;
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,

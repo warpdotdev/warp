@@ -594,18 +594,29 @@ fn escape_dismisses_menu_and_closed_menu_submit_falls_through() {
 }
 
 #[test]
-fn multiline_paste_inserts_without_submitting_until_enter() {
+fn multiline_paste_emits_once_and_fallback_inserts_without_submitting() {
     App::test((), |mut app| async move {
-        let (view, submitted) = app.update(|ctx| {
+        let (view, pasted, submitted) = app.update(|ctx| {
             let view = build_view(ctx);
+            let pasted = Rc::new(RefCell::new(Vec::new()));
+            let pasted_for_subscription = pasted.clone();
             let submitted = Rc::new(RefCell::new(Vec::new()));
             let submitted_for_subscription = submitted.clone();
-            ctx.subscribe_to_view(&view, move |_, event, _| {
-                if let TuiInputViewEvent::Submitted(text) = event {
+            ctx.subscribe_to_view(&view, move |_, event, _| match event {
+                TuiInputViewEvent::Pasted(text) => {
+                    pasted_for_subscription.borrow_mut().push(text.clone());
+                }
+                TuiInputViewEvent::Submitted(text) => {
                     submitted_for_subscription.borrow_mut().push(text.clone());
                 }
+                TuiInputViewEvent::AcceptedSlashCommand(_)
+                | TuiInputViewEvent::AcceptedConversation(_)
+                | TuiInputViewEvent::AcceptedModel(_)
+                | TuiInputViewEvent::AcceptedMcp(_)
+                | TuiInputViewEvent::BackspaceAtEmptyInput
+                | TuiInputViewEvent::MoveFocusUp => {}
             });
-            (view, submitted)
+            (view, pasted, submitted)
         });
         let payload = "USER:\nhello\n\nAGENT:\nHi!\n";
 
@@ -613,13 +624,14 @@ fn multiline_paste_inserts_without_submitting_until_enter() {
             dispatch(
                 &view,
                 ctx,
-                &[TuiInputAction::Editor(TuiEditorAction::InsertText(
+                &[TuiInputAction::Editor(TuiEditorAction::PasteText(
                     payload.to_owned(),
                 ))],
             );
         });
         app.read(|ctx| {
-            assert_eq!(text(&view, ctx), payload);
+            assert_eq!(pasted.borrow().as_slice(), &[payload]);
+            assert_eq!(text(&view, ctx), "");
             assert!(
                 submitted.borrow().is_empty(),
                 "paste must not emit a submission"
@@ -627,9 +639,46 @@ fn multiline_paste_inserts_without_submitting_until_enter() {
         });
 
         app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.insert_pasted_text(payload, ctx));
             dispatch(&view, ctx, &[TuiInputAction::Submit]);
         });
         assert_eq!(submitted.borrow().as_slice(), &[payload]);
+    });
+}
+
+#[test]
+fn backspace_at_empty_input_emits_attachment_removal_event() {
+    App::test((), |mut app| async move {
+        let (view, events) = app.update(|ctx| {
+            let view = build_view(ctx);
+            let events = Rc::new(RefCell::new(0));
+            let events_for_subscription = events.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiInputViewEvent::BackspaceAtEmptyInput) {
+                    *events_for_subscription.borrow_mut() += 1;
+                }
+            });
+            (view, events)
+        });
+
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::Backspace)],
+            );
+        });
+        assert_eq!(*events.borrow(), 1);
+
+        app.update(|ctx| {
+            type_str(&view, ctx, "x");
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::Backspace)],
+            );
+        });
+        assert_eq!(*events.borrow(), 1);
     });
 }
 
@@ -701,7 +750,7 @@ fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
             dispatch(
                 &view,
                 ctx,
-                &[TuiInputAction::Editor(TuiEditorAction::InsertText(
+                &[TuiInputAction::Editor(TuiEditorAction::PasteText(
                     "first\nsecond".to_string(),
                 ))],
             );

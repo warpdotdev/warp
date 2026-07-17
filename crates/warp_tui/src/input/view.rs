@@ -108,6 +108,10 @@ pub fn init(app: &mut AppContext) {
 pub enum TuiInputViewEvent {
     /// The user pressed Enter to submit the current input. Contains the final text.
     Submitted(String),
+    /// The terminal delivered one complete bracketed-paste payload.
+    Pasted(String),
+    /// Backspace was pressed with an empty normal input.
+    BackspaceAtEmptyInput,
     /// The user selected a slash command menu item.
     AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
     /// The user selected a conversation menu item.
@@ -369,6 +373,19 @@ impl TuiInputView {
         ctx.notify();
     }
 
+    /// Inserts a paste payload after the parent declines to consume it as
+    /// structured input.
+    pub(crate) fn insert_pasted_text(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        apply_editor_action(
+            &self.model,
+            &TuiEditorAction::PasteText(text.to_owned()),
+            self.editor_behavior,
+            ctx,
+        );
+        self.follow_cursor(ctx);
+        ctx.notify();
+    }
+
     /// Composes the shell-mode input row: the accent-styled `!` affordance in a
     /// two-column gutter (glyph plus one column of right padding), then the
     /// editor filling the remaining width. The gutter is outside the editable
@@ -456,6 +473,10 @@ impl TypedActionView for TuiInputView {
         }
         let outcome = match action {
             TuiInputAction::Editor(editor_action) => {
+                if let TuiEditorAction::PasteText(text) = editor_action {
+                    ctx.emit(TuiInputViewEvent::Pasted(text.clone()));
+                    return;
+                }
                 // A `!` typed at the very start of the input enters shell mode
                 // instead of inserting (matching the GUI's typed-only trigger).
                 if matches!(editor_action, TuiEditorAction::InsertChar('!'))
@@ -509,6 +530,12 @@ impl TypedActionView for TuiInputView {
                     && self.is_cursor_at_start(ctx)
                 {
                     self.exit_shell_mode(ctx);
+                    TuiEditorInteractionOutcome::FollowCursor
+                } else if matches!(*command, TuiEditorCommand::Backspace)
+                    && self.plain_text(ctx).is_empty()
+                    && self.is_cursor_at_start(ctx)
+                {
+                    ctx.emit(TuiInputViewEvent::BackspaceAtEmptyInput);
                     TuiEditorInteractionOutcome::FollowCursor
                 } else {
                     self.editor_state.apply_command(

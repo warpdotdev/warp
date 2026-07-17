@@ -54,6 +54,10 @@ use warpui_core::{
 };
 
 use crate::alt_screen_view::AltScreenElement;
+use crate::attachment_bar::{
+    FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
+    TuiAttachmentPasteDisposition,
+};
 use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
@@ -66,8 +70,9 @@ use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
 use crate::keybindings::{
-    CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
-    PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME, TUI_BINDING_GROUP,
+    ATTACHMENTS_AVAILABLE_FLAG, CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME,
+    KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
+    TUI_BINDING_GROUP,
 };
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
@@ -112,6 +117,8 @@ const ORCHESTRATION_TAB_LABEL_MAX_COLUMNS: u16 = 20;
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
 const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
 const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
+pub(crate) const SESSION_COMPOSER_OWNS_INPUT_FLAG: &str = "TuiSessionComposerOwnsInput";
+pub(crate) const PASTE_IMAGE_BINDING_NAME: &str = "tui:session:paste_image";
 
 /// Events emitted by the TUI terminal session surface.
 pub(crate) enum TuiTerminalSessionEvent {
@@ -268,12 +275,17 @@ pub(crate) enum TuiTerminalSessionAction {
     SelectFirstOrchestrationChild,
     /// Select the last child tab, excluding the orchestrator.
     SelectLastOrchestrationChild,
+    /// Move focus from the prompt input into the attachment bar.
+    FocusAttachments,
+    /// Read a raw image from the host clipboard and attach it to the next query.
+    PasteImageFromClipboard,
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
 pub(crate) struct TuiTerminalSessionView {
     transcript: ViewHandle<TuiTranscriptView>,
     input_view: ViewHandle<TuiInputView>,
+    attachment_bar: ViewHandle<TuiAttachmentBar>,
     inline_menus: Vec<TuiInlineMenu>,
     suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
@@ -379,6 +391,40 @@ pub(crate) fn init(app: &mut AppContext) {
         )
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-p"),
+        EditableBinding::new(
+            FOCUS_ATTACHMENTS_BINDING_NAME,
+            "Focus image attachments",
+            TuiTerminalSessionAction::FocusAttachments,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
+                & id!(ATTACHMENTS_AVAILABLE_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("tab"),
+        EditableBinding::new(
+            PASTE_IMAGE_BINDING_NAME,
+            "Paste an image from the clipboard",
+            TuiTerminalSessionAction::PasteImageFromClipboard,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
+                & id!(SESSION_COMPOSER_OWNS_INPUT_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-v"),
+        #[cfg(windows)]
+        EditableBinding::new(
+            PASTE_IMAGE_BINDING_NAME,
+            "Paste an image from the clipboard",
+            TuiTerminalSessionAction::PasteImageFromClipboard,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
+                & id!(SESSION_COMPOSER_OWNS_INPUT_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-v"),
     ]);
 
     // Tab navigation is user-remappable, unlike the reserved session-control
@@ -935,9 +981,10 @@ impl TuiTerminalSessionView {
         let transcript_for_input = transcript.clone();
         let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
         let orchestration_tab_bar_for_input = orchestration_tab_bar.clone();
+        let input_editor_for_input = input_editor_model.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
             TuiInputView::new(
-                input_editor_model,
+                input_editor_for_input,
                 input_mode_for_input_view,
                 suggestions_mode_for_input,
                 inline_menus_for_input,
@@ -946,6 +993,21 @@ impl TuiTerminalSessionView {
                 ctx,
             )
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
+        });
+        let attachment_model = ctx.add_model(|ctx| {
+            TuiAttachmentModel::new(
+                context_model.clone(),
+                ai_input_model.clone(),
+                input_editor_model,
+                active_session.clone(),
+                terminal_surface_id,
+                ctx,
+            )
+        });
+        let attachment_bar =
+            ctx.add_typed_action_tui_view(|ctx| TuiAttachmentBar::new(attachment_model, ctx));
+        ctx.subscribe_to_view(&attachment_bar, |view, _, event, ctx| {
+            view.handle_attachment_bar_event(event, ctx);
         });
 
         ctx.subscribe_to_view(&transcript, |view, _, event, ctx| match event {
@@ -967,6 +1029,11 @@ impl TuiTerminalSessionView {
 
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
             TuiInputViewEvent::Submitted(text) => view.handle_submitted(text.clone(), ctx),
+            TuiInputViewEvent::Pasted(text) => view.handle_pasted(text.clone(), ctx),
+            TuiInputViewEvent::BackspaceAtEmptyInput => {
+                view.attachment_bar
+                    .update(ctx, |bar, ctx| bar.remove_selected(ctx));
+            }
             TuiInputViewEvent::AcceptedSlashCommand(action) => {
                 view.handle_accepted_slash_command(action, ctx);
             }
@@ -1201,6 +1268,7 @@ impl TuiTerminalSessionView {
         Self {
             transcript,
             input_view,
+            attachment_bar,
             inline_menus,
             suggestions_mode,
             conversation_menu,
@@ -1837,6 +1905,36 @@ impl TuiTerminalSessionView {
             }
             _ => {}
         }
+    }
+
+    fn handle_pasted(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        let disposition = self
+            .attachment_bar
+            .update(ctx, |bar, ctx| bar.try_attach_paste(text.clone(), ctx));
+        if disposition == TuiAttachmentPasteDisposition::NotHandled {
+            self.input_view
+                .update(ctx, |input, ctx| input.insert_pasted_text(&text, ctx));
+        }
+    }
+
+    fn handle_attachment_bar_event(
+        &mut self,
+        event: &TuiAttachmentBarEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            TuiAttachmentBarEvent::AbortInputDetection => self.abort_input_detection(ctx),
+            TuiAttachmentBarEvent::RequestInputDetection => self.schedule_input_detection(ctx),
+            TuiAttachmentBarEvent::RestorePastedText(text) => {
+                self.input_view
+                    .update(ctx, |input, ctx| input.insert_pasted_text(text, ctx));
+            }
+            TuiAttachmentBarEvent::ShowHint(text) => {
+                self.show_transient_hint(text.clone(), ctx);
+            }
+            TuiAttachmentBarEvent::ReturnFocus => ctx.focus(&self.input_view),
+        }
+        ctx.notify();
     }
 
     /// Displays `text` in the footer's hint slot for the transient-hint
@@ -2719,6 +2817,7 @@ impl TuiView for TuiTerminalSessionView {
             self.transcript.id(),
             self.input_view.id(),
             self.orchestration_tab_bar.id(),
+            self.attachment_bar.id(),
         ]
     }
 
@@ -2738,6 +2837,14 @@ impl TuiView for TuiTerminalSessionView {
         }
         if self.keyboard_enhancement_supported {
             context.set.insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
+        }
+        if self.input_target().agent_editor_owns_input()
+            && !self.suggestions_mode.as_ref(ctx).mode().is_visible()
+        {
+            context.set.insert(SESSION_COMPOSER_OWNS_INPUT_FLAG);
+            if self.attachment_bar.as_ref(ctx).should_render(ctx) {
+                context.set.insert(ATTACHMENTS_AVAILABLE_FLAG);
+            }
         }
         context
     }
@@ -2884,6 +2991,17 @@ impl TuiView for TuiTerminalSessionView {
             } else {
                 builder.accent_border_style()
             };
+            if self.attachment_bar.as_ref(ctx).should_render(ctx) {
+                content = content.child(
+                    TuiConstrainedBox::new(
+                        TuiContainer::new(TuiChildView::new(&self.attachment_bar).finish())
+                            .with_padding_x(1)
+                            .finish(),
+                    )
+                    .with_max_rows(1)
+                    .finish(),
+                );
+            }
             content = content.child(
                 TuiConstrainedBox::new(
                     TuiContainer::new(TuiChildView::new(&self.input_view).finish())
@@ -2986,6 +3104,15 @@ impl TypedActionView for TuiTerminalSessionView {
             TuiTerminalSessionAction::TogglePlan => {
                 self.transcript
                     .update(ctx, |transcript, ctx| transcript.toggle_latest_plan(ctx));
+            }
+            TuiTerminalSessionAction::FocusAttachments => {
+                if self.attachment_bar.as_ref(ctx).should_render(ctx) {
+                    ctx.focus(&self.attachment_bar);
+                }
+            }
+            TuiTerminalSessionAction::PasteImageFromClipboard => {
+                self.attachment_bar
+                    .update(ctx, |bar, ctx| bar.paste_image_from_clipboard(ctx));
             }
         }
     }

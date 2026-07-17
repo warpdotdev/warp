@@ -25,6 +25,7 @@ use warpui_core::keymap::{
 };
 use warpui_core::{Action, AppContext, TuiView};
 
+use crate::attachment_bar::TuiAttachmentBar;
 use crate::editor_interaction::{TuiEditorBindingTarget, TuiEditorCommand, editor_binding_specs};
 use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
 use crate::input::TuiInputView;
@@ -38,6 +39,7 @@ use crate::transcript_view::TuiTranscriptView;
 /// Group tag set on every TUI-registered binding. The validators treat it (or
 /// a `tui:` name prefix) as proof of TUI ownership.
 pub(crate) const TUI_BINDING_GROUP: &str = "tui";
+pub(crate) const ATTACHMENTS_AVAILABLE_FLAG: &str = "TuiAttachmentsAvailable";
 pub(crate) const PLAN_TOGGLE_AVAILABLE_FLAG: &str = "TuiPlanToggleAvailable";
 pub(crate) const KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG: &str = "TuiKeyboardEnhancementAvailable";
 pub(crate) const PLAN_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_plan";
@@ -67,6 +69,7 @@ pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
 pub(crate) fn init(app: &mut AppContext) {
     crate::root_view::init(app);
     crate::terminal_session_view::init(app);
+    crate::attachment_bar::init(app);
     crate::input::init(app);
     register_editor_bindings(
         app,
@@ -133,6 +136,7 @@ fn context_for_editor_binding(
 fn register_binding_validators(app: &mut AppContext) {
     app.register_tui_binding_validator::<RootTuiView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTerminalSessionView>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiAttachmentBar>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiInputView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiEditorView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTranscriptView>(is_tui_owned_binding);

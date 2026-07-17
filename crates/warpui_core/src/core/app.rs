@@ -1232,7 +1232,7 @@ impl AppContext {
         self.on_draw_frame_error_callback = callback;
     }
 
-    fn trigger_on_frame_drawn_callbacks(&mut self, window_id: WindowId) {
+    pub(crate) fn trigger_on_frame_drawn_callbacks(&mut self, window_id: WindowId) {
         if let Some(callback) = self.first_frame_callback.take() {
             callback(self);
         }

@@ -238,7 +238,7 @@ fn focused_search_filters_including_digits_and_enter_confirms_top_match() {
         edit_search(
             &mut app,
             &selector,
-            TuiEditorAction::InsertText("gpt-5".to_string()),
+            TuiEditorAction::PasteText("gpt-5".to_string()),
         );
 
         let lines = render_lines(&app, &selector, 60);
@@ -311,7 +311,7 @@ fn search_no_matches_and_escape_clear_are_rendered_without_moving_the_field() {
         edit_search(
             &mut app,
             &selector,
-            TuiEditorAction::InsertText("zzz".to_string()),
+            TuiEditorAction::PasteText("zzz".to_string()),
         );
         let lines = render_lines(&app, &selector, 60);
         assert!(lines.iter().any(|line| line.contains("Search:")));
