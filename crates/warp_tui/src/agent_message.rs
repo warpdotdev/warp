@@ -94,28 +94,35 @@ fn message_presentation(
     let sender = participant
         .conversation_id
         .and_then(|conversation_id| history.conversation(&conversation_id));
-    let name = participant.display_name;
     let status = sender
         .map(|conversation| conversation.status().clone())
         .unwrap_or(ConversationStatus::InProgress);
     let fallback_identity_index = (!palette.is_empty()).then(|| {
         usize::try_from(stable_hash(sender_agent_id) % palette.len() as u64).unwrap_or_default()
     });
-    let identity = match participant.kind {
-        OrchestrationParticipantKind::Orchestrator => AgentIdentity::default(),
-        OrchestrationParticipantKind::Agent => participant
-            .conversation_id
-            .and_then(|conversation_id| {
-                child_identity_index(history, conversation_id, palette.len())
-            })
-            .or(fallback_identity_index)
-            .and_then(|index| palette.get(index))
-            .cloned()
-            .unwrap_or_default(),
-        OrchestrationParticipantKind::Unknown => fallback_identity_index
-            .and_then(|index| palette.get(index))
-            .cloned()
-            .unwrap_or_default(),
+    let (name, identity) = match participant.kind {
+        OrchestrationParticipantKind::Orchestrator => {
+            ("Orchestrator".to_owned(), AgentIdentity::default())
+        }
+        OrchestrationParticipantKind::Agent { name } => (
+            name,
+            participant
+                .conversation_id
+                .and_then(|conversation_id| {
+                    child_identity_index(history, conversation_id, palette.len())
+                })
+                .or(fallback_identity_index)
+                .and_then(|index| palette.get(index))
+                .cloned()
+                .unwrap_or_default(),
+        ),
+        OrchestrationParticipantKind::Unknown => (
+            "Unknown agent".to_owned(),
+            fallback_identity_index
+                .and_then(|index| palette.get(index))
+                .cloned()
+                .unwrap_or_default(),
+        ),
     };
     AgentMessagePresentation {
         name,
