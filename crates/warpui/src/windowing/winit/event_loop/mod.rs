@@ -1638,9 +1638,7 @@ impl EventLoop {
                         match winit_window.drag_window() {
                             Ok(_) => window_state.current_mouse_button_pressed = None,
                             Err(err) => {
-                                report_error!(
-                                    anyhow::Error::new(err).context("error dragging window")
-                                )
+                                log::warn!("error dragging window: {err:#}")
                             }
                         }
                     }
@@ -1873,9 +1871,7 @@ impl EventLoop {
         let on_input = Box::new(move |input: SoftKeyboardInput| {
             log::debug!("Soft keyboard callback received input: {:?}", input);
             if let Err(e) = proxy.send_event(CustomEvent::SoftKeyboardInput(input)) {
-                report_error!(
-                    anyhow::anyhow!("{e:?}").context("Failed to send SoftKeyboardInput event")
-                );
+                log::warn!("Failed to send SoftKeyboardInput event: {e:?}");
             }
         });
 
@@ -1885,8 +1881,7 @@ impl EventLoop {
                 self.soft_keyboard_manager = Some(manager);
             }
             Err(err) => {
-                report_error!(anyhow::anyhow!("{err:?}")
-                    .context("Failed to initialize soft keyboard manager"));
+                log::warn!("Failed to initialize soft keyboard manager: {err:?}");
             }
         }
     }

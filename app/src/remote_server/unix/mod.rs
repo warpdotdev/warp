@@ -53,7 +53,7 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
 
     if let Some(parent) = socket_path.parent() {
         if let Err(e) = proxy::ensure_private_daemon_dir(parent) {
-            report_error!(e.context("Failed to create daemon directory"));
+            log::warn!("Failed to create daemon directory: {e:#}");
             return;
         }
     }
@@ -64,7 +64,7 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
     let listener = match std::os::unix::net::UnixListener::bind(&socket_path) {
         Ok(l) => l,
         Err(e) => {
-            report_error!(anyhow::Error::new(e).context("Daemon: failed to bind socket"));
+            log::warn!("Daemon: failed to bind socket: {e:#}");
             return;
         }
     };
@@ -105,7 +105,7 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
             let listener = match async_io::Async::new(listener) {
                 Ok(l) => l,
                 Err(e) => {
-                    report_error!(anyhow::Error::new(e).context("Daemon: async listener error"));
+                    log::warn!("Daemon: async listener error: {e:#}");
                     return;
                 }
             };
@@ -124,7 +124,7 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
                             ))
                             .detach();
                     }
-                    Err(e) => report_error!(anyhow::Error::new(e).context("Daemon: accept error")),
+                    Err(e) => log::warn!("Daemon: accept error: {e:#}"),
                 }
             }
         })

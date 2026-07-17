@@ -3,7 +3,6 @@ use std::sync::LazyLock;
 use ipc::ServerBuilder;
 use parking_lot::Mutex;
 use warp_core::channel::ChannelState;
-use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use windows::core::Error;
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
@@ -67,9 +66,7 @@ fn try_create_mutex() -> Result<Option<MutexHandle>, Error> {
     let already_exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
     handle
         .inspect_err(|err| {
-            report_error!(
-                anyhow::anyhow!("{err:#}").context("Failed to create single-instance mutex")
-            );
+            log::warn!("Failed to create single-instance mutex: {err:#}");
         })
         .map(|handle| {
             if already_exists {
@@ -119,9 +116,7 @@ impl SingleInstanceManager {
                 server
             }
             Err(err) => {
-                report_error!(
-                    anyhow::anyhow!("{err:#}").context("Failed to initialize UriService Server")
-                );
+                log::warn!("Failed to initialize UriService Server: {err:#}");
                 // If we failed to create a server, we can't receive URI requests so we drop the
                 // lock.
                 *SOLE_INSTANCE_MUTEX.lock() = Ok(None);

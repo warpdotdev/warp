@@ -77,7 +77,7 @@ impl SecureStorage {
                 {
                     Ok(collection) => Some(collection),
                     Err(err) => {
-                        report_error!(err);
+                        log::warn!("{err:#}");
                         None
                     }
                 }

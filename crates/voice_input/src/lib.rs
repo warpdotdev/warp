@@ -160,7 +160,7 @@ impl VoiceInput {
             .default_input_config()
             .context("Failed to get default input config")
             .map_err(|e| {
-                report_error!(&e);
+                log::warn!("{e:#}");
                 StartListeningError::Other(e)
             })?;
 
@@ -236,9 +236,7 @@ impl VoiceInput {
                         log::debug!("Error in voice input stream (suppressed repeat): {err}");
                     } else {
                         has_logged_stream_error = true;
-                        report_error!(
-                            anyhow::Error::new(err).context("Error in voice input stream")
-                        );
+                        log::warn!("Error in voice input stream: {err:#}");
                     }
                 },
                 Some(STREAM_TIMEOUT),
@@ -388,7 +386,7 @@ impl VoiceInput {
             async move {
                 if let Err(e) = Self::resample_audio_frame(resampler, resampled, input_buffer).await
                 {
-                    report_error!(e.context("Failed to resample audio frame"));
+                    log::debug!("Failed to resample audio frame: {e:#}");
                 }
             },
             |_, _, _| {},

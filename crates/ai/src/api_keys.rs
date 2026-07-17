@@ -559,8 +559,7 @@ impl ApiKeyManager {
             Ok(json) => json,
             Err(e) => {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Failed to read API keys from secure storage"));
+                    log::warn!("Failed to read API keys from secure storage: {e:#}");
                 }
                 return ApiKeys::default();
             }
@@ -597,9 +596,7 @@ impl ApiKeyManager {
                 return;
             }
             if let Err(e) = ctx.secure_storage().write_value(SECURE_STORAGE_KEY, &json) {
-                report_error!(
-                    anyhow::Error::new(e).context("Failed to write API keys to secure storage")
-                );
+                log::warn!("Failed to write API keys to secure storage: {e:#}");
             }
         });
     }
@@ -609,8 +606,7 @@ impl ApiKeyManager {
             Ok(json) => json,
             Err(e) => {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Failed to read Grok tokens from secure storage"));
+                    log::warn!("Failed to read Grok tokens from secure storage: {e:#}");
                 }
                 return None;
             }
@@ -654,8 +650,7 @@ impl ApiKeyManager {
             };
             if let Err(e) = result {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Failed to persist Grok tokens to secure storage"));
+                    log::warn!("Failed to persist Grok tokens to secure storage: {e:#}");
                 }
             }
         });

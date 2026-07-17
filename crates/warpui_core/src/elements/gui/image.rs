@@ -348,7 +348,7 @@ impl Image {
                 }
             }
             Err(e) => {
-                report_error!(e);
+                log::warn!("{e:#}");
             }
         }
     }

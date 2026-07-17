@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use enclose::enclose;
 use pathfinder_geometry::vector::Vector2F;
 use vec1::Vec1;
-use warp_errors::report_error;
 use warpui::accessibility::AccessibilityContent;
 use warpui::elements::{
     resizable_state_handle, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
@@ -214,7 +213,7 @@ impl Voltron {
         {
             Some(handle) => handle,
             None => {
-                report_error!("Couldn't retrieve voltron resizable state handle.");
+                log::warn!("Couldn't retrieve voltron resizable state handle.");
                 resizable_state_handle(DEFAULT_VOLTRON_WIDTH)
             }
         };

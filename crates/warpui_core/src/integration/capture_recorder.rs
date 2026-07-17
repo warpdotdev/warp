@@ -5,8 +5,6 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context as _;
 use image::ImageEncoder;
 use instant::Instant;
-#[cfg(feature = "integration_tests")]
-use warp_errors::report_error;
 
 use crate::platform::CapturedFrame;
 
@@ -321,7 +319,7 @@ cfg_if::cfg_if! {
             {
                 Ok(e) => e,
                 Err(e) => {
-                    report_error!(e);
+                    log::warn!("{e:#}");
                     if let Ok(mut s) = inner.lock() {
                         s.encoding_in_progress = false;
                     }
@@ -362,7 +360,7 @@ cfg_if::cfg_if! {
                             batch_encoded += 1;
                         }
                         Err(e) => {
-                            report_error!(e);
+                            log::warn!("{e:#}");
                             break;
                         }
                     }

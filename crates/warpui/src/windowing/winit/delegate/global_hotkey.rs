@@ -7,7 +7,6 @@ use std::thread;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use parking_lot::Mutex;
-use warp_errors::report_error;
 use winit::event_loop::EventLoopProxy;
 
 use crate::keymap;
@@ -37,7 +36,7 @@ impl GlobalHotKeyHandler {
         let hotkey = match hotkey_for_keystroke(&shortcut) {
             Ok(hotkey) => hotkey,
             Err(e) => {
-                report_error!(e.context("invalid global hotkey"));
+                log::warn!("invalid global hotkey: {e:#}");
                 return;
             }
         };
@@ -49,7 +48,7 @@ impl GlobalHotKeyHandler {
         let hotkey = match hotkey_for_keystroke(shortcut) {
             Ok(hotkey) => hotkey,
             Err(e) => {
-                report_error!(e.context("invalid global hotkey"));
+                log::warn!("invalid global hotkey: {e:#}");
                 return;
             }
         };

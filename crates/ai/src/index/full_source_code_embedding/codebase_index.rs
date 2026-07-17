@@ -14,7 +14,6 @@ use instant::Instant;
 use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy};
 use repo_metadata::Repository;
 use warp_core::safe_error;
-use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext, ModelHandle};
 
 use super::fragment_metadata::{
@@ -828,7 +827,7 @@ impl CodebaseIndex {
                             ctx,
                         ),
                         Err(e) => {
-                            report_error!(anyhow::anyhow!("{e}").context("Failed to build tree"));
+                            log::warn!("Failed to build tree: {e:#}");
                             send_telemetry_from_ctx!(
                                 AITelemetryEvent::BuildTreeFailed {
                                     error: e.to_string(),
@@ -1510,9 +1509,9 @@ impl CodebaseIndex {
     ) {
         match relevant_fragments_result {
             Err(err) => {
-                report_error!(
-                    "Failed to retrieve relevant fragment",
-                    extra: { "root" => ?self.last_server_synced_root_node() }
+                log::warn!(
+                    "Failed to retrieve relevant fragment root={:?}",
+                    self.last_server_synced_root_node()
                 );
                 ctx.emit(CodebaseIndexEvent::RetrievalRequestFailed {
                     retrieval_id,
@@ -1893,15 +1892,14 @@ impl CodebaseIndex {
                             },
                             ctx
                         );
-                        report_error!(anyhow::anyhow!("{err:?}")
-                            .context("Failed to diff filesystem with tree from snapshot"));
+                        log::warn!("Failed to diff filesystem with tree from snapshot: {err:?}");
                         me.update_tree_sync_state(
                             TreeSourceSyncState::InitializeTreeFailure(err),
                             ctx,
                         );
                     }
                     Err(SnapshotLoadError::ParseFailed(e)) => {
-                        report_error!(e.context("Failed to parse snapshot"));
+                        log::warn!("Failed to parse snapshot: {e:#}");
                         me.update_tree_sync_state(
                             TreeSourceSyncState::InitializeTreeFailure(
                                 Error::SnapshotParsingFailed,

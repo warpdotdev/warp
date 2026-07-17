@@ -8,7 +8,6 @@ use objc2_app_kit::NSWorkspace;
 use objc2_foundation::{NSBundle, NSString, NSURL};
 use warp_core::channel::ChannelState;
 use warp_core::AppId;
-use warp_errors::report_error;
 use warpui::ApplicationBundleInfo;
 
 use super::*;
@@ -280,9 +279,7 @@ impl<'a> Editor {
                                 );
                             }
                             Err(err) => {
-                                report_error!(
-                                    anyhow::Error::new(err).context("unable to await process")
-                                );
+                                log::warn!("unable to await process: {err:#}");
                             }
                         };
                     })
@@ -291,10 +288,7 @@ impl<'a> Editor {
                 true
             }
             Err(e) => {
-                report_error!(
-                    anyhow::Error::new(e).context("Error launching editor"),
-                    extra: { "editor" => ?self }
-                );
+                log::warn!("Error launching editor editor={self:?}: {e:#}");
                 false
             }
         }

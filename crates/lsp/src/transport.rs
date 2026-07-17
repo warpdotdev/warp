@@ -8,7 +8,6 @@ use futures::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWr
 use futures::lock::Mutex;
 use jsonrpc::Transport;
 use simple_logger::SimpleLogger;
-use warp_errors::report_error;
 use warpui_core::r#async::executor::{Background, BackgroundTask};
 use warpui_core::r#async::Timer;
 
@@ -78,11 +77,7 @@ impl ProcessTransport {
                         if let Some(ref logger) = logger {
                             logger.log(format!("[error] Error reading stderr: {e}"));
                         }
-                        report_error!(
-                            anyhow::Error::new(e)
-                                .context("ProcessTransport: Error reading stderr"),
-                            extra: { "pid" => %child_pid }
-                        );
+                        log::warn!("ProcessTransport: Error reading stderr: {e:#} pid={child_pid}");
                         break;
                     }
                 }

@@ -9,7 +9,6 @@ use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
-use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::elements::{
     resizable_state_handle, Align, AnchorPair, Border, ConstrainedBox, Container, CornerRadius,
@@ -190,7 +189,7 @@ impl CommandSearchView {
             .as_ref(ctx)
             .get_handle(ctx.window_id(), ModalType::UniversalSearchWidth)
             .unwrap_or_else(|| {
-                report_error!("Couldn't retrieve universal search resizable state handle.");
+                log::warn!("Couldn't retrieve universal search resizable state handle.");
                 resizable_state_handle(DEFAULT_UNIVERSAL_SEARCH_WIDTH)
             });
 

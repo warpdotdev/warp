@@ -10,7 +10,6 @@ use objc2::rc::{autoreleasepool, Retained};
 use objc2::{msg_send, AnyThread, MainThreadMarker};
 use objc2_app_kit::{NSAlert, NSApplication, NSImage, NSRunningApplication};
 use objc2_foundation::{NSArray, NSData, NSString, NSUInteger, NSURL};
-use warp_errors::report_error;
 use warpui_core::assets::AssetProvider;
 use warpui_core::integration::TestDriver;
 use warpui_core::keymap::{Keystroke, Trigger};
@@ -540,9 +539,7 @@ extern "C-unwind" fn warp_app_open_files(this: &mut Object, paths: id) {
                 match CStr::from_ptr(path.UTF8String()).to_str() {
                     Ok(string) => Some(PathBuf::from(string)),
                     Err(err) => {
-                        report_error!(
-                            anyhow::Error::new(err).context("error converting path to string")
-                        );
+                        log::warn!("error converting path to string: {err:#}");
                         None
                     }
                 }
@@ -564,9 +561,7 @@ extern "C-unwind" fn warp_app_open_urls(this: &mut Object, urls: id) {
                 match CStr::from_ptr(url.UTF8String()).to_str() {
                     Ok(string) => Some(string.to_string()),
                     Err(err) => {
-                        report_error!(
-                            anyhow::Error::new(err).context("error converting url to string")
-                        );
+                        log::warn!("error converting url to string: {err:#}");
                         None
                     }
                 }

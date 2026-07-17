@@ -17,7 +17,6 @@ use notify_debouncer_full::{
     new_debouncer_opt, DebounceEventHandler, DebounceEventResult, DebouncedEvent, Debouncer,
     NoCache,
 };
-use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext};
 
 #[derive(Debug)]
@@ -158,15 +157,15 @@ impl BulkFilesystemWatcher {
                         // `unregister_path` calls will get `SendError` and
                         // log a warning — the app continues without file
                         // watching.
-                        report_error!(e.context(
-                            "Failed to create filesystem watcher, file watching will be disabled"
-                        ));
+                        log::warn!(
+                            "Failed to create filesystem watcher, file watching will be disabled: {e:#}"
+                        );
                     }
                 }
             })
             .context("Failed to spawn thread for background file watcher")
         {
-            report_error!(e);
+            log::warn!("{e:#}");
         }
         ctx.spawn_stream_local(rx, Self::handle_watcher_event, |_, _| {});
 

@@ -1,6 +1,5 @@
 use std::io;
 
-use warp_errors::report_error;
 use windows_registry::{Key, CURRENT_USER};
 use windows_result::HRESULT;
 
@@ -26,10 +25,7 @@ impl RegistryBackedPreferences {
     /// Gets Warp's registry key, creating it if it does not already exist.
     fn get_warp_registry(&self) -> Result<Key, super::Error> {
         CURRENT_USER.create(self.app_key_path.clone()).map_err(|e| {
-            report_error!(
-                "unable to access Warp app key in Windows Registry",
-                extra: { "error" => %e }
-            );
+            log::warn!("unable to access Warp app key in Windows Registry error={e}");
             super::Error::IoError(io::Error::from(e))
         })
     }

@@ -177,10 +177,9 @@ async fn persist_bytes(bytes: &Bytes, file: &Path) {
     use anyhow::Context;
     use async_fs::{OpenOptions, create_dir_all};
     use futures::AsyncWriteExt;
-    use warp_errors::report_error;
 
     let Some(parent_folder) = file.parent() else {
-        report_error!("attempted to write cache file in filesystem root");
+        log::warn!("attempted to write cache file in filesystem root");
         return;
     };
 
@@ -188,7 +187,7 @@ async fn persist_bytes(bytes: &Bytes, file: &Path) {
         .await
         .context("Error creating directory for cache files")
     {
-        report_error!(e);
+        log::warn!("{e:#}");
     }
 
     let mut file = match OpenOptions::new()
@@ -201,17 +200,17 @@ async fn persist_bytes(bytes: &Bytes, file: &Path) {
     {
         Ok(file) => file,
         Err(e) => {
-            report_error!(e);
+            log::warn!("{e:#}");
             return;
         }
     };
 
     if let Err(e) = file.write_all(bytes).await.context("Error writing to file") {
-        report_error!(e);
+        log::warn!("{e:#}");
     }
 
     if let Err(e) = file.flush().await.context("Error flushing file") {
-        report_error!(e);
+        log::warn!("{e:#}");
     };
 }
 

@@ -19,7 +19,6 @@ use nix::errno::Errno;
 use nix::unistd::{fchown, getgid, getuid};
 use warp_core::macos::get_bundle_path;
 use warp_core::safe_error;
-use warp_errors::report_error;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::{release_assets_directory_url, DownloadReady};
@@ -503,7 +502,7 @@ impl Drop for StagedBundle {
         if self.in_app_directory {
             log::info!("Removing temporary app bundle");
             if let Err(err) = fs::remove_dir_all(&self.path) {
-                report_error!(anyhow::Error::new(err).context("Failed to remove temporary bundle"));
+                log::warn!("Failed to remove temporary bundle: {err:#}");
             }
         }
     }
@@ -544,8 +543,7 @@ async fn download_and_extract_binary(
     // Unmount the dmg once we no longer need it. This prevents lingering images from unapplied
     // updates.
     if let Err(err) = unmount_dmg(mountpoint).await {
-        let err = err.context("Error unmounting dmg for update");
-        warp_errors::report_error!(&err);
+        log::warn!("Error unmounting dmg for update: {err:#}");
     }
 
     // Ensure that the new app we just downloaded has both integrity (e.g. no corrupted files)

@@ -8,7 +8,6 @@ use futures::lock::Mutex as AsyncMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::Value;
-use warp_errors::report_error;
 use warpui_core::r#async::executor::Background;
 
 use crate::transport::Transport;
@@ -114,7 +113,7 @@ impl JsonRpcService {
                 )
                 .await
                 {
-                    report_error!(e.context("JSON-RPC read loop error"));
+                    log::warn!("JSON-RPC read loop error: {e:#}");
                 }
             })
             .detach();
@@ -292,7 +291,7 @@ impl JsonRpcService {
                 method: method.to_string(),
                 params,
             }) {
-                report_error!(anyhow::Error::new(e).context("Failed to send notification"));
+                log::warn!("Failed to send notification: {e:#}");
             }
         }
     }
@@ -351,7 +350,7 @@ impl JsonRpcService {
         let transport = self.transport.clone();
         let future = async move {
             if let Err(e) = transport.write(&content).await {
-                report_error!(e.context("Failed to send notification"));
+                log::warn!("Failed to send notification: {e:#}");
             };
         };
 

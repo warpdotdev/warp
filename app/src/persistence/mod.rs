@@ -238,9 +238,7 @@ impl PersistenceWriter {
                 return;
             };
             if let Err(err) = sender.send(ModelEvent::Terminate) {
-                report_error!(
-                    anyhow::Error::new(err).context("Could not terminate SQLite writer thread")
-                );
+                log::warn!("Could not terminate SQLite writer thread: {err:#}");
             }
             if handle.join().is_err() {
                 // If crash reporting is enabled, Sentry will have already handled the panic.

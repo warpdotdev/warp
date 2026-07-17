@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use futures_util::FutureExt as _;
 use itertools::Itertools as _;
-use warp_errors::{report_error, report_if_error};
+use warp_errors::report_if_error;
 use warpui::r#async::executor::BackgroundTask;
 use warpui::{AppContext, SingletonEntity};
 use zbus::{interface, proxy, zvariant};
@@ -203,8 +203,9 @@ impl DBusServiceHost {
             }
             .map(|result: anyhow::Result<()>| {
                 if let Err(err) = result {
-                    report_error!(err
-                        .context("Failed to initialize org.freedesktop.Application D-Bus service"));
+                    log::warn!(
+                        "Failed to initialize org.freedesktop.Application D-Bus service: {err:#}"
+                    );
                 }
             }),
         );
