@@ -1575,9 +1575,8 @@ fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_
 
 #[test]
 fn cloud_mode_host_selector_shown_when_connected_workers_present() {
-    // Regression: the cloud-mode Execution host dropdown was gated on a workspace default host
-    // being configured, so connected self-hosted workers alone never surfaced it. It must appear
-    // once a self-hosted worker is connected, even with no default host set.
+    // Regression: connected self-hosted workers must surface the host dropdown even
+    // with no default host set.
     App::test((), |mut app| async move {
         let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
         initialize_app(&mut app);

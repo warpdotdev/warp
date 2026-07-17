@@ -116,9 +116,7 @@ impl ConnectedSelfHostedWorkersModel {
 
 #[cfg(test)]
 impl ConnectedSelfHostedWorkersModel {
-    /// Test hook: sets the connected worker list and emits `Changed`, mirroring a
-    /// server refresh, so tests can drive host-selector visibility without a live
-    /// `list_connected_self_hosted_workers` call.
+    /// Test hook: set the connected workers and emit `Changed`.
     pub fn set_workers_for_test(&mut self, worker_hosts: &[&str], ctx: &mut ModelContext<Self>) {
         self.workers = worker_hosts
             .iter()

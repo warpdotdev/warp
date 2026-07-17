@@ -570,11 +570,8 @@ impl Input {
         Some(ChildView::new(view).finish())
     }
 
-    /// Whether the cloud-mode *Execution host* dropdown should render in the top
-    /// row. It appears when a default host is configured OR when at least one
-    /// self-hosted worker is connected — so users with connected workers can pick
-    /// one even without a workspace default host set. Composer-only: a viewer of
-    /// an existing run has no host selector, so this returns `false` for it.
+    /// Whether to show the Execution host dropdown: a default host is set or a
+    /// self-hosted worker is connected. Composer-only.
     pub(super) fn should_show_host_selector(&self, app: &AppContext) -> bool {
         let Some(host_selector) = self.host_selector() else {
             return false;
@@ -591,8 +588,6 @@ impl Input {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(CLOUD_MODE_V2_TOP_ROW_INNER_GAP);
 
-        // Show the host selector when a default host is configured or when at least
-        // one self-hosted worker is connected (see `should_show_host_selector`).
         if self.should_show_host_selector(app) {
             if let Some(host) = self.host_selector() {
                 row.add_child(ChildView::new(host).finish());

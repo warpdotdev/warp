@@ -325,9 +325,7 @@ fn build_menu_items(
     connected_hosts.sort();
     connected_hosts.dedup();
     for host in &connected_hosts {
-        // No badge: every self-hosted host listed here is connected (they appear
-        // precisely because they're connected), so a "Connected" badge would be
-        // redundant. Only the default and disconnected states are badged.
+        // No badge: these are all connected, so a "Connected" badge is redundant.
         items.push(item_for(Host::SelfHosted { slug: host.clone() }, None));
     }
     if let Host::SelfHosted { slug } = selected {

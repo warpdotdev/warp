@@ -2466,11 +2466,8 @@ impl Input {
                 self.menu_positioning_provider.clone(),
                 ctx,
             );
-            // The host selector's top-row visibility depends on whether any
-            // self-hosted worker is connected (see `should_show_host_selector`),
-            // and the selector isn't mounted while hidden, so its own
-            // subscription can't drive the composer's re-render. Re-render when the
-            // connected-workers list changes so the dropdown appears/disappears.
+            // Re-render when connected workers change so the host selector shows/hides
+            // (it isn't mounted while hidden to drive this itself).
             ctx.subscribe_to_model(
                 &ConnectedSelfHostedWorkersModel::handle(ctx),
                 |_me, _, event, ctx| {
