@@ -6,6 +6,7 @@ use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::OrchestrationConfigStatus;
 use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
@@ -540,24 +541,7 @@ impl OrchestrationConfigBlockView {
         env_handle.update(ctx, |d, c| d.set_use_overlay_layer(true, c));
         self.pickers.environment_picker = Some(env_handle);
 
-        let initial_runner = match &self
-            .orchestration_edit_state
-            .orchestration_config_state
-            .execution_mode
-        {
-            RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
-            RunAgentsExecutionMode::Local => String::new(),
-        };
-        let runner_handle = oc::create_runner_picker(
-            &initial_runner,
-            &self.runners,
-            self.runners_loading,
-            &styles,
-            ctx,
-        );
-        runner_handle.update(ctx, |d, c| d.set_use_overlay_layer(true, c));
-        self.pickers.runner_picker = Some(runner_handle);
-        self.fetch_runners(ctx);
+        self.ensure_runner_picker(ctx);
 
         let initial_host = match &self
             .orchestration_edit_state
@@ -670,6 +654,48 @@ impl OrchestrationConfigBlockView {
         AIDocumentModel::handle(ctx).update(ctx, |model, ctx| {
             model.set_orchestration_config_for_plan(conversation_id, plan_id, config, status, ctx);
         });
+    }
+
+    /// Builds the Runner picker and kicks off the `getRunners` fetch, but
+    /// only when the `CloudAgentRunners` feature is enabled and the config
+    /// is in remote mode — otherwise the Runner control is not rendered, so
+    /// there is no reason to create the picker or hit `getRunners`.
+    /// Idempotent, and re-invoked on the Local→Cloud toggle.
+    fn ensure_runner_picker(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::CloudAgentRunners.is_enabled() {
+            return;
+        }
+        if !self
+            .orchestration_edit_state
+            .orchestration_config_state
+            .execution_mode
+            .is_remote()
+        {
+            return;
+        }
+        if self.pickers.runner_picker.is_some() {
+            return;
+        }
+        let appearance = Appearance::as_ref(ctx);
+        let (styles, _colors) = oc::picker_styles(appearance);
+        let initial_runner = match &self
+            .orchestration_edit_state
+            .orchestration_config_state
+            .execution_mode
+        {
+            RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
+            RunAgentsExecutionMode::Local => String::new(),
+        };
+        let runner_handle = oc::create_runner_picker(
+            &initial_runner,
+            &self.runners,
+            self.runners_loading,
+            &styles,
+            ctx,
+        );
+        runner_handle.update(ctx, |d, c| d.set_use_overlay_layer(true, c));
+        self.pickers.runner_picker = Some(runner_handle);
+        self.fetch_runners(ctx);
     }
 
     /// Fetches available runners via `getRunners` and repopulates the
@@ -974,6 +1000,10 @@ impl TypedActionView for OrchestrationConfigBlockView {
                     fallback,
                     ctx,
                 );
+                // Switching to Cloud reveals the Runner control (when the
+                // flag is on); build + fetch it lazily so Local configs
+                // never hit `getRunners`.
+                self.ensure_runner_picker(ctx);
                 self.apply_field_change(ctx);
                 // Local → Cloud can newly reveal the auth picker.
                 self.user_has_interacted = true;

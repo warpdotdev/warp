@@ -10,6 +10,7 @@ use ai::agent::action_result::{RunAgentsAgentOutcomeKind, RunAgentsResult};
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::skills::SkillReference;
 use pathfinder_geometry::vector::vec2f;
+use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warpui::elements::{
@@ -933,30 +934,7 @@ impl RunAgentsCardView {
             self.handles.pickers.environment_picker = Some(handle);
         }
 
-        let state = &self.orchestration_edit_state.orchestration_config_state;
-        if self.handles.pickers.runner_picker.is_none() {
-            let initial_runner = match &state.execution_mode {
-                RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
-                RunAgentsExecutionMode::Local => String::new(),
-            };
-            let handle = oc::create_runner_picker(
-                &initial_runner,
-                &self.runners,
-                self.runners_loading,
-                &styles,
-                ctx,
-            );
-            handle.update(ctx, |d, _| {
-                d.set_orientation(FilterableDropdownOrientation::Up)
-            });
-            ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
-                if let FilterableDropdownEvent::Close = event {
-                    me.refocus_after_picker_close(ctx);
-                }
-            });
-            self.handles.pickers.runner_picker = Some(handle);
-            self.fetch_runners(ctx);
-        }
+        self.ensure_runner_picker(ctx);
 
         let state = &self.orchestration_edit_state.orchestration_config_state;
         if self.handles.pickers.host_picker.is_none() {
@@ -1032,6 +1010,56 @@ impl RunAgentsCardView {
         }
 
         self.sync_picker_selections(ctx);
+    }
+
+    /// Builds the Runner picker and kicks off the `getRunners` fetch, but
+    /// only when the `CloudAgentRunners` feature is enabled and the card is
+    /// in remote mode — otherwise the Runner control is not rendered, so
+    /// there is no reason to create the picker or hit `getRunners`.
+    /// Idempotent, and re-invoked on the Local→Cloud toggle so the picker
+    /// appears (and loads) the first time the card enters remote mode.
+    fn ensure_runner_picker(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::CloudAgentRunners.is_enabled() {
+            return;
+        }
+        if !self
+            .orchestration_edit_state
+            .orchestration_config_state
+            .execution_mode
+            .is_remote()
+        {
+            return;
+        }
+        if self.handles.pickers.runner_picker.is_some() {
+            return;
+        }
+        let appearance = Appearance::as_ref(ctx);
+        let (styles, _colors) = oc::picker_styles(appearance);
+        let initial_runner = match &self
+            .orchestration_edit_state
+            .orchestration_config_state
+            .execution_mode
+        {
+            RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
+            RunAgentsExecutionMode::Local => String::new(),
+        };
+        let handle = oc::create_runner_picker(
+            &initial_runner,
+            &self.runners,
+            self.runners_loading,
+            &styles,
+            ctx,
+        );
+        handle.update(ctx, |d, _| {
+            d.set_orientation(FilterableDropdownOrientation::Up)
+        });
+        ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
+            if let FilterableDropdownEvent::Close = event {
+                me.refocus_after_picker_close(ctx);
+            }
+        });
+        self.handles.pickers.runner_picker = Some(handle);
+        self.fetch_runners(ctx);
     }
 
     /// Fetches available runners via `getRunners` and repopulates the
@@ -1344,6 +1372,10 @@ impl TypedActionView for RunAgentsCardView {
                     fallback,
                     ctx,
                 );
+                // Switching to Cloud reveals the Runner control (when the
+                // flag is on); build + fetch it lazily so Local cards never
+                // hit `getRunners`.
+                self.ensure_runner_picker(ctx);
                 // Mode change can newly reveal the auth picker (Local
                 // → Cloud) — give the user a fresh auto-open prompt.
                 self.has_auto_opened_create_modal = false;
