@@ -499,3 +499,56 @@ fn test_image_with_content_html_serialization() {
         assert!(html.contains("Some text"));
     });
 }
+
+/// `<kbd>` in body text serializes to a `<kbd>` element on HTML export (issue #13733).
+#[test]
+fn test_kbd_html_serialization() {
+    App::test((), |mut app| async move {
+        let markdown = "Press <kbd>Cmd</kbd> to run\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let html = app.read_model(&buffer, |buffer, ctx| {
+            let range = CharOffset::from(1)..buffer.max_charoffset();
+            buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+        });
+
+        let html = html.unwrap();
+        assert!(html.contains("<kbd>Cmd</kbd>"), "html was: {html}");
+    });
+}
+
+/// `<kbd>` inside a GFM table cell round-trips through both the Markdown and HTML export paths.
+#[test]
+fn test_kbd_in_table_cell_serialization() {
+    App::test((), |mut app| async move {
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
+        let markdown = "\
+| shortcut | action |\n\
+| --- | --- |\n\
+| <kbd>Cmd</kbd> | open palette |\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert!(
+            exported.contains("<kbd>Cmd</kbd>"),
+            "exported markdown was: {exported}"
+        );
+
+        let html = app.read_model(&buffer, |buffer, ctx| {
+            let range = CharOffset::from(1)..buffer.max_charoffset();
+            buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+        });
+        let html = html.unwrap();
+        assert!(html.contains("<kbd>Cmd</kbd>"), "html was: {html}");
+    });
+}

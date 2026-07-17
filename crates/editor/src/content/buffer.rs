@@ -6093,6 +6093,7 @@ fn text_to_formatted_fragment(text: &str, style: TextStyles) -> Vec<FormattedTex
             italic: style.is_italic(),
             underline: style.is_underlined(),
             inline_code: style.is_inline_code(),
+            kbd: style.is_kbd(),
             strikethrough: style.is_strikethrough(),
             ..Default::default()
         },
