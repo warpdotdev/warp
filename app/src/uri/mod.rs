@@ -492,7 +492,10 @@ impl UriHost {
                     let result = crate::ai::mcp::TemplatableMCPServerManager::handle(ctx)
                         .update(ctx, |manager, _ctx| manager.handle_oauth_callback(url));
                     if let Err(e) = result {
-                        log::warn!("Failed to handle MCP OAuth callback: {e:#}");
+                        warp_core::safe_warn!(
+                            safe: ("Failed to handle MCP OAuth callback"),
+                            full: ("Failed to handle MCP OAuth callback: {e:#}")
+                        );
                     }
                 }
             }

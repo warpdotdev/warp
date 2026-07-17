@@ -935,12 +935,18 @@ impl From<ShellLaunchData> for SessionPlatform {
 fn unescape_alias_key_value(key: &str, value: &str) -> Option<(SmolStr, String)> {
     let key = unescape_quotes(key)
         .inspect_err(|e| {
-            log::warn!("Failed to unescape alias key: {e:#}");
+            warp_core::safe_warn!(
+                safe: ("Failed to unescape alias key"),
+                full: ("Failed to unescape alias key: {e:#}")
+            );
         })
         .ok()?;
     let value = unescape_quotes(value)
         .inspect_err(|e| {
-            log::warn!("Failed to unescape alias value: {e:#}");
+            warp_core::safe_warn!(
+                safe: ("Failed to unescape alias value"),
+                full: ("Failed to unescape alias value: {e:#}")
+            );
         })
         .ok()?;
     Some((key.into(), value))

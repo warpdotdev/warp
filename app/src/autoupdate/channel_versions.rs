@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use channel_versions::ChannelVersions;
+use warp_errors::report_error;
 
 use crate::channel::{Channel, ChannelState};
 use crate::server::server_api::{ServerApi, FETCH_CHANNEL_VERSIONS_TIMEOUT};
@@ -36,7 +37,7 @@ pub async fn fetch_channel_versions(
                 // Only log an error on Dev and Preview -- if this is failing, its likely to be
                 // failing for all users, and Stable has too many users (this error would flood
                 // our Sentry logs).
-                Channel::Dev | Channel::Preview => log::warn!("{err:#}"),
+                Channel::Dev | Channel::Preview => report_error!(err),
                 _ => log::warn!(
                     "Failed to retrieve channel versions from Warp server, falling \
                 back to GCP JSON storage."

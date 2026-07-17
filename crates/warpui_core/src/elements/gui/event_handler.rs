@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 
 use pathfinder_geometry::vector::Vector2F;
+use warp_errors::{report_error, ReportErrorLogMode};
 
 use super::{
     AfterLayoutContext, AppContext, DispatchEventResult, Element, Event, EventContext,
@@ -250,9 +251,10 @@ impl Element for EventHandler {
         }
 
         let Some(z_index) = self.child_max_z_index else {
-            log::warn!(
-                "Dispatching event on EventHandler element which was never painted event={:?}",
-                EventDiscriminants::from(event.raw_event())
+            report_error!(
+                "Dispatching event on EventHandler element which was never painted",
+                extra: { "event" => ?EventDiscriminants::from(event.raw_event()) },
+                ReportErrorLogMode::OncePerRun
             );
             return false;
         };

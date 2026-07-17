@@ -37,7 +37,10 @@ pub fn console(ctx: Ctx<'_>) -> rquickjs::Result<Object<'_>> {
     console.set(
         "err",
         Function::new(ctx, |message: String| {
-            log::warn!("Plugin JS console error message={message}");
+            warp_core::safe_warn!(
+                safe: ("Plugin JS console error"),
+                full: ("Plugin JS console error message={message}")
+            );
         }),
     )?;
     Ok(console)

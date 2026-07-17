@@ -1283,7 +1283,10 @@ impl CodebaseIndexManager {
             },
             |_me, (repo_path, result), ctx| {
                 if let Err(err) = result {
-                    log::warn!("Unable to write snapshot: {err:#} repo_path={repo_path:?}");
+                    safe_warn!(
+                        safe: ("Unable to write snapshot"),
+                        full: ("Unable to write snapshot: {err:#} repo_path={repo_path:?}")
+                    );
                 }
                 Self::schedule_next_snapshot_write(repo_path, ctx);
             },
