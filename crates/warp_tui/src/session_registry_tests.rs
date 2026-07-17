@@ -39,7 +39,7 @@ fn add_and_focus_drive_events() {
             )
             .0
         });
-        let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test(window_id));
+        let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
         let events = capture_events(&mut app);
 
         let (first, first_manager) = add_test_terminal_session(&mut app, window_id);

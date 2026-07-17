@@ -7,7 +7,7 @@
 use warp::tui_export::{ServerConversationToken, TerminalManagerTrait};
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
-use warpui_core::{Entity, EntityId, ModelContext, ModelHandle, ViewHandle, WindowId};
+use warpui_core::{Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
 use crate::resume::TuiExitSummaryHandle;
 use crate::terminal_session_view::TuiTerminalSessionView;
@@ -56,7 +56,6 @@ pub(crate) struct TuiSessions {
     /// drop, so the app-lifetime session singleton must retain it.
     _driver: Option<TuiDriverHandle>,
     keyboard_enhancement_supported: bool,
-    window_id: WindowId,
     exit_summary: TuiExitSummaryHandle,
     sessions: Vec<TuiSession>,
     focused_session_id: Option<TuiSessionId>,
@@ -73,7 +72,6 @@ impl TuiSessions {
     /// Creates the app's session container.
     pub(crate) fn new(
         driver: TuiDriverHandle,
-        window_id: WindowId,
         exit_summary: TuiExitSummaryHandle,
         resume_token: Option<ServerConversationToken>,
     ) -> Self {
@@ -81,7 +79,6 @@ impl TuiSessions {
         Self {
             _driver: Some(driver),
             keyboard_enhancement_supported,
-            window_id,
             exit_summary,
             sessions: Vec::new(),
             focused_session_id: None,
@@ -91,11 +88,10 @@ impl TuiSessions {
 
     /// Creates a driverless container for unit tests.
     #[cfg(test)]
-    pub(crate) fn new_for_test(window_id: WindowId) -> Self {
+    pub(crate) fn new_for_test() -> Self {
         Self {
             _driver: None,
             keyboard_enhancement_supported: false,
-            window_id,
             exit_summary: TuiExitSummaryHandle::default(),
             sessions: Vec::new(),
             focused_session_id: None,
@@ -129,10 +125,9 @@ impl TuiSessions {
         id
     }
 
-    /// Returns the window and exit-summary handle used to create session views.
-    pub(crate) fn surface_context(&self) -> (WindowId, TuiExitSummaryHandle, bool) {
+    /// Returns the process-level context used to create session views.
+    pub(crate) fn surface_context(&self) -> (TuiExitSummaryHandle, bool) {
         (
-            self.window_id,
             self.exit_summary.clone(),
             self.keyboard_enhancement_supported,
         )

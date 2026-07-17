@@ -25,7 +25,7 @@ use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
 
 use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
-use crate::session_registry::TuiSessions;
+use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
 use crate::terminal_background::probe_and_select_theme;
 use crate::terminal_session_view::{
@@ -122,11 +122,13 @@ fn init(
     );
     match spawn_tui_driver(ctx, window_id, root.clone()) {
         Ok(driver) => {
-            let sessions = ctx.add_singleton_model(|_| {
-                TuiSessions::new(driver, window_id, exit_summary, resume_token)
-            });
+            let sessions =
+                ctx.add_singleton_model(|_| TuiSessions::new(driver, exit_summary, resume_token));
             root.update(ctx, |_, ctx| {
-                ctx.subscribe_to_model(&sessions, |_, _, _, ctx| ctx.notify());
+                ctx.subscribe_to_model(&sessions, |_, _, event, ctx| match event {
+                    TuiSessionsEvent::SessionAdded(_) => {}
+                    TuiSessionsEvent::FocusChanged(_) => ctx.notify(),
+                });
             });
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
                 // Already authenticated at mount: create the first session now.
@@ -164,7 +166,8 @@ fn create_terminal_session_after_login(
     }
 
     let resume_token = sessions.update(ctx, |sessions, _| sessions.take_resume_token());
-    let (window_id, exit_summary, keyboard_enhancement_supported) =
+    let window_id = root.window_id(ctx);
+    let (exit_summary, keyboard_enhancement_supported) =
         sessions.read(ctx, |sessions, _| sessions.surface_context());
     let banner = ctx.add_model(|_| BannerState::default());
     let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(

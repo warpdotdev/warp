@@ -4,7 +4,7 @@ use warpui::{AddWindowOptions, UpdateModel};
 use warpui_core::{App, TuiView as _, WindowId};
 
 use super::RootTuiView;
-use crate::session_registry::TuiSessions;
+use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 
 fn add_root(app: &mut App) -> (WindowId, warpui_core::ViewHandle<RootTuiView>) {
@@ -26,9 +26,12 @@ fn root_projects_only_the_focused_retained_session_view() {
         add_test_semantic_selection(&mut app);
         app.update(crate::autoupdate::TuiAutoupdater::register);
         let (window_id, root) = add_root(&mut app);
-        let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test(window_id));
+        let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
         root.update(&mut app, |_, ctx| {
-            ctx.subscribe_to_model(&sessions, |_, _, _, ctx| ctx.notify());
+            ctx.subscribe_to_model(&sessions, |_, _, event, ctx| match event {
+                TuiSessionsEvent::SessionAdded(_) => {}
+                TuiSessionsEvent::FocusChanged(_) => ctx.notify(),
+            });
         });
         app.read(|ctx| {
             assert!(root.as_ref(ctx).child_view_ids(ctx).is_empty());
