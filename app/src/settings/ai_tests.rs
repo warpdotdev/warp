@@ -791,16 +791,29 @@ fn test_voice_input_languages_codes_and_names_are_valid_and_unique() {
     let mut seen_codes = HashSet::new();
     let mut seen_names = HashSet::new();
     for (index, (code, name)) in VOICE_INPUT_LANGUAGES.iter().enumerate() {
-        assert!(!name.is_empty(), "language name must not be empty: {code:?}");
-        assert!(seen_names.insert(*name), "duplicate language name: {name:?}");
-        assert!(seen_codes.insert(*code), "duplicate language code: {code:?}");
+        assert!(
+            !name.is_empty(),
+            "language name must not be empty: {code:?}"
+        );
+        assert!(
+            seen_names.insert(*name),
+            "duplicate language name: {name:?}"
+        );
+        assert!(
+            seen_codes.insert(*code),
+            "duplicate language code: {code:?}"
+        );
 
         if index == 0 {
             // Auto-detect sentinel: empty code, validated separately.
             continue;
         }
         // Every real language uses a two-letter lowercase ISO-639-1 code.
-        assert_eq!(code.len(), 2, "expected a 2-letter ISO-639-1 code: {code:?}");
+        assert_eq!(
+            code.len(),
+            2,
+            "expected a 2-letter ISO-639-1 code: {code:?}"
+        );
         assert!(
             code.chars().all(|c| c.is_ascii_lowercase()),
             "ISO-639-1 code must be lowercase ascii: {code:?}"
