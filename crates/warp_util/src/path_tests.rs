@@ -673,7 +673,6 @@ fn test_convert_windows_path_to_msys2() {
 
 #[test]
 fn test_file_uri_drive_path_to_windows() {
-    // Drive path with trailing components.
     assert_eq!(
         file_uri_drive_path_to_windows("/E:/CLAUDE-BASE"),
         r"E:\CLAUDE-BASE"
@@ -682,18 +681,14 @@ fn test_file_uri_drive_path_to_windows() {
         file_uri_drive_path_to_windows("/C:/Users/foo/bar"),
         r"C:\Users\foo\bar"
     );
-    // Drive root (trailing slash) and bare drive.
     assert_eq!(file_uri_drive_path_to_windows("/E:/"), r"E:\");
     assert_eq!(file_uri_drive_path_to_windows("/E:"), "E:");
-    // Ordinary POSIX paths are left untouched.
     assert_eq!(
         file_uri_drive_path_to_windows("/Users/foo/bar"),
         "/Users/foo/bar"
     );
-    // Near-misses without the drive boundary are left untouched.
     assert_eq!(file_uri_drive_path_to_windows("/E/notdrive"), "/E/notdrive");
     assert_eq!(file_uri_drive_path_to_windows("/E:extra"), "/E:extra");
-    // Idempotent: a native path (no leading slash) is not rewritten.
     assert_eq!(
         file_uri_drive_path_to_windows(r"E:\CLAUDE-BASE"),
         r"E:\CLAUDE-BASE"

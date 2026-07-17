@@ -2928,7 +2928,7 @@ pub struct BlockSelectionDetails {
 /// can fire many times mid-block from chatty prompts. Once-per-block work
 /// (git-repo detection on unchanged CWDs, `block_completed_callbacks` drain)
 /// must be gated on this distinction.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum BlockMetadataUpdateSource {
     /// `Event::BlockMetadataReceived` — the shell's precmd hook fired between
     /// blocks. Run all once-per-block work.
@@ -11410,14 +11410,7 @@ impl TerminalView {
             return;
         }
 
-        // OSC 7 is terminal-controlled and can report a cwd that cannot be
-        // resolved to a usable native path (e.g. a Windows file-URI drive path
-        // that slipped through as a Unix path). Adopting it would wedge the file
-        // tree / global search on an unresolvable root and persist a bogus
-        // project path, so reject the update and keep the previous good working
-        // directory. Scoped to OSC 7 because precmd CWDs come from the shell
-        // itself and are trusted.
-        if matches!(source, BlockMetadataUpdateSource::Osc7) {
+        if source == BlockMetadataUpdateSource::Osc7 {
             if let Some(cwd) = block_metadata.current_working_directory() {
                 let resolvable = block_metadata
                     .session_id()
@@ -11526,7 +11519,7 @@ impl TerminalView {
                             // `maybe_set_pending_repo_init_path`'s project
                             // init before the actual command (e.g. `git
                             // clone`) finishes.
-                            if matches!(source, BlockMetadataUpdateSource::Precmd) {
+                            if source == BlockMetadataUpdateSource::Precmd {
                                 let callbacks =
                                     me.block_completed_callbacks.drain(..).collect_vec();
                                 for callback in callbacks {

@@ -1367,8 +1367,6 @@ fn parse_osc7_empty_payload_ignored() {
 #[cfg(windows)]
 #[test]
 fn parse_osc7_windows_drive_letter_normalized() {
-    // wezterm-style Windows OSC 7 hooks report drive paths as file-URI paths
-    // (`/E:/CLAUDE-BASE`); they must be mapped to native `E:\CLAUDE-BASE`.
     let local = crate::terminal::model::session::get_local_hostname()
         .expect("test requires a real local hostname");
     let payload = format!("\x1b]7;file://{local}/E:/CLAUDE-BASE\x07");
@@ -1391,8 +1389,6 @@ fn parse_osc7_windows_drive_letter_root() {
 #[cfg(windows)]
 #[test]
 fn parse_osc7_windows_drive_letter_percent_encoded() {
-    // Percent-decoding happens before drive normalization, so an encoded space
-    // in the path survives into the native path.
     let local = crate::terminal::model::session::get_local_hostname()
         .expect("test requires a real local hostname");
     let payload = format!("\x1b]7;file://{local}/E:/My%20Code\x07");
@@ -1404,8 +1400,6 @@ fn parse_osc7_windows_drive_letter_percent_encoded() {
 #[cfg(not(windows))]
 #[test]
 fn parse_osc7_posix_path_not_mangled_non_windows() {
-    // On non-Windows, a leading `/X:/` is a legitimate POSIX path and must not
-    // be rewritten to a Windows drive path.
     let local = crate::terminal::model::session::get_local_hostname()
         .expect("test requires a real local hostname");
 
@@ -1420,8 +1414,6 @@ fn parse_osc7_posix_path_not_mangled_non_windows() {
 
 #[test]
 fn parse_osc7_non_drive_slash_letter_untouched() {
-    // Near-misses that lack the drive boundary (`/E/...`, `/E:extra`) are never
-    // rewritten, on any platform.
     let local = crate::terminal::model::session::get_local_hostname()
         .expect("test requires a real local hostname");
 

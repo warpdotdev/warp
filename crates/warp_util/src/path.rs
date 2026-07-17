@@ -702,22 +702,6 @@ pub fn convert_windows_path_to_msys2(windows_path: &str) -> String {
 /// Converts a `file://` URI drive path back into a Windows-native path, e.g.
 /// `/E:/CLAUDE-BASE` → `E:\CLAUDE-BASE` and `/E:/` → `E:\`.
 ///
-/// wezterm-compatible OSC 7 prompt hooks on Windows report the working directory
-/// as a file-URI path where the drive letter follows a leading slash (produced
-/// by trivially replacing `\` with `/`). This maps that hybrid form back to a
-/// usable native path.
-///
-/// A leading slash followed by an ASCII drive letter, a colon, and either the
-/// end of the string or a `/` is treated as a drive path: the leading slash is
-/// stripped and forward slashes become backslashes. Any other input — ordinary
-/// POSIX paths (`/Users/foo`), or near-misses like `/E/notdrive` and `/E:extra`
-/// that lack the drive-boundary — is returned unchanged.
-///
-/// This is pure string logic and intentionally platform-independent so it can be
-/// unit-tested everywhere; callers decide when to apply it (drive-letter
-/// rewriting only makes sense on Windows, since a leading `/X:/` is a legitimate
-/// POSIX path elsewhere).
-///
 /// # Examples
 /// ```
 /// use warp_util::path::file_uri_drive_path_to_windows;
