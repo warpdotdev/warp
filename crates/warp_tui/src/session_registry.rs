@@ -238,7 +238,6 @@ impl TuiSessions {
                     sessions.remove_session(*session_id, ctx);
                 });
             }
-            TuiOrchestrationEvent::TabBarChanged => {}
         });
     }
 

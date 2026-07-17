@@ -42,7 +42,6 @@ fn orchestration_fixture(app: &mut App) -> OrchestrationFixture {
     }
 }
 
-
 fn add_child_session(
     app: &mut App,
     fixture: &OrchestrationFixture,

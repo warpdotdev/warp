@@ -4,7 +4,7 @@ use warp::tui_export::{
     PtyIntentEvent, SizeInfo, SizeUpdate,
 };
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, UpdateModel, ViewHandle};
+use warpui::{AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, SingletonEntity, ViewHandle};
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
@@ -274,15 +274,19 @@ fn alternate_screen_clears_orchestration_tab_focus_and_bindings() {
 }
 
 #[test]
-fn background_tab_refresh_never_moves_responder_focus() {
+fn background_model_notification_never_moves_responder_focus() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (foreground, foreground_id) = add_focus_test_session(&mut app, &fixture, true);
         let (background, _) = add_focus_test_session(&mut app, &fixture, false);
 
-        background.update(&mut app, |view, ctx| {
+        background.update(&mut app, |view, _| {
             view.orchestration_tabs_focused = true;
-            view.handle_orchestration_tab_change(ctx);
+        });
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |_, ctx| {
+                ctx.notify();
+            });
         });
 
         assert_eq!(

@@ -51,7 +51,7 @@ Model operations:
 - A dynamic ordering update automatically re-anchors to the active child only when explicit paging is false.
 - Removed roots clear the active page state; removed children clamp invalid anchors through fresh snapshot resolution.
 
-Subscribe exhaustively to `BlocklistAIHistoryModel` events that can change membership, parent linkage, labels, status, recency, or pin order, and to session addition/removal. Pin mutations emit `UpdatedConversationMetadata`, so ordering and invalidation share the same history boundary. Emit a narrow `Changed` event so retained session views redraw without polling.
+Subscribe exhaustively to `BlocklistAIHistoryModel` events that can change membership, parent linkage, labels, status, recency, or pin order, and react to session removal through the registry lifecycle. Pin mutations emit `UpdatedConversationMetadata`, so ordering and invalidation share the same history boundary. Notify model observers so retained session views redraw without adding a synthetic event variant or polling.
 
 ### 3. Session switching and focus handoff
 The model owns tab selection and page state, but actual responder focus remains view-owned because only a `ViewContext` can focus a view.

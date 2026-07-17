@@ -483,7 +483,6 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::EditorCommand(command) => {
                 if matches!(*command, TuiEditorCommand::SelectUp) && self.can_focus_above(ctx) {
                     ctx.emit(TuiInputViewEvent::MoveFocusUp);
-                    ctx.notify();
                     return;
                 }
                 // Only open the conversation list from normal agent input; in

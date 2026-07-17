@@ -27,9 +27,9 @@ use warp::tui_export::{
 use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
-use crate::orchestrated_agent_identity_styling::assign_agent_identity_indices;
 use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::terminal_session_view::TuiTerminalSessionView;
+
 /// One navigable child tab in an orchestration snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TuiOrchestrationTab {
@@ -47,7 +47,6 @@ pub(crate) struct TuiOrchestrationSnapshot {
     pub(crate) page_anchor: Option<AIConversationId>,
     pub(crate) reveal_selected: bool,
 }
-
 
 /// The TUI's orchestration singleton. See the module docs.
 pub(crate) struct TuiOrchestrationModel {
@@ -72,8 +71,8 @@ pub(crate) enum TuiOrchestrationEvent {
         conversation_name: String,
     },
     RemoveChildSession(TuiSessionId),
-    TabBarChanged,
 }
+
 pub(crate) struct MaterializedLocalOzChildSession {
     pub(crate) parent_session_id: TuiSessionId,
     pub(crate) session_id: TuiSessionId,
@@ -204,14 +203,6 @@ impl TuiOrchestrationModel {
         })
     }
 
-    pub(crate) fn has_tabs(
-        &self,
-        selected_conversation_id: AIConversationId,
-        ctx: &AppContext,
-    ) -> bool {
-        self.snapshot(selected_conversation_id, ctx).is_some()
-    }
-
     /// Stores an explicitly selected secondary page without switching sessions.
     pub(crate) fn set_explicit_page(
         &mut self,
@@ -222,7 +213,7 @@ impl TuiOrchestrationModel {
         self.page_root_conversation_id = Some(root_conversation_id);
         self.page_anchor = Some(page_anchor);
         self.explicitly_paged = true;
-        self.emit_changed(ctx);
+        ctx.notify();
     }
 
     /// Focuses the retained session for a conversation and resumes automatic reveal.
@@ -249,7 +240,7 @@ impl TuiOrchestrationModel {
         TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
             sessions.focus_session(session_id, ctx);
         });
-        self.emit_changed(ctx);
+        ctx.notify();
         Some(session_id)
     }
 
@@ -261,14 +252,8 @@ impl TuiOrchestrationModel {
             self.page_anchor = None;
             self.explicitly_paged = false;
         }
-        self.emit_changed(ctx);
-    }
-
-    fn emit_changed(&self, ctx: &mut ModelContext<Self>) {
-        ctx.emit(TuiOrchestrationEvent::TabBarChanged);
         ctx.notify();
     }
-
 
     /// Routes a `CreateAgent` request the same two ways as the GUI's
     /// per-mode dispatch, with unsupported modes resolving as clean per-child
@@ -404,7 +389,7 @@ impl TuiOrchestrationModel {
 
         self.child_session_by_conversation
             .insert(conversation_id, session_id);
-        self.emit_changed(ctx);
+        ctx.notify();
     }
 
     /// Tears down the background session of a child that failed at the
@@ -479,7 +464,6 @@ impl TuiOrchestrationModel {
         }
         self.child_session_by_conversation
             .retain(|_, child_session_id| *child_session_id != session_id);
-        ctx.emit(TuiOrchestrationEvent::TabBarChanged);
         ctx.notify();
     }
 }
