@@ -13,7 +13,7 @@ use crate::{RecordingConfig, Target};
 /// Inspecting the command's args (rather than spawning it) keeps the test
 /// hermetic: no display, no ffmpeg process, no temp files.
 fn argv(config: &RecordingConfig) -> Vec<String> {
-    let mut command = new_ffmpeg_capture_command(config, 1920, 1080);
+    let command = new_ffmpeg_capture_command(config, 1920, 1080);
     command
         .as_std()
         .get_args()

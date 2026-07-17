@@ -64,9 +64,15 @@ async fn start_reports_unsupported_when_ffmpeg_absent() {
     // by pointing PATH at an empty directory; `main_display_dimensions` uses
     // CoreGraphics (not PATH), so it is unaffected. Mutates the process env, so
     // run under `cargo nextest` (process-per-test) or in isolation.
-    std::env::remove_var("WARP_MOCK_RECORDER");
+    // SAFETY: these env mutations are process-local; this test runs in process
+    // isolation under `cargo nextest`, so no other task observes them.
+    unsafe {
+        std::env::remove_var("WARP_MOCK_RECORDER");
+    }
     let saved_path = std::env::var_os("PATH");
-    std::env::set_var("PATH", "/var/empty");
+    unsafe {
+        std::env::set_var("PATH", "/var/empty");
+    }
 
     // Drive the real macOS recorder directly rather than `create_recorder()`: the
     // latter routes to the noop recorder under the `test-util` feature
@@ -81,7 +87,10 @@ async fn start_reports_unsupported_when_ffmpeg_absent() {
         .await;
 
     if let Some(path) = saved_path {
-        std::env::set_var("PATH", path);
+        // SAFETY: process-local env restore under an isolated test process.
+        unsafe {
+            std::env::set_var("PATH", path);
+        }
     }
 
     let err = result
