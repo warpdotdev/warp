@@ -15,10 +15,11 @@ use itertools::Itertools;
 use markdown_parser::{FormattedTable, FormattedText};
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentOutputMessageType,
-    AIAgentText, AIAgentTextSection, AIAgentTodo, AIBlockModel, AIConversationId, BlockId,
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryModel, MessageId, ModelEvent,
-    ModelEventDispatcher, SummarizationType, TerminalModel, TodoOperation, TodoStatus,
+    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIBlockModel,
+    AIConversationId, BlockId, BlocklistAIActionEvent, BlocklistAIActionModel,
+    BlocklistAIHistoryModel, CancellationReason, MessageId, ModelEvent, ModelEventDispatcher,
+    SummarizationType, TerminalModel, TodoOperation, TodoStatus,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -38,6 +39,7 @@ use crate::agent_block_sections::{
     render_completed_todos_section, render_fallback_tool_call_section, render_input_section,
     render_summarization_section, render_thinking_section, render_todo_list_section,
 };
+use crate::orchestration_block::{TuiOrchestrationBlock, TuiOrchestrationBlockEvent};
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::TuiCLISubagentView;
@@ -160,6 +162,7 @@ enum TuiToolCallView {
     FileEdits(ViewHandle<TuiFileEditsView>),
     Plan(ViewHandle<TuiPlanView>),
     ShellCommand(ViewHandle<TuiShellCommandView>),
+    OrchestrationBlock(ViewHandle<TuiOrchestrationBlock>),
 }
 
 impl TuiToolCallView {
@@ -169,6 +172,7 @@ impl TuiToolCallView {
             Self::FileEdits(view) => view.id(),
             Self::Plan(view) => view.id(),
             Self::ShellCommand(view) => view.id(),
+            Self::OrchestrationBlock(view) => view.id(),
         }
     }
 
@@ -178,6 +182,7 @@ impl TuiToolCallView {
             Self::FileEdits(view) => TuiChildView::new(view),
             Self::Plan(view) => TuiChildView::new(view),
             Self::ShellCommand(view) => TuiChildView::new(view),
+            Self::OrchestrationBlock(view) => TuiChildView::new(view),
         }
     }
 }
@@ -186,6 +191,9 @@ impl TuiToolCallView {
 pub(super) enum TuiAIBlockEvent {
     /// The block's cached canonical height must be remeasured.
     LayoutInvalidated,
+    /// A blocking child's focus/blocking state may have changed; the session
+    /// surface re-derives the active blocker (input replacement).
+    BlockingStateChanged,
 }
 
 /// User interactions handled by the owning agent block.
@@ -322,6 +330,7 @@ impl TuiAIBlock {
         let mut file_edit_action_ids = Vec::new();
         let mut plan_actions = Vec::new();
         let mut shell_command_actions = Vec::new();
+        let mut run_agents_actions = Vec::new();
         if let Some(output) = status.output_to_render() {
             for message in &output.get().messages {
                 if matches!(&message.message, AIAgentOutputMessageType::TodoOperation(_)) {
@@ -344,6 +353,8 @@ impl TuiAIBlock {
                     AIAgentActionType::RequestCommandOutput { .. }
                 ) {
                     shell_command_actions.push(action.clone());
+                } else if matches!(&action.action, AIAgentActionType::RunAgents(_)) {
+                    run_agents_actions.push(action.clone());
                 }
             }
         }
@@ -403,6 +414,119 @@ impl TuiAIBlock {
             self.action_views
                 .insert(action_id, TuiToolCallView::ShellCommand(view));
             ctx.notify();
+        }
+
+        // Create or update the interactive orchestration card for each
+        // streamed RunAgents tool call.
+        for action in run_agents_actions {
+            let AIAgentActionType::RunAgents(request) = &action.action else {
+                continue;
+            };
+
+            // Existing block: re-sync its edit state from the latest streamed
+            // chunk (the request may have grown since the view was created).
+            if let Some(TuiToolCallView::OrchestrationBlock(view)) =
+                self.action_views.get(&action.id)
+            {
+                let request = request.clone();
+                view.update(ctx, |view, ctx| view.update_request(&request, ctx));
+                continue;
+            }
+            // Read the active orchestration config for plan-inherited
+            // resolution from the conversation, mirroring the GUI's
+            // `ensure_run_agents_card_view`.
+            let active_config = if request.plan_id.is_empty() {
+                None
+            } else {
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&self.conversation_id)
+                    .and_then(|conversation| {
+                        conversation
+                            .orchestration_config_for_plan(&request.plan_id)
+                            .map(|(config, status)| (config.clone(), status))
+                    })
+            };
+
+            let action_id = action.id.clone();
+            let request = request.clone();
+            let card_action_model = action_model.clone();
+            let run_agents_executor = action_model.as_ref(ctx).run_agents_executor(ctx);
+            let fallback_base_model_id = self.block_model.base_model(ctx).map(|id| id.to_string());
+            let is_restored = self.block_model.is_restored();
+            let view = ctx.add_typed_action_tui_view(move |ctx| {
+                TuiOrchestrationBlock::new(
+                    action,
+                    &request,
+                    active_config,
+                    card_action_model,
+                    run_agents_executor,
+                    fallback_base_model_id,
+                    is_restored,
+                    ctx,
+                )
+            });
+
+            let action_id_for_events = action_id.clone();
+            ctx.subscribe_to_view(&view, move |me, _, event, ctx| match event {
+                TuiOrchestrationBlockEvent::RejectRequested => {
+                    me.cancel_action(&action_id_for_events, ctx);
+                }
+                TuiOrchestrationBlockEvent::BlockingStateChanged => {
+                    ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
+                    me.invalidate_layout(ctx);
+                }
+                TuiOrchestrationBlockEvent::LayoutInvalidated => me.invalidate_layout(ctx),
+            });
+            self.action_views
+                .insert(action_id, TuiToolCallView::OrchestrationBlock(view));
+            ctx.notify();
+        }
+    }
+
+    /// Cancels a pending or running action as manually cancelled — the
+    /// TUI counterpart of the GUI `AIBlock::cancel_action` reject path.
+    fn cancel_action(&self, action_id: &AIAgentActionId, ctx: &mut ViewContext<Self>) {
+        let conversation_id = self.conversation_id;
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.cancel_action_with_id(
+                conversation_id,
+                action_id,
+                CancellationReason::ManuallyCancelled,
+                ctx,
+            );
+        });
+    }
+
+    /// The front-of-queue blocking interaction owned by this block, if any:
+    /// the conversation's front pending action when it is `Blocked`, rendered
+    /// by one of this block's child views, and that view is still awaiting
+    /// confirmation. Deriving from the action queue (not transcript order)
+    /// keeps semantics identical to the GUI's `focus_subview_if_necessary`.
+    pub(super) fn active_blocking_child(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TuiOrchestrationBlock>> {
+        let action_model = self.action_model.as_ref(ctx);
+        let pending = action_model.get_pending_action(ctx)?;
+        let action_id = pending.id.clone();
+        if !self.renders_action(&action_id) {
+            return None;
+        }
+        if !matches!(
+            action_model.get_action_status(&action_id),
+            Some(AIActionStatus::Blocked)
+        ) {
+            return None;
+        }
+        match self.action_views.get(&action_id)? {
+            TuiToolCallView::OrchestrationBlock(view) => view
+                .as_ref(ctx)
+                .is_awaiting_confirmation(ctx)
+                .then(|| view.clone()),
+            // These tool views render inline and never replace the input.
+            TuiToolCallView::FileEdits(_)
+            | TuiToolCallView::Plan(_)
+            | TuiToolCallView::ShellCommand(_) => None,
         }
     }
 
@@ -600,7 +724,9 @@ impl TuiAIBlock {
         self.last_measured_width.get() != Some(width)
             || self.block_model.status(app).is_streaming()
             || self.action_views.values().any(|view| match view {
-                TuiToolCallView::FileEdits(_) | TuiToolCallView::Plan(_) => false,
+                TuiToolCallView::FileEdits(_)
+                | TuiToolCallView::Plan(_)
+                | TuiToolCallView::OrchestrationBlock(_) => false,
                 TuiToolCallView::ShellCommand(view) => {
                     view.as_ref(app).needs_continuous_height_measurement()
                 }

@@ -80,6 +80,56 @@ fn execution_mode_change_prefers_valid_fallback_over_default_model() {
 }
 
 #[test]
+fn forcing_oz_before_local_preserves_codex_model_memory() {
+    let state = OrchestrationConfigState::from_run_agents_fields(
+        Some("gpt-5"),
+        Some("codex"),
+        &remote_mode(),
+    );
+    let mut edit_state = OrchestrationEditState {
+        orchestration_config_state: state,
+        saved_model_per_harness: HashMap::from([("oz".to_string(), "auto".to_string())]),
+    };
+    let model_is_valid = |id: &str, harness: &str, _is_local: bool| match harness {
+        "oz" => id == "auto",
+        "codex" => id == "gpt-5",
+        _ => false,
+    };
+    let default_model_id = |harness: &str| match harness {
+        "oz" => Some("auto".to_string()),
+        "codex" => Some(String::new()),
+        _ => None,
+    };
+
+    edit_state.apply_harness_change_core(
+        "oz",
+        Some("auto".to_string()),
+        AuthSecretSelection::Unset,
+        &model_is_valid,
+        &default_model_id,
+    );
+    edit_state
+        .orchestration_config_state
+        .apply_execution_mode_change_core(
+            false,
+            Some("auto".to_string()),
+            None,
+            &model_is_valid,
+            &default_model_id,
+        );
+
+    assert_eq!(edit_state.orchestration_config_state.harness_type, "oz");
+    assert_eq!(edit_state.orchestration_config_state.model_id, "auto");
+    assert!(matches!(
+        edit_state.orchestration_config_state.execution_mode,
+        RunAgentsExecutionMode::Local
+    ));
+    assert_eq!(
+        edit_state.saved_model_per_harness.get("codex"),
+        Some(&"gpt-5".to_string())
+    );
+}
+#[test]
 fn harness_change_saves_and_restores_per_harness_model_memory() {
     let state = OrchestrationConfigState::from_run_agents_fields(
         Some("sonnet"),

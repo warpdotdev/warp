@@ -195,9 +195,6 @@ pub struct BootstrappedEvent {
 
 #[derive(Clone)]
 pub struct BlockCompletedEvent {
-    /// This will be None when we don't want to collect telemetry
-    /// for this block's latency.
-    pub block_latency_data: Option<BlockLatencyData>,
     pub block_type: BlockType,
     pub num_secrets_obfuscated: usize,
     pub block_index: BlockIndex,
@@ -221,13 +218,6 @@ pub struct AfterBlockCompletedEvent {
 
     /// If the completed block had an env var object associated.
     pub cloud_env_var_collection_id: Option<SyncId>,
-}
-
-#[derive(Clone)]
-pub struct BlockLatencyData {
-    pub command: &'static str,
-    /// When the block's command grid was started (i.e. when the user hit enter).
-    pub started_at: Instant,
 }
 
 #[derive(Clone, Debug)]

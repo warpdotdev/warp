@@ -434,6 +434,7 @@ fn shell_command_disclosure_invalidates_agent_block_layout() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
+                TuiAIBlockEvent::BlockingStateChanged => {}
             });
         });
 
@@ -526,6 +527,7 @@ fn plan_collapse_invalidates_agent_block_layout() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
+                TuiAIBlockEvent::BlockingStateChanged => {}
             });
         });
 
@@ -787,6 +789,7 @@ fn code_children_reconcile_across_streamed_section_boundaries() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
+                TuiAIBlockEvent::BlockingStateChanged => {}
             });
         });
 

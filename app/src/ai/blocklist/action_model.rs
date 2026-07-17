@@ -1033,7 +1033,9 @@ impl BlocklistAIActionModel {
         self.handle_action_result(conversation_id, Arc::new(action_result), None, ctx);
     }
 
-    pub(super) fn cancel_action_with_id(
+    /// Cancels a running or pending action by id with the given reason.
+    /// Public because both frontends' permission cards route Reject here.
+    pub fn cancel_action_with_id(
         &mut self,
         conversation_id: AIConversationId,
         action_id: &AIAgentActionId,

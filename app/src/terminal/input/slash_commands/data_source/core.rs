@@ -278,17 +278,17 @@ pub trait SlashCommandDataSource {
         }
     }
 
-    /// Replace the active command set. Returns whether the number of active commands changed.
-    ///
-    /// This is an imperfect heuristic, but better than re-firing unnecessarily. If it actually
-    /// matters, we can update it.
+    /// Replace the active command set. Returns whether the active commands changed.
     fn replace_active_commands(
         &mut self,
         commands: HashMap<SlashCommandId, StaticCommand>,
     ) -> bool {
-        let changed = commands.len() != self.state().active_commands_by_id.len();
-        self.state_mut().active_commands_by_id = commands;
-        changed
+        if self.state().active_commands_by_id == commands {
+            false
+        } else {
+            self.state_mut().active_commands_by_id = commands;
+            true
+        }
     }
 
     /// Availability bits derived only from state shared by both surfaces.
