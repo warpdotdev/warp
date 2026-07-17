@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use typed_path::UnixPathBuf;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::session_id::SessionId;
-use warp_errors::report_error;
 use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
 
 use crate::terminal::available_shells::AvailableShell;
@@ -189,9 +188,9 @@ impl ShellStarter {
             if #[cfg(unix)] {
                 let pw_shell_path = super::unix::resolve_current_user().map(|user| user.shell);
                 if pw_shell_path.is_none() {
-                    report_error!(
-                        "could not resolve the current user (getpwuid, getent, and /etc/passwd all failed)",
-                        extra: { "uid" => %nix::unistd::getuid().as_raw() }
+                    log::error!(
+                        "could not resolve the current user (getpwuid, getent, and /etc/passwd all failed) uid={}",
+                        nix::unistd::getuid().as_raw()
                     );
                 }
                 if let Some((resolved_pw_shell_path, shell_type)) =
@@ -588,9 +587,7 @@ impl WslShellStarter {
             &self.distribution,
         )
         .inspect_err(|err| {
-            report_error!(
-                anyhow::anyhow!("{err:#}").context("error conversion WSL home dir for host")
-            )
+            log::warn!("error conversion WSL home dir for host: {err:#}");
         })
         .ok()
     }
@@ -782,7 +779,7 @@ pub fn ssh_socket_dir() -> String {
 fn decode_wsl_path_result(result: io::Result<process::Output>) -> Option<UnixPathBuf> {
     match result {
         Err(err) => {
-            report_error!(anyhow::Error::new(err).context("error finding wsl.exe"));
+            log::error!("error finding wsl.exe: {err:#}");
             None
         }
         Ok(output) => {
@@ -803,11 +800,9 @@ fn decode_wsl_path_result(result: io::Result<process::Output>) -> Option<UnixPat
                 if wsl_err_msg.is_empty() {
                     if let Ok(inner_err_msg) = String::from_utf8(output.stderr) {
                         log::error!("Error from WSL command: {inner_err_msg}");
-                        report_error!("Error from WSL command");
                     }
                 } else {
                     log::error!("Error invoking wsl.exe: {wsl_err_msg:?}");
-                    report_error!("Error invoking wsl.exe");
                 }
                 return None;
             }

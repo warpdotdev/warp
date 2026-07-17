@@ -24,7 +24,7 @@ use signal_hook_mio::v1_0::Signals;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
-use warp_errors::{report_error, report_if_error};
+use warp_errors::report_if_error;
 use warpui::{AppContext, SingletonEntity};
 
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
@@ -703,7 +703,7 @@ impl EventedPty for Pty {
                 Ok(true) => Some(ChildEvent::Exited),
                 Ok(false) => None,
                 Err(e) => {
-                    report_error!(e.context("Error checking child process termination"));
+                    log::warn!("Error checking child process termination: {e:#}");
                     None
                 }
             }
@@ -776,7 +776,7 @@ fn spawn_docker_sandbox(
     // itself is created + attached in a single step via `sbx run` when
     // the PTY process spawns below.
     if let Err(e) = prepare_docker_sandbox(&docker_starter) {
-        report_error!(&e);
+        log::error!("Docker sandbox setup failed: {e:#}");
         return Err(Error::msg(format!("Docker sandbox setup failed: {e}")));
     }
 

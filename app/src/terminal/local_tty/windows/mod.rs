@@ -510,7 +510,7 @@ impl EventedPty for Pty {
 
     fn on_resize(&mut self, size: &crate::terminal::SizeInfo) {
         if let Err(err) = unsafe { self.conpty_api.resize(self.pty_handle, size.to_coord()) } {
-            report_error!(anyhow::Error::new(err).context("Failed to resize pseudoconsole"));
+            log::warn!("Failed to resize pseudoconsole: {err:#}");
         }
     }
 
