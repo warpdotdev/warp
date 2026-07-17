@@ -174,22 +174,31 @@ pub struct TuiTabBarView {
 }
 
 impl TuiTabBarView {
+    /// Creates an empty tab bar without fallible caller-supplied configuration.
+    pub fn empty() -> Self {
+        Self::from_valid_config(TuiTabBarConfig::new(Vec::new()), HashSet::new())
+    }
+
     /// Creates a retained view and initializes mouse state for every unique tab key.
     ///
     /// Returns an error before constructing the view when keys are duplicated
     /// or a configured label cap cannot preserve visible label content.
     pub fn new(config: TuiTabBarConfig) -> Result<Self, TuiTabBarConfigError> {
         let live_keys = validated_live_keys(&config)?;
+        Ok(Self::from_valid_config(config, live_keys))
+    }
+
+    fn from_valid_config(config: TuiTabBarConfig, live_keys: HashSet<String>) -> Self {
         let mouse_states = live_keys
             .into_iter()
             .map(|key| (key, MouseStateHandle::default()))
             .collect();
-        Ok(Self {
+        Self {
             config,
             mouse_states,
             previous_overflow_mouse_state: MouseStateHandle::default(),
             next_overflow_mouse_state: MouseStateHandle::default(),
-        })
+        }
     }
 
     /// Replaces caller-owned semantic inputs while preserving mouse state for live keys.
