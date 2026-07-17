@@ -497,6 +497,17 @@ define_settings_group!(TabSettings, settings: [
         toml_path: "appearance.tabs.preserve_active_tab_color",
         description: "Whether to preserve the active tab's color when switching tabs.",
     },
+    assign_color_to_new_tab_groups: AssignColorToNewTabGroups {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.tabs.assign_color_to_new_tab_groups",
+        description: "Whether to automatically assign a color to new tab groups, cycling through palette colors not already used by existing groups.",
+        feature_flag: warp_core::features::FeatureFlag::GroupedTabs,
+    },
     use_vertical_tabs: UseVerticalTabs {
         type: bool,
         default: false,

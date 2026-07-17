@@ -1,9 +1,12 @@
 //! Tab group data model. Gated at runtime by `FeatureFlag::GroupedTabs`.
 
+use std::collections::HashMap;
+
 use uuid::Uuid;
 use warpui::elements::DraggableState;
 
 use crate::tab::SelectedTabColor;
+use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 
 /// Stable identity for a tab group.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -53,3 +56,34 @@ impl Default for TabGroup {
         Self::new()
     }
 }
+
+/// Picks the color to assign to a newly created tab group when the
+/// `assign_color_to_new_tab_groups` setting is enabled. Iterates the tab color
+/// palette ([`TAB_COLOR_OPTIONS`]) in order and returns the first color not
+/// already claimed by an existing group, cycling back to the first palette
+/// color once every color is in use (Chrome-style). Groups whose color is
+/// [`SelectedTabColor::Unset`] or [`SelectedTabColor::Cleared`] never count as
+/// used, so they don't block the cycle.
+pub(crate) fn next_group_color(existing: &HashMap<TabGroupId, TabGroup>) -> SelectedTabColor {
+    let used: Vec<SelectedTabColor> = existing.values().map(|group| group.color).collect();
+    next_unused_group_color(&used)
+}
+
+/// Pure color-selection core: given the colors already used by existing groups,
+/// returns the first palette color not present, or the first palette color once
+/// all are used. Split out from [`next_group_color`] so the selection logic is
+/// unit-testable without constructing full [`TabGroup`] values.
+fn next_unused_group_color(used: &[SelectedTabColor]) -> SelectedTabColor {
+    for &option in TAB_COLOR_OPTIONS.iter() {
+        let candidate = SelectedTabColor::Color(option);
+        if !used.contains(&candidate) {
+            return candidate;
+        }
+    }
+    // Every palette color is already in use — cycle back to the first option.
+    SelectedTabColor::Color(TAB_COLOR_OPTIONS[0])
+}
+
+#[cfg(test)]
+#[path = "tab_group_tests.rs"]
+mod tests;

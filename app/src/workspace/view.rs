@@ -494,7 +494,7 @@ use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderTo
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
 use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::workspace::tab_group::{next_group_color, TabGroup, TabGroupId};
 use crate::workspace::tab_settings::TabCloseButtonPosition;
 use crate::workspace::toast_stack::{
     ToastStack, ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
@@ -3842,6 +3842,9 @@ impl Workspace {
                 self.sync_panel_positions_from_config(ctx);
                 ctx.notify();
             }
+            TabSettingsChangedEvent::AssignColorToNewTabGroups { .. } => {
+                ctx.notify();
+            }
         }
     }
 
@@ -7065,7 +7068,10 @@ impl Workspace {
 
     /// Creates a new tab group containing a single new tab.
     fn create_new_tab_group(&mut self, ctx: &mut ViewContext<Self>) {
-        let group = TabGroup::new();
+        let mut group = TabGroup::new();
+        if *TabSettings::as_ref(ctx).assign_color_to_new_tab_groups {
+            group.color = next_group_color(&self.tab_groups);
+        }
         let group_id = group.id;
         self.tab_groups.insert(group_id, group);
         self.add_new_session_tab_with_default_mode(
@@ -7191,7 +7197,10 @@ impl Workspace {
         };
         let previous_group_id = tab.group_id;
 
-        let group = TabGroup::new();
+        let mut group = TabGroup::new();
+        if *TabSettings::as_ref(ctx).assign_color_to_new_tab_groups {
+            group.color = next_group_color(&self.tab_groups);
+        }
         let group_id = group.id;
         self.tab_groups.insert(group_id, group);
 
@@ -23127,6 +23136,11 @@ impl Workspace {
         }
         if *tab_settings.preserve_active_tab_color.value() {
             context.set.insert(flags::PRESERVE_ACTIVE_TAB_COLOR_FLAG);
+        }
+        if *tab_settings.assign_color_to_new_tab_groups.value() {
+            context
+                .set
+                .insert(flags::ASSIGN_COLOR_TO_NEW_TAB_GROUPS_FLAG);
         }
         if *tab_settings
             .show_vertical_tab_panel_in_restored_windows
