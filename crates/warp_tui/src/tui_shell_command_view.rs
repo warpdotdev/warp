@@ -22,14 +22,11 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
-use crate::agent_block_sections::{
-    render_fallback_tool_call_section, tool_call_glyph_style, tool_call_label_style,
-};
+use crate::agent_block_sections::render_fallback_tool_call_section;
 use crate::terminal_block::TerminalBlockElement;
 use crate::terminal_use::user_controls_running_command;
 use crate::tool_call_labels::{
-    tool_call_display_state, tool_call_glyph, tool_call_label, CommandBlockState,
-    ResolvedCommandBlock,
+    tool_call_display_state, tool_call_label, CommandBlockState, ResolvedCommandBlock,
 };
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
@@ -258,15 +255,15 @@ impl TuiView for TuiShellCommandView {
         let builder = TuiUiBuilder::from_app(app);
         let display_state =
             tool_call_display_state(status.as_ref(), false, Some(block.details.state));
-        let glyph_style = tool_call_glyph_style(display_state, &builder);
-        let mut label_style = tool_call_label_style(display_state, &builder);
+        let glyph_style = display_state.glyph_style(&builder);
+        let mut label_style = display_state.label_style(&builder);
         if self.header_mouse_state.lock().unwrap().is_hovered() {
             label_style = label_style.add_modifier(Modifier::BOLD);
         }
         let collapsed = self.state.is_collapsed() && !self.user_controls_command();
         let label = tool_call_label(&self.action, status.as_ref(), false, Some(&block.details));
         let header_spans = vec![
-            (format!("{} ", tool_call_glyph(display_state)), glyph_style),
+            (format!("{} ", display_state.glyph()), glyph_style),
             (format!("{label} "), label_style),
         ];
 

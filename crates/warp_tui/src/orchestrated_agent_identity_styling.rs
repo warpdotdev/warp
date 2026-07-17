@@ -18,6 +18,15 @@ pub(crate) struct AgentIdentity {
     pub(crate) style: TuiStyle,
 }
 
+impl Default for AgentIdentity {
+    fn default() -> Self {
+        Self {
+            glyph: "⟡",
+            style: TuiStyle::default(),
+        }
+    }
+}
+
 /// Builds the identity palette from the seven color roles in the design:
 /// themed cyan, blue, magenta, lilac, pink, green, and yellow. Lilac uses
 /// bright magenta while the remaining roles use their normal ANSI slots.
