@@ -45,7 +45,7 @@ mod scene;
 mod scrollable;
 mod selectable;
 mod shimmering_text;
-mod tab_bar;
+mod size_constraint_switch;
 mod text;
 mod text_helpers;
 mod viewported_list;
@@ -77,10 +77,7 @@ pub use selectable::{
     TuiSelectionHandle, TuiSelectionSpan,
 };
 pub use shimmering_text::TuiShimmeringText;
-pub use tab_bar::{
-    TuiTab, TuiTabBar, TuiTabBarConfig, TuiTabBarEvent, TuiTabBarNavigationDirection,
-    TuiTabBarStyles,
-};
+pub use size_constraint_switch::{TuiSizeConstraintCondition, TuiSizeConstraintSwitch};
 pub use text::TuiText;
 pub use text_helpers::{text_width, truncate_with_ellipsis};
 pub use viewported_list::{

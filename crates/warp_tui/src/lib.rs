@@ -41,6 +41,7 @@ mod resume;
 mod session_registry;
 mod skills_menu;
 mod slash_commands;
+pub mod tab_bar;
 mod terminal_background;
 mod terminal_block;
 mod terminal_content_element;

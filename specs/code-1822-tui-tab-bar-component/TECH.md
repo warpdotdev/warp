@@ -1,100 +1,105 @@
-# TECH: Reusable TUI Tab-Bar Component
+# TECH: Reusable TUI Tab-Bar View
 Linear: [CODE-1822 — Orchestration](https://linear.app/warpdotdev/issue/CODE-1822/orchestration)
 Product: [specs/code-1822-tui-tab-bar-component/PRODUCT.md](./PRODUCT.md)
-Inspected commit: `caa826c2ef395faee32c87c19c533a44ef88d81b`
 
 ## Context
-The TUI cell-grid library has the layout, styling, retained-geometry, and click primitives needed for a horizontal tab bar, but no component that owns tab packing or paging:
-- [`crates/warpui_core/src/elements/tui/mod.rs (31-74) @ caa826c2`](https://github.com/warpdotdev/warp/blob/caa826c2ef395faee32c87c19c533a44ef88d81b/crates/warpui_core/src/elements/tui/mod.rs#L31-L74) — exports the TUI element vocabulary and `TuiElement`.
-- [`crates/warpui_core/src/elements/tui/mod.rs (215-292) @ caa826c2`](https://github.com/warpdotdev/warp/blob/caa826c2ef395faee32c87c19c533a44ef88d81b/crates/warpui_core/src/elements/tui/mod.rs#L215-L292) — `layout` must remain side-effect free, while `after_layout` is the settled post-layout side-effect seam.
-- [`crates/warpui_core/src/elements/tui/hoverable.rs (40-189) @ caa826c2`](https://github.com/warpdotdev/warp/blob/caa826c2ef395faee32c87c19c533a44ef88d81b/crates/warpui_core/src/elements/tui/hoverable.rs#L40-L189) — `TuiHoverable` requires stable `MouseStateHandle`s across per-frame element reconstruction and limits hit testing to retained painted bounds.
-- [`crates/warpui_core/src/elements/tui/flex.rs @ caa826c2`](https://github.com/warpdotdev/warp/blob/caa826c2ef395faee32c87c19c533a44ef88d81b/crates/warpui_core/src/elements/tui/flex.rs) — row composition and child layout.
-- [`crates/warpui_core/src/elements/tui/text.rs @ caa826c2`](https://github.com/warpdotdev/warp/blob/caa826c2ef395faee32c87c19c533a44ef88d81b/crates/warpui_core/src/elements/tui/text.rs) — styled terminal text rendering.
+The TUI separates retained views from per-frame elements:
+- `crates/warpui_core/src/core/view/tui.rs (19-75)` defines `TuiView`, whose `render` method produces an element tree from retained state.
+- `crates/warpui_core/src/elements/gui/size_constraint_switch.rs (45-153)` is the GUI responsive-layout precedent: it selects a normal child from the current layout constraint and delegates subsequent lifecycle passes to that child.
+- `crates/warpui_core/src/elements/tui/mod.rs (205-292)` defines the TUI element lifecycle.
+- `crates/warpui_core/src/elements/tui/flex.rs (263-424)`, `container.rs`, `text.rs`, and `hoverable.rs` provide the generic composition, styling, text, and pointer primitives needed by a tab bar.
 
-The component is intentionally domain-neutral. The orchestration integration that first consumes it is specified separately in `specs/code-1822-tui-orchestration-tab-bar/`.
+The reusable tab abstraction is a retained view in the `warp_tui` front-end, not a tab-specific element. The core element library supplies the same discrete size-constraint switch pattern as the GUI.
 
-## Proposed changes
-### Public component contract
-Add `crates/warpui_core/src/elements/tui/tab_bar.rs` and export the component's public types from `crates/warpui_core/src/elements/tui/mod.rs`. Add `crates/warpui_core/src/elements/tui/text_helpers.rs` for shared terminal display-cell measurement and grapheme-safe ellipsis truncation used by the tab bar and existing TUI column formatting.
+## Implementation
+### GUI-parity size switching
+`crates/warpui_core/src/elements/tui/size_constraint_switch.rs` adds `TuiSizeConstraintSwitch` and `TuiSizeConstraintCondition`.
 
-Use a stable string key rather than indices so dynamic reordering cannot retarget callbacks without parameterizing the component and every supporting layout type. The public data surface contains:
-- `TuiTab`: string key, label, and an optional factory for caller-rendered leading content. During each layout pass, the component builds the element once, measures it, and moves that same instance into the rendered tab.
+Like the GUI `SizeConstraintSwitch`, it accepts a default prebuilt child plus ordered conditional children. During layout it selects the first child whose width, height, or combined-size condition matches. Every later lifecycle pass delegates to that same selected child.
+
+The switch contains no tab, paging, or application semantics. It is exported from `crates/warpui_core/src/elements/tui/mod.rs`.
+
+### Generic text ellipsis
+`crates/warpui_core/src/elements/tui/text.rs` adds `TuiText::truncate_with_ellipsis`. The text element truncates inside its assigned display-cell width, preserves grapheme boundaries and span styles, and uses as much of `...` as fits. Tab rendering therefore does not construct pre-truncated strings.
+
+### Retained tab-bar view
+`crates/warp_tui/src/tab_bar.rs` defines:
+- `TuiTab`: stable string key, label, and optional styled leading text.
 - `TuiTabBarStyles`: caller-supplied bar, leading-label, chrome, normal-tab, focused-selected, and unfocused-selected styles.
-- `TuiTabBarConfig`: optional product label and main tab, ordered secondary tabs, selected key, focus presentation, page anchor, selected-tab reveal policy, optional maximum label cells, spacing, and styles. Divider and arrow glyphs are component-owned so every caller uses the same row structure.
-- `TuiTabBarNavigationDirection`: `Previous` or `Next`.
-- `TuiTabBar`: the reusable component retained by the caller and updated/rendered from config.
+- `TuiTabBarConfig`: optional product label and main tab, ordered secondary tabs, selected key, focus presentation, page anchor, selected-tab reveal policy, optional maximum label cells, spacing, and styles.
+- `TuiTabBarEvent`: semantic `SelectTab` and `PageChanged` outcomes.
+- `TuiTabBarNavigationDirection` and `TuiTabBarSecondaryEdge`: semantic keyboard target requests.
+- `TuiTabBarView`: retained view state and responsive rendering.
 
-The component exposes high-level operations only:
-- `render(config, on_event) -> Box<dyn TuiElement>`
-- `navigation_target(direction) -> Option<String>`, which resolves against private settled layout.
+The view is registered as a typed-action TUI view. Click handlers on generic `TuiHoverable` elements dispatch private component actions; `TuiTabBarView::handle_action` converts those actions into public view events for its owner.
 
-It does not expose visible indices, visible keys, page boundaries, measured widths, or mouse handles.
+### State ownership
+`TuiTabBarView` retains:
+- `HashMap<String, MouseStateHandle>` for currently supplied tab keys.
+- One mouse handle for each overflow arrow.
+- The latest caller-supplied `TuiTabBarConfig`.
 
-### Private retained state
-`TuiTabBar` privately retains:
-- `HashMap<String, MouseStateHandle>` for currently supplied tabs.
-- Previous/next overflow mouse handles.
-- The latest lightweight `SettledNavigation` containing only ordered keys, explicit main-tab identity, selected key, and visible secondary keys.
+`set_config` replaces semantic inputs, prunes removed mouse handles, creates handles for new keys, and notifies the view. Application selection, focus, and page anchors remain caller-owned.
 
-Every config update prunes removed keys before rendering. Existing keys reuse their mouse handles. Settled navigation is invalidated before the next layout publishes replacement data.
+### Responsive row composition
+`TuiTabBarView::render` prebuilds one row alternative for each distinct visible-tab count. `TuiSizeConstraintSwitch` selects the row during layout. Each row is composed only from:
+- `TuiFlex` for row ordering;
+- `TuiFlex::with_spacing` for gaps between leading text and labels, tabs, and overflow controls;
+- `TuiText` for labels, divider, and arrows;
+- `TuiConstrainedBox` for configured maximum label and tab widths;
+- `TuiContainer` for tab and divider padding plus backgrounds;
+- `TuiHoverable` for hover and click behavior.
 
-The per-frame element receives an internal shared state reference so `after_layout` can publish settled navigation data back to the component without retaining or exposing the render-only page layout. This handle is private to `tab_bar.rs`; it is not part of the public contract described by PRODUCT (7).
+The static threshold calculation:
+1. Measures known text and padding in terminal display cells.
+2. Reserves the optional caller label, fixed main tab, and divider.
+3. Resolves the requested secondary page anchor, falling back to the first page.
+4. Computes the minimum row width for each possible visible-tab count from both the requested anchor and, when reveal is enabled, the selected tab.
+5. Reserves a previous control only when the page starts after the first secondary tab.
+6. Reserves a next control only when the page ends before the last secondary tab.
+7. Gives the final visible tab the remaining flex width only when that width can show at least one label glyph plus the ellipsis; otherwise the tab becomes the next-page anchor.
+For each width alternative, the requested anchor wins while the selected tab remains visible. An off-page selected tab moves to the deterministic page containing it only when reveal is enabled. The view derives a non-overlapping page sequence from the first secondary tab: next-page anchors begin after the final visible tab, and previous-page anchors target the preceding sequence entry rather than subtracting the current page size. This preserves stable in-page selection and whole-page navigation without exposing layout geometry to the caller.
 
-### Layout algorithm
-Build and measure caller-provided leading elements through the normal `TuiElement::layout` contract, then pass those widths into a pure layout function. The settled row takes the same measured element instances rather than invoking their factories again. The function returns a `TabBarLayout` with named main-tab, previous-anchor, visible-tab, next-anchor, and navigation fields rather than a generic sequence of layout pieces.
+`crates/warpui_core/src/elements/tui/text_helpers.rs` continues to provide shared display-cell measurement and string truncation for non-element formatting such as `crates/warp_tui/src/tui_column_layout.rs`.
 
-The algorithm:
-1. Measure fixed caller-supplied leading content, the optional main tab, each tab's caller-rendered leading element, and the component-owned divider.
-2. Normalize each label to the optional maximum display-cell width.
-3. Resolve the requested page anchor against the ordered secondary keys, clamping a missing anchor.
-4. Reserve a previous overflow control when the page does not start at the first secondary tab.
-5. Pack secondary tabs from the anchor while reserving a next overflow control whenever later tabs remain.
-6. If the final otherwise-visible tab does not fit in full, shrink its label to the remaining display cells while preserving its leading content and required next control.
-7. Omit a secondary tab rather than produce invalid or negative-width geometry when the row is too narrow.
-8. Build one deterministic page sequence from the beginning. Use that sequence for previous-page anchors and selected-tab reveal so all page progression shares one strictly advancing rule.
+### Navigation
+Keyboard target methods depend only on semantic tab order:
+- Previous/next navigation uses the optional main tab followed by all secondary tabs and wraps.
+- First/last-secondary navigation reads the edges of the secondary list.
 
-Use terminal display-cell width and grapheme-safe truncation. Keep the ellipsis inside the requested width. The component paints from the returned layout rather than independently remeasuring, so rendering, hit testing, overflow callbacks, and navigation share one result.
-
-### Semantic interaction dispatch
-Wrap every painted tab and overflow control in `TuiHoverable` with component-owned mouse state:
-- A tab click invokes `SelectTab(key)`.
-- A previous/next overflow click invokes `PageChanged(anchor_key)` from the settled layout.
-- A hovered tab bolds its label, and a hovered overflow control bolds its arrow.
-- Neither callback changes focus or application state directly.
-
-`navigation_target(Previous | Next)` uses the private settled layout:
-- If the selected key is visible, resolve the adjacent key from the complete supplied sequence of main tab followed by secondary tabs and wrap.
-- If the selected key is off-page, resolve `Previous` to the last visible secondary key and `Next` to the first visible secondary key.
-- If no target exists, return `None`.
-
-The consuming view remains responsible for binding keys, forwarding directions, and applying the returned semantic target. This keeps keymap and application-selection policy outside the component while keeping width-dependent target resolution inside it.
+The caller applies returned keys, updates its authoritative selection/page models, and resynchronizes the view config.
 
 ## Testing and validation
-Add focused, scenario-based unit coverage:
-- fixed-main layout, explicit/missing page anchors, and complete navigation order;
-- overflow reservation, final-tab truncation, and strict next-page progress at narrow widths;
-- explicit page ownership and selected-tab reveal stability;
-- visible wraparound and off-page keyboard navigation without a main tab;
-- selected styling and one-build-per-layout caller leading elements;
-- tab and overflow hover treatments;
-- semantic tab-selection and page-change click events;
-- retained mouse-state reuse and removed-key pruning; and
-- shared display-cell measurement and grapheme-safe truncation in `text_helpers_tests.rs`.
+`crates/warpui_core/src/elements/tui/size_constraint_switch_tests.rs` covers default, ordered width/height, and combined-size selection.
 
-Run:
-- `cargo test -p warpui_core --features tui tab_bar`
+`crates/warpui_core/src/elements/tui/text_tests.rs` covers constraint-aware ellipsis, grapheme preservation, and span styling.
+
+`crates/warp_tui/src/tab_bar_tests.rs` covers:
+- page anchors and selected-tab reveal;
+- stable pages when selection changes within the visible range, including the all-tabs-fit case;
+- strictly increasing visible-count thresholds;
+- narrow-width ellipsis and next-control preservation;
+- start, middle, and end overflow-control visibility;
+- semantic navigation and secondary edges;
+- selected and leading-text styles rendered through generic elements; and
+- retained mouse-state reuse and removed-key pruning.
+
+`crates/warpui_core/src/elements/tui/text_helpers_tests.rs` covers display-cell measurement and grapheme-safe truncation.
+
+Validation commands:
+- `cargo test -p warpui_core --features tui size_constraint_switch`
+- `cargo test -p warpui_core --features tui ellipsis`
+- `cargo test -p warp_tui tab_bar`
 - `cargo test -p warpui_core --features tui text_helpers`
 - `cargo test -p warp_tui tui_column_layout`
 - `./script/format`
 - `cargo clippy -p warpui_core --features tui --tests -- -D warnings`
 - `cargo clippy -p warp_tui --tests -- -D warnings`
 
-## Parallelization
-Do not split this component across child agents. Its public contract, private retained state, layout result, and event tests are tightly coupled and should land as one coherent PR. Long-running workspace validation can run separately after focused tests pass.
-
 ## Risks and mitigations
-- **Public geometry leakage:** keep `TabBarLayout` and `SettledNavigation` private to `tab_bar.rs`; expose semantic callbacks only.
-- **Layout/event disagreement:** paint and dispatch from one settled layout result.
-- **Stale navigation after mutation:** invalidate private layout on config changes and resolve callback keys against the latest supplied key set.
-- **Unicode width corruption:** keep one grapheme-safe display-cell truncation helper in `text_helpers.rs` and use it from the tab bar and two-column formatter.
-- **Hover-state churn:** key mouse state by stable tab key and prune only removed keys.
+- **Responsive policy leaking into the element library:** the switch knows only about conditions and child lifecycle delegation, matching the GUI primitive.
+- **Layout/event disagreement:** each prebuilt row owns its matching visible tabs and overflow callbacks; the switch delegates all passes to one selected row.
+- **Variant growth:** alternatives are created only when the visible-tab count changes, not for every terminal column.
+- **Stale pointer state:** `set_config` keys mouse handles by stable tab identity and prunes removed keys.
+- **Unicode width corruption:** `TuiText` measures terminal display width and truncates only at grapheme boundaries.
+- **Application state divergence:** the view emits semantic events and never mutates caller-owned selection, focus, or page models.

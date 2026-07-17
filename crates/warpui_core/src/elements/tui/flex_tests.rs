@@ -25,6 +25,22 @@ fn layout_at(element: &mut dyn TuiElement, size: TuiSize, app_ctx: &crate::AppCo
     element.layout(TuiConstraint::loose(size), &mut ctx, app_ctx)
 }
 
+#[test]
+fn row_inserts_configured_spacing_between_children() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let mut row = TuiFlex::row()
+                .with_spacing(2)
+                .child(TuiText::new("AA").truncate().finish())
+                .child(TuiText::new("BB").truncate().finish());
+
+            let size = layout_at(&mut row, TuiSize::new(10, 1), app_ctx);
+            assert_eq!(size, TuiSize::new(6, 1));
+            assert_eq!(render_to_lines(row, TuiSize::new(6, 1)), vec!["AA  BB"]);
+        });
+    });
+}
+
 // -- column-axis tests --
 
 #[test]
