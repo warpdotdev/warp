@@ -165,7 +165,17 @@ fn parse_osc_7_cwd(payload: &[u8]) -> Option<String> {
         return None;
     }
 
-    percent_decode_utf8(encoded_path)
+    let decoded = percent_decode_utf8(encoded_path)?;
+
+    // wezterm-style OSC 7 hooks on Windows report drive paths as file-URI paths
+    // like `/E:/CLAUDE-BASE`; map them back to native `E:\CLAUDE-BASE` so the cwd
+    // is usable downstream. Gated on `cfg!(windows)` because a leading `/X:/` is
+    // a legitimate (if unusual) POSIX path on macOS/Linux and must not be
+    // rewritten there.
+    #[cfg(windows)]
+    let decoded = warp_util::path::file_uri_drive_path_to_windows(&decoded).into_owned();
+
+    Some(decoded)
 }
 
 fn osc_7_host_is_local(host: &str) -> bool {

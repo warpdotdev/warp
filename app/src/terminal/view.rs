@@ -11410,6 +11410,29 @@ impl TerminalView {
             return;
         }
 
+        // OSC 7 is terminal-controlled and can report a cwd that cannot be
+        // resolved to a usable native path (e.g. a Windows file-URI drive path
+        // that slipped through as a Unix path). Adopting it would wedge the file
+        // tree / global search on an unresolvable root and persist a bogus
+        // project path, so reject the update and keep the previous good working
+        // directory. Scoped to OSC 7 because precmd CWDs come from the shell
+        // itself and are trusted.
+        if matches!(source, BlockMetadataUpdateSource::Osc7) {
+            if let Some(cwd) = block_metadata.current_working_directory() {
+                let resolvable = block_metadata
+                    .session_id()
+                    .and_then(|sid| self.sessions.as_ref(ctx).get(sid))
+                    .map(|session| session.can_resolve_cwd_to_native_path(cwd))
+                    // Unknown session: don't block the update — this is a
+                    // targeted guard, not a general filter.
+                    .unwrap_or(true);
+                if !resolvable {
+                    log::debug!("Ignoring unresolvable OSC 7 cwd: {cwd:?}");
+                    return;
+                }
+            }
+        }
+
         if let Some(prev_block_metadata) = self.active_block_metadata.take() {
             // Only send event to save app state when the block is post bootstrap
             // and working directory has changed.

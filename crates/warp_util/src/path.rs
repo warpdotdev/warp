@@ -699,6 +699,47 @@ pub fn convert_windows_path_to_msys2(windows_path: &str) -> String {
     convert_windows_path_with_drive_prefix(windows_path, "/")
 }
 
+/// Converts a `file://` URI drive path back into a Windows-native path, e.g.
+/// `/E:/CLAUDE-BASE` → `E:\CLAUDE-BASE` and `/E:/` → `E:\`.
+///
+/// wezterm-compatible OSC 7 prompt hooks on Windows report the working directory
+/// as a file-URI path where the drive letter follows a leading slash (produced
+/// by trivially replacing `\` with `/`). This maps that hybrid form back to a
+/// usable native path.
+///
+/// A leading slash followed by an ASCII drive letter, a colon, and either the
+/// end of the string or a `/` is treated as a drive path: the leading slash is
+/// stripped and forward slashes become backslashes. Any other input — ordinary
+/// POSIX paths (`/Users/foo`), or near-misses like `/E/notdrive` and `/E:extra`
+/// that lack the drive-boundary — is returned unchanged.
+///
+/// This is pure string logic and intentionally platform-independent so it can be
+/// unit-tested everywhere; callers decide when to apply it (drive-letter
+/// rewriting only makes sense on Windows, since a leading `/X:/` is a legitimate
+/// POSIX path elsewhere).
+///
+/// # Examples
+/// ```
+/// use warp_util::path::file_uri_drive_path_to_windows;
+///
+/// assert_eq!(file_uri_drive_path_to_windows("/E:/CLAUDE-BASE"), "E:\\CLAUDE-BASE");
+/// assert_eq!(file_uri_drive_path_to_windows("/E:/"), "E:\\");
+/// assert_eq!(file_uri_drive_path_to_windows("/Users/foo/bar"), "/Users/foo/bar");
+/// ```
+pub fn file_uri_drive_path_to_windows(path: &str) -> Cow<'_, str> {
+    let bytes = path.as_bytes();
+    let is_drive_path = bytes.len() >= 3
+        && bytes[0] == b'/'
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+        && (bytes.len() == 3 || bytes[3] == b'/');
+    if is_drive_path {
+        Cow::Owned(path[1..].replace('/', "\\"))
+    } else {
+        Cow::Borrowed(path)
+    }
+}
+
 /// Trait for path-like values that can participate in ancestor-aware
 /// grouping. Implemented for [`PathBuf`] (component-aware matching via
 /// [`Path::starts_with`]) and [`StandardizedPath`].

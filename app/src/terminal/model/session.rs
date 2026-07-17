@@ -1689,6 +1689,18 @@ impl Session {
             ShellFamily::PowerShell => TypedPathBuf::from_windows(pwd),
         }
     }
+
+    /// Returns whether `cwd` (a working directory reported for this session)
+    /// can be resolved to a usable native path. OSC 7 is terminal-controlled
+    /// and can report a directory that cannot be converted for this session
+    /// (e.g. a Windows file-URI drive path that slipped through as a Unix path);
+    /// callers use this to reject such updates instead of adopting an
+    /// unresolvable working directory that would wedge the file tree / search.
+    pub fn can_resolve_cwd_to_native_path(&self, cwd: &str) -> bool {
+        let typed_path = self.convert_directory_to_typed_path_buf(cwd.to_string());
+        self.maybe_convert_to_native_path(&typed_path.to_path())
+            .is_ok()
+    }
 }
 
 impl Display for Session {

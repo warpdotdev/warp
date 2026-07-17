@@ -129,6 +129,34 @@ fn test_malicious_histfile_path_does_not_execute_injected_commands() {
     });
 }
 
+#[cfg(not(windows))]
+#[test]
+fn can_resolve_cwd_to_native_path_accepts_posix_path() {
+    // On non-Windows a normal absolute POSIX path resolves to a native path.
+    let session = Session::test();
+    assert!(session.can_resolve_cwd_to_native_path("/Users/foo/bar"));
+}
+
+#[cfg(windows)]
+#[test]
+fn can_resolve_cwd_to_native_path_accepts_windows_drive_path() {
+    // A PowerShell session on Windows resolves a native drive path.
+    let session = Session::test();
+    assert!(session.can_resolve_cwd_to_native_path(r"E:\CLAUDE-BASE"));
+}
+
+#[cfg(windows)]
+#[test]
+fn can_resolve_cwd_to_native_path_rejects_unix_encoded_path_on_windows() {
+    // A Posix-family (e.g. Git Bash) session on Windows with no WSL/MSYS2
+    // launch data cannot convert a leaked Unix-encoded path (the exact failure
+    // mode from issue 13814), so it must be rejected.
+    let session_info =
+        SessionInfo::new_for_test().with_shell_type(crate::terminal::shell::ShellType::Bash);
+    let session = Session::new(session_info, Arc::new(TestCommandExecutor::default()));
+    assert!(!session.can_resolve_cwd_to_native_path("/E:/CLAUDE-BASE"));
+}
+
 #[cfg(windows)]
 #[test]
 fn powershell_read_command_embeds_escaped_path_without_args() {
