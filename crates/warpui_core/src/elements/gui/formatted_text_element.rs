@@ -1853,7 +1853,8 @@ impl Element for FormattedTextElement {
                                 text_style.foreground_color.unwrap_or(self.text_color);
                             text_style = text_style.with_underline_color(underline_color)
                         }
-                        if inline.styles.inline_code {
+                        // `<kbd>` reuses inline code's monospace chip treatment (issue #13733).
+                        if inline.styles.inline_code || inline.styles.kbd {
                             // If we have existing background and foreground highlighting from, for example,
                             // a link or a search, we don't want to override it.
                             if let Some(font_color) = self.inline_code_font_color {
@@ -1870,6 +1871,7 @@ impl Element for FormattedTextElement {
 
                         let font_family_id = if matches!(line, FormattedTextLine::CodeBlock(_))
                             || inline.styles.inline_code
+                            || inline.styles.kbd
                         {
                             self.code_block_family_id
                         } else {
