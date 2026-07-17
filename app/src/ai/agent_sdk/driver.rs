@@ -931,7 +931,7 @@ impl AgentDriver {
                     // (never fires) for local and self-hosted runs without a deadline.
                     let timer_fut = maybe_wait
                         .map(|w| Either::Left(Timer::after(w)))
-                        .unwrap_or_else(|| Either::Right(future::pending::<()>()));
+                        .unwrap_or_else(|| Either::Right(future::pending::<std::time::Instant>()));
 
                     // SIGTERM backup future: wakes immediately on signal receipt via an
                     // async stream (no polling). Dropped after tokio::select! completes,
