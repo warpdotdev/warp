@@ -141,6 +141,13 @@ const WHITE: ColorU = ColorU {
     a: 255,
 };
 
+const BLACK: ColorU = ColorU {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 255,
+};
+
 pub const TEST_STYLES: RichTextStyles = RichTextStyles {
     base_text: ParagraphStyles {
         font_family: FamilyId(0),
@@ -177,7 +184,9 @@ pub const TEST_STYLES: RichTextStyles = RichTextStyles {
     cursor_fill: Fill::None,
     inline_code_style: InlineCodeStyle {
         font_family: FamilyId(0),
-        background: WHITE,
+        // Distinct background and font color so `<kbd>` keycap styling (border = font color)
+        // is distinguishable from the inline-code chip (border = background) in render tests.
+        background: BLACK,
         font_color: WHITE,
     },
     check_box_style: CheckBoxStyle {

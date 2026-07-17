@@ -1035,6 +1035,61 @@ fn test_table_inline_style_runs_apply_kbd_background() {
     });
 }
 
+/// A `<kbd>` keycap must render as a bordered badge that is visually distinguishable from an
+/// inline-code chip: the keycap gets a visible outline (border color != background), while the
+/// inline-code chip stays borderless (border color == background). This guards issue #13733's
+/// requirement that a keycap not simply reuse the inline-code chip. (Regression: an earlier
+/// implementation shared the styling branch, so both chips rendered identically.)
+#[test]
+fn test_kbd_keycap_style_differs_from_inline_code() {
+    App::test((), |app| async move {
+        let layout_cache = LayoutCache::new();
+        app.read(|ctx| {
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let paragraph = text_layout.paragraph_styles(&BufferBlockStyle::PlainText);
+
+            let code_style = text_layout
+                .style_and_font(&paragraph, &TextStylesWithMetadata::default().inline_code());
+            let kbd_style =
+                text_layout.style_and_font(&paragraph, &TextStylesWithMetadata::default().kbd());
+
+            let code_border = code_style
+                .style
+                .border
+                .expect("inline code should have a chip border");
+            let kbd_border = kbd_style
+                .style
+                .border
+                .expect("kbd keycap should have a border");
+
+            // The inline-code chip is borderless: its border color matches its background.
+            assert_eq!(
+                Some(code_border.color),
+                code_style.style.background_color,
+                "inline code border should be invisible (border color == background)"
+            );
+
+            // The keycap outline is visible: its border color contrasts with its background.
+            assert_ne!(
+                Some(kbd_border.color),
+                kbd_style.style.background_color,
+                "kbd keycap border must be visible (border color != background)"
+            );
+
+            // The keycap and inline-code chips must not render identically.
+            assert_ne!(
+                kbd_border.color, code_border.color,
+                "kbd keycap must be visually distinguishable from an inline-code chip"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_layout_code_block_urls() {
     // Regression test for laying out URLs in a code block, which contains multiple lines.

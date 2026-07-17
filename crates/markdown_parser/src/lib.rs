@@ -552,8 +552,9 @@ pub struct FormattedTextStyles {
     pub strikethrough: bool,
     pub inline_code: bool,
     /// Whether this run came from a `<kbd>` keyboard-shortcut element. Rendered as a keycap
-    /// badge, reusing inline code's visual treatment. Kept distinct from `inline_code` so it
-    /// round-trips back to `<kbd>` rather than a backtick code span.
+    /// badge: the inline-code chip's monospace background plus a visible outline that sets it
+    /// apart from a code span. Kept distinct from `inline_code` so it round-trips back to `<kbd>`
+    /// rather than a backtick code span.
     pub kbd: bool,
     pub hyperlink: Option<Hyperlink>,
 }

@@ -1116,6 +1116,11 @@ impl TextStylesWithMetadata {
         self
     }
 
+    pub fn kbd(mut self) -> Self {
+        self.kbd = true;
+        self
+    }
+
     pub fn link(mut self, link: String) -> Self {
         self.link = Some(link);
         self

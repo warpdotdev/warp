@@ -168,7 +168,8 @@ impl<'a> TextLayout<'a> {
         text_styles: &TextStylesWithMetadata,
     ) -> StyleAndFont {
         let font_properties = text_styles.apply_properties(paragraph_styles.properties());
-        // `<kbd>` reuses inline code's monospace keycap treatment (issue #13733).
+        // Both inline code and `<kbd>` keycaps are monospace; only their chip styling
+        // (border, below) differs (issue #13733).
         let font_family = if text_styles.is_inline_code() || text_styles.is_kbd() {
             self.rich_text_styles.inline_code_style.font_family
         } else {
@@ -188,15 +189,23 @@ impl<'a> TextLayout<'a> {
             styling = styling.with_underline_color(self.rich_text_styles.base_text.text_color);
         }
 
-        // `<kbd>` reuses inline code's chip appearance (background + border) as the keycap
-        // treatment. Kept as a shared branch so a future differentiated keycap style can diverge
-        // here without touching inline code (issue #13733).
+        // Inline code and `<kbd>` share the monospace chip background but differ in their border,
+        // so a keycap reads as a distinct bordered badge rather than a code span (issue #13733).
         if text_styles.is_inline_code() || text_styles.is_kbd() {
+            let inline_code_style = &self.rich_text_styles.inline_code_style;
+            // A `<kbd>` keycap gets a visible outline (the foreground/font color contrasts with the
+            // chip background by construction); an inline-code chip stays borderless by matching its
+            // border color to its background.
+            let border_color = if text_styles.is_kbd() {
+                inline_code_style.font_color
+            } else {
+                inline_code_style.background
+            };
             styling = styling
-                .with_foreground_color(self.rich_text_styles.inline_code_style.font_color)
-                .with_background_color(self.rich_text_styles.inline_code_style.background)
+                .with_foreground_color(inline_code_style.font_color)
+                .with_background_color(inline_code_style.background)
                 .with_border(TextBorder {
-                    color: self.rich_text_styles.inline_code_style.background,
+                    color: border_color,
                     radius: 4,
                     width: 1,
                     // Use the set 1.2 line height ratio for inline code backgrounds.
