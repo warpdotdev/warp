@@ -54,6 +54,13 @@ In scope:
   `[text](#fragment)` link) against the set of anchors in the current document — explicit
   `<a id>`/`<a name>` targets and implicit heading slugs — and scroll the viewer so the
   target is visible, instead of the current behavior (treated as an opaque URL).
+- **Cross-document fragment links** — a link whose target combines a relative file path and
+  a fragment, e.g. `[text](other-file.md#section)`. Clicking it opens (or, if already open,
+  focuses) that file's Markdown-viewer tab and scrolls it to the matching anchor once the
+  document has loaded. A relative file link *without* a fragment already opens the target
+  today; this in-scope item is specifically the fragment half — carrying the `#section`
+  through the file-open flow and scrolling after load. Deferred to phase 3 (see phasing),
+  because it builds on the same-document slug resolver rather than replacing it.
 - A `#fragment` link with no matching anchor in the document degrades gracefully: it
   remains a normally-styled, clickable-looking link, but clicking it is a no-op (no
   navigation, no error, no crash) rather than attempting to open `#fragment` as a URL.
@@ -63,10 +70,15 @@ In scope:
 
 Out of scope (explicit non-goals):
 
-- **Cross-document/cross-tab fragment links** (e.g. `[text](other-file.md#section)`
-  jumping into a different open document or tab). This spec covers same-document
-  resolution only; the tech spec should note whether the chosen anchor-index design leaves
-  room for that later.
+- **Following a cross-document fragment link into a non-Markdown target, or into an
+  external editor.** The cross-document scroll-to-anchor (in-scope above, phase 3) applies
+  only when the target file opens in Warp's Markdown viewer. If the user's Markdown Viewer
+  preference is off — so the file opens in the code editor or an external app — the
+  fragment is dropped and only the file opens, matching how a plain relative file link
+  behaves today. Bridging a `#slug` anchor to a code-editor line is a separate concern.
+- **Cross-document anchor scroll in the terminal (TUI) Markdown renderer.** Same rationale
+  as the same-document TUI non-goal below — the TUI has no scroll model or click-to-open
+  path. `other-file.md#section` in the TUI renders as inert styled text.
 - **Slug-collision policy beyond "first wins."** If two headings produce the same slug
   (e.g. two headings both literally titled "Overview"), only the first is addressable by
   that slug — matching common Markdown-renderer behavior (GitHub disambiguates duplicates
@@ -132,6 +144,15 @@ Out of scope (explicit non-goals):
     value) degrade to literal text for that tag, without swallowing the rest of the
     paragraph or document and without panicking.
 
+11. (Phase 3) Clicking `[text](other-file.md#section)` opens `other-file.md` in the
+    Markdown viewer (or focuses its tab if already open — the same open/focus behavior a
+    plain `other-file.md` link has today) and, once that document has loaded, scrolls it to
+    the `section` anchor using the same slug resolution as a same-document jump. If
+    `other-file.md` opens but has no matching anchor, the outcome degrades to the
+    same-document miss (invariant 7): the file is shown, unscrolled, no error. If the file
+    itself cannot be resolved (does not exist relative to the document), clicking is a
+    no-op, matching a broken plain relative link today.
+
 ## Suggested phasing
 
 The two capabilities compound in value but are separately shippable:
@@ -144,5 +165,11 @@ The two capabilities compound in value but are separately shippable:
 - **Phase 2:** Arbitrary `<a id>`/`<a name>` targets (anchors not attached to a heading).
   Lower value on its own — most real documents anchor at headings — but completes the
   issue's hand-built-table-of-contents use case for authors who anchor mid-paragraph.
+- **Phase 3:** Cross-document fragment links (`other-file.md#section`). Independent of
+  phases 1–2 in spirit but built on phase 1's slug resolver: the file-open, tab-focus, and
+  dedup machinery already exists (a fragment-less relative link opens today), so this phase
+  adds only fragment carry-through plus a deferred scroll after the target document loads.
+  Sequenced last because it reuses — rather than reshapes — the same-document resolver, so
+  it gains from phase 1 landing first.
 
 The tech spec should confirm or revise this split based on actual implementation cost.

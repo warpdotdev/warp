@@ -121,10 +121,21 @@ normalization inside that one function so a hyphenated fragment matches a spaced
     should early-return instead of falling through. Flag this for the implementer to verify
     against invariant 7's "no error dialog" clause.
 
+- **(iv) Cross-document fragment navigation (`other-file.md#section`): MEDIUM.** The
+  file-open, tab-focus, and dedup are free — a fragment-less relative link opens the target
+  in the Markdown viewer today (`resolve_and_open` → `OpenFileNotebook` →
+  `open_file_notebook`, `app/src/workspace/view.rs:8470`). The remaining work is bounded:
+  split the `#section` off before file resolution, thread it to the destination pane
+  (mirroring the code editor's existing `line_and_column` plumbing), and drain it as a
+  **deferred scroll** once the new document parses — the one genuinely new element, since
+  there is no on-load hook to reuse. Sized above SMALL because of that new deferred-scroll
+  state and the multi-hop field plumbing; below LARGE because the targeting, dedup, and
+  scroll primitives all already exist. Full mechanism in **item 6a**.
+
 This spec recommends implementing **(i) + (iii)** as phase 1 (matches the product spec's
 phasing — this is the slice that fixes the issue's headline test case and also repairs
-markdown-native `[text](#heading)` links, which get zero benefit from (ii) alone), and
-**(ii)** as phase 2.
+markdown-native `[text](#heading)` links, which get zero benefit from (ii) alone),
+**(ii)** as phase 2, and **(iv)** as phase 3.
 
 ## Proposed changes
 
@@ -261,6 +272,88 @@ riding an existing one — unlike the tables spec, there's no existing "structur
 flag this naturally extends, and gating separately lets phase 1 (headings + `<a href>`) ship
 independently of phase 2 (`<a id>`) if their cost estimates diverge during implementation.
 
+### 6a. Cross-document fragment navigation (phase 3)
+
+**Size: MEDIUM.** The file-open half is free — a fragment-less relative link
+(`other-file.md`) already opens the target in the Markdown viewer today, including
+tab-focus and dedup. What's missing is carrying the `#section` through that flow and
+scrolling after the *new* document parses. This is bounded, well-scoped plumbing, not new
+targeting machinery — but it is more than a single parameter through one existing call, and
+it needs a new piece of deferred state on the destination editor because the scroll target
+can't be applied until the document is loaded and there is no on-load hook today.
+
+**What already works (verified on master).** Clicking a relative link with no fragment
+routes through `maybe_open_url` (`app/src/notebooks/editor/view.rs:1955`); because it does
+not start with `#`, it goes to `NotebookLinks::resolve_and_open`
+(`app/src/notebooks/link.rs:323`). `resolve` (:128) resolves the relative path against the
+session's base directory (:211-222), `resolve_file` (:235) confirms it exists on disk, and
+`open` (:258) emits `LinkEvent::OpenFileNotebook` for a Markdown target (:282/:290). That
+event is consumed at `app/src/pane_group/pane/notebook_pane.rs:175`, re-emitted as
+`Event::OpenFileInWarp`, and handled by `Workspace::open_file_notebook`
+(`app/src/workspace/view.rs:8470`) — which **already de-dupes an open pane and focuses it**
+(:8489-8494) or opens a new tab/split (:8503-8520). So open, focus, and dedup for the target
+document are live; only the fragment is lost.
+
+**Why the fragment is lost today.** The path is cleaned by
+`CleanPathResult::with_line_and_column_number` (`crates/warp_util/src/path.rs:158`), whose
+`LINE_AND_COLUMN_REGEX` (:47) strips `:line[:col]`, `[l, c]`, and `#L100`-style suffixes
+(:48-56) but **not** a bare `#section` fragment. So `other-file.md#section` survives cleaning
+intact, is resolved as a literal on-disk path, misses (`ResolveError::FileNotFound`), and
+`resolve_and_open`'s closure silently drops the error (:328-332) — the current no-op.
+
+**The precedent for "open a file AND position the viewport" already exists — for the code
+editor.** `LinkTarget::LocalFile` carries `line_and_column` (link.rs:35) end-to-end, and
+`add_tab_for_code_file` (`app/src/workspace/view.rs:12828`) threads it through to position the
+code editor. The Markdown-notebook path is the gap: `add_tab_for_file_notebook` (:12767) and
+`open_file_notebook` (:8470) carry only a `path`, no viewport target, and `OpenFileNotebook`
+(link.rs:441) has no fragment field.
+
+**Concrete mechanism (three localized changes):**
+
+1. **Split the fragment before file resolution.** In `NotebookLinks::resolve`
+   (link.rs:128), for a link that is neither a parseable URL nor a bare `#fragment`, peel a
+   trailing `#…` off the string before it reaches `CleanPathResult`, keeping it as an
+   `Option<String> anchor` alongside the cleaned path. (A bare `#fragment` is still handled
+   earlier by `maybe_open_url`'s `starts_with('#')` branch — this split only affects strings
+   that have a path *and* a fragment.) Once the fragment is removed, `resolve_file` finds the
+   real file and the existing open/focus flow runs unchanged.
+
+2. **Thread the fragment to the destination pane**, mirroring how `line_and_column` already
+   rides the code path. Add `anchor: Option<String>` to `LinkTarget::LocalFile` (link.rs:33),
+   to `LinkEvent::OpenFileNotebook` (link.rs:441), to `pane_group::Event::OpenFileInWarp`
+   (`app/src/pane_group/mod.rs:549`), and through `open_file_notebook` (view.rs:8470) into the
+   `FilePane`/notebook it constructs. This is additive field-plumbing along an existing event
+   chain — the analog of the code editor's `line_and_column`, which already proves the shape
+   works end-to-end.
+
+3. **Apply the scroll after the destination document loads — the one genuinely new piece.**
+   The same-document jump can call `scroll_to_matching_header` immediately because the buffer
+   is already parsed. A freshly opened notebook is not: the offset the slug resolves to does
+   not exist until parse completes, and there is **no on-load callback in the notebook-open
+   flow to hang the scroll on** (`open_file_notebook` constructs the pane and returns; nothing
+   fires when its content finishes parsing). The destination editor model therefore needs a
+   small piece of **deferred-scroll state** — a `pending_anchor: Option<String>` set at
+   construction — that is consumed once, on the first successful parse/layout, by calling the
+   existing `scroll_to_matching_header` (`app/src/notebooks/editor/model.rs:1335`) with the
+   pending fragment and then clearing it. This reuses phase 1's resolver verbatim; the only
+   new logic is *when* to call it. The implementer must locate the model's
+   content-ready/relayout point (the notebook already rebuilds layout on content load — e.g.
+   the `rebuild_layout` path around `model.rs:1315`) and drain `pending_anchor` there. If no
+   anchor matches after load, draining is a no-op — identical to the same-document miss
+   (product invariant 7).
+
+**Resolution reuse.** The slug comparison is entirely unchanged: the destination scroll runs
+through the same `find_matching_header` (`app/src/notebooks/editor/model.rs:1351`) the
+same-document jump uses, so phase 1's slug normalizer (item 2) is the cross-document resolver
+too — no second matcher, no divergence. This is the concrete sense in which phase 1 "leaves
+room" for cross-document navigation: the target document's resolver is the *same function*,
+invoked after open instead of in place.
+
+**Non-Markdown / external-editor targets.** If the Markdown Viewer preference is off, `open`
+routes the file to `open_file` → the code editor or system handler (link.rs:284), which has
+no slug concept. Per the product non-goal, the fragment is simply dropped in that case: the
+file opens, unscrolled. Only the `OpenFileNotebook` branch carries the anchor.
+
 ### 7. Security
 
 `<a href>` reuses `Hyperlink::Url` verbatim — no new trust boundary, no script/event-handler
@@ -327,6 +420,13 @@ These target the matcher directly, since that is where the phase-1 change lives.
   the first, exercised by asserting the returned range is the earlier heading's.
 - (Phase 2) Explicit `<a id="x">` colocated with a heading whose implicit slug is also `x`
   → explicit anchor wins per invariant 6, or documented fallback if not achievable.
+- (Phase 3) Fragment-split in `resolve`: `other-file.md#section` yields cleaned path
+  `other-file.md` + anchor `section`; `other-file.md` (no fragment) yields no anchor;
+  `other-file.md#L10` still routes to the existing line-number path, not the anchor path
+  (guard against regressing the `#L`-suffix handling in `CleanPathResult`).
+- (Phase 3) A resolved `LinkTarget::LocalFile` for a `#section` link carries the anchor
+  through to `OpenFileNotebook` (assert on the emitted event, mirroring the existing
+  `link_tests.rs:432` `OpenFileNotebook` assertion).
 
 ### Integration / manual
 
@@ -334,7 +434,11 @@ Per CONTRIBUTING, before/after screenshots plus a short recording reproducing th
 motivating test document verbatim: the raw-HTML `<a href="#target-section">` jump, the
 markdown-native `[Jump to Target Section](#target-section)` jump (contrast case — today
 resolves as a plain URL), the external `<a href="https://warp.dev">` link, and the `<a
-id="target-section"></a>` marker preceding the heading. Confirm scroll lands the heading in
+id="target-section"></a>` marker preceding the heading. (Phase 3) additionally: clicking
+`[text](other-file.md#section)` opens/focuses `other-file.md` and lands on its `section`
+heading after load; re-clicking when the tab is already open focuses and re-scrolls rather
+than opening a duplicate; a `#section` with no matching heading in the opened file shows the
+file unscrolled with no error. Confirm scroll lands the heading in
 view (the existing call uses `AutoScrollMode::PositionOffsetInViewportCenter`, i.e. the target
 is centered rather than top-aligned — sanity-check that this reads well for the anchor-jump
 case, since it is the behavior already shipped for other `#`-fragment jumps and changing it
@@ -362,9 +466,12 @@ would affect them too).
   work automatically once cell inline content is parsed via the same `parse_phrasing_content`
   path the tables spec already plans to reuse — verify once both land, no explicit design
   change anticipated here.
-- **Cross-document fragment links (explicit non-goal) are the natural next step** once
-  same-document resolution ships. Phase 1's live-resolution approach doesn't paint this into a
-  corner — a cross-document jump would resolve against a *different* document's buffer, which
-  is an orthogonal addition to `find_matching_header`'s target selection rather than a change
-  to any cached index shape (there is none). Worth a design glance if phase 2 introduces an
-  `<a id>` index, but nothing in phase 1 constrains it.
+- **Cross-document fragment links are now specced as phase 3 (item 6a), not just gestured
+  at.** Investigation confirmed a fragment-less relative link already opens/focuses the target
+  Markdown-viewer tab today, so phase 3 is MEDIUM (carry the fragment through + deferred
+  scroll after load), not LARGE. Phase 1's live-resolution approach doesn't paint this into a
+  corner: the cross-document jump resolves against the *destination* document's buffer using
+  the **same** `find_matching_header` slug resolver, invoked after open instead of in place —
+  so nothing in phase 1 forecloses it, and phase 1 landing first is what phase 3 builds on.
+  The one new element phase 3 introduces is deferred-scroll state on the destination editor
+  (there is no on-load hook to reuse); see item 6a and product invariant 11.
