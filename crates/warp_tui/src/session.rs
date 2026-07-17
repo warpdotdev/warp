@@ -4,36 +4,25 @@
 //! initialization is done, the mount built here starts the TUI driver and
 //! defers creating the first terminal session until login.
 
-use std::collections::HashMap;
-use std::ffi::OsString;
-use std::path::PathBuf;
-
 use anyhow::{Context, Result};
 use clap::error::ErrorKind;
 use clap::Parser;
-use pathfinder_geometry::vector::Vector2F;
-use warp::tui_export::{
-    Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
-    ServerConversationToken, TerminalSurfaceResult,
-};
+use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::spawn_tui_driver;
-use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle, WindowId};
+use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
 
 use crate::orchestration_model::TuiOrchestrationModel;
 use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
-use crate::session_registry::{TuiSessionId, TuiSessions, TuiSessionsEvent};
+use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
 use crate::terminal_background::probe_and_select_theme;
-use crate::terminal_session_view::{
-    TuiConversationRestoreOrigin, TuiConversationRestoreTarget, TuiTerminalSessionView,
-};
-use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
+use crate::terminal_session_view::{TuiConversationRestoreOrigin, TuiConversationRestoreTarget};
 
 #[derive(Parser)]
 #[command(name = "warp-tui")]
@@ -171,8 +160,13 @@ fn create_terminal_session_after_login(
 
     let resume_token = sessions.update(ctx, |sessions, _| sessions.take_resume_token());
     let window_id = root.window_id(ctx);
-    let (_, surface) =
-        create_local_terminal_session(sessions, window_id, true, std::env::current_dir().ok(), ctx);
+    let (_, surface) = TuiSessions::create_local_terminal_session(
+        sessions,
+        window_id,
+        true,
+        std::env::current_dir().ok(),
+        ctx,
+    );
     if let Some(token) = resume_token {
         surface.update(ctx, |view, ctx| {
             view.restore_conversation(
@@ -183,54 +177,6 @@ fn create_terminal_session_after_login(
         });
     }
     root.update(ctx, |root, ctx| root.show_terminal(ctx));
-}
-
-/// Creates and registers a full local terminal session.
-pub(crate) fn create_local_terminal_session(
-    sessions: &ModelHandle<TuiSessions>,
-    window_id: WindowId,
-    focus: bool,
-    startup_directory: Option<PathBuf>,
-    ctx: &mut AppContext,
-) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
-    let (exit_summary, keyboard_enhancement_supported) =
-        sessions.read(ctx, |sessions, _| sessions.surface_context());
-    // The manager uses this internal model for unsupported-shell state; the
-    // TUI does not render a separate banner surface.
-    let banner = ctx.add_model(|_| BannerState::default());
-    let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(
-        startup_directory,
-        HashMap::<OsString, OsString>::from_iter(std::env::vars_os()),
-        IsSharedSessionCreator::No,
-        None,
-        banner.clone(),
-        Vector2F::new(120., 24.),
-        None,
-        None,
-        TRANSCRIPT_BLOCK_SPACING,
-        ctx,
-        move |surface_init, ctx| {
-            let surface = ctx.add_typed_action_tui_view(window_id, |ctx| {
-                TuiTerminalSessionView::new(
-                    surface_init,
-                    exit_summary,
-                    keyboard_enhancement_supported,
-                    ctx,
-                )
-            });
-            TerminalSurfaceResult {
-                surface,
-                post_wire: move |_manager: &mut LocalTtyTerminalManager<TuiTerminalSessionView>,
-                                 _surface: &ViewHandle<TuiTerminalSessionView>,
-                                 _ctx: &mut AppContext| {},
-            }
-        },
-    );
-
-    let surface = manager.surface.clone();
-    let session_id =
-        TuiSessions::register_session(sessions, manager.surface, manager.manager, focus, ctx);
-    (session_id, surface)
 }
 
 #[cfg(test)]

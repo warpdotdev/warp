@@ -3,18 +3,25 @@
 //! Every session is a full [`TuiTerminalSessionView`] backed by a retained
 //! terminal manager. The container owns session lifetime and focus; the root
 //! view renders and routes input only to the focused session.
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::PathBuf;
 
-use warp::tui_export::{ServerConversationToken, TerminalManagerTrait};
+use pathfinder_geometry::vector::Vector2F;
+use warp::tui_export::{
+    BannerState, IsSharedSessionCreator, LocalTtyTerminalManager, ServerConversationToken,
+    TerminalManagerTrait, TerminalSurfaceResult,
+};
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
-use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
+use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle, WindowId};
 
 use crate::orchestration_model::{
     MaterializedLocalOzChildSession, TuiOrchestrationEvent, TuiOrchestrationModel,
 };
 use crate::resume::TuiExitSummaryHandle;
-use crate::session::create_local_terminal_session;
 use crate::terminal_session_view::{TuiTerminalSessionEvent, TuiTerminalSessionView};
+use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 
 /// Identifies a TUI terminal session.
 ///
@@ -73,6 +80,59 @@ impl Entity for TuiSessions {
 impl SingletonEntity for TuiSessions {}
 
 impl TuiSessions {
+    /// Creates and registers a full local terminal session.
+    pub(crate) fn create_local_terminal_session(
+        sessions: &ModelHandle<Self>,
+        window_id: WindowId,
+        focus: bool,
+        startup_directory: Option<PathBuf>,
+        ctx: &mut AppContext,
+    ) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
+        let (exit_summary, keyboard_enhancement_supported) = sessions.read(ctx, |sessions, _| {
+            (
+                sessions.exit_summary.clone(),
+                sessions.keyboard_enhancement_supported,
+            )
+        });
+        // The manager uses this internal model for unsupported-shell state; the
+        // TUI does not render a separate banner surface.
+        let banner = ctx.add_model(|_| BannerState::default());
+        let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(
+            startup_directory,
+            HashMap::<OsString, OsString>::from_iter(std::env::vars_os()),
+            IsSharedSessionCreator::No,
+            None,
+            banner.clone(),
+            Vector2F::new(120., 24.),
+            None,
+            None,
+            TRANSCRIPT_BLOCK_SPACING,
+            ctx,
+            move |surface_init, ctx| {
+                let surface = ctx.add_typed_action_tui_view(window_id, |ctx| {
+                    TuiTerminalSessionView::new(
+                        surface_init,
+                        exit_summary,
+                        keyboard_enhancement_supported,
+                        ctx,
+                    )
+                });
+                TerminalSurfaceResult {
+                    surface,
+                    post_wire: move |_manager: &mut LocalTtyTerminalManager<
+                        TuiTerminalSessionView,
+                    >,
+                                     _surface: &ViewHandle<TuiTerminalSessionView>,
+                                     _ctx: &mut AppContext| {},
+                }
+            },
+        );
+
+        let surface = manager.surface.clone();
+        let session_id =
+            Self::register_session(sessions, manager.surface, manager.manager, focus, ctx);
+        (session_id, surface)
+    }
     /// Wires a session view to orchestration before registering it.
     pub(crate) fn register_session(
         sessions: &ModelHandle<Self>,
@@ -151,7 +211,7 @@ impl TuiSessions {
                     .expect("the dispatching parent session must remain registered")
                     .view()
                     .window_id(ctx);
-                let (session_id, session_view) = create_local_terminal_session(
+                let (session_id, session_view) = Self::create_local_terminal_session(
                     &sessions,
                     window_id,
                     false,
@@ -211,13 +271,6 @@ impl TuiSessions {
         }
     }
 
-    /// Returns the process-level context used to create session views.
-    pub(crate) fn surface_context(&self) -> (TuiExitSummaryHandle, bool) {
-        (
-            self.exit_summary.clone(),
-            self.keyboard_enhancement_supported,
-        )
-    }
     /// Removes a session. When the focused session is removed, focus falls
     /// back to the most recently added remaining session, if any.
     pub(crate) fn remove_session(&mut self, id: TuiSessionId, ctx: &mut ModelContext<Self>) {
