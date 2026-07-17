@@ -49,10 +49,7 @@ fn add_dispatching_session(
     focus: bool,
 ) -> TuiSessionId {
     let (session, manager) = add_test_terminal_session(app, fixture.window_id);
-    let session_id = app.update(|ctx| {
-        TuiSessions::register_session(&fixture.sessions, session, manager, focus, ctx)
-    });
-    session_id
+    app.update(|ctx| TuiSessions::register_session(&fixture.sessions, session, manager, focus, ctx))
 }
 
 /// Creates a standalone executor and relays its frontend materialization
