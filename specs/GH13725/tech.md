@@ -12,54 +12,75 @@ This is two mostly-independent pieces of work bolted together by the issue, and 
 be evaluated separately because their feasibility differs enormously:
 
 - **`<a href>` as a hyperlink tag: small.** Warp's inline parser has no HTML-tag concept at
-  all — `InlineToken` (`crates/markdown_parser/src/markdown_parser.rs:1674-1694`) covers
+  all — `InlineToken` (`crates/markdown_parser/src/markdown_parser.rs:1684`) covers
   `Delimiter`, `Text`, `BackslashEscape`, `HtmlEntity`, `CodeSpan`, `AutoLink`, `LinkEnd`,
   `UnderlineEnd`. The **only** literal HTML tag special-cased anywhere in the inline grammar
-  is `<u>`/`</u>` (`parse_inline_token_underline_start`/`_end`, :1628-1645), which is handled
+  is `<u>`/`</u>` (`parse_inline_token_underline_start`/`_end`, :1635/:1648), which is handled
   exactly like a markdown delimiter pair (push a `Delimiter`/`UnderlineEnd` token, no
   attribute parsing). `<a href="…">…</a>` is a direct structural analog: a start delimiter
   carrying one piece of data (the `href` value) and a fixed end tag. The existing markdown
-  link path, `parse_link` (:1116-1179) + `parse_link_target` (:1183-1271), already builds
+  link path, `parse_link` (:1125) + `parse_link_target` (:1192), already builds
   exactly the styling this needs — `styles.hyperlink = Some(Hyperlink::Url(url))`
-  (:1149) — so an HTML `<a>` reader can reuse `Hyperlink::Url` as its output type; it only
+  (:1158) — so an HTML `<a>` reader can reuse `Hyperlink::Url` as its output type; it only
   needs a new *front door* into that styling, not a new link model.
-- **Fragment resolution + scroll-to: medium, and this is where the real work is.** A
+- **Fragment resolution + scroll-to: small, because the scaffolding already exists.** A
   markdown link `[text](#fragment)` **already parses today** — `parse_link_target` has no
   opinion on what a link destination looks like beyond balanced parens/brackets, so
   `#fragment` is accepted as a URL string exactly like `https://…` would be (confirmed at
-  `markdown_parser_tests.rs:1646-1653`, "Example 501": `[link](#fragment)` →
-  `Hyperlink::Url("#fragment")`). The gap is entirely downstream of parsing: nothing in the
-  content model or render/click path treats a `#`-prefixed `Hyperlink::Url` differently from
-  an external URL.
-  - `FormattedTextHeader` (`crates/markdown_parser/src/lib.rs:303-306`) is
-    `{ heading_size: usize, text: FormattedTextInline }` — no id/slug field. No heading
-    carries any addressable identity today.
-  - `grep -rn "slug\|anchor" crates/markdown_parser/ crates/editor/` (excluding this spec's
-    own additions) turns up nothing — there is no slug-generation code anywhere in the repo
-    to reuse.
-  - The hyperlink click path is `FormattedTextElement::register_default_click_handlers`
-    (`crates/warpui_core/src/elements/gui/formatted_text_element.rs:334-365`): for each
-    `Hyperlink::Url(url)` found via `line.hyperlinks(false)`, a registered callback receives
-    `HyperlinkUrl { url }` on click (:358-359). Today every consumer of this callback treats
-    `url` as an opener target (external browser / new tab) — there is no branch anywhere
-    that inspects the string for a leading `#` and no code path back into the editor's own
-    scroll state from here.
-  - **The scroll primitive this needs already exists**, which is the good news:
-    `EditorRenderState::request_autoscroll_to_exact_vertical(character_offset: CharOffset,
-    pixel_delta: Pixels)` (`crates/editor/src/render/model/mod.rs:3064-3074`) submits
-    `LayoutAction::Autoscroll { mode: AutoScrollMode::ScrollToExactVertical { .. } }`, handled
-    at :3694-3700+, and there's a simpler `scroll_to(ScrollPositionSnapshot)` /
-    `LayoutAction::ScrollTo` (:2951-2952, handled :3145-3148) for a raw scroll-top target.
-    Both already work in terms of a **character offset into the document**, which is exactly
-    what a resolved anchor needs to produce. The missing piece isn't "how do we scroll" — a
-    character-offset-based autoscroll API is already used elsewhere (selection-follow) — it's
-    "how do we go from `#target-section` to a character offset."
+  `markdown_parser_tests.rs:1644-1647`, "Example 501": `[link](#fragment)` →
+  `Hyperlink::Url("#fragment")`). And the click path **already** treats a `#`-prefixed
+  `Hyperlink::Url` differently from an external URL: `maybe_open_url`
+  (`app/src/notebooks/editor/view.rs:1971`) routes it to `scroll_to_matching_header` rather
+  than the URL opener. The gap is narrow and specific: the matcher compares the fragment
+  against the heading's exact lowercased text instead of a GitHub-style slug, so a hyphenated
+  fragment misses a spaced heading. Fixing that one comparison is the core of the resolution
+  work — no new content-model field and no new click branch are required for headings.
+  - `FormattedTextHeader` (`crates/markdown_parser/src/lib.rs:303`) is
+    `{ heading_size: usize, text: FormattedTextInline }` — no id/slug field. But this no
+    longer matters for phase 1: heading matching happens in the editor at click time via
+    `find_matching_header`, which re-reads each heading's text out of the live buffer
+    (`content.text_in_range(...)`) on every click — it never consulted a parse-time slug
+    field, so none needs to be added to `FormattedTextHeader`.
+  - `grep -rn "slug" crates/markdown_parser/ crates/editor/` turns up no slug-*generation*
+    helper — the normalization function has to be written — but the *matching loop* it plugs
+    into already exists (`find_matching_header`, `app/src/notebooks/editor/model.rs:1351`),
+    so this is a small localized change, not new plumbing.
+  - **A `#`-fragment click path already exists in the Markdown viewer** — this is the key
+    fact that reshapes the scoping below. The viewer's click entry point is
+    `NotebookEditorView::maybe_open_url`
+    (`app/src/notebooks/editor/view.rs:1955`), and it **already branches on a leading `#`**:
+    at :1971-1983, `if url.starts_with('#')` it calls
+    `model.scroll_to_matching_header(&url, ctx)` and returns early on a hit, only falling
+    through to ordinary URL-open handling on a miss. So the fragment-scroll wiring the earlier
+    draft of this spec treated as net-new does not need to be built — it is live on master.
+    (The general `FormattedTextElement::register_default_click_handlers` helper at
+    `crates/warpui_core/src/elements/gui/formatted_text_element.rs:336` is used by many other
+    surfaces — settings pages, banners, modals, the changelog, AI views — but **not** by the
+    notebook Markdown viewer, and none of those callers has a `#`-fragment branch. It is not
+    the fix site; do not target it.)
+  - **The gap is the matching rule, not the scroll or the click branch.**
+    `scroll_to_matching_header` (`app/src/notebooks/editor/model.rs:1335`) delegates to
+    `find_matching_header` (:1351), which walks `content.outline_blocks()`, filters to
+    `BlockType::Text(BufferBlockStyle::Header { .. })`, and compares the fragment against
+    `heading.trim().to_lowercase()` (:1374) — i.e. the **exact lowercased heading text**, not
+    a GitHub-style slug. So `#target-section` (hyphenated) misses a heading titled
+    "Target Section" (spaced), which is precisely the issue's failing case. It does already
+    strip the `#` prefix and `urlencoding::decode` the fragment (:1352-1356), so URL-escaped
+    fragments are handled; only the text-vs-slug comparison is wrong.
+  - **The scroll primitive is already wired end-to-end.** On a match,
+    `scroll_to_matching_header` calls
+    `render_state.request_autoscroll_to(AutoScrollMode::PositionOffsetInViewportCenter(range.start))`
+    (`app/src/notebooks/editor/model.rs:1346`), backed by
+    `EditorRenderState::request_autoscroll_to` (`crates/editor/src/render/model/mod.rs:3054`,
+    with `PositionOffsetInViewportCenter` handled at :3661/:3712). Nothing new is needed on the
+    scroll side — a resolved heading range already scrolls today.
 
 This framing matters for scoping: the visible, "does it look done" work (parsing `<a href>`
-text into a blue underlined link) is the cheap part. The part that makes the issue's test
-case actually pass — `[Jump to Target Section](#target-section)` scrolling to the heading
-below it — requires building an anchor index and wiring a new click branch, neither of which
-exist in any form today.
+text into a blue underlined link) is one piece. The part that makes the issue's headline test
+case pass — `[Jump to Target Section](#target-section)` scrolling to the heading below it — is
+**far smaller than the earlier draft claimed**: the click branch, the scroll call, and the
+per-click heading iteration all already exist in `find_matching_header`. What's missing is slug
+normalization inside that one function so a hyphenated fragment matches a spaced heading.
 
 ## Feasibility summary
 
@@ -76,26 +97,29 @@ exist in any form today.
     at least had an existing multi-line cell rendering path to extend. This is closer to net
     new plumbing: an anchor is not text, not a delimiter, not a link — it's an id-to-position
     binding that must survive from parse time through to click-resolution time.
-- **(iii) Heading auto-slugs + anchor index + fragment click resolution: MEDIUM–LARGE.**
-  Three sub-parts, each real but bounded:
-  - Slug generation from heading text (GitHub-style: lowercase, spaces→hyphens, strip
-    punctuation, dedupe via `-1`/`-2` suffixes). Pure function, no existing code to build on
-    (product non-goal notes dedupe policy is flexible), straightforward to unit test in
-    isolation.
-  - An **anchor index**: id → position, built once per document (or incrementally per edit)
-    from (a) every heading's slug and (b) every `<a id>`/`<a name>` marker found during
-    parse. This needs a place to live — likely alongside or inside the existing document/
-    buffer model that already tracks headings for other purposes (e.g. whatever powers
-    "jump to heading" style navigation, if Warp has one — **needs verification**; if no such
-    index exists yet, this is genuinely new state, not a variant of something already
-    tracked).
-  - Click-time resolution: extend (or add a sibling to)
-    `register_default_click_handlers`'s callback so a `Hyperlink::Url` starting with `#` is
-    looked up in the anchor index instead of being handed to the URL-open callback, then
-    calls `request_autoscroll_to_exact_vertical`/`scroll_to` with the resolved offset. A
-    miss (product invariant 7) simply does nothing — no fallback to "open `#fragment` as a
-    URL" (that would be actively wrong; today's behavior of doing that is precisely the bug
-    being fixed).
+- **(iii) Heading slug matching + fragment click resolution: SMALL.** The click branch, the
+  scroll call, and the per-click heading walk all already exist in `find_matching_header`
+  (`app/src/notebooks/editor/model.rs:1351`). The only work is:
+  - Slug normalization (GitHub-style: lowercase, spaces→hyphens, strip punctuation). This is
+    a pure function with no existing code to build on, straightforward to unit test in
+    isolation. It gets applied inside `find_matching_header`: normalize the incoming fragment
+    and normalize each heading's text with the **same** function, then compare — replacing the
+    current `heading.trim().to_lowercase() == target` check (:1374). Both sides run through
+    one normalizer, so a hyphenated fragment matches a spaced heading.
+  - **No new anchor index.** `find_matching_header` already iterates `content.outline_blocks()`
+    and reads each heading's text live from the buffer on every click, so there is no
+    id→offset map to build, no place for it to live, and no cache-invalidation problem — the
+    function recomputes against the current buffer each time it runs. (Dedupe of collision
+    slugs, if wanted, is likewise "first match wins" as a natural consequence of the loop
+    returning on the first hit — no separate `-1`/`-2` bookkeeping is required for phase 1;
+    the product spec's non-goal already accepts first-wins.)
+  - Miss behavior (product invariant 7) is already correct: `find_matching_header` returns
+    `None` → `scroll_to_matching_header` returns `false` → `maybe_open_url` falls through.
+    The one nuance to preserve: on a miss today, `maybe_open_url` still hands `#fragment` to
+    the URL opener (view.rs:1984+), which for an in-document fragment is a no-op in practice
+    but should be confirmed not to surface a broken-link tooltip; if it does, the miss path
+    should early-return instead of falling through. Flag this for the implementer to verify
+    against invariant 7's "no error dialog" clause.
 
 This spec recommends implementing **(i) + (iii)** as phase 1 (matches the product spec's
 phasing — this is the slice that fixes the issue's headline test case and also repairs
@@ -107,7 +131,7 @@ markdown-native `[text](#heading)` links, which get zero benefit from (ii) alone
 ### 1. `<a href="…">text</a>` inline token (phase 1)
 
 Add HTML-anchor delimiter tokens to `InlineToken`
-(`crates/markdown_parser/src/markdown_parser.rs:1674-1694`), following the `<u>` precedent
+(`crates/markdown_parser/src/markdown_parser.rs:1684`), following the `<u>` precedent
 exactly in shape but carrying data:
 
 - A start token that captures the `href` attribute value — unlike `<u>`'s zero-data
@@ -116,10 +140,10 @@ exactly in shape but carrying data:
   (e.g. `InlineToken::HtmlAnchorStart(String)` for the href, paired with a `HtmlAnchorEnd`
   token on `</a>`), or the URL could live in a small ad hoc attribute parser called at
   `<a` and stashed on the delimiter-stack entry (mirroring how `parse_link` stashes
-  `link_start.node_index` today at :1141).
+  `link_start.node_index` today at :1153).
 - Closing `</a>` applies `styles.hyperlink = Some(Hyperlink::Url(href))` to the fragments
   between start and end — the exact same `backtrack_styles` call `parse_link` makes at
-  :1148-1150, just triggered by `</a>` instead of `]`+`(url)`.
+  :1157-1158, just triggered by `</a>` instead of `]`+`(url)`.
 - A minimal attribute parser for the opening tag: extract `href="…"` (single/double-quoted),
   tolerate and discard any other attributes (`title`, `target`, `rel`, `class`, …) per
   product invariant 8 — this can be a small nom combinator scanning `key="value"` pairs
@@ -133,62 +157,86 @@ exactly in shape but carrying data:
   literal text for the tag, matching how `parse_link` falls back to a literal `]` on failure
   (:1170-1177) — product invariant 10.
 
-### 2. Heading slugs (phase 1)
+### 2. Heading slug normalization (phase 1)
 
-Add a `slug: String` (or `Option<String>` if collision/empty-text edge cases need to opt
-out) field to `FormattedTextHeader` (`crates/markdown_parser/src/lib.rs:303-306`), computed
-at parse time from the heading's rendered text. This is a **shared-struct change** like the
-table `<br>` cell-type change in the sibling spec — audit callers of
-`FormattedTextHeader { .. }` construction and pattern matches before landing (`grep -rn
-"FormattedTextHeader" crates/`) to size the ripple; expect this to be small since the field
-is purely additive.
+No parse-time change and **no field on `FormattedTextHeader`**. Heading matching happens in
+the editor at click time via `find_matching_header`
+(`app/src/notebooks/editor/model.rs:1351`), which already reads each heading's text out of
+the live buffer (`content.text_in_range(...)`, :1371-1373) on every click. The fix is a single
+slug normalizer applied on both sides of the comparison inside that function.
 
 Slug algorithm (GitHub-compatible, since that's the ecosystem convention the product spec
 points to): lowercase, strip characters outside `[a-z0-9 -]`, collapse/trim spaces, replace
-spaces with `-`. Deduplicate across the document by appending `-1`, `-2`, … to repeats,
-processed in document order — this requires slug generation to happen as a document-wide
-pass (or with access to prior headings' slugs), not purely per-heading, so it likely belongs
-as a post-process over the parsed `FormattedText.lines` rather than inline in the heading
-parser itself.
+spaces with `-`. Add it as a small pure function (natural home: alongside `find_matching_header`
+in `model.rs`, or a shared helper if a second caller appears). It should be unit-testable in
+isolation on `&str → String`.
 
-### 3. Anchor index (phase 1 for headings, phase 2 extends it for `<a id>`)
+`find_matching_header` already normalizes the incoming fragment as `target = fragment
+.strip_prefix('#')` → `urlencoding::decode` → `trim().to_lowercase()` (:1352-1357). Replace
+that trailing `to_lowercase()` with the slug normalizer, and change the per-heading comparison
+at :1374 from `heading.trim().to_lowercase() == target` to `slug(&heading) == target`. Both
+sides then run through the same normalizer, so `#target-section` matches a heading "Target
+Section". No document-wide pass and no prior-heading state are needed — first-match-wins for
+collisions falls out of the loop returning on the first hit, which satisfies the product
+non-goal's "first wins" dedupe stance.
 
-Build a document-scoped `HashMap<String, CharOffset>` (id → character offset of the target)
-by walking `FormattedText.lines` after parsing:
+### 3. No anchor index (phase 1)
 
-- Every `FormattedTextLine::Header(h)` contributes `h.slug → <offset of this line>`.
-- (Phase 2) every `<a id>`/`<a name>` marker contributes `id → <offset of the marker>`.
-- Product invariant 6 (explicit `<a id>` wins over a same-named implicit heading slug):
-  since phase 2 markers are indexed after or alongside headings, insert order (or an
-  explicit "explicit beats implicit" rule in the insert step) resolves the collision — flag
-  for implementation whether `HashMap::insert` overwrite order alone is sufficient or needs
-  an explicit priority check.
+There is deliberately no anchor index in phase 1. The earlier draft of this spec proposed a
+document-scoped `HashMap<String, CharOffset>` rebuilt per edit, and treated its storage and
+invalidation lifecycle as the biggest unknown — but that entire structure is unnecessary
+because `find_matching_header` already performs the id→offset lookup live: it iterates
+`content.outline_blocks()`, filters to headers, and returns the matching header's
+`start..end` range directly from the current buffer. Iterating a handful of outline blocks on
+a click is cheap, and re-reading the buffer each time means there is nothing to keep in sync
+with edits. **No new per-document cached state, no invalidation hook, no lifecycle question.**
 
-Where this index lives and how it's invalidated on edit is the main open question — needs
-verification against however Warp already tracks per-document derived state (if anything
-comparable exists for, say, syntax-highlighting spans or the table offset maps referenced in
-the tables spec, follow that pattern; if nothing comparable exists, this is new
-per-document cached state that must be recomputed on edit, which the tech implementer should
-scope against the render/relayout lifecycle in `render/model/mod.rs`).
+Phase 2 (`<a id>`/`<a name>` markers) needs the parsed anchor positions to be reachable at
+click time, and that is where any indexing question actually lives — deferred to that phase's
+design, not phase 1's.
 
-### 4. Fragment-aware click resolution (phase 1)
+### 4. Fragment-aware click resolution — already exists (phase 1)
 
-`register_default_click_handlers` (`formatted_text_element.rs:334-365`) currently maps every
-`Hyperlink::Url(url)` to the same `HyperlinkUrl { url }` callback unconditionally (:358-359).
-Add a branch: if `url` starts with `#`, resolve `url[1..]` against the anchor index instead
-of invoking the URL-open callback.
+The click branch does **not** need to be built: `maybe_open_url`
+(`app/src/notebooks/editor/view.rs:1955`) already does, on a leading `#` (:1971-1983), call
+`scroll_to_matching_header`, which on a hit calls
+`request_autoscroll_to(AutoScrollMode::PositionOffsetInViewportCenter(range.start))`
+(`app/src/notebooks/editor/model.rs:1346`). The `#`-branch, the resolution call, and the
+scroll are all live on master. Do **not** target
+`FormattedTextElement::register_default_click_handlers` — that helper is used by unrelated
+surfaces and is not on the Markdown viewer's click path.
 
-- **Hit:** call `request_autoscroll_to_exact_vertical(character_offset, Pixels::zero())` (or
-  `scroll_to` with a `ScrollPositionSnapshot` built from the offset, whichever the
-  surrounding `EventContext`/`AppContext` at the click site can most directly construct —
-  needs verification of which of the two APIs is reachable from
-  `formatted_text_element.rs`'s click callback without new plumbing).
-- **Miss:** do nothing (product invariant 7) — explicitly *not* falling through to the
-  URL-open callback with `#fragment` as a literal URL, which is today's bug.
-- This requires `register_default_click_handlers` (or its caller in the Markdown-viewer
-  wiring, not yet located — **needs verification** of exactly where the viewer instantiates
-  `FormattedTextElement` and supplies the click callback) to have access to the anchor index
-  from (3) at click time.
+The only phase-1 behavior change here is downstream of the slug fix in item 2:
+
+- **Hit:** already correct — `find_matching_header` returns a range,
+  `scroll_to_matching_header` requests the autoscroll, `maybe_open_url` early-returns
+  (view.rs:1978-1982). Once item 2's slug normalization lands, headings that previously missed
+  now resolve.
+- **Miss:** `find_matching_header` returns `None` → `scroll_to_matching_header` returns
+  `false` → `maybe_open_url` falls through to the ordinary URL path. Per product invariant 7
+  this must be observably inert (no scroll, no error, no crash). Confirm the fall-through does
+  not raise a broken-link tooltip for an in-document `#fragment`; if it does, add an
+  early-return on the `#`-prefixed miss instead of falling through. This is the one spot the
+  implementer must check by hand against invariant 7.
+
+### Render surfaces (GUI vs. TUI)
+
+Master now has a second Markdown render surface — the TUI renderer at
+`crates/warp_tui/src/tui_markdown.rs` — and it shares the same `markdown_parser` crate and the
+same `FormattedText`/`Hyperlink` model as the GUI. This splits the feature cleanly:
+
+- **`<a href>` *parsing* (item 1) benefits both surfaces for free.** Because the new
+  `Hyperlink::Url` fragments are produced in the shared parser, the TUI renderer picks them up
+  with no TUI-specific code: `inline_spans` already reads
+  `fragment.styles.hyperlink → Some(Hyperlink::Url(url))` and renders the link text styled but
+  inert (`crates/warp_tui/src/tui_markdown.rs:194-196`). So an `<a href>` link will *display*
+  correctly in the TUI the moment the parser change lands.
+- **Fragment *scroll* resolution (items 2–4) is GUI-only.** The whole resolution path lives in
+  `app/src/notebooks/editor/` (`maybe_open_url`, `scroll_to_matching_header`,
+  `find_matching_header`) — the TUI has no `maybe_open_url` equivalent and no scroll model to
+  drive, so there is nothing to hook. `#fragment` clicks resolving to a scroll are explicitly
+  **out of scope for the TUI surface** in this slice; the TUI simply renders the link as inert
+  styled text. Call this out so a reviewer doesn't read "shared parser" as "shared behavior."
 
 ### 5. `<a id>`/`<a name>` anchor markers (phase 2)
 
@@ -218,11 +266,32 @@ independently of phase 2 (`<a id>`) if their cost estimates diverge during imple
 `<a href>` reuses `Hyperlink::Url` verbatim — no new trust boundary, no script/event-handler
 attributes are read (only `href`; all others parsed-but-discarded per product invariant 8).
 Fragment resolution never leaves the document (no network, no file access) — a `#fragment`
-click either scrolls within the current buffer or is a no-op. `<a id>`/`<a name>` values are
-used only as HashMap keys for in-document lookup, never interpolated into a URL, path, or
+click either scrolls within the current buffer or is a no-op. `<a id>`/`<a name>` values
+(phase 2) are used only as in-document lookup keys, never interpolated into a URL, path, or
 shell context.
 
+**On GitHub's `user-content-` prefix (intentionally not replicated).** GitHub's renderer
+prefixes the *rendered DOM ids* it emits for headings and `<a id>` anchors with
+`user-content-` (to avoid collisions with GitHub's own page-chrome ids), while leaving the
+`href="#…"` fragments authors write unprefixed; a small piece of client JS bridges the two at
+click time. Warp has no such collision surface and no DOM: resolution happens **in-process**,
+comparing the fragment against slugs computed live from heading text (item 2), not against any
+emitted id attribute. So Warp deliberately does **not** add a `user-content-` prefix on either
+side — there is nothing for it to disambiguate against, and adding it would only break parity
+with the plain `#slug` fragments authors actually write. Worth stating explicitly so a
+reviewer familiar with GitHub's scheme doesn't flag its absence as a bug.
+
 ## Testing and validation
+
+**Invert the existing negative-behavior probes first.** The master checkout carries an
+untracked probe file, `crates/markdown_parser/src/html_tag_support_tests.rs` (wired via
+`#[path] mod html_tag_support_tests;` at `markdown_parser.rs:1998-1999`), whose two anchor
+tests — `test_raw_html_anchor_href_not_parsed_as_hyperlink` and
+`test_raw_html_anchor_id_not_registered_as_target` — currently assert the **no-op** status
+quo (raw `<a href>` produces *no* hyperlink style; raw `<a id>` registers *no* target). Once
+item 1 lands, both assertions become false and CI goes red. The implementation must **invert
+them into positive assertions** (`<a href>` *does* produce a `Hyperlink::Url`; `<a id>` *does*
+register an anchor) as part of the same change, not leave them asserting the old behavior.
 
 ### Parser unit tests (`crates/markdown_parser/src/markdown_parser_tests.rs`)
 
@@ -234,22 +303,28 @@ shell context.
   effect on output (invariant 8).
 - Unterminated `<a href="…">` / missing closing `</a>` → literal text fallback, rest of
   paragraph intact (invariant 10).
-- Heading slug generation: plain text, text with punctuation/mixed case, duplicate headings
-  → `-1`/`-2` suffixes (invariant 4, product non-goal on exact dedupe scheme — assert the
-  chosen behavior, not GitHub's exact algorithm unless matched intentionally).
+- Slug normalizer (item 2): plain text, text with punctuation/mixed case, multi-space runs
+  → normalized slug (invariant 4). Test the pure `&str → String` function directly; first-wins
+  collision behavior is covered by the resolution tests below, not the normalizer.
 - (Phase 2) `<a id="x"></a>` / `<a name="x"></a>` → zero-width anchor marker, no visible
   text emitted (invariant 5).
 - (Phase 2) `<a id="x">text</a>` (both id and content on one tag) — confirm documented
   behavior (out of scope; assert it doesn't panic, even if unspecified which role wins).
 
-### Anchor index / resolution tests (`crates/editor/` — exact module TBD per item 3)
+### Resolution tests (`app/src/notebooks/editor/` — `find_matching_header` / `model.rs`)
 
-- Document with a heading and a `[text](#slug)` link → click resolves to the heading's
-  character offset (invariants 2, 3, 4).
-- `<a href="#slug">` and markdown `[text](#slug)` targeting the same heading → identical
-  resolved offset (invariant 3 — the two syntaxes must be equivalent post-resolution).
-- `#fragment` with no matching anchor → click is a no-op, no panic, link still renders
-  normally (invariant 7).
+These target the matcher directly, since that is where the phase-1 change lives.
+
+- Heading `## Target Section` + fragment `#target-section` → `find_matching_header` returns
+  the heading's range; today (exact-text match) it returns `None`. This is the regression the
+  slug normalizer fixes (invariants 2, 3, 4).
+- `<a href="#slug">` and markdown `[text](#slug)` targeting the same heading resolve to the
+  same range (invariant 3 — the two syntaxes are equivalent because both reach
+  `find_matching_header` via the same `#`-branch in `maybe_open_url`).
+- Fragment with no matching heading → `find_matching_header` returns `None`,
+  `scroll_to_matching_header` returns `false`, no panic (invariant 7).
+- First-wins collision: two headings normalizing to the same slug → the fragment resolves to
+  the first, exercised by asserting the returned range is the earlier heading's.
 - (Phase 2) Explicit `<a id="x">` colocated with a heading whose implicit slug is also `x`
   → explicit anchor wins per invariant 6, or documented fallback if not achievable.
 
@@ -259,19 +334,25 @@ Per CONTRIBUTING, before/after screenshots plus a short recording reproducing th
 motivating test document verbatim: the raw-HTML `<a href="#target-section">` jump, the
 markdown-native `[Jump to Target Section](#target-section)` jump (contrast case — today
 resolves as a plain URL), the external `<a href="https://warp.dev">` link, and the `<a
-id="target-section"></a>` marker preceding the heading. Confirm scroll lands the heading at
-or near the top of the viewport (exact positioning behavior — top-align vs. some offset — is
-an implementation choice the manual pass should sanity-check against `request_autoscroll_to_
-exact_vertical`'s existing `pixel_delta` semantics).
+id="target-section"></a>` marker preceding the heading. Confirm scroll lands the heading in
+view (the existing call uses `AutoScrollMode::PositionOffsetInViewportCenter`, i.e. the target
+is centered rather than top-aligned — sanity-check that this reads well for the anchor-jump
+case, since it is the behavior already shipped for other `#`-fragment jumps and changing it
+would affect them too).
 
 ## Risks and follow-ups
 
-- **The anchor index's storage/invalidation lifecycle is the single biggest unknown.**
-  Everything else in this spec (slug generation, click resolution, the `<a id>` marker
-  itself) is bounded, ordinary parser/render work. Where a per-document id→offset map lives,
-  how it's kept in sync with edits, and whether an existing analogous cache already exists to
-  extend — none of this is verified yet and should be the first thing implementation
-  confirms, since it could shift (iii) from MEDIUM to LARGE if no such lifecycle hook exists.
+- **No anchor-index lifecycle risk in phase 1.** An earlier draft of this spec called a
+  per-document id→offset map's storage and invalidation the single biggest unknown. That risk
+  is now moot: phase 1 builds no index (item 3). `find_matching_header` resolves live against
+  the current buffer per click, so there is nothing to store, sync, or invalidate. The only
+  residual judgment call is cosmetic — whether the existing center-in-viewport autoscroll
+  reads well for anchor jumps (noted in the manual-testing section).
+- **The one behavioral check the implementer must not skip** is the miss path (item 4): today
+  a `#`-fragment that resolves to nothing falls through to the URL opener. Confirm that
+  fall-through is observably inert (no broken-link tooltip) per invariant 7, and add an
+  early-return if it is not. This is the sole place phase-1 correctness is not already
+  guaranteed by existing master behavior.
 - **`<a href>`'s attribute parser (item 1) needs a maintainer call between a purpose-built
   scanner and reusing `html5ever`.** The purpose-built path matches the `<u>` precedent's
   spirit (minimal, inline-grammar-native) but is more exposed to malformed real-world HTML
@@ -282,7 +363,8 @@ exact_vertical`'s existing `pixel_delta` semantics).
   path the tables spec already plans to reuse — verify once both land, no explicit design
   change anticipated here.
 - **Cross-document fragment links (explicit non-goal) are the natural next step** once
-  same-document resolution ships, and the anchor-index design should be sanity-checked
-  against not painting that in a corner (e.g. keying the index by document id in addition to
-  fragment id would future-proof it cheaply) — not required for this slice, but worth a
-  design glance before implementation locks in the index's shape.
+  same-document resolution ships. Phase 1's live-resolution approach doesn't paint this into a
+  corner — a cross-document jump would resolve against a *different* document's buffer, which
+  is an orthogonal addition to `find_matching_header`'s target selection rather than a change
+  to any cached index shape (there is none). Worth a design glance if phase 2 introduces an
+  `<a id>` index, but nothing in phase 1 constrains it.

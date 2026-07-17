@@ -82,6 +82,10 @@ Out of scope (explicit non-goals):
 - **URL scheme validation or link-target security beyond what markdown links already do.**
   `<a href>` reuses the exact same `Hyperlink::Url` styling and click path as markdown
   links; it inherits that trust boundary as-is rather than introducing a new one.
+- **Anchor scroll-to in the terminal (TUI) Markdown renderer.** `<a href>` links will
+  *render* in the TUI viewer for free (it shares the parser), but clicking a `#fragment`
+  there does not scroll — the TUI has no scroll model or click-to-navigate path. Fragment
+  resolution is a GUI-viewer feature in this slice.
 
 ## Behavior
 
