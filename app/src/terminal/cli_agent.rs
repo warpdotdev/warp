@@ -292,11 +292,13 @@ impl CLIAgent {
         }
     }
 
-    /// Returns the prefix character used for skill invocations by this CLI agent.
-    /// Most agents use `/` (e.g. `/skill-name`), but Codex uses `$` (e.g. `$skill-name`).
+    /// Returns the prefix used for skill invocations by this CLI agent.
+    /// Most agents use `/` (e.g. `/skill-name`), but Codex uses `$` (e.g. `$skill-name`)
+    /// and OhMyPi uses `/skill:` (e.g. `/skill:skill-name`).
     pub fn skill_command_prefix(&self) -> &'static str {
         match self {
             CLIAgent::Codex => "$",
+            CLIAgent::OhMyPi => "/skill:",
             _ => "/",
         }
     }

@@ -592,6 +592,14 @@ fn test_oh_my_pi_supports_bash_mode() {
 }
 
 #[test]
+fn test_oh_my_pi_skill_command_prefix() {
+    // OhMyPi invokes skills as `/skill:<name>`; other agents keep their prefixes.
+    assert_eq!(CLIAgent::OhMyPi.skill_command_prefix(), "/skill:");
+    assert_eq!(CLIAgent::Codex.skill_command_prefix(), "$");
+    assert_eq!(CLIAgent::Claude.skill_command_prefix(), "/");
+}
+
+#[test]
 fn test_command_is_warp_tui_matches_binaries_and_launchers() {
     // Direct binary names.
     assert!(CLIAgent::command_is_warp_tui("warp-tui", None));
