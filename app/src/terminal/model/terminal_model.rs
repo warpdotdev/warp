@@ -3016,7 +3016,7 @@ impl ansi::Handler for TerminalModel {
                 // Not being able to read the value should not cause a full-app crash. Instead,
                 // bootstrapping should fail in the same way that it would if the DCS message
                 // were otherwise corrupted.
-                report_error!("Received bootstrap message with no pending session info.");
+                log::warn!("Received bootstrap message with no pending session info.");
                 return;
             }
         };
@@ -3162,9 +3162,9 @@ impl ansi::Handler for TerminalModel {
                         uname: data.uname,
                     }))
             }
-            None => report_error!(
-                "Received invalid shell name in init_subshell",
-                extra: { "shell" => %data.shell }
+            None => log::warn!(
+                "Received invalid shell name in init_subshell: {}",
+                data.shell
             ),
         }
     }
@@ -3186,9 +3186,9 @@ impl ansi::Handler for TerminalModel {
                         ))
                 }
                 None => {
-                    report_error!(
-                        "Received invalid shell name in SourcedRCFileForWarpValue",
-                        extra: { "shell" => %data.shell }
+                    log::warn!(
+                        "Received invalid shell name in SourcedRCFileForWarpValue: {}",
+                        data.shell
                     );
                 }
             }

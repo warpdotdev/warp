@@ -5,8 +5,6 @@ use std::sync::Arc;
 use async_channel::{Receiver, Sender};
 use parking_lot::FairMutex;
 use thiserror::Error;
-#[cfg(feature = "local_fs")]
-use warp_errors::report_error;
 use warp_util::path::ShellFamily;
 use warpui::r#async::block_on;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -429,7 +427,7 @@ impl<T: EventLoopSender> PtyController<T> {
                     self.source_bootstrap_script(path, shell_type, ctx);
                 } else {
                     self.write_terminating_bootstrap_bytes(ctx);
-                    report_error!("Could not convert bootstrap script file path to str");
+                    log::warn!("Could not convert bootstrap script file path to str");
                 }
 
                 self.bootstrap_file = Some(file);

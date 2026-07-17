@@ -10,7 +10,6 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use rangemap::{RangeInclusiveMap, StepLite};
-use warp_errors::report_error;
 use warpui::elements::SecretRange;
 use warpui::EntityId;
 
@@ -377,8 +376,7 @@ pub fn set_user_and_enterprise_secret_regexes<'a>(
     let dfas = match RegexDFAs::new_many(&all_secrets, false, true) {
         Ok(dfas) => dfas,
         Err(err) => {
-            report_error!(anyhow::Error::new(err)
-                .context("Failed to construct new RegexDFA with combined secrets"));
+            log::warn!("Failed to construct new RegexDFA with combined secrets: {err:#}");
             return;
         }
     };
@@ -392,8 +390,7 @@ pub fn set_user_and_enterprise_secret_regexes<'a>(
             },
         },
         Err(err) => {
-            report_error!(anyhow::Error::new(err)
-                .context("Failed to construct new Regex with combined secrets"));
+            log::warn!("Failed to construct new Regex with combined secrets: {err:#}");
             return;
         }
     };
