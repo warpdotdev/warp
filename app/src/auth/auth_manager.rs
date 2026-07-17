@@ -115,9 +115,7 @@ impl AuthManager {
         }
     }
 
-    #[cfg(any(test, feature = "test-util"))]
-    // Only consumed by `tui_export`; unused when `test-util` is on without `tui`.
-    #[cfg_attr(not(any(test, feature = "tui")), allow(dead_code))]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
         use crate::server::server_api::ServerApiProvider;
 

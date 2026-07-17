@@ -650,9 +650,7 @@ impl LaunchMode {
         }
     }
 
-    #[cfg(any(test, feature = "test-util"))]
-    // Only consumed by `tui_export`; unused when `test-util` is on without `tui`.
-    #[cfg_attr(not(any(test, feature = "tui")), allow(dead_code))]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub(crate) fn new_for_unit_test() -> Self {
         LaunchMode::Test {
             driver: Box::new(None),

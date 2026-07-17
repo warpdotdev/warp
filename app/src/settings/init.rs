@@ -280,7 +280,7 @@ fn handle_warp_config_change(
 /// settings when the settings file feature flag is disabled.
 fn init_platform_native_preferences() -> user_preferences::Model {
     cfg_if::cfg_if! {
-        if #[cfg(any(test, feature = "test-util"))] {
+        if #[cfg(test)] {
             Box::<user_preferences::in_memory::InMemoryPreferences>::default()
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd", feature = "integration_tests"))] {
             match user_preferences::file_backed::FileBackedUserPreferences::new(super::user_preferences_file_path()) {
@@ -448,11 +448,14 @@ fn migrate_native_settings_to_settings_file(ctx: &mut AppContext) {
         .map_err(|err| anyhow::anyhow!(err)));
 }
 
-#[cfg(any(test, feature = "test-util"))]
+#[cfg(any(test, all(feature = "tui", feature = "test-util")))]
 pub fn init_and_register_user_preferences(ctx: &mut AppContext) {
-    let (public_prefs, _parse_error) = init_public_user_preferences();
+    let public_prefs = Box::<user_preferences::in_memory::InMemoryPreferences>::default();
+    let private_prefs = settings::PrivatePreferences::new(Box::<
+        user_preferences::in_memory::InMemoryPreferences,
+    >::default());
     ctx.add_singleton_model(move |_| settings::PublicPreferences::new(public_prefs));
-    ctx.add_singleton_model(move |_| init_private_user_preferences());
+    ctx.add_singleton_model(move |_| private_prefs);
 }
 
 #[cfg(test)]

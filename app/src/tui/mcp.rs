@@ -83,7 +83,7 @@ pub struct TuiMcpManager {
 
 impl TuiMcpManager {
     /// Creates an empty MCP aggregate for frontend tests.
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub(crate) fn new_for_test(_ctx: &mut ModelContext<Self>) -> Self {
         Self {
             snapshot: TuiMcpSnapshot {
