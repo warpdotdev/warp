@@ -170,6 +170,8 @@ use crate::ai::blocklist::handoff::touched_repos::{
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::orchestration_topology::has_in_progress_descendant_conversation;
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::ai::blocklist::{
@@ -4537,6 +4539,33 @@ impl Input {
     }
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    /// Returns true when this input's active conversation has running child agents.
+    fn active_conversation_has_in_progress_children(&self, ctx: &AppContext) -> bool {
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        history
+            .active_conversation_id(self.terminal_view_id)
+            .is_some_and(|conversation_id| {
+                has_in_progress_descendant_conversation(history, conversation_id)
+            })
+    }
+
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    /// Shows the handoff-blocked toast without mutating the current draft.
+    fn show_handoff_child_agents_in_progress_toast(&self, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::error(
+                    "Hand off is disabled while child agents are in progress. Wait for them to finish, then try again."
+                        .to_owned(),
+                ),
+                window_id,
+                ctx,
+            );
+        });
+    }
+
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn maybe_launch_cloud_handoff_request(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         use crate::cloud_object::CloudObjectLookup as _;
 
@@ -4546,6 +4575,10 @@ impl Input {
             || self.prefix_mode(ctx) != InputPrefixMode::CloudHandoff
         {
             return false;
+        }
+        if self.active_conversation_has_in_progress_children(ctx) {
+            self.show_handoff_child_agents_in_progress_toast(ctx);
+            return true;
         }
 
         if self.block_cloud_handoff_if_model_unsupported(ctx) {
