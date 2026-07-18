@@ -219,6 +219,56 @@ fn should_watch_prunes_gitignored_directory() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn should_watch_prunes_directory_symlinks_and_their_descendants() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::create_dir_all(root.join("target/tree")).unwrap();
+    std::os::unix::fs::symlink(root.join("target"), root.join("result")).unwrap();
+
+    // The symlink and paths reached through it must both be rejected. The
+    // latter protects the watch filter's ancestor monotonicity invariant.
+    assert!(!super::should_watch_repo_directory(
+        &root.join("result"),
+        &[],
+        &[]
+    ));
+    assert!(!super::should_watch_repo_directory(
+        &root.join("result/tree"),
+        &[],
+        &[]
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn should_watch_allows_symlinked_force_included_paths() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::create_dir_all(root.join("targets/skills/linked")).unwrap();
+    fs::create_dir_all(root.join(".agents/skills")).unwrap();
+    std::os::unix::fs::symlink(
+        root.join("targets/skills/linked"),
+        root.join(".agents/skills/linked"),
+    )
+    .unwrap();
+    let force_included = [std::path::PathBuf::from(".agents/skills")];
+
+    // Project-skill providers intentionally support symlinked skill
+    // directories, so the explicit force-included path remains watchable.
+    assert!(super::should_watch_repo_directory(
+        &root.join(".agents/skills/linked"),
+        &[],
+        &force_included
+    ));
+    assert!(super::should_watch_repo_directory(
+        &root.join(".agents/skills/linked/SKILL.md"),
+        &[],
+        &force_included
+    ));
+}
+
 #[test]
 fn should_watch_descends_to_force_included_under_ignored_ancestor() {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -320,10 +370,12 @@ fn should_watch_descends_dir_only_reinclude_negation() {
 
 #[test]
 fn should_watch_preserves_git_internal_allowlist() {
-    // No gitignores / force-included paths needed: `.git` handling
-    // short-circuits and is path-based, mirroring
-    // `should_watch_directory_in_git_path`.
-    let repo = std::path::Path::new("/home/user/project");
+    // No gitignores / force-included paths needed: `.git` handling is
+    // path-based, mirroring `should_watch_directory_in_git_path`.
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::create_dir_all(repo.join(".git/refs/heads")).unwrap();
+    fs::create_dir_all(repo.join(".git/objects")).unwrap();
     assert!(super::should_watch_repo_directory(
         &repo.join(".git/refs/heads"),
         &[],

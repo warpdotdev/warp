@@ -992,20 +992,30 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 /// a watch on) the directory at `path`.
 ///
 /// Directories inside `.git/` follow the watcher allowlist, force-included
-/// paths are always watched even when gitignored, and any other gitignored
-/// directory is pruned so we don't register watches on `node_modules`, build
-/// output, vendored deps, etc.
+/// paths are always watched even when gitignored, directory symlinks are
+/// pruned to avoid following trees outside the repository, and any other
+/// gitignored directory is pruned so we don't register watches on
+/// `node_modules`, build output, vendored deps, etc.
 pub fn should_watch_repo_directory(
     path: &Path,
     gitignores: &[Gitignore],
     force_included_paths: &[PathBuf],
 ) -> bool {
-    if is_git_internal_path(path) {
-        return should_watch_directory_in_git_path(path);
-    }
-
+    // Do not follow directory symlinks while recursively registering watches.
+    // A repository symlink such as `result -> /nix/store/...` can otherwise
+    // make the watcher traverse a large tree outside the repository. Keep
+    // explicitly force-included paths working for project-skill providers,
+    // which intentionally support symlinked skill directories.
     if matches_force_included_path(path, force_included_paths) {
         return true;
+    }
+
+    if is_within_symlink(path) {
+        return false;
+    }
+
+    if is_git_internal_path(path) {
+        return should_watch_directory_in_git_path(path);
     }
 
     !matches_gitignores(
@@ -1014,6 +1024,19 @@ pub fn should_watch_repo_directory(
         gitignores,
         /* check_ancestors */ true,
     )
+}
+
+/// Returns whether `path` is a symlink or is below one.
+///
+/// The recursive watcher requires this check to be monotonic: if a symlinked
+/// directory is rejected, its descendants must be rejected as well even
+/// though their individual paths are not themselves symlinks.
+fn is_within_symlink(path: &Path) -> bool {
+    // A valid path beneath a symlink can only be reached through a directory
+    // symlink, so avoid a second `metadata` syscall to resolve its target.
+    path.ancestors().any(|ancestor| {
+        std::fs::symlink_metadata(ancestor).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    })
 }
 
 /// Returns the [`WatchFilter`] used by repository file watchers.
