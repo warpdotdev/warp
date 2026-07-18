@@ -15,6 +15,7 @@ use string_offset::{ByteOffset, CharOffset};
 use vec1::{Vec1, vec1};
 use warp_util::content_version::ContentVersion;
 use warpui_core::elements::ListIndentLevel;
+use warpui_core::fonts::Weight;
 use warpui_core::text::point::Point;
 use warpui_core::{App, AppContext, ModelContext, ModelHandle, ReadModel};
 
@@ -1909,6 +1910,150 @@ fn test_block_style() {
                     })
                 ]
             );
+        });
+    });
+}
+
+#[test]
+fn test_block_style_strips_non_bold_weight() {
+    // Regression test for #13949: `TextStyles::all()` can only carry one `CustomWeight`
+    // (it hardcodes `Some(CustomWeight::Bold)`), so the strip-all-styles path used when
+    // converting styled text into a block that disallows formatting (e.g. a code block)
+    // only unstyled text that was exactly Bold, leaving other weights like Black to keep
+    // rendering inside the disallowed block.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(3),
+                selection.clone(),
+                ctx,
+            );
+            let mut black = TextStyles::default();
+            black.set_weight(Weight::Black);
+            let _ = buffer.style_internal(black, selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><b_s>te<b_e>st");
+
+            let delta = buffer
+                .block_style_range(
+                    CharOffset::from(1)..CharOffset::from(5),
+                    BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default(),
+                    },
+                    selection.clone(),
+                    ctx,
+                )
+                .delta
+                .expect("Should exist");
+            assert_eq!(buffer.content.debug(), "<code:Shell>test<text>");
+            assert_eq!(
+                delta.new_lines,
+                vec![StyledBufferBlock::Text(StyledTextBlock {
+                    block: vec![StyledBufferRun {
+                        run: "test\n".to_string(),
+                        text_styles: TextStylesWithMetadata::default(),
+                        block_style: BufferBlockStyle::CodeBlock {
+                            code_block_type: Default::default()
+                        }
+                    },],
+                    style: BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default()
+                    },
+                    content_length: CharOffset::from(5),
+                }),]
+            );
+        });
+    });
+}
+
+#[test]
+fn test_block_style_strips_light_weight() {
+    // Same regression as `test_block_style_strips_non_bold_weight`, exercised with a second
+    // non-Bold weight to make sure the fix isn't Black-specific.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(3),
+                selection.clone(),
+                ctx,
+            );
+            let mut light = TextStyles::default();
+            light.set_weight(Weight::Light);
+            let _ = buffer.style_internal(light, selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><b_s>te<b_e>st");
+
+            let _delta = buffer
+                .block_style_range(
+                    CharOffset::from(1)..CharOffset::from(5),
+                    BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default(),
+                    },
+                    selection.clone(),
+                    ctx,
+                )
+                .delta
+                .expect("Should exist");
+            assert_eq!(buffer.content.debug(), "<code:Shell>test<text>");
+        });
+    });
+}
+
+#[test]
+fn test_block_style_strips_bold_weight() {
+    // Guard case for the two tests above: Bold matches the literal value `TextStyles::all()`
+    // carries, so this already passed before the fix, but it's worth keeping as a regression
+    // guard alongside the non-Bold cases.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(3),
+                selection.clone(),
+                ctx,
+            );
+            let _ = buffer.style_internal(TextStyles::default().bold(), selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><b_s>te<b_e>st");
+
+            let _delta = buffer
+                .block_style_range(
+                    CharOffset::from(1)..CharOffset::from(5),
+                    BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default(),
+                    },
+                    selection.clone(),
+                    ctx,
+                )
+                .delta
+                .expect("Should exist");
+            assert_eq!(buffer.content.debug(), "<code:Shell>test<text>");
         });
     });
 }
