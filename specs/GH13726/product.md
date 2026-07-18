@@ -37,14 +37,10 @@ a silently-merged cell, never left unspecified. Because #13726 cites `colspan`/`
 as one of its two motivating requirements, this PR does **not** fully close that issue on
 its own; see the note on issue linkage below.
 
-**Issue linkage:** this spec/PR should not use "Closes #13726" as-is, since the issue's
-span requirement is explicitly deferred here. Options, for the PR author to choose before
-merge: (a) reword the PR to "Contributes to #13726" / "Partially addresses #13726" and
-leave the issue open until a follow-up spec lands span support; or (b) file a dedicated
-follow-up issue for `colspan`/`rowspan` support, retarget #13726's remaining scope to it,
-and let this PR close #13726 as "un-spanned HTML tables, the deliverable this issue's
-title actually describes, with spans tracked separately." Either is acceptable; the
-PR must not claim to fully close #13726 while silently shipping a subset.
+**Issue linkage (resolved):** option (b) was chosen — `colspan`/`rowspan` support is
+tracked as its own follow-up issue, #13953, and this PR keeps "Closes #13726" for the
+un-spanned raw-HTML table subset (the deliverable this issue's title describes). Spanned
+tables degrade deterministically per the malformed-input rules below until #13953 lands.
 
 The repo's own paste-path test, `test_unsupported_html_types`
 (`crates/markdown_parser/src/html_parser_tests.rs:191-222`, TODO-marked), documents
