@@ -502,6 +502,10 @@ pub enum FeatureFlag {
     /// Enables rendering markdown tables in notebooks.
     MarkdownTables,
 
+    /// Enables horizontal alignment of `<div align>`/`<p align>` block regions in the
+    /// markdown viewer (GH-13735).
+    MarkdownBlockAlign,
+
     /// Renders `.ipynb` (Jupyter) files as a formatted, read-only notebook in
     /// Warp's notebook viewer instead of showing the raw JSON in the code editor.
     JupyterNotebookRendering,

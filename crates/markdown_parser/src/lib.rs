@@ -11,8 +11,8 @@ pub mod weight;
 pub use html_parser::parse_html;
 use itertools::Itertools;
 pub use markdown_parser::{
-    parse_image_prefix, parse_image_run_line, parse_inline_markdown, parse_markdown,
-    parse_markdown_with_gfm_tables,
+    MarkdownParseOptions, parse_image_prefix, parse_image_run_line, parse_inline_markdown,
+    parse_markdown, parse_markdown_with_gfm_tables, parse_markdown_with_options,
 };
 use serde_yaml::Mapping;
 use weight::CustomWeight;

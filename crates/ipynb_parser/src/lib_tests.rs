@@ -2,9 +2,9 @@ use markdown_parser::{CodeBlockText, FormattedImage, FormattedText, FormattedTex
 
 use super::*;
 
-/// Convert a notebook, asserting it parses successfully (GFM tables off).
+/// Convert a notebook, asserting it parses successfully (optional detectors off).
 fn convert(json: &str) -> FormattedText {
-    ipynb_to_formatted_text(json, false).expect("should convert")
+    ipynb_to_formatted_text(json, MarkdownParseOptions::default()).expect("should convert")
 }
 
 /// All code blocks in the formatted text, in order.
@@ -308,14 +308,14 @@ fn test_empty_notebook_is_ok() {
 
 #[test]
 fn test_malformed_json_is_error() {
-    let result = ipynb_to_formatted_text("{ not valid json", false);
+    let result = ipynb_to_formatted_text("{ not valid json", MarkdownParseOptions::default());
     assert!(matches!(result, Err(IpynbError::Parse(_))));
 }
 
 #[test]
 fn test_non_v4_notebook_is_error() {
     let json = r#"{"nbformat": 3, "cells": []}"#;
-    let result = ipynb_to_formatted_text(json, false);
+    let result = ipynb_to_formatted_text(json, MarkdownParseOptions::default());
     assert!(matches!(
         result,
         Err(IpynbError::UnsupportedFormat { nbformat: Some(3) })
@@ -327,7 +327,7 @@ fn test_missing_nbformat_is_error() {
     // Arbitrary JSON that lacks an nbformat field must not render as a blank
     // notebook; it should error so the caller falls back to raw content.
     let json = r#"{"some": "json", "cells": []}"#;
-    let result = ipynb_to_formatted_text(json, false);
+    let result = ipynb_to_formatted_text(json, MarkdownParseOptions::default());
     assert!(matches!(
         result,
         Err(IpynbError::UnsupportedFormat { nbformat: None })
@@ -341,7 +341,7 @@ fn test_missing_cells_is_error() {
     // back to raw content. An explicit `"cells": []` remains a valid empty
     // notebook (see `test_empty_notebook_is_ok`).
     let json = r#"{"nbformat": 4}"#;
-    let result = ipynb_to_formatted_text(json, false);
+    let result = ipynb_to_formatted_text(json, MarkdownParseOptions::default());
     assert!(matches!(result, Err(IpynbError::Parse(_))));
 }
 
