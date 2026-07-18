@@ -1,10 +1,10 @@
-# Git source control in the Tools panel
+# Git history in the Tools panel
 
 ## Summary
 
 Add a Git source-control tab to Warp's Tools panel so developers can browse repository history without leaving Warp. Working-tree changes remain in Warp's existing Code Changes right panel.
 
-Related issues: [#10484](https://github.com/warpdotdev/warp/issues/10484), [#8542](https://github.com/warpdotdev/warp/issues/8542).
+Issue: [#9732](https://github.com/warpdotdev/warp/issues/9732).
 
 ## Goals
 

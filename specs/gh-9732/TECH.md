@@ -1,4 +1,4 @@
-# Git source control in the Tools panel: technical design
+# Git history in the Tools panel: technical design
 
 ## Context
 
