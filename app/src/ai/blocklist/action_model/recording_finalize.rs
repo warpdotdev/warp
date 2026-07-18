@@ -96,9 +96,12 @@ async fn finalize_recording(
     uploader: FileArtifactUploader,
     server_conversation_token: Option<crate::ai::agent::api::ServerConversationToken>,
 ) -> StopRecordingResult {
-    // Conversation cancellation discards the recording instead of publishing
-    // it. Dropping the handle kill-on-drops the ffmpeg process and removes the
-    // partial output, so there is nothing to finalize or upload.
+    // Conversation cancellation always discards the recording instead of
+    // publishing it, including when no action group was committed. This
+    // intentionally precedes the empty-actions error below: cancellation keeps
+    // its `Cancelled` result contract while still guaranteeing no video upload.
+    // Dropping the handle kill-on-drops ffmpeg and removes the partial output,
+    // so there is nothing to finalize or upload.
     if !should_upload {
         drop(recording);
         return StopRecordingResult::Cancelled;

@@ -11,7 +11,7 @@ use crate::test_util::terminal::initialize_app_for_terminal_view;
 /// dropping the handle) and resolves as `Cancelled` without touching the
 /// uploader.
 #[test]
-fn cancellation_finalization_skips_upload() {
+fn cancellation_finalization_skips_upload_even_without_actions() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
