@@ -146,7 +146,7 @@ impl SlashCommandRequest {
                 Some(controller.start_new_conversation_for_request(ctx).id())
             }
         }) else {
-            report_error!("Failed to get conversation ID for slash command request");
+            log::warn!("Failed to get conversation ID for slash command request");
             return;
         };
 

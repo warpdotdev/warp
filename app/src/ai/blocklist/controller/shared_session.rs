@@ -335,10 +335,7 @@ impl BlocklistAIController {
             }
         });
         let Some(conversation) = history_model.as_ref(ctx).conversation(&conversation_id) else {
-            report_error!(
-                "Failed to find conversation with id",
-                extra: { "conversation_id" => ?conversation_id }
-            );
+            log::warn!("Failed to find conversation with id: {conversation_id:?}");
             return;
         };
 
@@ -439,10 +436,7 @@ impl BlocklistAIController {
 
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         let Some(conversation) = history_model.as_ref(ctx).conversation(&conversation_id) else {
-            report_error!(
-                "Failed to find conversation with id",
-                extra: { "conversation_id" => ?conversation_id }
-            );
+            log::warn!("Failed to find conversation with id: {conversation_id:?}");
             return;
         };
 
@@ -726,7 +720,7 @@ impl BlocklistAIController {
 
         // We have file downloads — ensure both the download dir and task ID are available.
         let Some(attachment_dir) = self.attachments_download_dir.clone() else {
-            report_error!(
+            log::warn!(
                 "No attachments_download_dir set on controller, cannot process file attachments"
             );
             self.send_shared_session_query(
@@ -739,7 +733,7 @@ impl BlocklistAIController {
             return;
         };
         let Some(task_id) = self.ambient_agent_task_id else {
-            report_error!("No task_id available to download attachments");
+            log::warn!("No task_id available to download attachments");
             self.send_shared_session_query(
                 prompt,
                 conversation_id,
@@ -768,18 +762,13 @@ impl BlocklistAIController {
                         .map(|att| (att.attachment_id, att.download_url))
                         .collect::<std::collections::HashMap<_, _>>(),
                     Err(e) => {
-                        report_error!(
-                            e.context("Failed to get download URLs for task"),
-                            extra: { "task_id" => %task_id }
-                        );
+                        log::warn!("Failed to get download URLs for task {task_id}: {e:#}");
                         return vec![];
                     }
                 };
 
                 if let Err(e) = async_fs::create_dir_all(&attachment_dir).await {
-                    report_error!(
-                        anyhow::Error::new(e).context("Failed to create attachments directory")
-                    );
+                    log::warn!("Failed to create attachments directory: {e:#}");
                     return vec![];
                 }
 
@@ -801,10 +790,7 @@ impl BlocklistAIController {
                             });
                         }
                         Err(e) => {
-                            report_error!(
-                                e.context("Failed to download attachment"),
-                                extra: { "file_name" => %safe_name }
-                            );
+                            log::warn!("Failed to download attachment {safe_name}: {e:#}");
                         }
                     }
                 }
@@ -878,7 +864,7 @@ impl BlocklistAIController {
                         })
                     })
                 else {
-                    report_error!("Failed to get conversation id for shared session prompt");
+                    log::warn!("Failed to get conversation id for shared session prompt");
                     return;
                 };
 

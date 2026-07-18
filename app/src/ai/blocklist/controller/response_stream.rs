@@ -399,9 +399,7 @@ impl ResponseStream {
                 );
             }
             Err(e) => {
-                report_error!(
-                    anyhow::anyhow!("{e:?}").context("Failed to send request to multi-agent API")
-                );
+                log::warn!("Failed to send request to multi-agent API: {e:?}");
                 if self.current_request_id.is_none_or(|id| id != request_id) {
                     return;
                 }
