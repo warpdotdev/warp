@@ -143,16 +143,29 @@ transport. The reporter is on macOS, so macOS coverage is mandatory.
   - *Platform-specific (`NSPasteboard` on macOS, `x11rb`/`arboard` elsewhere)* —
     rejected as unnecessary complexity when `arboard` covers all three desktop
     OSes.
-- **Local vs remote detection:**
-  - *Environment heuristic (`SSH_CONNECTION` / `SSH_TTY` present ⇒ remote)* —
-    **chosen.** Standard, dependency-free, matches how shells/tmux detect SSH.
-    Cons: imperfect for exotic setups (mosh, nested sessions); acceptable because
-    the local fallback (behaviour 6) keeps those no worse than today.
-  - *Try native first, always, then OSC 52 on failure* — rejected as the
+- **Transport ordering — env-detection, NOT try-then-fallback:**
+  - *Environment-detected transport (`SSH_CONNECTION` / `SSH_TTY` present ⇒
+    remote ⇒ OSC 52; otherwise local ⇒ native `arboard`, with OSC 52 as a
+    last-resort fallback only if `arboard` errors)* — **chosen.** The transport
+    is selected up front from the environment; native is **not** merely a
+    fallback behind an OSC 52 attempt.
+  - *Try OSC 52 first, native as fallback* — **rejected.** OSC 52 is entirely
+    fire-and-forget: the host sends **no acknowledgment**, so the TUI cannot
+    detect whether the write was accepted or dropped without a fragile
+    before/after clipboard poll. "OSC 52 first" would therefore always look like
+    success and never trigger the native fallback — re-introducing the exact
+    false-success bug this change fixes. Detecting the session up front avoids
+    relying on an unobservable signal. (This is the pattern the Codex Rust TUI
+    uses in `codex-rs/tui/src/clipboard_copy.rs`.)
+  - *Try native first, always (ignoring the environment)* — rejected as the
     *primary* signal: on a remote host `arboard` may "succeed" writing to the
-    server clipboard, so we can't rely on native success to mean the user's
-    machine got the text. The env heuristic gates native to the local case; the
-    try-then-fallback pattern is still used *within* the local case (behaviour 6).
+    **server's** clipboard (wrong machine), so native success can't be trusted
+    to mean the user's machine got the text. The env heuristic gates native to
+    the local case; the try-then-fallback pattern is used only *within* the
+    local case (native → OSC 52 on `arboard` error, behaviour 6).
+  - The env heuristic is imperfect for exotic setups (mosh, nested sessions);
+    acceptable because the local fallback (behaviour 6) keeps those no worse
+    than today.
 - **Feedback for the OSC 52 path:** keep a distinct, honest message
   ("sent to terminal…") rather than reusing the confirmed-copy hint, because the
   TUI cannot observe whether the host accepted the sequence. Reusing the success
@@ -204,14 +217,32 @@ transport. The reporter is on macOS, so macOS coverage is mandatory.
      (already parameterised via `write_osc52_sequences(_, _, &mut impl Write)`).
      Only the real `copy_to_clipboard` entry point binds the real `arboard`
      backend and real `stdout`.
-   - **Linux clipboard-ownership caveat:** on X11/Wayland the clipboard contents
-     are served by the process that owns the selection. Because the TUI is a
-     long-lived process, hold a **process-lifetime** `arboard::Clipboard`
-     (lazily initialised, e.g. a `OnceLock<Mutex<Clipboard>>`) and reuse it for
-     every copy, rather than constructing and dropping a `Clipboard` per copy
-     (which can clear the selection immediately). This satisfies behaviour 7.
-     Calls happen on the UI thread synchronously, matching the current OSC 52
-     write.
+   - **Linux clipboard-ownership caveat (a real, mandatory implementation
+     detail — the "ClipboardLease" pattern):** on X11/Wayland the clipboard
+     contents are *served by the process that owns the selection*, so **dropping
+     the `arboard::Clipboard` handle makes the copied text disappear**. Because
+     the TUI is a long-lived process, hold the `arboard::Clipboard` for the
+     **TUI's entire lifetime** (lazily initialised and retained, e.g. a
+     `OnceLock<Mutex<Clipboard>>` process-lifetime handle) and reuse it for every
+     copy — never construct-and-drop a `Clipboard` per copy. Codex names this a
+     `ClipboardLease`; the naming is optional but the lifetime requirement is
+     not. This satisfies behaviour 7. Calls happen on the UI thread
+     synchronously, matching the current OSC 52 write.
+   - **Platform behaviour of the native path (`arboard`), confirmed against
+     prior art:**
+     - *macOS* — works with no GUI window; `NSPasteboard` is a system service.
+       (This is the reporter's platform.)
+     - *Linux X11/Wayland* — works when `$DISPLAY` / `$WAYLAND_DISPLAY` is set,
+       subject to the ClipboardLease lifetime requirement above.
+     - *Linux headless / SSH* — `arboard` fails (no display / not the local
+       machine); the transport selection routes these to OSC 52 (SSH by env
+       detection; a displayless local run by the native→OSC 52 fallback,
+       behaviour 6).
+     - *Windows* — works via the system clipboard.
+     Prior art using `arboard` in a Rust TUI in exactly this way: the Codex TUI
+     (`codex-rs/tui/src/clipboard_copy.rs`, env-detected native/OSC 52 with a
+     `ClipboardLease`). The opencode TUI (Go) achieves the same effect via
+     `atotto/clipboard`, which shells out to `pbcopy`/`xclip`/`wl-copy`.
 3. **`crates/warp_tui/src/terminal_session_view.rs`** — update the two call
    sites to map the new outcome to hints:
    - Selection copy (`:842`): `Ok(ClipboardCopy::Copied)` → `show_copy_hint`
