@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
-use anyhow::Context as _;
+use anyhow::{anyhow, Context as _};
 use futures::channel::oneshot;
 use futures::future::{self, join_all, Either};
 use futures::FutureExt as _;
@@ -2993,7 +2993,7 @@ impl AgentDriver {
         {
             Ok(()) => true,
             Err(err) => {
-                log::error!("Failed to save harness conversation (final): {err:#}");
+                report_error!(err);
                 false
             }
         };
@@ -3716,7 +3716,7 @@ impl AgentDriver {
 
         for provider in providers {
             if let Err(err) = provider.cleanup().await {
-                log::warn!("Unable to clean up cloud provider: {err:#}");
+                report_error!(anyhow!(err).context("Unable to clean up cloud provider"));
             }
         }
     }
@@ -3776,11 +3776,16 @@ impl AgentDriver {
         snapshot::run_declarations_script(&working_dir, &task_id, script_timeout).await;
 
         // Cap the upload so a pathological slow upload cannot wedge cleanup.
+        // On timeout we surface via report_error! so Sentry captures the incident and on-call
+        // alerting can fire, then let cloud-provider teardown continue.
         if let Err(TimeoutError) = snapshot::upload_snapshot_from_declarations(client, &task_id)
             .with_timeout(upload_timeout)
             .await
         {
-            log::warn!("Snapshot upload timed out; continuing with cleanup");
+            report_error!(
+                "Snapshot upload timed out; continuing with cleanup",
+                extra: { "timeout" => ?upload_timeout, "task_id" => %task_id }
+            );
         }
     }
 }
