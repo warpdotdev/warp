@@ -56,7 +56,7 @@ use crate::workspace::view::conversation_list::view::{
 use crate::workspace::view::global_search::view::{
     Event as GlobalSearchViewEvent, GlobalSearchEntryFocus, GlobalSearchView,
 };
-use crate::workspace::view::source_control::{SourceControlEvent, SourceControlView};
+use crate::workspace::view::source_control::SourceControlView;
 use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
     LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
@@ -100,9 +100,6 @@ pub enum LeftPanelEvent {
         conversation_id: AIConversationId,
         conversation_title: String,
         terminal_view_id: Option<warpui::EntityId>,
-    },
-    OpenCodeReview {
-        repo_path: LocalOrRemotePath,
     },
 }
 
@@ -245,14 +242,6 @@ impl LeftPanelView {
                     conversation_id: *conversation_id,
                     conversation_title: conversation_title.clone(),
                     terminal_view_id: *terminal_view_id,
-                });
-            }
-        });
-
-        ctx.subscribe_to_view(&source_control_view, |_me, _, event, ctx| match event {
-            SourceControlEvent::OpenCodeReview { repo_path } => {
-                ctx.emit(LeftPanelEvent::OpenCodeReview {
-                    repo_path: repo_path.clone(),
                 });
             }
         });

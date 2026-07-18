@@ -3,4 +3,4 @@ mod layout;
 mod row_canvas;
 mod view;
 
-pub use view::{SourceControlEvent, SourceControlView};
+pub use view::SourceControlView;

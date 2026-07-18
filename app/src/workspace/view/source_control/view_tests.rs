@@ -4,9 +4,7 @@ use pathfinder_geometry::vector::vec2f;
 use warpui::platform::WindowStyle;
 use warpui::{App, EntityIdSet, Presenter, WindowInvalidation};
 
-use super::super::data::{
-    CommitNode, CommitStats, FileChange, GitChangeKind, GitRefKind, GitRefLabel, RepositorySnapshot,
-};
+use super::super::data::{CommitNode, CommitStats, GitRefKind, GitRefLabel, RepositorySnapshot};
 use super::*;
 
 #[test]
@@ -17,10 +15,6 @@ fn paints_snapshot_with_finite_geometry() {
         let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, SourceControlView::new);
         let repo = LocalOrRemotePath::Local(PathBuf::from("/tmp/test-repo"));
         let snapshot = RepositorySnapshot {
-            staged_changes: vec![FileChange {
-                path: "src/main.rs".to_string(),
-                kind: GitChangeKind::Modified,
-            }],
             commits: vec![
                 CommitNode {
                     hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -58,7 +52,6 @@ fn paints_snapshot_with_finite_geometry() {
             ],
             has_more_history: true,
             has_head: true,
-            ..Default::default()
         };
 
         view.update(&mut app, |view, ctx| {

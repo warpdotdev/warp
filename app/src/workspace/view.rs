@@ -6409,25 +6409,6 @@ impl Workspace {
                     ctx,
                 );
             }
-            LeftPanelEvent::OpenCodeReview { repo_path } => {
-                let pane_group = self.active_tab_pane_group().clone();
-                let diff_state_model = self.working_directories_model.update(ctx, |model, ctx| {
-                    model.get_or_create_diff_state_model(repo_path.clone(), None, ctx)
-                });
-                if let Some(diff_state_model) = diff_state_model {
-                    let context = CodeReviewPaneContext {
-                        repo_path: Some(repo_path.clone()),
-                        diff_state_model,
-                    };
-                    self.open_right_panel(
-                        &context,
-                        &pane_group,
-                        CodeReviewPaneEntrypoint::SourceControl,
-                        None,
-                        ctx,
-                    );
-                }
-            }
         }
     }
 

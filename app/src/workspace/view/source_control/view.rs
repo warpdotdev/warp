@@ -1,30 +1,26 @@
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 use chrono::{Local, TimeZone};
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    Container, CornerRadius, CrossAxisAlignment, DragBarSide, Element, Expanded, Flex, Hoverable,
+    Container, CornerRadius, CrossAxisAlignment, Element, Expanded, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Point, Radius, Resizable, ResizableStateHandle,
-    ScrollbarWidth, Shrinkable, Stack, Text,
+    ParentElement, ParentOffsetBounds, Radius, ScrollbarWidth, Shrinkable, Stack, Text,
 };
-use warpui::event::DispatchedEvent;
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    AfterLayoutContext, AppContext, Entity, EventContext, LayoutContext, ModelHandle, PaintContext,
-    SingletonEntity, SizeConstraint, TypedActionView, View, ViewContext, ViewHandle,
+    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
 };
 
 use super::data::{
-    apply_mutation, load_history, load_repository, CommitNode, FileChange, GitChangeKind,
-    GitMutation, GitRefKind, GitRefLabel, RepositorySnapshot, HISTORY_PAGE_SIZE,
+    load_history, load_repository, CommitNode, GitRefKind, GitRefLabel, RepositorySnapshot,
+    HISTORY_PAGE_SIZE,
 };
 use super::layout::{layout_commits, GraphLayout};
 use super::row_canvas::GraphRowCanvas;
@@ -35,42 +31,11 @@ use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusEvent, GitR
 use crate::ui_components::buttons::icon_button;
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ChangeSection {
-    Merge,
-    Staged,
-    Changes,
-    Untracked,
-}
-
-impl ChangeSection {
-    fn title(self) -> &'static str {
-        match self {
-            Self::Merge => "Merge Changes",
-            Self::Staged => "Staged Changes",
-            Self::Changes => "Changes",
-            Self::Untracked => "Untracked Changes",
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourceControlAction {
     SelectRepository(LocalOrRemotePath),
     Refresh,
-    ToggleSection(ChangeSection),
-    ToggleHistory,
-    OpenCodeReview,
-    StagePaths(Vec<String>),
-    UnstagePaths(Vec<String>),
-    StageAll,
-    UnstageAll,
     LoadMore,
-}
-
-#[derive(Clone, Debug)]
-pub enum SourceControlEvent {
-    OpenCodeReview { repo_path: LocalOrRemotePath },
 }
 
 fn relative_time_string(timestamp: i64) -> Option<String> {
@@ -111,60 +76,7 @@ fn absolute_time_string(timestamp: i64) -> String {
 #[derive(Default)]
 struct StaticMouseStates {
     refresh: MouseStateHandle,
-    history: MouseStateHandle,
     load_more: MouseStateHandle,
-}
-
-struct MeasuredHeight {
-    child: Box<dyn Element>,
-    handle: Arc<Mutex<f32>>,
-}
-
-impl MeasuredHeight {
-    fn new(handle: Arc<Mutex<f32>>, child: Box<dyn Element>) -> Self {
-        Self { child, handle }
-    }
-}
-
-impl Element for MeasuredHeight {
-    fn layout(
-        &mut self,
-        constraint: SizeConstraint,
-        ctx: &mut LayoutContext,
-        app: &AppContext,
-    ) -> Vector2F {
-        let size = self.child.layout(constraint, ctx, app);
-        *self
-            .handle
-            .lock()
-            .expect("split area height should be accessible") = size.y();
-        size
-    }
-
-    fn after_layout(&mut self, ctx: &mut AfterLayoutContext, app: &AppContext) {
-        self.child.after_layout(ctx, app);
-    }
-
-    fn paint(&mut self, origin: Vector2F, ctx: &mut PaintContext, app: &AppContext) {
-        self.child.paint(origin, ctx, app);
-    }
-
-    fn size(&self) -> Option<Vector2F> {
-        self.child.size()
-    }
-
-    fn origin(&self) -> Option<Point> {
-        self.child.origin()
-    }
-
-    fn dispatch_event(
-        &mut self,
-        event: &DispatchedEvent,
-        ctx: &mut EventContext,
-        app: &AppContext,
-    ) -> bool {
-        self.child.dispatch_event(event, ctx, app)
-    }
 }
 
 pub struct SourceControlView {
@@ -179,20 +91,10 @@ pub struct SourceControlView {
     needs_refresh: bool,
     is_loading: bool,
     reload_after_current: bool,
-    mutation_in_progress: bool,
     history_page_in_progress: bool,
     generation: u64,
-    collapsed_sections: HashMap<ChangeSection, bool>,
-    history_collapsed: bool,
-    history_scroll_state: ClippedScrollStateHandle,
-    changes_scroll_state: ClippedScrollStateHandle,
-    split_state: ResizableStateHandle,
-    split_area_height: Arc<Mutex<f32>>,
+    scroll_state: ClippedScrollStateHandle,
     static_mouse_states: StaticMouseStates,
-    section_mouse_states: HashMap<ChangeSection, MouseStateHandle>,
-    section_action_mouse_states: HashMap<ChangeSection, MouseStateHandle>,
-    row_mouse_states: HashMap<(ChangeSection, String), MouseStateHandle>,
-    row_action_mouse_states: HashMap<(ChangeSection, String), MouseStateHandle>,
     commit_mouse_states: HashMap<String, MouseStateHandle>,
 }
 
@@ -209,12 +111,6 @@ impl SourceControlView {
             dropdown
         });
 
-        let sections = [
-            ChangeSection::Merge,
-            ChangeSection::Staged,
-            ChangeSection::Changes,
-            ChangeSection::Untracked,
-        ];
         Self {
             repositories: Vec::new(),
             selected_repository: None,
@@ -227,29 +123,10 @@ impl SourceControlView {
             needs_refresh: false,
             is_loading: false,
             reload_after_current: false,
-            mutation_in_progress: false,
             history_page_in_progress: false,
             generation: 0,
-            collapsed_sections: sections
-                .into_iter()
-                .map(|section| (section, false))
-                .collect(),
-            history_collapsed: false,
-            history_scroll_state: ClippedScrollStateHandle::default(),
-            changes_scroll_state: ClippedScrollStateHandle::default(),
-            split_state: warpui::elements::resizable_state_handle(320.),
-            split_area_height: Arc::new(Mutex::new(0.)),
+            scroll_state: ClippedScrollStateHandle::default(),
             static_mouse_states: StaticMouseStates::default(),
-            section_mouse_states: sections
-                .into_iter()
-                .map(|section| (section, MouseStateHandle::default()))
-                .collect(),
-            section_action_mouse_states: sections
-                .into_iter()
-                .map(|section| (section, MouseStateHandle::default()))
-                .collect(),
-            row_mouse_states: HashMap::new(),
-            row_action_mouse_states: HashMap::new(),
             commit_mouse_states: HashMap::new(),
         }
     }
@@ -317,11 +194,8 @@ impl SourceControlView {
         self.error = None;
         self.is_loading = false;
         self.reload_after_current = false;
-        self.mutation_in_progress = false;
         self.history_page_in_progress = false;
         self.needs_refresh = repository.is_some();
-        self.row_mouse_states.clear();
-        self.row_action_mouse_states.clear();
         self.commit_mouse_states.clear();
         self.update_repository_dropdown(ctx);
 
@@ -454,74 +328,12 @@ impl SourceControlView {
 
     fn set_snapshot(&mut self, snapshot: RepositorySnapshot) {
         self.graph_layout = layout_commits(&snapshot.commits);
-        for (section, changes) in [
-            (ChangeSection::Merge, &snapshot.merge_changes),
-            (ChangeSection::Staged, &snapshot.staged_changes),
-            (ChangeSection::Changes, &snapshot.changes),
-            (ChangeSection::Untracked, &snapshot.untracked_changes),
-        ] {
-            for change in changes {
-                let key = (section, change.path.clone());
-                self.row_mouse_states.entry(key.clone()).or_default();
-                self.row_action_mouse_states.entry(key).or_default();
-            }
-        }
         for commit in &snapshot.commits {
             self.commit_mouse_states
                 .entry(commit.hash.clone())
                 .or_default();
         }
         self.snapshot = Some(snapshot);
-    }
-
-    fn run_mutation(&mut self, mutation: GitMutation, ctx: &mut ViewContext<Self>) {
-        if self.mutation_in_progress {
-            return;
-        }
-        let Some(LocalOrRemotePath::Local(repo_path)) = self.selected_repository.clone() else {
-            return;
-        };
-        let has_head = self
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.has_head);
-        let generation = self.generation;
-        let expected_repository = LocalOrRemotePath::Local(repo_path.clone());
-        self.mutation_in_progress = true;
-        self.error = None;
-        ctx.spawn(
-            async move {
-                apply_mutation(&repo_path, &mutation, has_head)
-                    .await
-                    .map_err(|err| (mutation, err))
-            },
-            move |me, result, ctx| {
-                if me.generation != generation
-                    || me.selected_repository.as_ref() != Some(&expected_repository)
-                {
-                    return;
-                }
-                me.mutation_in_progress = false;
-                match result {
-                    Ok(()) => {
-                        if let Some(model) = &me.git_status_model {
-                            model.update(ctx, |model, ctx| model.refresh_metadata(ctx));
-                        }
-                        me.request_refresh(ctx);
-                    }
-                    Err((mutation, err)) => {
-                        log::warn!(
-                            "Source control failed to {} in {}: {err}",
-                            mutation.label(),
-                            expected_repository.display_path()
-                        );
-                        me.error = Some(format!("Unable to {}: {err}", mutation.label()));
-                        ctx.notify();
-                    }
-                }
-            },
-        );
-        ctx.notify();
     }
 
     fn load_more(&mut self, ctx: &mut ViewContext<Self>) {
@@ -654,7 +466,7 @@ impl SourceControlView {
             "Refresh source control",
             self.static_mouse_states.refresh.clone(),
             SourceControlAction::Refresh,
-            self.is_loading || self.mutation_in_progress,
+            self.is_loading,
             appearance,
         );
         let mut header = Flex::column()
@@ -961,290 +773,6 @@ impl SourceControlView {
         .with_max_width(420.)
         .finish()
     }
-
-    fn render_section(
-        &self,
-        section: ChangeSection,
-        changes: &[FileChange],
-        appearance: &Appearance,
-    ) -> Option<Box<dyn Element>> {
-        if changes.is_empty() {
-            return None;
-        }
-        let theme = appearance.theme();
-        let main_color = theme.main_text_color(theme.background()).into_solid();
-        let sub_color = theme.sub_text_color(theme.background()).into_solid();
-        let collapsed = self
-            .collapsed_sections
-            .get(&section)
-            .copied()
-            .unwrap_or(false);
-        let section_mouse_state = self.section_mouse_states.get(&section)?.clone();
-        let section_action_mouse_state = self.section_action_mouse_states.get(&section)?.clone();
-        let chevron = if collapsed {
-            Icon::ChevronRight
-        } else {
-            Icon::ChevronDown
-        };
-        let header_left = Hoverable::new(section_mouse_state, |_| {
-            Container::new(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(4.)
-                    .with_child(
-                        ConstrainedBox::new(chevron.to_warpui_icon(sub_color.into()).finish())
-                            .with_width(appearance.ui_font_size())
-                            .with_height(appearance.ui_font_size())
-                            .finish(),
-                    )
-                    .with_child(
-                        Text::new_inline(
-                            format!("{} ({})", section.title(), changes.len()),
-                            appearance.ui_font_family(),
-                            appearance.ui_font_size(),
-                        )
-                        .with_color(main_color)
-                        .finish(),
-                    )
-                    .finish(),
-            )
-            .with_padding_left(6.)
-            .with_padding_top(5.)
-            .with_padding_bottom(5.)
-            .finish()
-        })
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(SourceControlAction::ToggleSection(section));
-        })
-        .with_cursor(Cursor::PointingHand)
-        .finish();
-        let (bulk_icon, bulk_tooltip, bulk_action) = match section {
-            ChangeSection::Staged => (
-                Icon::Minus,
-                "Unstage all changes",
-                SourceControlAction::UnstageAll,
-            ),
-            ChangeSection::Changes | ChangeSection::Untracked => (
-                Icon::Plus,
-                "Stage all changes",
-                SourceControlAction::StageAll,
-            ),
-            ChangeSection::Merge => (
-                Icon::Diff,
-                "Review merge changes",
-                SourceControlAction::OpenCodeReview,
-            ),
-        };
-        let header = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(Shrinkable::new(1., header_left).finish())
-            .with_child(self.render_icon_action(
-                bulk_icon,
-                bulk_tooltip,
-                section_action_mouse_state,
-                bulk_action,
-                self.mutation_in_progress,
-                appearance,
-            ))
-            .finish();
-        let mut section_column = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(header);
-        if !collapsed {
-            for change in changes {
-                section_column.add_child(self.render_file_row(section, change, appearance));
-            }
-        }
-        Some(section_column.finish())
-    }
-
-    fn render_file_row(
-        &self,
-        section: ChangeSection,
-        change: &FileChange,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let main_color = theme.main_text_color(theme.background()).into_solid();
-        let sub_color = theme.sub_text_color(theme.background()).into_solid();
-        let key = (section, change.path.clone());
-        let row_state = self
-            .row_mouse_states
-            .get(&key)
-            .cloned()
-            .expect("file rows are assigned persistent mouse state when a snapshot is applied");
-        let action_state =
-            self.row_action_mouse_states.get(&key).cloned().expect(
-                "file actions are assigned persistent mouse state when a snapshot is applied",
-            );
-        let path = Path::new(&change.path);
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(&change.path)
-            .to_string();
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .map(|parent| parent.to_string_lossy().to_string());
-        let mut label = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(5.)
-            .with_child(
-                Text::new_inline(
-                    file_name,
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_clip(ClipConfig::ellipsis())
-                .with_color(main_color)
-                .finish(),
-            );
-        if let Some(parent) = parent {
-            label.add_child(
-                Text::new_inline(
-                    parent,
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_clip(ClipConfig::ellipsis())
-                .with_color(sub_color)
-                .finish(),
-            );
-        }
-        if let Some(old_path) = change.kind.previous_path() {
-            label.add_child(
-                Text::new_inline(
-                    format!("← {old_path}"),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_clip(ClipConfig::ellipsis())
-                .with_color(sub_color)
-                .finish(),
-            );
-        }
-        let clickable = Container::new(label.finish())
-            .with_padding_left(22.)
-            .with_padding_top(4.)
-            .with_padding_bottom(4.)
-            .finish();
-        let status_color = match change.kind {
-            GitChangeKind::Added | GitChangeKind::Untracked => add_color(appearance),
-            GitChangeKind::Deleted => remove_color(appearance),
-            GitChangeKind::Conflicted => theme.ui_error_color(),
-            GitChangeKind::Modified
-            | GitChangeKind::Renamed { .. }
-            | GitChangeKind::Copied { .. } => theme.accent().into_solid(),
-        };
-        let status = Text::new_inline(
-            change.kind.status_letter(),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(status_color)
-        .finish();
-        let action = match section {
-            ChangeSection::Staged => Some((
-                Icon::Minus,
-                "Unstage file",
-                SourceControlAction::UnstagePaths(change.kind.paths_for_action(&change.path)),
-            )),
-            ChangeSection::Changes | ChangeSection::Untracked => Some((
-                Icon::Plus,
-                "Stage file",
-                SourceControlAction::StagePaths(change.kind.paths_for_action(&change.path)),
-            )),
-            ChangeSection::Merge => None,
-        };
-        let mut trailing = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(2.);
-        if let Some((icon, tooltip, action)) = action {
-            trailing.add_child(self.render_icon_action(
-                icon,
-                tooltip,
-                action_state,
-                action,
-                self.mutation_in_progress,
-                appearance,
-            ));
-        }
-        trailing.add_child(status);
-
-        let row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(Shrinkable::new(1., clickable).finish())
-            .with_child(
-                Container::new(trailing.finish())
-                    .with_padding_right(8.)
-                    .finish(),
-            )
-            .finish();
-        Hoverable::new(row_state, |state| {
-            let mut row = Container::new(row);
-            if state.is_hovered() {
-                row = row.with_background(internal_colors::fg_overlay_3(theme));
-            }
-            row.finish()
-        })
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(SourceControlAction::OpenCodeReview);
-        })
-        .with_defer_events_to_children()
-        .with_cursor(Cursor::PointingHand)
-        .finish()
-    }
-
-    fn render_history_header(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let main_color = theme.main_text_color(theme.background()).into_solid();
-        let sub_color = theme.sub_text_color(theme.background()).into_solid();
-        let chevron = if self.history_collapsed {
-            Icon::ChevronRight
-        } else {
-            Icon::ChevronDown
-        };
-        let history_header = Hoverable::new(self.static_mouse_states.history.clone(), |_| {
-            Container::new(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(4.)
-                    .with_child(
-                        ConstrainedBox::new(chevron.to_warpui_icon(sub_color.into()).finish())
-                            .with_width(appearance.ui_font_size())
-                            .with_height(appearance.ui_font_size())
-                            .finish(),
-                    )
-                    .with_child(
-                        Text::new_inline(
-                            "HISTORY",
-                            appearance.ui_font_family(),
-                            appearance.ui_font_size(),
-                        )
-                        .with_color(main_color)
-                        .finish(),
-                    )
-                    .finish(),
-            )
-            .with_padding_left(6.)
-            .with_padding_top(7.)
-            .with_padding_bottom(7.)
-            .finish()
-        })
-        .on_click(|ctx, _, _| ctx.dispatch_typed_action(SourceControlAction::ToggleHistory))
-        .with_cursor(Cursor::PointingHand)
-        .finish();
-
-        Container::new(history_header)
-            .with_border(Border::top(1.).with_border_fill(theme.surface_3()))
-            .finish()
-    }
-
     fn render_history_content(
         &self,
         snapshot: &RepositorySnapshot,
@@ -1382,62 +910,6 @@ impl SourceControlView {
         }
         column.finish()
     }
-
-    fn render_changes_content(
-        &self,
-        snapshot: &RepositorySnapshot,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        if !snapshot.has_changes() {
-            content.add_child(self.render_message(
-                "No changes",
-                "The working tree is clean.",
-                appearance,
-            ));
-        } else {
-            for (section, changes) in [
-                (ChangeSection::Merge, snapshot.merge_changes.as_slice()),
-                (ChangeSection::Staged, snapshot.staged_changes.as_slice()),
-                (ChangeSection::Changes, snapshot.changes.as_slice()),
-                (
-                    ChangeSection::Untracked,
-                    snapshot.untracked_changes.as_slice(),
-                ),
-            ] {
-                if let Some(section) = self.render_section(section, changes, appearance) {
-                    content.add_child(section);
-                }
-            }
-        }
-        content.finish()
-    }
-
-    fn render_changes_region(
-        &self,
-        snapshot: &RepositorySnapshot,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let changes = ClippedScrollable::vertical(
-            self.changes_scroll_state.clone(),
-            self.render_changes_content(snapshot, appearance),
-            ScrollbarWidth::Auto,
-            theme.nonactive_ui_detail().into(),
-            theme.active_ui_detail().into(),
-            warpui::elements::Fill::None,
-        )
-        .finish();
-        let mut region = Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        if let Some(error) = &self.error {
-            region.add_child(self.render_error(error, appearance));
-        }
-        region.add_child(Shrinkable::new(1., changes).finish());
-        region.finish()
-    }
-
     fn render_history_region(
         &self,
         snapshot: &RepositorySnapshot,
@@ -1445,7 +917,7 @@ impl SourceControlView {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let history = ClippedScrollable::vertical(
-            self.history_scroll_state.clone(),
+            self.scroll_state.clone(),
             self.render_history_content(snapshot, appearance),
             ScrollbarWidth::Auto,
             theme.nonactive_ui_detail().into(),
@@ -1453,11 +925,8 @@ impl SourceControlView {
             warpui::elements::Fill::None,
         )
         .finish();
-        Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(self.render_history_header(appearance))
-            .with_child(Shrinkable::new(1., history).finish())
+        Container::new(history)
+            .with_border(Border::top(1.).with_border_fill(theme.surface_3()))
             .finish()
     }
 
@@ -1468,7 +937,7 @@ impl SourceControlView {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         ClippedScrollable::vertical(
-            self.changes_scroll_state.clone(),
+            self.scroll_state.clone(),
             body,
             ScrollbarWidth::Auto,
             theme.nonactive_ui_detail().into(),
@@ -1480,7 +949,7 @@ impl SourceControlView {
 }
 
 impl Entity for SourceControlView {
-    type Event = SourceControlEvent;
+    type Event = ();
 }
 
 impl TypedActionView for SourceControlView {
@@ -1494,28 +963,6 @@ impl TypedActionView for SourceControlView {
                 }
             }
             SourceControlAction::Refresh => self.request_refresh(ctx),
-            SourceControlAction::ToggleSection(section) => {
-                let collapsed = self.collapsed_sections.entry(*section).or_default();
-                *collapsed = !*collapsed;
-                ctx.notify();
-            }
-            SourceControlAction::ToggleHistory => {
-                self.history_collapsed = !self.history_collapsed;
-                ctx.notify();
-            }
-            SourceControlAction::OpenCodeReview => {
-                if let Some(repo_path) = self.selected_repository.clone() {
-                    ctx.emit(SourceControlEvent::OpenCodeReview { repo_path });
-                }
-            }
-            SourceControlAction::StagePaths(paths) => {
-                self.run_mutation(GitMutation::StagePaths(paths.clone()), ctx)
-            }
-            SourceControlAction::UnstagePaths(paths) => {
-                self.run_mutation(GitMutation::UnstagePaths(paths.clone()), ctx)
-            }
-            SourceControlAction::StageAll => self.run_mutation(GitMutation::StageAll, ctx),
-            SourceControlAction::UnstageAll => self.run_mutation(GitMutation::UnstageAll, ctx),
             SourceControlAction::LoadMore => self.load_more(ctx),
         }
     }
@@ -1538,69 +985,12 @@ impl View for SourceControlView {
             _ => None,
         };
         if let Some(snapshot) = local_snapshot {
-            let changes_region = self.render_changes_region(snapshot, appearance);
-            if self.history_collapsed {
-                root.add_child(
-                    Shrinkable::new(
-                        1.,
-                        Flex::column()
-                            .with_main_axis_size(MainAxisSize::Max)
-                            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                            .with_child(Shrinkable::new(1., changes_region).finish())
-                            .with_child(self.render_history_header(appearance))
-                            .finish(),
-                    )
-                    .finish(),
-                );
-            } else {
-                let bounds_height = self.split_area_height.clone();
-                let reset_height = self.split_area_height.clone();
-                let reset_state = self.split_state.clone();
-                let changes_region = Resizable::new(self.split_state.clone(), changes_region)
-                    .with_dragbar_side(DragBarSide::Bottom)
-                    .on_resize(|ctx, _| ctx.notify())
-                    .with_bounds_callback(Box::new(move |_| {
-                        let measured = *bounds_height
-                            .lock()
-                            .expect("split area height should be accessible");
-                        if measured <= 0. {
-                            // Preserve the initial size until the split area is measured after layout.
-                            (120., f32::MAX)
-                        } else if measured <= 240. {
-                            let half = measured / 2.;
-                            (half, half)
-                        } else {
-                            (120., measured - 120.)
-                        }
-                    }))
-                    .on_dragbar_double_click(move |ctx, _| {
-                        let measured = *reset_height
-                            .lock()
-                            .expect("split area height should be accessible");
-                        reset_state
-                            .lock()
-                            .expect("source control split state should be accessible")
-                            .set_size(measured / 2.);
-                        ctx.notify();
-                    })
-                    .finish();
-                let split = Flex::column()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                    .with_child(changes_region)
-                    .with_child(
-                        Shrinkable::new(1., self.render_history_region(snapshot, appearance))
-                            .finish(),
-                    )
-                    .finish();
-                root.add_child(
-                    Shrinkable::new(
-                        1.,
-                        MeasuredHeight::new(self.split_area_height.clone(), split).finish(),
-                    )
-                    .finish(),
-                );
+            if let Some(error) = &self.error {
+                root.add_child(self.render_error(error, appearance));
             }
+            root.add_child(
+                Shrinkable::new(1., self.render_history_region(snapshot, appearance)).finish(),
+            );
         } else {
             let body = match &self.selected_repository {
                 None => self.render_message(
