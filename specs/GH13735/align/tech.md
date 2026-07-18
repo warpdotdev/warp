@@ -223,7 +223,11 @@ The reasoning — and the precedent that decides it — is in design question 1.
    own-line raw-HTML block detection. Recommend a block-level detector in
    `markdown_parser.rs` (same pattern as those siblings: scan for an own-line
    `<div align="…">` / `<p align="…">`, find the matching own-line closing tag,
-   recursively parse the raw content between them as ordinary Markdown). The
+   recursively parse the raw content between them as ordinary Markdown). It reads
+   the opening tag's `align`/`style` attributes through the single **Attribute-matching
+   contract** below (the same contract the single-line detector uses), so both
+   detector paths resolve `align=`/`style=`, the conflict winner, unrelated
+   attributes, and malformed syntax identically. The
    detector's job is to emit a **`FormattedTextLine::AlignRegionStart(alignment)`
    boundary line, the interior blocks parsed exactly as if standalone, and a
    `FormattedTextLine::AlignRegionEnd` boundary line** (the parser-to-buffer
@@ -253,7 +257,7 @@ The reasoning — and the precedent that decides it — is in design question 1.
    `<p (align="…"|style="…")>...</p>` **entirely on that one line** — open tag,
    then content, then close tag, with nothing before the open tag and nothing
    after the close tag but trailing whitespace. On a match, extract the
-   alignment (design question 7's attribute/style parsing, applied to this
+   alignment (the **Attribute-matching contract** below, applied to this
    tag's attributes) and the inline content between the tags, then emit the
    *same three-part shape* the own-line detector emits, collapsed onto one
    source line: `AlignRegionStart(alignment)`, one interior `Line` built by
@@ -289,6 +293,72 @@ The reasoning — and the precedent that decides it — is in design question 1.
    whole-line/whole-region. A test case should assert this literal-fallback
    behavior explicitly (see Testing and validation) so the boundary is
    documented and doesn't regress into silent partial-application.
+
+   **Attribute-matching contract.** Both detector paths above — the own-line
+   `<div>`/`<p>` scanner and the single-line `<p>` matcher — resolve a tag's
+   alignment by reading its `align`/`style` attributes through *this one shared
+   contract*, so they never diverge on how an attribute is matched. It is the
+   single place both cite; the product spec's `style` micro-grammar (product
+   invariant 3) is the value-parsing half of it, restated here once so the
+   contract is self-contained:
+
+   - **Attribute names are matched case-insensitively.** `align`, `ALIGN`,
+     `Align` are the same attribute; `style`, `STYLE`, `Style` likewise. HTML
+     attribute names are case-insensitive and this contract follows that.
+   - **Values may be double-quoted, single-quoted, or unquoted.**
+     `align="center"`, `align='center'`, and `align=center` are equivalent; the
+     matched value is the characters up to the closing quote (for quoted forms)
+     or up to the next whitespace or `>` (for the unquoted form). This mirrors
+     the quoting latitude the sibling raw-HTML-subset specs accept.
+   - **`align=` extraction.** The attribute value is matched
+     **case-insensitively** against the three recognized literals `left`,
+     `center`, `right` (product invariant 4). Any other value — `justify`,
+     `bogus`, empty — is well-formed but unrecognized: the tag is still consumed
+     as an align tag, it just yields no alignment (unaligned region), never an
+     error. This is distinct from *malformed syntax* (below), where the tag
+     falls back to literal text.
+   - **`style=` extraction** applies the product-spec `style` micro-grammar
+     (invariant 3) to the attribute value: split declarations on `;`; split each
+     declaration into `property:value` on the **first** `:`; trim whitespace
+     around the declaration, the property, and the value; ignore a trailing or
+     empty (`;;`) declaration; match the property name **case-insensitively**
+     against `text-align`; ignore declarations whose property isn't `text-align`
+     (e.g. `color: red`) without invalidating the rest; when **multiple**
+     `text-align` declarations appear, the **last** wins; match the value
+     **case-insensitively** against `left`/`center`/`right`. It is a fixed
+     literal-value matcher, not a CSS parser — `calc()`, custom properties,
+     `!important`, comments, or any unrecognized `text-align` value make that
+     declaration contribute no alignment.
+   - **`align`-vs-`style` conflict winner: `style` wins** (product invariant 3,
+     restated here once as the single source both detectors read). When both
+     `align` and a recognized `text-align` `style` declaration are present and
+     name different values, the `style` value is used. If `style` is present but
+     contributes no recognized `text-align` value (unrecognized value, or no
+     `text-align` declaration at all), it does **not** override — `align`'s value
+     (if recognized) is used; if neither yields a recognized value the region is
+     unaligned.
+   - **Unrelated attributes are ignored.** Any attribute other than `align` and
+     `style` — `class`, `id`, `onclick`, `data-*`, arbitrary others — is read
+     past and discarded; its presence never blocks detection and never falls the
+     tag back to literal text. Only `align` and `style` are consulted (see the
+     Security section).
+   - **Malformed attribute syntax → the whole tag is literal.** If the opening
+     tag's attribute list can't be parsed as a well-formed sequence of
+     `name`/`name=value` attributes (e.g. an unterminated quote, a stray `=`
+     with no value, a `<` inside the attribute region), the detector does **not**
+     guess a partial alignment: the tag is not recognized as an align tag, and
+     it falls through to ordinary parsing where it renders as literal text —
+     consistent with product invariant 7's "degrades deterministically, never to
+     undefined behavior" and with the unterminated-region and mixed-same-line
+     literal fallbacks already defined above. A recognized tag with an
+     *unrecognized value* (well-formed syntax, but `align="justify"`) is the
+     distinct, softer case: the tag is still consumed as an align tag but
+     contributes no alignment (unaligned region), not literal text.
+
+   Because both detectors funnel through this one contract, a test that fixes
+   any single rule here (conflict winner, unrelated-attribute-ignoring,
+   case-insensitivity, malformed fallback) fixes it for both the `<div>` group
+   case and the `<p>` single-line case at once.
 
 4. **`<p align>` vs `<div align>` — single block vs. group.** Both route through
    the same detector and emit the same paired region markers; the only difference
@@ -392,31 +462,100 @@ the stream.)
    underlying boolean parameter — that's what keeps them from diverging, not
    any single call site being canonical.
 
-   Apply the identical shape here: extend `parse_markdown_impl` with a second
-   boolean, `parse_block_align` (or fold both flags into a small options
-   struct once there are two — either is fine as long as it's one shared
-   internal function), add a `parse_markdown_with_block_align` public entry
-   point analogous to `parse_markdown_with_gfm_tables`, and have **each**
-   caller that currently chooses between `parse_markdown` /
-   `parse_markdown_with_gfm_tables` — `buffer.rs:850-855`, `buffer.rs:890-891`
-   / `ipynb_parser`, and any TUI call site that selects a parse entry point —
-   check `FeatureFlag::MarkdownBlockAlign` the same way it already checks
-   `FeatureFlag::MarkdownTables`, and route to the align-aware entry point.
-   Because the detector itself only runs when the bool it receives is true,
-   the align-region-boundary variants (`AlignRegionStart`/`AlignRegionEnd`)
-   are simply never emitted when the flag is off — every downstream consumer
-   (the `edit` lowering loop, the TUI renderer, `find.rs`) can assume the
-   variants don't exist in that mode without a separate runtime check,
-   identical to how `Table` lines don't appear unless `MarkdownTables` is on.
-   This lets the feature ship dark and be enabled independently of unrelated
-   Markdown work, with the GUI and TUI guaranteed to agree because they share
-   the same gated boolean rather than two independently-maintained checks.
+   **The master mechanism only composes for one flag, so don't extend it as
+   a second boolean entry point.** Today's two public entry points
+   (`parse_markdown`, `parse_markdown_with_gfm_tables`) encode a single binary
+   choice, and the call sites express it as an either/or —
+   `if MarkdownTables { parse_markdown_with_gfm_tables } else { parse_markdown }`
+   (`buffer.rs:850-855`). Adding a sibling `parse_markdown_with_block_align`
+   the same way would leave the **both-enabled** state (GFM tables *and* block
+   alignment on together) unrepresentable: there is no entry point for it and
+   no `else` branch that selects it, so a caller with both flags set would have
+   to pick one feature and silently drop the other. Two independent boolean
+   features need a 2×2 of behaviors, which two mutually-exclusive entry points
+   cannot express. So evolve the one shared internal function to take an
+   **options struct** instead of accumulating positional booleans:
+
+   ```rust
+   #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+   pub struct MarkdownParseOptions {
+       pub gfm_tables: bool,
+       pub block_align: bool,
+   }
+
+   fn parse_markdown_impl(markdown: &str, options: MarkdownParseOptions) -> Result<FormattedText>
+   ```
+
+   `parse_markdown_internal` takes the same `options` and hands each field to
+   the detector it gates — `options.gfm_tables` to the existing table detector,
+   `options.block_align` to the new align-region detector (design question 3).
+   All **four** combinations are well-defined by construction, because the two
+   fields are independent inputs to independent detectors: neither on (plain
+   Markdown), tables only, align only, or both on (tables and align regions
+   both detected in the same pass; they don't interact — a table can appear
+   inside an aligned region and is detected normally). `#[derive(Default)]`
+   makes "neither" the zero value, so the plain path stays a one-liner.
+
+   Keep the public entry points as **thin wrappers** over the one impl, so no
+   existing caller signature breaks and the composable state is reachable:
+
+   ```rust
+   pub fn parse_markdown(markdown: &str) -> Result<FormattedText> {
+       parse_markdown_impl(markdown, MarkdownParseOptions::default())
+   }
+   pub fn parse_markdown_with_gfm_tables(markdown: &str) -> Result<FormattedText> {
+       parse_markdown_impl(markdown, MarkdownParseOptions { gfm_tables: true, ..Default::default() })
+   }
+   pub fn parse_markdown_with_options(markdown: &str, options: MarkdownParseOptions) -> Result<FormattedText> {
+       parse_markdown_impl(markdown, options)
+   }
+   ```
+
+   The existing two wrappers keep working unchanged (`parse_markdown_with_gfm_tables`
+   is now just `gfm_tables: true`), and the new `parse_markdown_with_options`
+   is the entry point for callers that populate **both** fields. There is no
+   `parse_markdown_with_block_align` sibling — a third boolean wrapper would
+   reintroduce the same non-composing pattern this replaces (it still couldn't
+   express tables-and-align-together).
+
+   Then have **each** call site that currently chooses between the two entry
+   points build a `MarkdownParseOptions` from **both** `FeatureFlag` checks and
+   route through `parse_markdown_with_options`:
+
+   ```rust
+   let options = MarkdownParseOptions {
+       gfm_tables: FeatureFlag::MarkdownTables.is_enabled(),
+       block_align: FeatureFlag::MarkdownBlockAlign.is_enabled(),
+   };
+   let parsed = parse_markdown_with_options(markdown, options)?;
+   ```
+
+   The call sites to convert are the same set that reads `MarkdownTables`
+   today — `buffer.rs:850-855` (`from_markdown`), `buffer.rs:890-891` /
+   `ipynb_parser::ipynb_to_formatted_text` (whose signature widens from a
+   `gfm_tables: bool` parameter to a `MarkdownParseOptions` parameter,
+   re-checking both flags the same way, `crates/ipynb_parser/src/lib.rs:16,
+   124`), and any TUI call site that selects a parse entry point. Each reads
+   **both** flags and funnels them to the same `MarkdownParseOptions`, so the
+   surfaces stay in lockstep on *both* features — the same anti-divergence
+   guarantee the single-boolean threading gives today, now extended to two
+   independent flags. Because a detector only runs when its `options` field is
+   true, the align-region-boundary variants (`AlignRegionStart`/`AlignRegionEnd`)
+   are simply never emitted when `block_align` is false — every downstream
+   consumer (the `edit` lowering loop, the TUI renderer, `find.rs`) can assume
+   the variants don't exist in that mode without a separate runtime check,
+   identical to how `Table` lines don't appear unless `gfm_tables` is on. This
+   lets the feature ship dark and be enabled independently of unrelated Markdown
+   work, with the GUI and TUI guaranteed to agree because they read the same
+   `MarkdownParseOptions` rather than two independently-maintained checks.
 
 ## Security
 
 Only `align` and `style="text-align:…"` are read, and only the three recognized
 values are consulted; any other `style` property or attribute (`onclick`,
-`class`, `id`, arbitrary CSS) is ignored, matching the pattern already
+`class`, `id`, arbitrary CSS) is ignored — this is the "unrelated attributes
+ignored" clause of the Attribute-matching contract (design question 3), the same
+single contract both detector paths use, matching the pattern already
 established for the tables spec (invariant 10 there). No script/event-handler
 surface. Nested content inherits the viewer's existing trust boundary — an
 aligned region's interior blocks are ordinary `FormattedTextLine`s parsed the same
@@ -452,6 +591,23 @@ now positioned differently."
   justify"`) → unaligned, not an error.
 - Unrecognized value (`align="justify"`, `align="bogus"`) → unaligned
   (`Left`/no wrapping), not an error (invariant 4).
+- Attribute-matching contract, quoting variants: `align="center"`,
+  `align='center'`, and `align=center` (double-quoted, single-quoted, unquoted)
+  all resolve to `Center` (Attribute-matching contract, quoted/unquoted values).
+- Attribute-matching contract, attribute-name case-insensitivity:
+  `<div ALIGN="center">` / `<p Align="right">` detect identically to lowercase
+  (Attribute-matching contract, case-insensitive names).
+- Attribute-matching contract, unrelated attributes ignored:
+  `<div class="hero" id="x" align="center">` still detects a `Center` region —
+  the extra attributes neither block detection nor fall the tag to literal text
+  (Attribute-matching contract, unrelated attributes ignored).
+- Attribute-matching contract, malformed attribute syntax →
+  whole tag literal: an unterminated quote (`<div align="center>`) or a stray
+  `<` in the attribute region renders the tag as literal text, no
+  `AlignRegionStart`/`AlignRegionEnd` emitted — distinct from the softer
+  unrecognized-*value* case (`align="justify"`, which is consumed as an align
+  tag but yields no alignment). Assert both to pin the boundary between the two
+  fallbacks (Attribute-matching contract, malformed syntax rule).
 - Nested content inside an aligned block still parses with normal semantics
   (heading stays `Heading`, not flattened to `Line`) (invariant 5).
 - Nested `<div align><p align></div>` → innermost governs its own content,
