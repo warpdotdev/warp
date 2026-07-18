@@ -2126,6 +2126,41 @@ fn test_parse_unterminated_nested_kbd_is_literal() {
     );
 }
 
+/// Two unmatched `<kbd>` opens with no close must stay literal — never a keycap (issue #13733).
+///
+/// This pins behavior against a theorized failure raised in review: because `KbdStart` is
+/// right-flanking-closable, the final generic `process_emphasis` pass could in principle let a
+/// second `<kbd>` opener close against the first, wrapping the text between them in a keycap. It
+/// can't, because the flat-collapse depth counter (see the `KbdStart` arm in `parse_inline`) drops
+/// any second `<kbd>` opened while still nested, so two `KbdStart` delimiters never coexist on the
+/// stack for the pass to pair. The lone surviving opener degrades to literal text. Note the dropped
+/// inner `<kbd>` leaves no literal tag, so only the outer tag remains in the output.
+#[test]
+fn test_parse_double_open_kbd_stays_literal() {
+    let source = "<kbd>Ctrl <kbd>K";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<kbd>Ctrl K"),
+        ])]
+    );
+}
+
+/// A well-formed `<kbd>` followed by a second unmatched open must keep the first as a keycap and
+/// leave the trailing opener literal — the depth counter resets to zero after the balanced close, so
+/// the second opener is a lone unpaired `KbdStart` that can't self-close (issue #13733).
+#[test]
+fn test_parse_kbd_then_unmatched_open_stays_literal() {
+    let source = "<kbd>a</kbd> b<kbd>c";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::kbd("a"),
+            FormattedTextFragment::plain_text(" b<kbd>c"),
+        ])]
+    );
+}
+
 #[test]
 fn test_multi_parse_kbd() {
     let source = "<kbd>test1</kbd>\n<kbd>test2</kbd>";
