@@ -59,8 +59,10 @@ use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
 use crate::conversation_selection::TuiConversationSelection;
+use crate::editor_interaction::TuiEditorCommand;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
 use crate::inline_menu::{active_inline_menu, TuiInlineMenu, MAX_INLINE_MENU_ROWS};
+use crate::input::view::TuiInputAction;
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
@@ -70,11 +72,17 @@ use crate::keybindings::{
 };
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
+use crate::orchestrated_agent_identity_styling::assign_agent_identity_indices;
 use crate::orchestration_block::TuiOrchestrationBlock;
+use crate::orchestration_model::{TuiOrchestrationModel, TuiOrchestrationSnapshot};
 use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
+use crate::tab_bar::{
+    TuiTab, TuiTabBarConfig, TuiTabBarEvent, TuiTabBarNavigationDirection, TuiTabBarSecondaryEdge,
+    TuiTabBarView,
+};
 use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
     hide_agent_requested_command_from_top_level, terminal_use_conversation_to_resume,
@@ -97,6 +105,8 @@ use self::input_detection::InputDetectionState;
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
+const ORCHESTRATION_TAB_BAR_FOCUSED_FLAG: &str = "TuiOrchestrationTabBarFocused";
+const ORCHESTRATION_TAB_LABEL_MAX_COLUMNS: u16 = 20;
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
@@ -238,8 +248,21 @@ pub(crate) enum TuiTerminalSessionAction {
     ToggleUsageDisplay,
     /// Raw user bytes to forward to the foreground PTY process.
     ForwardUserPtyBytes(Vec<u8>),
+    /// Ctrl-d while the prompt is focused: exit the TUI immediately when the
+    /// prompt is empty, else delete the next character.
+    Eof,
     /// Toggle the latest exposed inline plan.
     TogglePlan,
+    /// Return keyboard focus from tabs to the session's default interaction target.
+    FocusDefaultInteractionTarget,
+    /// Select the previous tab using the tab view's semantic order.
+    SelectPreviousOrchestrationTab,
+    /// Select the next tab using the tab view's semantic order.
+    SelectNextOrchestrationTab,
+    /// Select the first child tab, excluding the orchestrator.
+    SelectFirstOrchestrationChild,
+    /// Select the last child tab, excluding the orchestrator.
+    SelectLastOrchestrationChild,
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -296,6 +319,8 @@ pub(crate) struct TuiTerminalSessionView {
     /// detect blocker transitions in [`Self::sync_blocker_focus`]. Input
     /// visibility itself is derived at render time, never stored.
     active_blocker_view_id: Option<EntityId>,
+    orchestration_tab_bar: ViewHandle<TuiTabBarView>,
+    orchestration_tabs_focused: bool,
 }
 
 /// Registers the session surface's keybindings. Called once at TUI startup
@@ -307,6 +332,12 @@ pub(crate) fn init(app: &mut AppContext) {
             TAKE_CONTROL_KEY_BINDING,
             TuiTerminalSessionAction::Interrupt,
             id!(TuiTerminalSessionView::ui_name()),
+        )
+        .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new(
+            "ctrl-d",
+            TuiTerminalSessionAction::Eof,
+            id!(TuiInputView::ui_name()),
         )
         .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
@@ -344,6 +375,69 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-p"),
     ]);
+
+    // Tab navigation is user-remappable, unlike the reserved session-control
+    // bindings above, so the two groups use different registration APIs.
+    let tab_context =
+        id!(TuiTerminalSessionView::ui_name()) & id!(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "tui:orchestration_tabs:previous",
+            "Select the previous orchestration tab",
+            TuiTerminalSessionAction::SelectPreviousOrchestrationTab,
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("left"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:previous",
+            "Select the previous orchestration tab",
+            TuiTerminalSessionAction::SelectPreviousOrchestrationTab,
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-tab"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:next",
+            "Select the next orchestration tab",
+            TuiTerminalSessionAction::SelectNextOrchestrationTab,
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("right"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:next",
+            "Select the next orchestration tab",
+            TuiTerminalSessionAction::SelectNextOrchestrationTab,
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("tab"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:first_child",
+            "Select the first child agent",
+            TuiTerminalSessionAction::SelectFirstOrchestrationChild,
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-left"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:last_child",
+            "Select the last child agent",
+            TuiTerminalSessionAction::SelectLastOrchestrationChild,
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-right"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:focus_input",
+            "Return focus to the session input",
+            TuiTerminalSessionAction::FocusDefaultInteractionTarget,
+        )
+        .with_context_predicate(tab_context)
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-down"),
+    ]);
 }
 
 impl TuiTerminalSessionView {
@@ -358,12 +452,18 @@ impl TuiTerminalSessionView {
         self.focus_current_owner_if_active(ctx);
     }
 
-    fn focus_current_owner(&self, ctx: &mut ViewContext<Self>) {
+    fn focus_current_owner(&mut self, ctx: &mut ViewContext<Self>) {
         match self.input_target() {
-            TuiInputTarget::Disabled | TuiInputTarget::Pty => ctx.focus_self(),
+            TuiInputTarget::Disabled | TuiInputTarget::Pty => {
+                self.orchestration_tabs_focused = false;
+                ctx.focus_self();
+            }
             TuiInputTarget::AgentEditor => {
                 if let Some(blocker) = self.active_blocking_child(ctx) {
+                    self.orchestration_tabs_focused = false;
                     ctx.focus(&blocker);
+                } else if self.orchestration_tabs_focused {
+                    ctx.focus_self();
                 } else {
                     ctx.focus(&self.input_view);
                 }
@@ -371,9 +471,14 @@ impl TuiTerminalSessionView {
         }
     }
 
-    fn focus_current_owner_if_active(&self, ctx: &mut ViewContext<Self>) {
+    fn focus_current_owner_if_active(&mut self, ctx: &mut ViewContext<Self>) {
         if self.is_focused_session(ctx) {
+            let tabs_were_focused = self.orchestration_tabs_focused;
             self.focus_current_owner(ctx);
+            if tabs_were_focused && !self.orchestration_tabs_focused {
+                self.refresh_orchestration_tab_bar(ctx);
+                ctx.notify();
+            }
         }
     }
 
@@ -382,6 +487,7 @@ impl TuiTerminalSessionView {
             ctx.focus(&self.input_view);
         }
     }
+
     fn resume_after_user_controlled_command(
         &mut self,
         block_id: &BlockId,
@@ -822,6 +928,8 @@ impl TuiTerminalSessionView {
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
         let transcript_for_input = transcript.clone();
+        let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
+        let orchestration_tab_bar_for_input = orchestration_tab_bar.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
             TuiInputView::new(
                 input_editor_model,
@@ -829,6 +937,7 @@ impl TuiTerminalSessionView {
                 suggestions_mode_for_input,
                 inline_menus_for_input,
                 transcript_for_input,
+                move |ctx| orchestration_tab_bar_for_input.as_ref(ctx).has_tabs(),
                 ctx,
             )
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
@@ -865,6 +974,9 @@ impl TuiTerminalSessionView {
             TuiInputViewEvent::AcceptedMcp(action) => {
                 view.handle_accepted_mcp_action(*action, ctx);
             }
+            TuiInputViewEvent::MoveFocusUp => {
+                view.focus_orchestration_tabs(ctx);
+            }
         });
         ctx.subscribe_to_model(&action_model, |view, action_model, event, ctx| {
             let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event else {
@@ -878,6 +990,23 @@ impl TuiTerminalSessionView {
                 });
             if finished_asking_question {
                 ctx.focus(&view.input_view);
+            }
+        });
+        ctx.subscribe_to_view(&orchestration_tab_bar, |view, _, event, ctx| match event {
+            TuiTabBarEvent::SelectTab(conversation_id) => {
+                view.switch_to_orchestration_tab(
+                    Some(conversation_id.clone()),
+                    view.orchestration_tabs_focused,
+                    ctx,
+                );
+            }
+            TuiTabBarEvent::PageChanged(page_anchor) => {
+                let Ok(page_anchor) = AIConversationId::try_from(page_anchor.clone()) else {
+                    return;
+                };
+                TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.set_explicit_page(page_anchor, ctx);
+                });
             }
         });
         // The input box border color and the footer's shell-mode hint depend
@@ -894,7 +1023,9 @@ impl TuiTerminalSessionView {
         );
         ctx.subscribe_to_model(&conversation_selection, |view, _, _, ctx| {
             view.refresh_exit_summary(ctx);
-            ctx.notify();
+            if view.is_focused_session(ctx) {
+                view.refresh_orchestration_tab_state(ctx);
+            }
         });
 
         // The zero state's "What's new" section: fetch the changelog once at
@@ -1057,16 +1188,7 @@ impl TuiTerminalSessionView {
         ctx.spawn_stream_local(
             throttle(WAKEUP_THROTTLE_PERIOD, wakeups_rx),
             |view, _, ctx| {
-                {
-                    let mut model = view.terminal_model.lock();
-                    if !model.is_alt_screen_active() {
-                        model.block_list_mut().update_background_block_height();
-                        model.block_list_mut().update_active_block_height();
-                    }
-                }
-                view.update_process_input_focus(ctx);
-
-                ctx.notify();
+                view.handle_terminal_wakeup(ctx);
             },
             |_, _| {},
         );
@@ -1104,6 +1226,8 @@ impl TuiTerminalSessionView {
             next_restore_request_id: 0,
             exit_summary,
             active_blocker_view_id: None,
+            orchestration_tab_bar,
+            orchestration_tabs_focused: false,
         }
     }
 
@@ -1122,6 +1246,224 @@ impl TuiTerminalSessionView {
         });
     }
 
+    /// Initializes a background child session with the conversation it owns.
+    pub(crate) fn initialize_orchestrated_child_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.conversation_selection.update(ctx, |selection, ctx| {
+            selection.select_existing_conversation(conversation_id, AgentViewEntryOrigin::Tui, ctx);
+        });
+    }
+
+    /// Resolves live semantic orchestration state for this session.
+    fn compute_orchestration_tab_snapshot(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<TuiOrchestrationSnapshot> {
+        if !ctx.has_singleton_model::<TuiOrchestrationModel>()
+            || !ctx.has_singleton_model::<TuiSessions>()
+        {
+            return None;
+        }
+        let selected_conversation_id = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)?;
+        TuiOrchestrationModel::as_ref(ctx).snapshot(selected_conversation_id, ctx)
+    }
+    /// Refreshes this session's retained bar from live semantic state.
+    pub(crate) fn refresh_orchestration_tab_state(&mut self, ctx: &mut ViewContext<Self>) {
+        let snapshot = self.compute_orchestration_tab_snapshot(ctx);
+        let tabs_were_available = self.orchestration_tab_bar.as_ref(ctx).has_tabs();
+        if let Some(snapshot) = snapshot.as_ref() {
+            let builder = TuiUiBuilder::from_app(ctx);
+            self.sync_orchestration_tab_bar(snapshot, &builder, ctx);
+        } else {
+            self.clear_orchestration_tab_bar(ctx);
+        }
+        let tabs_are_available = self.orchestration_tab_bar.as_ref(ctx).has_tabs();
+        let availability_changed = tabs_were_available != tabs_are_available;
+        let mut focus_changed = false;
+        if !tabs_are_available && self.orchestration_tabs_focused {
+            self.orchestration_tabs_focused = false;
+            focus_changed = true;
+            self.focus_current_owner(ctx);
+        }
+        if availability_changed || focus_changed {
+            ctx.notify();
+        }
+    }
+
+    /// Gives keyboard focus to the orchestration tab bar when it is available.
+    fn focus_orchestration_tabs(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.orchestration_tab_bar.as_ref(ctx).has_tabs() {
+            return;
+        }
+        self.set_orchestration_tab_focus(true, ctx);
+    }
+
+    /// Applies tab-focus mode, synchronizes presentation, and resolves the focus owner.
+    fn set_orchestration_tab_focus(&mut self, focused: bool, ctx: &mut ViewContext<Self>) {
+        self.orchestration_tabs_focused = focused;
+        self.focus_current_owner(ctx);
+        self.refresh_orchestration_tab_bar(ctx);
+        ctx.notify();
+    }
+
+    fn refresh_orchestration_tab_bar(&self, ctx: &mut ViewContext<Self>) {
+        if let Some(snapshot) = self.compute_orchestration_tab_snapshot(ctx) {
+            let builder = TuiUiBuilder::from_app(ctx);
+            self.sync_orchestration_tab_bar(&snapshot, &builder, ctx);
+        }
+    }
+
+    fn switch_to_orchestration_tab(
+        &mut self,
+        key: Option<String>,
+        keep_tab_focus: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(conversation_id) = key.and_then(|key| AIConversationId::try_from(key).ok()) else {
+            return;
+        };
+        self.switch_to_orchestration_conversation(conversation_id, keep_tab_focus, ctx);
+    }
+
+    /// Switches to the retained session that owns an orchestration conversation.
+    fn switch_to_orchestration_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        keep_tab_focus: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let session_id = TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+            model.focus_conversation_session(conversation_id, ctx)
+        });
+        let Some(session_id) = session_id else {
+            return;
+        };
+        if session_id.surface_id() == self.terminal_surface_id {
+            self.refresh_orchestration_tab_state(ctx);
+            self.set_orchestration_tab_focus(keep_tab_focus, ctx);
+            return;
+        }
+        self.orchestration_tabs_focused = false;
+        ctx.notify();
+        let target_view = TuiSessions::as_ref(ctx)
+            .session(session_id)
+            .map(|session| session.view().clone());
+        let Some(target_view) = target_view else {
+            return;
+        };
+        target_view.update(ctx, |target, target_ctx| {
+            target.set_orchestration_tab_focus(keep_tab_focus, target_ctx);
+        });
+    }
+
+    /// Builds the tab child-view configuration for an orchestration snapshot.
+    fn orchestration_tab_bar_config(
+        &self,
+        snapshot: &TuiOrchestrationSnapshot,
+        builder: &TuiUiBuilder,
+    ) -> TuiTabBarConfig {
+        let palette = builder.agent_identity_palette();
+        let mut children_in_spawn_order = snapshot.children.iter().collect::<Vec<_>>();
+        children_in_spawn_order.sort_by_key(|child| child.spawn_index);
+        let identity_indices = assign_agent_identity_indices(
+            children_in_spawn_order
+                .iter()
+                .map(|child| child.label.as_str()),
+            palette.len(),
+        );
+        let identity_by_conversation = children_in_spawn_order
+            .into_iter()
+            .map(|child| child.conversation_id)
+            .zip(identity_indices)
+            .collect::<HashMap<_, _>>();
+        let tabs = snapshot
+            .children
+            .iter()
+            .map(|child| {
+                let identity = palette
+                    .get(
+                        identity_by_conversation
+                            .get(&child.conversation_id)
+                            .copied()
+                            .unwrap_or_default(),
+                    )
+                    .or_else(|| palette.first())
+                    .cloned()
+                    .unwrap_or_default();
+                TuiTab::new(child.conversation_id.to_string(), child.label.clone())
+                    .with_leading_text(identity.glyph, identity.style)
+            })
+            .collect();
+        let mut config = TuiTabBarConfig::new(tabs);
+        config.leading = Some("   Agents:   ".to_owned());
+        config.main_tab = Some(TuiTab::new(
+            snapshot.root_conversation_id.to_string(),
+            "orchestrator",
+        ));
+        config.selected_key = Some(snapshot.selected_conversation_id.to_string());
+        config.focused = self.orchestration_tabs_focused;
+        config.page_anchor = snapshot.page_anchor.map(|id| id.to_string());
+        config.reveal_selected = snapshot.reveal_selected;
+        config.maximum_label_columns = Some(ORCHESTRATION_TAB_LABEL_MAX_COLUMNS);
+        config.secondary_gap_columns = 3;
+        config.styles = builder.orchestration_tab_bar_styles();
+        config
+    }
+
+    /// Synchronizes the retained tab child view from current orchestration state.
+    fn sync_orchestration_tab_bar(
+        &self,
+        snapshot: &TuiOrchestrationSnapshot,
+        builder: &TuiUiBuilder,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let config = self.orchestration_tab_bar_config(snapshot, builder);
+        self.set_orchestration_tab_bar_config(config, ctx);
+    }
+
+    fn clear_orchestration_tab_bar(&self, ctx: &mut ViewContext<Self>) {
+        self.set_orchestration_tab_bar_config(TuiTabBarConfig::new(Vec::new()), ctx);
+    }
+
+    fn set_orchestration_tab_bar_config(
+        &self,
+        config: TuiTabBarConfig,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let result = self
+            .orchestration_tab_bar
+            .update(ctx, |tab_bar, ctx| tab_bar.set_config(config, ctx));
+        if let Err(error) = result {
+            report_error!(
+                anyhow::Error::new(error)
+                    .context("Failed to update orchestration tab bar configuration"),
+                warp_errors::ReportErrorLogMode::OncePerRun
+            );
+        }
+    }
+
+    /// Footer shown while orchestration tabs own keyboard focus.
+    fn render_orchestration_tab_footer(&self, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+        let primary = builder.primary_text_style();
+        let muted = builder.muted_text_style();
+        TuiText::from_spans([
+            ("Tab or ← →".to_string(), primary),
+            (" to navigate  ".to_string(), muted),
+            ("Shift + ← →".to_string(), primary),
+            (" to go to start/end  ".to_string(), muted),
+            ("Shift + ↓".to_string(), primary),
+            (" to send a message".to_string(), muted),
+        ])
+        .truncate()
+        .finish()
+    }
+
     /// The active front-of-queue blocking interaction, if any.
     fn active_blocking_child(&self, ctx: &AppContext) -> Option<ViewHandle<TuiOrchestrationBlock>> {
         self.transcript.as_ref(ctx).active_blocking_child(ctx)
@@ -1131,6 +1473,7 @@ impl TuiTerminalSessionView {
     pub(crate) fn activate(&mut self, ctx: &mut ViewContext<Self>) {
         self.focus_current_owner(ctx);
         self.write_exit_summary(ctx);
+        ctx.notify();
     }
 
     /// Whether this view projects the focused session.
@@ -1424,6 +1767,22 @@ impl TuiTerminalSessionView {
         ctx.emit(TuiTerminalSessionEvent::Resize(size_update));
         ctx.notify();
     }
+    /// Refreshes terminal model geometry and redraws only when this session is visible.
+    fn handle_terminal_wakeup(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        {
+            let mut model = self.terminal_model.lock();
+            if !model.is_alt_screen_active() {
+                model.block_list_mut().update_background_block_height();
+                model.block_list_mut().update_active_block_height();
+            }
+        }
+        let is_focused = self.is_focused_session(ctx);
+        if is_focused {
+            self.update_process_input_focus(ctx);
+            ctx.notify();
+        }
+        is_focused
+    }
 
     /// Re-renders on history events that can change the warping indicator:
     /// the selected conversation's status changing, or an exchange starting
@@ -1535,6 +1894,22 @@ impl TuiTerminalSessionView {
         ctx.notify();
     }
 
+    /// Handles ctrl-d while the prompt is focused. Unlike ctrl-c, ctrl-d exits
+    /// immediately when the prompt is empty; otherwise it keeps its editing
+    /// role of deleting the next character.
+    fn handle_eof(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.input_view.as_ref(ctx).is_empty(ctx) {
+            ctx.terminate_app(TerminationMode::ForceTerminate, None);
+        } else {
+            self.input_view.update(ctx, |input, ctx| {
+                input.handle_action(
+                    &TuiInputAction::EditorCommand(TuiEditorCommand::DeleteForward),
+                    ctx,
+                );
+            });
+        }
+    }
+
     /// Cancels the surface's running conversation (in-flight stream or pending
     /// tool actions), returning whether there was one to cancel.
     fn cancel_active_conversation(&mut self, ctx: &mut ViewContext<Self>) -> bool {
@@ -1565,11 +1940,11 @@ impl TuiTerminalSessionView {
     /// Builds the status footer under the input box. The left slot shows one
     /// hint at a time — the ctrl-c exit confirmation while armed, else a
     /// transient notice, else the shell-mode callout, else the conversations
-    /// callout while the input is empty and no inline menu is visible; the
-    /// active model and working directory are pushed to the right edge behind a
-    /// flex spacer. Every child truncates to a single row, so the row lays out
-    /// one row tall.
-    fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
+    /// callout while the input is empty and no inline menu is visible, else the
+    /// orchestration-tab callout; the active model and working directory are
+    /// pushed to the right edge behind a flex spacer. Every child truncates to
+    /// a single row, so the row lays out one row tall.
+    fn render_footer(&self, orchestration_tabs_available: bool, ctx: &AppContext) -> TuiFlex {
         let builder = TuiUiBuilder::from_app(ctx);
         let muted = builder.muted_text_style();
         let mut left = TuiFlex::row();
@@ -1593,6 +1968,8 @@ impl TuiTerminalSessionView {
             Some((transient, style))
         } else if self.is_shell_mode(ctx) {
             Some((SHELL_MODE_HINT, builder.shell_mode_accent_style()))
+        } else if orchestration_tabs_available {
+            Some(("Shift + ↑ sub-agents", muted))
         } else {
             None
         };
@@ -2127,6 +2504,10 @@ impl TuiTerminalSessionView {
                 self.mcp_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
+            TuiSlashCommand::Exit => {
+                record_static_slash_command_accepted(command.name, true, ctx);
+                ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            }
             TuiSlashCommand::CreateNewProject => {
                 let Some(query) = argument
                     .map(|argument| argument.trim())
@@ -2302,11 +2683,18 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn child_view_ids(&self, _ctx: &AppContext) -> Vec<EntityId> {
-        vec![self.transcript.id(), self.input_view.id()]
+        vec![
+            self.transcript.id(),
+            self.input_view.id(),
+            self.orchestration_tab_bar.id(),
+        ]
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
         let mut context = Self::default_keymap_context();
+        if self.orchestration_tabs_focused && self.input_target().agent_editor_owns_input() {
+            context.set.insert(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
+        }
         if self.is_conversation_restore_loading() {
             context.set.insert(SESSION_CAN_CANCEL_RESTORE_FLAG);
         }
@@ -2366,6 +2754,8 @@ impl TuiView for TuiTerminalSessionView {
                 .and_then(|menu| menu.render(ctx))
             })
             .flatten();
+        let builder = TuiUiBuilder::from_app(ctx);
+        let orchestration_tabs_available = self.orchestration_tab_bar.as_ref(ctx).has_tabs();
 
         // Ctrl-c (cancel/clear/exit) is handled by the keymap pass via the
         // fixed binding registered in [`Self::init`], so no element-level key
@@ -2457,7 +2847,6 @@ impl TuiView for TuiTerminalSessionView {
                         .finish(),
                 );
             }
-            let builder = TuiUiBuilder::from_app(ctx);
             let border_style = if self.is_shell_mode(ctx) {
                 builder.shell_mode_accent_style()
             } else {
@@ -2473,11 +2862,13 @@ impl TuiView for TuiTerminalSessionView {
                 .with_max_rows(MAX_INPUT_TEXT_ROWS + 2)
                 .finish(),
             );
-            content = content.child(
-                TuiConstrainedBox::new(self.render_footer(ctx).finish())
-                    .with_max_rows(1)
-                    .finish(),
-            );
+            let footer = if self.orchestration_tabs_focused {
+                self.render_orchestration_tab_footer(&builder)
+            } else {
+                self.render_footer(orchestration_tabs_available, ctx)
+                    .finish()
+            };
+            content = content.child(TuiConstrainedBox::new(footer).with_max_rows(1).finish());
         }
         let content = content.finish();
         let terminal_content =
@@ -2492,11 +2883,19 @@ impl TuiView for TuiTerminalSessionView {
         // the PTY's columns match the width block content actually renders at
         // (the GUI wraps its view root, but its padding is sub-cell; here it is
         // 4 whole columns).
-        TuiContainer::new(terminal_content.finish())
+        let session = TuiContainer::new(terminal_content.finish())
             .with_padding_x(2)
             .with_padding_top(2)
             .with_padding_bottom(1)
-            .finish()
+            .finish();
+        if orchestration_tabs_available {
+            TuiFlex::column()
+                .child(TuiChildView::new(&self.orchestration_tab_bar).finish())
+                .flex_child(session)
+                .finish()
+        } else {
+            session
+        }
     }
 }
 
@@ -2506,6 +2905,7 @@ impl TypedActionView for TuiTerminalSessionView {
     fn handle_action(&mut self, action: &TuiTerminalSessionAction, ctx: &mut ViewContext<Self>) {
         match action {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
+            TuiTerminalSessionAction::Eof => self.handle_eof(ctx),
             TuiTerminalSessionAction::CancelRestore => {
                 self.cancel_conversation_restore(ctx);
             }
@@ -2513,6 +2913,37 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.hand_back_terminal_use_control(ctx)
             }
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
+            TuiTerminalSessionAction::FocusDefaultInteractionTarget => {
+                self.set_orchestration_tab_focus(false, ctx)
+            }
+            TuiTerminalSessionAction::SelectPreviousOrchestrationTab => {
+                let key = self
+                    .orchestration_tab_bar
+                    .as_ref(ctx)
+                    .navigation_target(TuiTabBarNavigationDirection::Previous);
+                self.switch_to_orchestration_tab(key, true, ctx);
+            }
+            TuiTerminalSessionAction::SelectNextOrchestrationTab => {
+                let key = self
+                    .orchestration_tab_bar
+                    .as_ref(ctx)
+                    .navigation_target(TuiTabBarNavigationDirection::Next);
+                self.switch_to_orchestration_tab(key, true, ctx);
+            }
+            TuiTerminalSessionAction::SelectFirstOrchestrationChild => {
+                let key = self
+                    .orchestration_tab_bar
+                    .as_ref(ctx)
+                    .secondary_edge_target(TuiTabBarSecondaryEdge::First);
+                self.switch_to_orchestration_tab(key, true, ctx);
+            }
+            TuiTerminalSessionAction::SelectLastOrchestrationChild => {
+                let key = self
+                    .orchestration_tab_bar
+                    .as_ref(ctx)
+                    .secondary_edge_target(TuiTabBarSecondaryEdge::Last);
+                self.switch_to_orchestration_tab(key, true, ctx);
+            }
             TuiTerminalSessionAction::ForwardUserPtyBytes(bytes) => {
                 // Raw passthrough: the bytes are already the app's escape
                 // sequence, so write them to the PTY unmodified.

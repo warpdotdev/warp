@@ -1,13 +1,14 @@
-//! [`TuiOrchestrationModel`]: the TUI's child-agent coordinator.
+//! [`TuiOrchestrationModel`]: TUI orchestration runtime and navigation state.
 //!
 //! The shared `StartAgentExecutor` (one per session surface) emits
 //! `CreateAgent` and waits for a frontend to materialize the child. In the
 //! GUI that materializer is `TerminalView` → `PaneGroup`'s hidden child
 //! panes; in the TUI, [`crate::session_registry::TuiSessions`] owns
 //! materialization. This singleton prepares native Oz children, requests
-//! background session lifecycle changes, and tracks the session dimension of
-//! the orchestration tree — conversation lineage itself stays in
-//! `BlocklistAIHistoryModel`.
+//! background session lifecycle changes, tracks the session dimension of the
+//! orchestration tree, and projects that tree into the single visible tab bar.
+//! Conversation lineage and ordering policy stay in `BlocklistAIHistoryModel`
+//! and the shared topology helpers.
 //!
 //! Native (Oz) local children run in background TUI sessions. Local
 //! CLI-harness and remote child requests resolve with an explicit failure.
@@ -16,18 +17,40 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use warp::tui_export::{
-    apply_child_agent_model_override, inherit_child_agent_settings, prepare_local_oz_child_launch,
-    register_agent_event_consumer, unregister_agent_event_consumer, AIConversationId,
-    BlocklistAIHistoryModel, ConversationStatus, Harness, RenderableAIError,
-    StartAgentExecutionMode, StartAgentRequest,
+    apply_child_agent_model_override, descendant_conversations_in_pill_order,
+    inherit_child_agent_settings, orchestration_root_conversation_id,
+    prepare_local_oz_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
+    AIConversationId, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus,
+    Harness, RenderableAIError, StartAgentExecutionMode, StartAgentRequest,
 };
 use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
-use crate::session_registry::TuiSessionId;
+use crate::session_registry::{TuiSessionId, TuiSessions};
+use crate::tab_bar::TuiTabBarPagingState;
 use crate::terminal_session_view::TuiTerminalSessionView;
 
-/// The TUI's child-agent coordinator singleton. See the module docs.
+/// One navigable child conversation in an orchestration snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TuiOrchestrationChild {
+    pub(crate) conversation_id: AIConversationId,
+    pub(crate) label: String,
+    pub(crate) spawn_index: usize,
+}
+
+/// Live semantic state for the orchestration tab bar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TuiOrchestrationSnapshot {
+    pub(crate) root_conversation_id: AIConversationId,
+    pub(crate) selected_conversation_id: AIConversationId,
+    pub(crate) children: Vec<TuiOrchestrationChild>,
+    /// Stable child ID used to resolve the page start at the current width.
+    pub(crate) page_anchor: Option<AIConversationId>,
+    /// Whether the tab bar may override the anchor to reveal the selection.
+    pub(crate) reveal_selected: bool,
+}
+
+/// The TUI's orchestration singleton. See the module docs.
 pub(crate) struct TuiOrchestrationModel {
     /// Session hosting each live child conversation. The session dimension
     /// only — conversation lineage is read from `BlocklistAIHistoryModel`
@@ -35,6 +58,8 @@ pub(crate) struct TuiOrchestrationModel {
     child_session_by_conversation: HashMap<AIConversationId, TuiSessionId>,
     /// Conversations whose event streams are consumed by each live session.
     event_consumers_by_session: HashMap<TuiSessionId, HashSet<AIConversationId>>,
+    /// Paging intent shared by the per-session tab-bar views.
+    tab_bar_paging: TuiTabBarPagingState<AIConversationId>,
 }
 pub(crate) enum TuiOrchestrationEvent {
     CreateLocalOzChildSession {
@@ -47,6 +72,7 @@ pub(crate) enum TuiOrchestrationEvent {
     },
     RemoveChildSession(TuiSessionId),
 }
+
 pub(crate) struct MaterializedLocalOzChildSession {
     pub(crate) parent_session_id: TuiSessionId,
     pub(crate) session_id: TuiSessionId,
@@ -66,10 +92,132 @@ impl SingletonEntity for TuiOrchestrationModel {}
 impl TuiOrchestrationModel {
     /// Registers the singleton before sessions are created and wired to it.
     pub(crate) fn register(ctx: &mut AppContext) -> ModelHandle<Self> {
-        ctx.add_singleton_model(|_| Self {
+        let history = BlocklistAIHistoryModel::handle(ctx);
+        let model = ctx.add_singleton_model(|_| Self {
             child_session_by_conversation: HashMap::new(),
             event_consumers_by_session: HashMap::new(),
+            tab_bar_paging: TuiTabBarPagingState::default(),
+        });
+        let model_for_history = model.clone();
+        ctx.subscribe_to_model(&history, move |_, event, ctx| {
+            let topology_changed = match event {
+                BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                | BlocklistAIHistoryEvent::AppendedExchange { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+                | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
+                | BlocklistAIHistoryEvent::SplitConversation { .. }
+                | BlocklistAIHistoryEvent::RemoveConversation { .. }
+                | BlocklistAIHistoryEvent::DeletedConversation { .. }
+                | BlocklistAIHistoryEvent::RestoredConversations { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
+                | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces {
+                    ..
+                } => true,
+                BlocklistAIHistoryEvent::CreatedSubtask { .. }
+                | BlocklistAIHistoryEvent::UpgradedTask { .. }
+                | BlocklistAIHistoryEvent::ReassignedExchange { .. }
+                | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
+                | BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+                | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
+                | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
+                | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
+                | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
+                | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+                | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+                | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => false,
+            };
+
+            if topology_changed {
+                model_for_history.update(ctx, |model, ctx| model.topology_changed(ctx));
+            }
+        });
+        model
+    }
+
+    /// Builds the current navigable tab tree for a selected conversation.
+    pub(crate) fn snapshot(
+        &self,
+        selected_conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) -> Option<TuiOrchestrationSnapshot> {
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let root_conversation_id =
+            orchestration_root_conversation_id(history, selected_conversation_id)?;
+        let sessions = TuiSessions::as_ref(ctx);
+        let session_ids_by_conversation = sessions.session_ids_by_conversation(history);
+        session_ids_by_conversation.get(&root_conversation_id)?;
+
+        let children = descendant_conversations_in_pill_order(history, root_conversation_id)
+            .into_iter()
+            .filter_map(|descendant| {
+                let conversation_id = descendant.conversation_id;
+                session_ids_by_conversation.get(&conversation_id)?;
+                let conversation = history.conversation(&conversation_id)?;
+                Some(TuiOrchestrationChild {
+                    conversation_id,
+                    label: conversation
+                        .agent_name()
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or("Agent")
+                        .to_owned(),
+                    spawn_index: descendant.spawn_index,
+                })
+            })
+            .collect::<Vec<_>>();
+        if children.is_empty() {
+            return None;
+        }
+
+        let resolved_page = self.tab_bar_paging.resolve(
+            children.first().map(|child| child.conversation_id),
+            |anchor| {
+                children
+                    .iter()
+                    .any(|child| child.conversation_id == *anchor)
+            },
+        );
+        Some(TuiOrchestrationSnapshot {
+            root_conversation_id,
+            selected_conversation_id,
+            children,
+            page_anchor: resolved_page.page_anchor,
+            reveal_selected: resolved_page.reveal_selected,
         })
+    }
+
+    /// Stores an explicitly selected secondary page without switching sessions.
+    pub(crate) fn set_explicit_page(
+        &mut self,
+        page_anchor: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.tab_bar_paging.set_explicit_anchor(page_anchor);
+        ctx.notify();
+    }
+
+    /// Focuses the retained session for a conversation and resumes automatic reveal.
+    pub(crate) fn focus_conversation_session(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<TuiSessionId> {
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        orchestration_root_conversation_id(history, conversation_id)?;
+        let session_id = *TuiSessions::as_ref(ctx)
+            .session_ids_by_conversation(history)
+            .get(&conversation_id)?;
+        self.tab_bar_paging.clear_explicit_anchor();
+        TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+            sessions.focus_session(session_id, ctx);
+        });
+        Some(session_id)
+    }
+
+    fn topology_changed(&mut self, ctx: &mut ModelContext<Self>) {
+        ctx.notify();
     }
 
     /// Routes a `CreateAgent` request the same two ways as the GUI's
@@ -195,6 +343,9 @@ impl TuiOrchestrationModel {
 
         self.register_event_consumer(parent_session_id, request.parent_conversation_id, ctx);
         self.register_event_consumer(session_id, conversation_id, ctx);
+        session_view.update(ctx, |view, ctx| {
+            view.initialize_orchestrated_child_conversation(conversation_id, ctx);
+        });
 
         let prompt = request.prompt;
         session_view.update(ctx, |view, ctx| {
@@ -278,6 +429,7 @@ impl TuiOrchestrationModel {
         }
         self.child_session_by_conversation
             .retain(|_, child_session_id| *child_session_id != session_id);
+        ctx.notify();
     }
 }
 

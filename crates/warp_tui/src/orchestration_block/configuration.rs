@@ -16,6 +16,7 @@ const LOCATION_CLOUD_ID: &str = "cloud";
 /// therefore always uses Oz.
 pub(super) fn normalize_tui_local_harness(state: &mut OrchestrationConfigState) {
     if matches!(state.execution_mode, RunAgentsExecutionMode::Local)
+        && !state.harness_type.trim().is_empty()
         && !state.harness_type.eq_ignore_ascii_case("oz")
     {
         state.harness_type = "oz".to_string();

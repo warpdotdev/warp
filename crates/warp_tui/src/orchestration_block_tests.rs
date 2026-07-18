@@ -167,6 +167,16 @@ fn unapproved_local_request_forces_oz_harness() {
     assert_eq!(state.harness_type, "oz");
     assert_eq!(state.model_id, "");
 }
+#[test]
+fn local_request_with_implicit_oz_harness_preserves_explicit_model() {
+    let mut incoming = request("", RunAgentsExecutionMode::Local);
+    incoming.model_id = "claude-3-5-haiku".to_string();
+
+    let state = TuiOrchestrationBlock::config_state_from_request(&incoming, None);
+
+    assert_eq!(state.harness_type, "");
+    assert_eq!(state.model_id, "claude-3-5-haiku");
+}
 
 #[test]
 fn build_request_carries_card_fields_and_edited_run_wide_state() {

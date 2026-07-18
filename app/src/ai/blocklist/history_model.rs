@@ -838,6 +838,10 @@ impl BlocklistAIHistoryModel {
         }
         conversation.set_pinned(pinned);
         conversation.write_updated_conversation_state(ctx);
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+            terminal_surface_id: self.terminal_surface_id_for_conversation(&conversation_id),
+            conversation_id,
+        });
     }
 
     /// Sets a live conversation's server token, updates the reverse index, and

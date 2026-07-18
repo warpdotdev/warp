@@ -24,7 +24,7 @@ const DIVIDER_PADDING_RIGHT: u16 = 2;
 const ELLIPSIS: &str = "...";
 
 /// Stable tab data rendered by [`TuiTabBarView`].
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct TuiTab {
     pub key: String,
     pub label: String,
@@ -32,7 +32,7 @@ pub struct TuiTab {
 }
 
 /// Styled text rendered before a tab label.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct TuiTabLeading {
     text: String,
     style: TuiStyle,
@@ -59,7 +59,7 @@ impl TuiTab {
 }
 
 /// Caller-supplied styles for the tab bar and its semantic states.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TuiTabBarStyles {
     pub background: Option<Color>,
     pub leading: TuiStyle,
@@ -70,7 +70,7 @@ pub struct TuiTabBarStyles {
 }
 
 /// Caller-owned semantic state and presentation options for a tab bar.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct TuiTabBarConfig {
     pub leading: Option<String>,
     pub main_tab: Option<TuiTab>,
@@ -104,6 +104,54 @@ impl TuiTabBarConfig {
     }
 }
 
+/// Caller-owned responsive paging intent for a tab bar.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TuiTabBarPagingState<K> {
+    explicit_anchor: Option<K>,
+}
+impl<K> Default for TuiTabBarPagingState<K> {
+    fn default() -> Self {
+        Self {
+            explicit_anchor: None,
+        }
+    }
+}
+
+impl<K> TuiTabBarPagingState<K> {
+    /// Preserves the page beginning at `anchor` instead of revealing selection.
+    pub(crate) fn set_explicit_anchor(&mut self, anchor: K) {
+        self.explicit_anchor = Some(anchor);
+    }
+
+    /// Resumes automatic selected-tab reveal.
+    pub(crate) fn clear_explicit_anchor(&mut self) {
+        self.explicit_anchor = None;
+    }
+}
+
+impl<K: Clone> TuiTabBarPagingState<K> {
+    /// Resolves paging intent against the owner's current ordered keys.
+    pub(crate) fn resolve(
+        &self,
+        default_anchor: Option<K>,
+        explicit_anchor_is_valid: impl FnOnce(&K) -> bool,
+    ) -> TuiTabBarResolvedPage<K> {
+        let explicit_anchor = self
+            .explicit_anchor
+            .as_ref()
+            .and_then(|anchor| explicit_anchor_is_valid(anchor).then_some(anchor));
+        TuiTabBarResolvedPage {
+            page_anchor: explicit_anchor.cloned().or(default_anchor),
+            reveal_selected: explicit_anchor.is_none(),
+        }
+    }
+}
+
+/// Effective paging inputs resolved from [`TuiTabBarPagingState`].
+pub(crate) struct TuiTabBarResolvedPage<K> {
+    pub(crate) page_anchor: Option<K>,
+    pub(crate) reveal_selected: bool,
+}
 /// Invalid caller-supplied tab-bar configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TuiTabBarConfigError {
@@ -210,6 +258,9 @@ impl TuiTabBarView {
         config: TuiTabBarConfig,
         ctx: &mut ViewContext<Self>,
     ) -> Result<(), TuiTabBarConfigError> {
+        if self.config == config {
+            return Ok(());
+        }
         let live_keys = validated_live_keys(&config)?;
         self.config = config;
         self.reconcile_mouse_states(live_keys);
@@ -223,6 +274,10 @@ impl TuiTabBarView {
         for key in live_keys {
             self.mouse_states.entry(key).or_default();
         }
+    }
+    /// Whether the current configuration contains any main or secondary tabs.
+    pub(crate) fn has_tabs(&self) -> bool {
+        self.config.main_tab.is_some() || !self.config.tabs.is_empty()
     }
 
     /// Resolves the adjacent tab in semantic order, wrapping at either end.

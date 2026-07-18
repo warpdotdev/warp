@@ -2928,7 +2928,7 @@ pub struct BlockSelectionDetails {
 /// can fire many times mid-block from chatty prompts. Once-per-block work
 /// (git-repo detection on unchanged CWDs, `block_completed_callbacks` drain)
 /// must be gated on this distinction.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum BlockMetadataUpdateSource {
     /// `Event::BlockMetadataReceived` — the shell's precmd hook fired between
     /// blocks. Run all once-per-block work.
@@ -5851,9 +5851,9 @@ impl TerminalView {
                                         agent_view_visibility: agent_view_visibility.into(),
                                     },
                                 ) {
-                                    report_error!(anyhow::Error::new(e).context(
-                                        "Error sending UpdateBlockAgentViewVisibility event"
-                                    ));
+                                    log::warn!(
+                                        "Error sending UpdateBlockAgentViewVisibility event: {e:#}"
+                                    );
                                 }
                             }
                         }
@@ -5886,9 +5886,9 @@ impl TerminalView {
                                         agent_view_visibility: agent_view_visibility.into(),
                                     },
                                 ) {
-                                    report_error!(anyhow::Error::new(e).context(
-                                        "Error sending UpdateBlockAgentViewVisibility event"
-                                    ));
+                                    log::warn!(
+                                        "Error sending UpdateBlockAgentViewVisibility event: {e:#}"
+                                    );
                                 }
                             }
                         }
@@ -7369,7 +7369,7 @@ impl TerminalView {
 
         // Determine DiffMode from the base branch.
         if self.current_repo_path.is_none() {
-            report_error!("Cannot insert PR comments: not in a git repository");
+            log::warn!("Cannot insert PR comments: not in a git repository");
             return;
         }
 
@@ -9909,9 +9909,7 @@ impl TerminalView {
                 AliasExpansionSettings::handle(ctx).update(ctx, |settings, ctx| {
                     if let Err(e) = settings.alias_expansion_enabled.set_value(true, ctx) {
                         should_dismiss_banner = false;
-                        report_error!(
-                            e.context("Failed to enable alias expansion setting from banner")
-                        );
+                        log::warn!("Failed to enable alias expansion setting from banner: {e:#}");
                     }
                 });
                 if should_dismiss_banner {
@@ -10238,8 +10236,7 @@ impl TerminalView {
                         agent_view_visibility: agent_view_visibility.into(),
                     })
                 {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Error sending UpdateBlockAgentViewVisibility event"));
+                    log::warn!("Error sending UpdateBlockAgentViewVisibility event: {e:#}");
                 }
             }
         }
@@ -10416,9 +10413,7 @@ impl TerminalView {
                             if let Err(e) = ai_settings
                                 .codebase_index_speedbump_banner_dismissed_for_repo_paths
                                 .set_value(dismissed_repo_paths, ctx) {
-                                    report_error!(e.context(
-                                        "Failed to persist 'Codebase indexing speedbump banner dismissed' setting"
-                                    ));
+                                    log::warn!("Failed to persist 'Codebase indexing speedbump banner dismissed' setting: {e:#}");
                                 }
                         });
                     }
@@ -10440,9 +10435,7 @@ impl TerminalView {
                         .codebase_index_speedbump_banner_globally_dismissed
                         .set_value(true, ctx)
                     {
-                        report_error!(e.context(
-                            "Failed to persist 'Codebase indexing speedbump banner globally dismissed' setting"
-                        ));
+                        log::warn!("Failed to persist 'Codebase indexing speedbump banner globally dismissed' setting: {e:#}");
                     }
                 });
                 if let Some(banner_state) = self
@@ -11410,6 +11403,22 @@ impl TerminalView {
             return;
         }
 
+        if source == BlockMetadataUpdateSource::Osc7 {
+            if let Some(cwd) = block_metadata.current_working_directory() {
+                let resolvable = block_metadata
+                    .session_id()
+                    .and_then(|sid| self.sessions.as_ref(ctx).get(sid))
+                    .map(|session| session.can_resolve_cwd_to_native_path(cwd))
+                    // Unknown session: don't block the update — this is a
+                    // targeted guard, not a general filter.
+                    .unwrap_or(true);
+                if !resolvable {
+                    log::debug!("Ignoring unresolvable OSC 7 cwd: {cwd:?}");
+                    return;
+                }
+            }
+        }
+
         if let Some(prev_block_metadata) = self.active_block_metadata.take() {
             // Only send event to save app state when the block is post bootstrap
             // and working directory has changed.
@@ -11503,7 +11512,7 @@ impl TerminalView {
                             // `maybe_set_pending_repo_init_path`'s project
                             // init before the actual command (e.g. `git
                             // clone`) finishes.
-                            if matches!(source, BlockMetadataUpdateSource::Precmd) {
+                            if source == BlockMetadataUpdateSource::Precmd {
                                 let callbacks =
                                     me.block_completed_callbacks.drain(..).collect_vec();
                                 for callback in callbacks {
@@ -12424,8 +12433,9 @@ impl TerminalView {
                             },
                             move |_, res, _| {
                                 if let Err(err) = res {
-                                    report_error!(anyhow::Error::new(err)
-                                        .context("Error sending UpdateFinishedCommand event"));
+                                    log::warn!(
+                                        "Error sending UpdateFinishedCommand event: {err:#}"
+                                    );
                                 }
                             },
                         );
@@ -14492,9 +14502,7 @@ impl TerminalView {
                 .agent_mode_setup_banner_shown_for_repo_paths
                 .set_value(shown_repo_paths, ctx)
             {
-                report_error!(
-                    e.context("Failed to persist 'Agent Mode setup banner shown' setting")
-                );
+                log::warn!("Failed to persist 'Agent Mode setup banner shown' setting: {e:#}");
             }
         });
     }
@@ -17847,7 +17855,7 @@ impl TerminalView {
             self.maybe_copy_selection_to_clipboard(ctx);
             ctx.notify();
         } else {
-            report_error!("end_selection dispatched with no pending selection");
+            log::warn!("end_selection dispatched with no pending selection");
         }
     }
 
@@ -17883,7 +17891,7 @@ impl TerminalView {
 
             ctx.notify();
         } else {
-            report_error!("end_selection dispatched with no pending selection");
+            log::warn!("end_selection dispatched with no pending selection");
         }
     }
 
@@ -25002,7 +25010,7 @@ impl TerminalView {
                 };
                 SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
                     if let Err(e) = session_settings.notifications.set_value(new_settings, ctx) {
-                        report_error!(e.context("Error persisting notifications setting"));
+                        log::warn!("Error persisting notifications setting: {e:#}");
                     }
                 });
 
@@ -25060,7 +25068,7 @@ impl TerminalView {
                 };
                 SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
                     if let Err(e) = session_settings.notifications.set_value(new_settings, ctx) {
-                        report_error!(e.context("Error persisting notifications setting"));
+                        log::warn!("Error persisting notifications setting: {e:#}");
                     }
                 });
 
@@ -25730,7 +25738,7 @@ impl TerminalView {
         #[cfg(feature = "local_fs")]
         {
             let Some(working_directory_str) = self.pwd() else {
-                report_error!("No working directory found for terminal session");
+                log::warn!("No working directory found for terminal session");
                 return;
             };
 

@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::{io, process};
 
+use anyhow::Context as _;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use typed_path::UnixPathBuf;
@@ -587,11 +588,8 @@ impl WslShellStarter {
             &home_dir.to_typed_path(),
             &self.distribution,
         )
-        .inspect_err(|err| {
-            report_error!(
-                anyhow::anyhow!("{err:#}").context("error conversion WSL home dir for host")
-            )
-        })
+        .context("error conversion WSL home dir for host")
+        .inspect_err(|err| report_error!(err))
         .ok()
     }
 }
@@ -780,46 +778,45 @@ pub fn ssh_socket_dir() -> String {
 /// Take the output of a wsl.exe subcommand and try to decode it while reporting errors.
 /// NOTE: The empty string Some("") may be returned.
 fn decode_wsl_path_result(result: io::Result<process::Output>) -> Option<UnixPathBuf> {
-    match result {
+    let output = match result.context("error finding wsl.exe") {
+        Ok(output) => output,
         Err(err) => {
-            report_error!(anyhow::Error::new(err).context("error finding wsl.exe"));
-            None
+            report_error!(err);
+            return None;
         }
-        Ok(output) => {
-            if !output.status.success() {
-                // Errors with wsl.exe usage itself outputs error messages in UTF-16.
-                cfg_if::cfg_if! {
-                    // WSL is Windows only, but most of the WSL code isn't cfg-guarded. This
-                    // snipped does need to be guarded.
-                    if #[cfg(windows)] {
-                        use std::os::windows::ffi::OsStringExt as _;
-                        let wsl_err_msg = OsString::from_wide(bytemuck::cast_slice(&output.stdout));
-                    } else {
-                        let wsl_err_msg = "";
-                    }
-                }
-                // If wsl.exe was correctly invoked but the Linux command had an error, that will
-                // be UTF-8.
-                if wsl_err_msg.is_empty() {
-                    if let Ok(inner_err_msg) = String::from_utf8(output.stderr) {
-                        log::error!("Error from WSL command: {inner_err_msg}");
-                        report_error!("Error from WSL command");
-                    }
-                } else {
-                    log::error!("Error invoking wsl.exe: {wsl_err_msg:?}");
-                    report_error!("Error invoking wsl.exe");
-                }
-                return None;
+    };
+    if !output.status.success() {
+        // Errors with wsl.exe usage itself outputs error messages in UTF-16.
+        cfg_if::cfg_if! {
+            // WSL is Windows only, but most of the WSL code isn't cfg-guarded. This
+            // snipped does need to be guarded.
+            if #[cfg(windows)] {
+                use std::os::windows::ffi::OsStringExt as _;
+                let wsl_err_msg = OsString::from_wide(bytemuck::cast_slice(&output.stdout));
+            } else {
+                let wsl_err_msg = "";
             }
-
-            Some(UnixPathBuf::from(
-                take_until_utf16_crlf(output.stdout)
-                    .into_iter()
-                    .take_while(|b| *b != b'\n')
-                    .collect_vec(),
-            ))
         }
+        // If wsl.exe was correctly invoked but the Linux command had an error, that will
+        // be UTF-8.
+        if wsl_err_msg.is_empty() {
+            if let Ok(inner_err_msg) = String::from_utf8(output.stderr) {
+                log::error!("Error from WSL command: {inner_err_msg}");
+                report_error!("Error from WSL command");
+            }
+        } else {
+            log::error!("Error invoking wsl.exe: {wsl_err_msg:?}");
+            report_error!("Error invoking wsl.exe");
+        }
+        return None;
     }
+
+    Some(UnixPathBuf::from(
+        take_until_utf16_crlf(output.stdout)
+            .into_iter()
+            .take_while(|b| *b != b'\n')
+            .collect_vec(),
+    ))
 }
 
 /// Takes bytes until [13, 0, 10, 0] is found in the byte sequence, dropping the rest.

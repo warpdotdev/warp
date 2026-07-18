@@ -68,8 +68,10 @@ pub use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
 pub use crate::ai::blocklist::orchestration_topology::{
-    orchestrator_agent_id_for_conversation, resolve_orchestration_participant,
-    OrchestrationParticipantKind, ResolvedOrchestrationParticipant,
+    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
+    orchestration_root_conversation_id, orchestrator_agent_id_for_conversation,
+    resolve_orchestration_participant, OrchestrationParticipantKind,
+    OrderedOrchestrationDescendant, ResolvedOrchestrationParticipant,
 };
 pub use crate::ai::blocklist::view_util::format_credits;
 #[cfg(not(target_family = "wasm"))]

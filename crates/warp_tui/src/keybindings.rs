@@ -98,23 +98,34 @@ fn register_editor_bindings<A>(
     let action_for = &action_for;
     let bindings = editor_binding_specs(target).flat_map(|spec| {
         let context = context.clone();
-        spec.keys.iter().map(move |key| {
-            let context = if matches!(target, TuiEditorBindingTarget::Input)
-                && matches!(spec.command, TuiEditorCommand::MoveUp)
-                && *key == "ctrl-p"
-            {
-                context.clone()
-                    & (!id!(PLAN_TOGGLE_AVAILABLE_FLAG) | id!(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG))
-            } else {
-                context.clone()
-            };
-            EditableBinding::new(spec.name, spec.description, action_for(spec.command))
-                .with_context_predicate(context)
-                .with_group(TUI_BINDING_GROUP)
-                .with_key_binding(key)
+        spec.keys.iter().filter_map(move |key| {
+            let context = context_for_editor_binding(target, spec.command, key, &context)?;
+            Some(
+                EditableBinding::new(spec.name, spec.description, action_for(spec.command))
+                    .with_context_predicate(context)
+                    .with_group(TUI_BINDING_GROUP)
+                    .with_key_binding(key),
+            )
         })
     });
     app.register_editable_bindings(bindings);
+}
+
+fn context_for_editor_binding(
+    target: TuiEditorBindingTarget,
+    command: TuiEditorCommand,
+    key: &str,
+    default_context: &ContextPredicate,
+) -> Option<ContextPredicate> {
+    match (target, command, key) {
+        // The input editor reserves ctrl-d for session-level EOF and exit handling.
+        (TuiEditorBindingTarget::Input, TuiEditorCommand::DeleteForward, "ctrl-d") => None,
+        (TuiEditorBindingTarget::Input, TuiEditorCommand::MoveUp, "ctrl-p") => Some(
+            default_context.clone()
+                & (!id!(PLAN_TOGGLE_AVAILABLE_FLAG) | id!(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)),
+        ),
+        _ => Some(default_context.clone()),
+    }
 }
 
 /// Debug-time guard (no-op in release): every keystroke binding that matches a

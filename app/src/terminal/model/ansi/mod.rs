@@ -165,7 +165,12 @@ fn parse_osc_7_cwd(payload: &[u8]) -> Option<String> {
         return None;
     }
 
-    percent_decode_utf8(encoded_path)
+    let decoded = percent_decode_utf8(encoded_path)?;
+
+    #[cfg(windows)]
+    let decoded = warp_util::path::file_uri_drive_path_to_windows(&decoded).into_owned();
+
+    Some(decoded)
 }
 
 fn osc_7_host_is_local(host: &str) -> bool {

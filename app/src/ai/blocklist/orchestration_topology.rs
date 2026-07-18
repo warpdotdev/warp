@@ -5,6 +5,8 @@
 //! orchestration pill bar so other surfaces (e.g. keyboard navigation and
 //! the agent-mode usage footer's credit rollup) can walk and order the same
 //! tree without duplicating the logic.
+#[cfg(feature = "tui")]
+use std::collections::HashSet;
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -100,6 +102,29 @@ pub fn resolve_orchestration_participant(
     }
 }
 
+/// Returns the topmost loaded conversation in an orchestration tree.
+///
+/// Conversations without descendants are not orchestration roots. Malformed
+/// parent cycles and missing ancestors fail closed.
+#[cfg(feature = "tui")]
+pub fn orchestration_root_conversation_id(
+    history: &BlocklistAIHistoryModel,
+    conversation_id: AIConversationId,
+) -> Option<AIConversationId> {
+    history.conversation(&conversation_id)?;
+    let mut current = conversation_id;
+    let mut visited = HashSet::new();
+    while visited.insert(current) {
+        let conversation = history.conversation(&current)?;
+        let Some(parent) = history.resolved_parent_conversation_id_for_conversation(conversation)
+        else {
+            return (!history.child_conversation_ids_of(&current).is_empty()).then_some(current);
+        };
+        current = parent;
+    }
+    None
+}
+
 const DONE_STATUS_KEY: u8 = 3;
 
 fn pill_status_sort_key(status: Option<&ConversationStatus>) -> u8 {
@@ -181,6 +206,13 @@ pub fn has_local_orchestrated_children(
         })
 }
 
+/// One descendant in canonical orchestration pill order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrderedOrchestrationDescendant {
+    pub conversation_id: AIConversationId,
+    pub spawn_index: usize,
+}
+
 /// Returns descendants in the canonical orchestration pill order:
 ///   1) pinned children
 ///   2) unpinned children
@@ -189,10 +221,10 @@ pub fn has_local_orchestrated_children(
 /// This is the single ordering source used by both the pill bar and keyboard
 /// navigation. Callers should preserve the returned order rather than sorting
 /// the conversations again.
-pub fn descendant_conversation_ids_in_pill_order(
+pub fn descendant_conversations_in_pill_order(
     history: &BlocklistAIHistoryModel,
     parent_id: AIConversationId,
-) -> Vec<AIConversationId> {
+) -> Vec<OrderedOrchestrationDescendant> {
     let mut descendants = descendant_conversation_ids_in_spawn_order(history, parent_id)
         .into_iter()
         .enumerate()
@@ -223,7 +255,12 @@ pub fn descendant_conversation_ids_in_pill_order(
     );
     descendants
         .into_iter()
-        .map(|(_, _, _, _, conversation_id)| conversation_id)
+        .map(
+            |(_, _, _, spawn_index, conversation_id)| OrderedOrchestrationDescendant {
+                conversation_id,
+                spawn_index,
+            },
+        )
         .collect()
 }
 
@@ -243,12 +280,16 @@ pub fn adjacent_orchestration_child_conversation_id(
     let orchestration_root_id = history
         .resolved_parent_conversation_id_for_conversation(active_conversation)
         .unwrap_or(active_conversation_id);
-    let descendant_ids = descendant_conversation_ids_in_pill_order(history, orchestration_root_id);
-    if descendant_ids.is_empty() {
+    let descendants = descendant_conversations_in_pill_order(history, orchestration_root_id);
+    if descendants.is_empty() {
         return None;
     }
     let conversation_ids = std::iter::once(orchestration_root_id)
-        .chain(descendant_ids)
+        .chain(
+            descendants
+                .into_iter()
+                .map(|descendant| descendant.conversation_id),
+        )
         .collect::<Vec<_>>();
 
     let active_index = conversation_ids

@@ -3,7 +3,7 @@
 //! These drive a real [`CodeEditorModel`] (TUI char-cell mode) behind a real
 //! [`TuiInputView`] so they exercise the exact render/layout/cursor path the
 //! presenter uses, not a reimplementation of it.
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -314,7 +314,14 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
         },
         |ctx| {
             let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-            TuiInputView::new_for_test(model, input_mode, suggestions_mode, Vec::new(), ctx)
+            TuiInputView::new_for_test(
+                model,
+                input_mode,
+                suggestions_mode,
+                Vec::new(),
+                |_| false,
+                ctx,
+            )
         },
     );
     view
@@ -349,6 +356,7 @@ fn build_view_with_conversation_menu(
                 input_mode,
                 suggestions_mode,
                 vec![inline_menu_for_view],
+                |_| false,
                 ctx,
             )
         },
@@ -400,6 +408,7 @@ fn build_view_with_inline_menu(
                 input_mode,
                 suggestions_mode,
                 vec![inline_menu],
+                |_| false,
                 ctx,
             )
         },
@@ -441,6 +450,7 @@ fn build_view_with_model_menu(
                 input_mode,
                 suggestions_mode,
                 vec![inline_menu],
+                |_| false,
                 ctx,
             )
         },
@@ -621,6 +631,100 @@ fn dispatch(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, actions: &[Tu
         for action in actions {
             v.handle_action(action, vctx);
         }
+    });
+}
+
+#[test]
+fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
+    App::test((), |mut app| async move {
+        let (view, requests, available) = app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            add_test_semantic_selection(ctx);
+            let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
+            let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::Closed);
+            let available = Rc::new(Cell::new(false));
+            let available_for_view = available.clone();
+            let (_window_id, view) = ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                move |ctx| {
+                    let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
+                    TuiInputView::new_for_test(
+                        model,
+                        input_mode,
+                        suggestions_mode,
+                        Vec::new(),
+                        move |_| available_for_view.get(),
+                        ctx,
+                    )
+                },
+            );
+            let requests = Rc::new(RefCell::new(0usize));
+            let captured = requests.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiInputViewEvent::MoveFocusUp = event {
+                    *captured.borrow_mut() += 1;
+                }
+            });
+            (view, requests, available)
+        });
+
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::SelectUp)],
+            );
+        });
+        assert_eq!(*requests.borrow(), 0);
+
+        available.set(true);
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::SelectUp)],
+            );
+        });
+        assert_eq!(*requests.borrow(), 1);
+
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::Editor(TuiEditorAction::InsertText(
+                    "first\nsecond".to_string(),
+                ))],
+            );
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::SelectUp)],
+            );
+        });
+        assert_eq!(
+            *requests.borrow(),
+            1,
+            "second visual row stays in the input"
+        );
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.clear(ctx));
+            type_str(&view, ctx, "abc");
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::SelectLeft)],
+            );
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::SelectUp)],
+            );
+        });
+        assert_eq!(*requests.borrow(), 1, "active selection stays in the input");
     });
 }
 
