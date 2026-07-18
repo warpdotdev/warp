@@ -16,7 +16,6 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
-use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
@@ -621,7 +620,7 @@ impl CLISubagentView {
                         self.terminal_view_id,
                         ctx,
                     ) {
-                        report_error!(e);
+                        log::warn!("Failed to persist Agent Mode write-to-PTY permission: {e:#}");
                     }
                 });
                 ctx.notify();
@@ -643,7 +642,9 @@ impl CLISubagentView {
                             self.terminal_view_id,
                             ctx,
                         ) {
-                            report_error!(e);
+                            log::warn!(
+                                "Failed to persist Agent Mode file access permission: {e:#}"
+                            );
                         }
                     });
                     ctx.notify();
@@ -1504,7 +1505,7 @@ impl TypedActionView for CLISubagentView {
                         self.terminal_view_id,
                         ctx,
                     ) {
-                        report_error!(e);
+                        log::warn!("Failed to persist Agent Mode write-to-PTY permission: {e:#}");
                     }
                 });
                 ctx.notify();
@@ -1517,7 +1518,7 @@ impl TypedActionView for CLISubagentView {
                         self.terminal_view_id,
                         ctx,
                     ) {
-                        report_error!(e);
+                        log::warn!("Failed to persist Agent Mode file access permission: {e:#}");
                     }
                 });
                 ctx.notify();

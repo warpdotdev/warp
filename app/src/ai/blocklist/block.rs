@@ -3177,9 +3177,7 @@ impl AIBlock {
                     .show_code_suggestion_speedbump
                     .set_value(false, ctx)
                 {
-                    report_error!(
-                        e.context("Failed to persist 'Show code suggestion speedbump' setting")
-                    );
+                    log::warn!("Failed to persist 'Show code suggestion speedbump' setting: {e:#}");
                 }
             });
         }
@@ -4270,9 +4268,7 @@ impl AIBlock {
                     .show_code_suggestion_speedbump
                     .set_value(false, ctx)
                 {
-                    report_error!(
-                        e.context("Failed to persist 'Show code suggestion speedbump' setting")
-                    );
+                    log::warn!("Failed to persist 'Show code suggestion speedbump' setting: {e:#}");
                 }
             });
         }
@@ -6564,7 +6560,9 @@ impl TypedActionView for AIBlock {
                                             },
                                             ctx);
                                     }
-                                    Err(e) => report_error!(e),
+                                    Err(e) => log::warn!(
+                                        "Failed to persist Agent Mode read-only command permissions: {e:#}"
+                                    ),
                                 }
                             });
                 }
@@ -6590,7 +6588,9 @@ impl TypedActionView for AIBlock {
                                     ctx
                                 );
                             }
-                            Err(e) => report_error!(e),
+                            Err(e) => log::warn!(
+                                "Failed to persist Agent Mode file access permissions: {e:#}"
+                            ),
                         }
                     });
                 }
@@ -6618,7 +6618,9 @@ impl TypedActionView for AIBlock {
                                     ctx
                                 );
                             }
-                            Err(e) => report_error!(e),
+                            Err(e) => log::warn!(
+                                "Failed to persist Agent Mode file access permissions: {e:#}"
+                            ),
                         }
                     });
                 }
