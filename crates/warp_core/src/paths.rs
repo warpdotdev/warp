@@ -157,6 +157,14 @@ pub fn tui_config_local_dir() -> PathBuf {
     }
 }
 
+/// Returns the path to the TUI front-end's global MCP configuration file.
+///
+/// This is intentionally distinct from [`warp_home_mcp_config_file_path`] so
+/// the GUI and TUI can run different MCP configurations and versions without
+/// reading or modifying each other's files.
+pub fn tui_mcp_config_file_path() -> PathBuf {
+    tui_config_local_dir().join(".mcp.json")
+}
 /// Returns the base directory for general config files. Useful for accessing the config files for
 /// other programs.
 pub fn base_config_dir() -> PathBuf {

@@ -2,6 +2,7 @@
 mod action_model;
 pub mod agent_view;
 pub mod block;
+mod child_agent_launch;
 pub mod code_block;
 mod context_model;
 mod controller;
@@ -43,26 +44,47 @@ pub(crate) use action_model::recording_finalize::{
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use action_model::AIActionStatus;
-// Consumed by `tui_export` for the `warp_tui` frontend.
-#[cfg(feature = "tui")]
-pub use action_model::RequestFileEditsExecutor;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
     apply_edits, read_local_file_context, FileReadResult, ReadFileContextResult,
-    RequestFileEditsFormatKind, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    StartAgentRequestId,
+    RequestFileEditsFormatKind,
 };
+// Consumed by `tui_export` for the `warp_tui` frontend.
+#[cfg(feature = "tui")]
+pub use action_model::{AskUserQuestionExecutor, RequestFileEditsExecutor};
 pub use action_model::{
     BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent,
+};
+// Consumed by `tui_export` for the `warp_tui` frontend.
+#[cfg(feature = "tui")]
+pub use action_model::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawningSnapshot};
+// Consumed by `tui_export` for the `warp_tui` frontend's child-agent
+// materializer, in addition to the GUI pane-group dispatch.
+#[cfg_attr(
+    any(target_family = "wasm", not(feature = "tui")),
+    allow(unused_imports)
+)]
+pub use action_model::{
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
+    StartAgentRequestId,
 };
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};
 pub use block::{keyboard_navigable_buttons, toggleable_items};
+pub use child_agent_launch::inherit_child_agent_settings;
+#[cfg(not(target_family = "wasm"))]
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use child_agent_launch::{
+    apply_child_agent_model_override, prepare_local_oz_child_launch, PreparedLocalOzChildLaunch,
+};
+#[cfg(not(feature = "tui"))]
+pub(crate) use context_model::block_context_from_terminal_model;
+#[cfg(feature = "tui")]
+pub use context_model::block_context_from_terminal_model;
 pub use context_model::BlocklistAIContextModel;
 pub(crate) use context_model::{
-    block_context_from_terminal_model, AttachmentType, BlocklistAIContextEvent, PendingAttachment,
-    PendingFile,
+    AttachmentType, BlocklistAIContextEvent, PendingAttachment, PendingFile,
 };
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,

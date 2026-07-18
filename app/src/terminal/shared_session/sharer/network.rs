@@ -58,8 +58,15 @@ use crate::terminal::shared_session::{
 use crate::terminal::TerminalModel;
 use crate::throttle::throttle;
 
-/// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server
+/// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server.
+#[cfg(not(any(test, feature = "integration_tests")))]
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);
+/// Under `test`/`integration_tests` the threshold is larger so the transient
+/// `Batching` state is reliably observable instead of racing the real ~50ms timer
+/// under coarse scheduler granularity (which flaked on Windows CI); see
+/// `test_handle_pty_read_event_while_not_batching`.
+#[cfg(any(test, feature = "integration_tests"))]
+const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(250);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]

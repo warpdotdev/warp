@@ -672,6 +672,30 @@ fn test_convert_windows_path_to_msys2() {
 }
 
 #[test]
+fn test_file_uri_drive_path_to_windows() {
+    assert_eq!(
+        file_uri_drive_path_to_windows("/E:/CLAUDE-BASE"),
+        r"E:\CLAUDE-BASE"
+    );
+    assert_eq!(
+        file_uri_drive_path_to_windows("/C:/Users/foo/bar"),
+        r"C:\Users\foo\bar"
+    );
+    assert_eq!(file_uri_drive_path_to_windows("/E:/"), r"E:\");
+    assert_eq!(file_uri_drive_path_to_windows("/E:"), "E:");
+    assert_eq!(
+        file_uri_drive_path_to_windows("/Users/foo/bar"),
+        "/Users/foo/bar"
+    );
+    assert_eq!(file_uri_drive_path_to_windows("/E/notdrive"), "/E/notdrive");
+    assert_eq!(file_uri_drive_path_to_windows("/E:extra"), "/E:extra");
+    assert_eq!(
+        file_uri_drive_path_to_windows(r"E:\CLAUDE-BASE"),
+        r"E:\CLAUDE-BASE"
+    );
+}
+
+#[test]
 fn test_canonicalize_git_bash_path() {
     assert_eq!(
         canonicalize_git_bash_path(

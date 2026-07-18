@@ -29,6 +29,7 @@ ignore = "0.4.23"
 once_cell.workspace = true
 log.workspace = true
 futures.workspace = true
+async-fs.workspace = true
 tempfile.workspace = true
 cfg-if = "1.0"
 dirs.workspace = true
@@ -38,7 +39,6 @@ strum.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 notify-debouncer-full.workspace = true
-async-fs.workspace = true
 watcher.workspace = true
 
 [build-dependencies]

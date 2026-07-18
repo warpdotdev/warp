@@ -123,16 +123,56 @@ pub fn should_close_slash_command_menu_for_exact_match(
 ) -> bool {
     result_count < 2 || argument_started
 }
+
+/// Static slash commands that the TUI can execute.
+///
+/// Converting a registry command to this enum centralizes the supported-command policy and lets
+/// the TUI execution path match every supported command exhaustively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiSlashCommand {
+    Agent,
+    New,
+    Compact,
+    Plan,
+    Conversations,
+    Model,
+    Skills,
+    CreateNewProject,
+    ExportToClipboard,
+    ExportToFile,
+    Mcp,
+    Exit,
+}
+
+impl TuiSlashCommand {
+    /// Classifies a registry command when the TUI supports it.
+    pub fn from_static_command(command: &StaticCommand) -> Option<Self> {
+        match command.name {
+            name if name == commands::AGENT.name => Some(Self::Agent),
+            name if name == commands::NEW.name => Some(Self::New),
+            name if name == commands::COMPACT.name => Some(Self::Compact),
+            name if name == commands::PLAN.name => Some(Self::Plan),
+            name if name == commands::CONVERSATIONS.name => Some(Self::Conversations),
+            name if name == commands::MODEL.name => Some(Self::Model),
+            name if name == commands::INVOKE_SKILL.name => Some(Self::Skills),
+            name if name == commands::CREATE_NEW_PROJECT.name => Some(Self::CreateNewProject),
+            name if name == commands::EXPORT_TO_CLIPBOARD.name => Some(Self::ExportToClipboard),
+            name if name == commands::EXPORT_TO_FILE.name => Some(Self::ExportToFile),
+            name if name == commands::MCP.name => Some(Self::Mcp),
+            name if name == commands::EXIT.name => Some(Self::Exit),
+            _ => None,
+        }
+    }
+}
+
 /// Returns whether TUI can execute or otherwise handle the static slash command today.
 ///
 /// GUI-only actions such as opening settings panes or inline menus should stay hidden until the
 /// TUI has equivalent flows.
 pub fn slash_command_is_supported_in_tui(command: &StaticCommand) -> bool {
-    command.name == commands::AGENT.name
-        || command.name == commands::NEW.name
-        || command.name == commands::COMPACT.name
-        || command.name == commands::PLAN.name
+    TuiSlashCommand::from_static_command(command).is_some()
 }
+
 /// Records a static slash command accepted from either the GUI or TUI surface.
 pub fn record_static_slash_command_accepted(
     command_name: &str,
@@ -821,7 +861,10 @@ impl Input {
                     entrypoint: CodeReviewPaneEntrypoint::SlashCommand,
                 });
             }
-            open_mcp_servers if command.name == commands::OPEN_MCP_SERVERS.name => {
+            open_mcp_servers
+                if command.name == commands::OPEN_MCP_SERVERS.name
+                    || command.name == commands::MCP.name =>
+            {
                 ctx.dispatch_typed_action(&TerminalAction::OpenViewMCPPane);
             }
             open_settings_file if command.name == commands::OPEN_SETTINGS_FILE.name => {

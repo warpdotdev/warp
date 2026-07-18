@@ -1,8 +1,52 @@
-//! Telemetry for the `warp-tui` background auto-updater.
+//! Telemetry for the `warp-tui` front-end.
 
 use serde_json::{json, Value};
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
+#[derive(Debug)]
+pub(crate) struct TuiStartupTelemetryEvent;
+
+impl TelemetryEvent for TuiStartupTelemetryEvent {
+    fn name(&self) -> &'static str {
+        "TUI.Startup"
+    }
+
+    fn payload(&self) -> Option<Value> {
+        None
+    }
+
+    fn description(&self) -> &'static str {
+        "The headless Warp TUI is launched"
+    }
+
+    fn enablement_state(&self) -> EnablementState {
+        EnablementState::Always
+    }
+
+    fn contains_ugc(&self) -> bool {
+        false
+    }
+
+    fn event_descs() -> impl Iterator<Item = Box<dyn TelemetryEventDesc>> {
+        std::iter::once(Box::new(Self) as Box<dyn TelemetryEventDesc>)
+    }
+}
+
+impl TelemetryEventDesc for TuiStartupTelemetryEvent {
+    fn name(&self) -> &'static str {
+        "TUI.Startup"
+    }
+
+    fn description(&self) -> &'static str {
+        "The headless Warp TUI is launched"
+    }
+
+    fn enablement_state(&self) -> EnablementState {
+        EnablementState::Always
+    }
+}
+
+warp_core::register_telemetry_event!(TuiStartupTelemetryEvent);
 
 /// Health signals for the TUI auto-updater. Sent when the outcome of a
 /// background update check *changes* (not on every poll), so repeated

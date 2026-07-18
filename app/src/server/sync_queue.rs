@@ -356,7 +356,7 @@ pub struct SyncQueue {
 }
 
 impl SyncQueue {
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(ctx: &mut ModelContext<Self>) -> Self {
         use super::server_api::ServerApiProvider;
 

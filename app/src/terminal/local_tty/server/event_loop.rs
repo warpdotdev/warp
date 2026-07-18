@@ -204,9 +204,7 @@ impl EventLoop {
                                     },
                                     Option::<RawFd>::None,
                                 ) {
-                                    report_error!(err.context(
-                                        "Failed to notify host process about terminated children"
-                                    ));
+                                    log::error!("Failed to notify host process about terminated children: {err:#}");
                                 }
                             }
                         }
@@ -232,9 +230,9 @@ impl EventLoop {
             let result = match protocol::try_receive_message(self.recv_socket_fd) {
                 Ok(result) => result,
                 Err(err) => {
-                    report_error!(err.context(
-                        "Encountered unexpected error receiving message from host process"
-                    ));
+                    log::error!(
+                        "Encountered unexpected error receiving message from host process: {err:#}"
+                    );
                     log::info!("Shutting down terminal server...");
                     return None;
                 }
@@ -262,7 +260,7 @@ impl EventLoop {
                             Ok(pty_spawn_info.result)
                         }
                         Err(err) => {
-                            report_error!(&err);
+                            log::error!("Failed to spawn shell: {err:#}");
                             Err(err)
                         }
                     };
@@ -278,9 +276,9 @@ impl EventLoop {
                         },
                         leader_fd,
                     ) {
-                        report_error!(err.context(
-                            "Encountered unexpected error sending message to host process"
-                        ));
+                        log::error!(
+                            "Encountered unexpected error sending message to host process: {err:#}"
+                        );
                         log::info!("Shutting down terminal server...");
                         return None;
                     };
@@ -289,9 +287,7 @@ impl EventLoop {
                     // process is holding a copy of it.
                     if let Some(leader_fd) = leader_fd {
                         if let Err(err) = nix::unistd::close(leader_fd) {
-                            report_error!(anyhow::Error::new(err).context(
-                                "Failed to close leader fd after sending it back to host process"
-                            ));
+                            log::warn!("Failed to close leader fd after sending it back to host process: {err:#}");
                         }
                     }
                 }
@@ -309,9 +305,9 @@ impl EventLoop {
                         api::Message::KillChildResponse { error_msg },
                         Option::<RawFd>::None,
                     ) {
-                        report_error!(err.context(
-                            "Encountered unexpected error sending message to host process"
-                        ));
+                        log::error!(
+                            "Encountered unexpected error sending message to host process: {err:#}"
+                        );
                         log::info!("Shutting down terminal server...");
                         return None;
                     };

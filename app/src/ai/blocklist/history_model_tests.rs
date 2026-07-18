@@ -16,12 +16,14 @@ use super::{
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
-    ServerAIConversationMetadata,
+    ServerAIConversationMetadata, TodoStatus,
 };
 use crate::ai::agent::task::helper::MessageExt;
+use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
-    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
-    RenderableAIError, Shared, TransientNetworkErrorKind, UserQueryMode,
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIAgentTodo,
+    AIAgentTodoId, FinishedAIAgentOutput, RenderableAIError, Shared, TransientNetworkErrorKind,
+    UserQueryMode,
 };
 use crate::ai::ambient_agents::{
     conversation_output_status_from_conversation, AmbientAgentTaskId, AmbientConversationStatus,
@@ -1725,6 +1727,64 @@ fn test_ambient_agent_conversations_excluded_from_list_but_accessible_by_id() {
 }
 
 #[test]
+fn test_child_agent_conversations_excluded_from_list_but_accessible_by_id() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let regular_id = AIConversationId::new();
+
+        // One child linked via a local parent placeholder, one via the
+        // parent's server-side run identifier (driver-hosted processes).
+        let mut local_child = AIConversation::new(false, false);
+        local_child.set_parent_conversation_id(AIConversationId::new());
+        let local_child_id = local_child.id();
+        let mut driver_child = AIConversation::new(false, false);
+        driver_child.set_parent_agent_id("parent-run-id".to_string());
+        let driver_child_id = driver_child.id();
+
+        history_model.update(&mut app, |model, _| {
+            let regular_metadata = AIConversationMetadata::from_server_metadata(
+                regular_id,
+                create_server_metadata(
+                    "Regular Conversation",
+                    "token-regular-child-test",
+                    5.0,
+                    None,
+                ),
+            );
+            model
+                .all_conversations_metadata
+                .insert(regular_id, regular_metadata);
+            model
+                .all_conversations_metadata
+                .insert(local_child_id, AIConversationMetadata::from(&local_child));
+            model
+                .all_conversations_metadata
+                .insert(driver_child_id, AIConversationMetadata::from(&driver_child));
+        });
+
+        history_model.read(&app, |model, _| {
+            let listed: Vec<AIConversationId> = model
+                .get_local_conversations_metadata()
+                .map(|m| m.id)
+                .collect();
+            assert_eq!(
+                listed,
+                vec![regular_id],
+                "child agent conversations must be excluded from the navigable list"
+            );
+
+            // Both children remain accessible by ID.
+            assert!(model.get_conversation_metadata(&local_child_id).is_some());
+            assert!(model.get_conversation_metadata(&driver_child_id).is_some());
+        });
+    });
+}
+
+#[test]
 fn test_initialize_historical_conversations_indexes_child_conversations() {
     use chrono::NaiveDateTime;
 
@@ -1862,6 +1922,66 @@ fn test_set_parent_multiple_children() {
             assert!(children.contains(&child_a));
             assert!(children.contains(&child_b));
             assert_eq!(model.child_conversations_of(parent_id).len(), 2);
+        });
+    });
+}
+
+#[test]
+fn test_remove_child_conversation_cleans_parent_index() {
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let parent_id = history_model.update(&mut app, |model, ctx| {
+            model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_id = history_model.update(&mut app, |model, ctx| {
+            let child_id = model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            model.set_parent_for_conversation(child_id, parent_id);
+            child_id
+        });
+
+        history_model.update(&mut app, |model, ctx| {
+            model.remove_conversation(child_id, terminal_view_id, ctx);
+        });
+
+        history_model.read(&app, |model, _| {
+            assert!(model.conversation(&child_id).is_none());
+            assert!(model.child_conversation_ids_of(&parent_id).is_empty());
+        });
+    });
+}
+
+#[test]
+fn test_remove_parent_conversation_cleans_incoming_and_outgoing_index_entries() {
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let grandparent_id = history_model.update(&mut app, |model, ctx| {
+            model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let parent_id = history_model.update(&mut app, |model, ctx| {
+            let parent_id =
+                model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            model.set_parent_for_conversation(parent_id, grandparent_id);
+            parent_id
+        });
+        let child_id = history_model.update(&mut app, |model, ctx| {
+            let child_id = model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            model.set_parent_for_conversation(child_id, parent_id);
+            child_id
+        });
+
+        history_model.update(&mut app, |model, ctx| {
+            model.remove_conversation(parent_id, terminal_view_id, ctx);
+        });
+
+        history_model.read(&app, |model, _| {
+            assert!(model.conversation(&parent_id).is_none());
+            assert!(model.conversation(&child_id).is_some());
+            assert!(model.child_conversation_ids_of(&grandparent_id).is_empty());
+            assert!(model.child_conversation_ids_of(&parent_id).is_empty());
         });
     });
 }
@@ -5088,5 +5208,56 @@ fn fork_exact_reconciles_fork_point_client_tool_calls() {
             result_for(orphan_id).is_none(),
             "no result may be synthesized outside the fork-point exchange"
         );
+    });
+}
+
+#[test]
+fn todo_projections_delegate_to_the_conversation() {
+    App::test((), |mut app| async move {
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+        let conversation_id = history_model.update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        let completed = AIAgentTodo::new("t1".to_owned().into(), "one".to_owned(), String::new());
+        let pending_first =
+            AIAgentTodo::new("t2".to_owned().into(), "two".to_owned(), String::new());
+        let pending_second =
+            AIAgentTodo::new("t3".to_owned().into(), "three".to_owned(), String::new());
+        history_model.update(&mut app, |history, _| {
+            history
+                .conversation_mut(&conversation_id)
+                .expect("conversation exists")
+                .set_todo_lists_for_test(vec![AIAgentTodoList::default()
+                    .with_completed_items(vec![completed.clone()])
+                    .with_pending_items(vec![pending_first, pending_second.clone()])]);
+        });
+
+        history_model.read(&app, |history, _| {
+            assert_eq!(
+                history.todo_status(&conversation_id, &completed.id),
+                Some(TodoStatus::Completed)
+            );
+            // Non-head pending items are Pending regardless of conversation status.
+            assert_eq!(
+                history.todo_status(&conversation_id, &pending_second.id),
+                Some(TodoStatus::Pending)
+            );
+            assert_eq!(
+                history.todo_status(&conversation_id, &AIAgentTodoId::from("missing".to_owned())),
+                None
+            );
+            assert_eq!(
+                history
+                    .active_todo_list(&conversation_id)
+                    .map(AIAgentTodoList::len),
+                Some(3)
+            );
+            // Unknown conversations yield no projections at all.
+            let unknown = AIConversationId::new();
+            assert_eq!(history.todo_status(&unknown, &completed.id), None);
+            assert!(history.active_todo_list(&unknown).is_none());
+        });
     });
 }

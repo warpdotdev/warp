@@ -1,4 +1,15 @@
-use super::Availability;
+use super::{commands, Availability};
+
+#[test]
+fn argument_hint_uses_shared_command_prefix_and_text() {
+    let hint = commands::EXPORT_TO_FILE
+        .argument_hint()
+        .expect("export-to-file has an argument hint");
+
+    assert_eq!(hint.input_prefix, "/export-to-file ");
+    assert_eq!(hint.text, "<optional filename>");
+    assert_eq!(commands::EXPORT_TO_CLIPBOARD.argument_hint(), None);
+}
 
 /// Helper: constructs a session context for an agent view in a local session with a repo,
 /// no active LRC, and an active conversation.

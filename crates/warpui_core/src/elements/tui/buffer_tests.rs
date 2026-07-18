@@ -1,6 +1,6 @@
 use ratatui::style::{Color, Style};
 
-use crate::elements::tui::{TuiBuffer, TuiBufferExt, TuiRect};
+use crate::elements::tui::{TuiBuffer, TuiBufferExt, TuiPaintSurface, TuiRect, TuiScreenPosition};
 
 fn buffer(width: u16, height: u16) -> TuiBuffer {
     TuiBuffer::empty(TuiRect::new(0, 0, width, height))
@@ -54,4 +54,34 @@ fn styled_writes_round_trip_through_cells() {
 
     assert_eq!(b[(0, 0)].symbol(), "x");
     assert_eq!(b[(0, 0)].fg, Color::Red);
+}
+
+/// Maps negative absolute positions onto a scratch buffer without exposing its origin.
+#[test]
+fn mapped_surface_writes_negative_absolute_positions() {
+    let mut b = buffer(2, 1);
+    {
+        let mut surface = TuiPaintSurface::mapped(&mut b, TuiScreenPosition::new(-5, -2));
+        surface
+            .cell_mut(TuiScreenPosition::new(-4, -2))
+            .unwrap()
+            .set_symbol("x");
+    }
+
+    assert_eq!(b.to_lines(), vec![" x"]);
+}
+
+/// Rejects positions outside the active buffer instead of clamping them.
+#[test]
+fn surface_writes_outside_the_mapping_fail_closed() {
+    let mut b = buffer(2, 1);
+    {
+        let mut surface = TuiPaintSurface::mapped(&mut b, TuiScreenPosition::new(-5, -2));
+        assert!(surface.cell_mut(TuiScreenPosition::new(-6, -2)).is_none());
+        assert!(surface
+            .cell_mut(TuiScreenPosition::new(i32::MAX, -2))
+            .is_none());
+    }
+
+    assert_eq!(b.to_lines(), vec!["  "]);
 }

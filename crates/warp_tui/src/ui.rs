@@ -57,6 +57,8 @@ pub(crate) fn compact_footer_path(path: &str) -> String {
 /// Placeholder shown while a requested conversation is restored.
 pub(crate) fn conversation_restoring(app: &AppContext) -> Box<dyn TuiElement> {
     let muted = TuiUiBuilder::from_app(app).muted_text_style();
+    let hint = "Esc or Ctrl-C to cancel and start a new session";
+
     centered_in_viewport(
         TuiConstrainedBox::new(
             TuiFlex::column()
@@ -70,10 +72,11 @@ pub(crate) fn conversation_restoring(app: &AppContext) -> Box<dyn TuiElement> {
                         .truncate()
                         .finish(),
                 )
+                .child(TuiText::new(hint).with_style(muted).truncate().finish())
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .finish(),
         )
-        .with_max_cols("Loading session...".len() as u16)
+        .with_max_cols(hint.len() as u16)
         .finish(),
     )
 }

@@ -160,6 +160,10 @@ impl ansi::Handler for GridHandler {
         report_error!("Handler method GridHandler::set_title should never be called. This should be handled by TerminalModel.");
     }
 
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        self.active_hyperlink_id = hyperlink.and_then(|h| self.hyperlink_registry.intern(h));
+    }
+
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
         self.ansi_handler_state.cursor_style = style.unwrap_or_default();
 
@@ -849,10 +853,13 @@ impl ansi::Handler for GridHandler {
             ansi::ClearMode::All => {
                 if self.ansi_handler_state.is_alt_screen {
                     self.grid.region_mut(..).each(|cell| *cell = bg.into());
-                } else if self.full_grid_clear_behavior == FullGridClearBehavior::Clear {
-                    self.clear_visible_rows_in_place(bg);
                 } else {
-                    self.clear_viewport();
+                    if self.full_grid_clear_behavior == FullGridClearBehavior::Clear {
+                        self.clear_visible_rows_in_place(bg);
+                    } else {
+                        self.clear_viewport();
+                    }
+                    self.active_hyperlink_id = None;
                 }
             }
             ansi::ClearMode::Saved if self.history_size() > 0 => {
@@ -869,6 +876,7 @@ impl ansi::Handler for GridHandler {
                 // grid has been cleared.
                 self.clear_secrets();
                 self.clear_displayed_rows_and_filter_matches();
+                self.active_hyperlink_id = None;
 
                 // The row with the cursor still exists, though, so mark it as
                 // dirty and re-compute state accordingly.
@@ -899,6 +907,8 @@ impl ansi::Handler for GridHandler {
         self.flat_storage.clear();
 
         self.clear_secrets();
+
+        self.active_hyperlink_id = None;
 
         self.ansi_handler_state.active_charset = Default::default();
         self.ansi_handler_state.cursor_style = CursorStyle::default();
@@ -1589,6 +1599,7 @@ impl GridHandler {
         let fg = self.grid.cursor().template.fg;
         let bg = self.grid.cursor().template.bg;
         let flags = self.grid.cursor().template.flags;
+        let hyperlink_id = self.active_hyperlink_id;
 
         let cursor_cell = self.grid.cursor_cell();
 
@@ -1598,6 +1609,7 @@ impl GridHandler {
         cursor_cell.fg = fg;
         cursor_cell.bg = bg;
         cursor_cell.flags = flags;
+        cursor_cell.set_hyperlink_id(hyperlink_id);
 
         cursor_cell
     }

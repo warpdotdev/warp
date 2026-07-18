@@ -100,6 +100,8 @@ The server token must be installed on the `AIConversation` before `restore_conve
 
 For startup, replacement operates on the provisional eager conversation and an otherwise empty transcript. For future inline selection, load and validate the requested conversation before clearing the current surface. If loading fails, retain the old transcript and selection. Once loading succeeds, remove the old conversation's agent rich content, conversation-derived command blocks, and action state before applying the new plan. `clear_conversations_for_terminal_surface` still emits a cleanup event for other subscribers; selection and transcript handlers must compare their current content with the IDs carried by that event because delivery may occur after the restored conversation is installed.
 
+Escape or Ctrl-C while startup restoration is loading aborts the loader, invalidates its request generation, clears the loading state, and reveals the existing eager provisional conversation as a normal new TUI session. The loading screen includes `Esc or Ctrl-C to cancel and start a new session`. A cancelled request cannot later replace the session, and the requested token never reaches the exit-summary handle.
+
 ### 3. Extract shared conversation block restoration preparation
 
 The GUI and TUI share `AIConversation`, `TerminalModel`, and `BlockList`; only their final rich-content view types differ. `app/src/terminal/conversation_restoration.rs` contains the model/blocklist work extracted from `TerminalView::restore_conversation_after_view_creation`.
@@ -165,7 +167,7 @@ Registration must precede `TuiAIBlock` construction because `AIBlockModelImpl` r
 - `Loading`
 - `Failed(String)`
 
-Startup resume renders loading instead of the zero state until completion. A startup failure renders an error with the input disabled until the user exits; it must not silently enter new-conversation mode.
+Startup resume renders loading instead of the zero state until completion and includes the cancellation hint. A startup failure renders an error with the input disabled until the user exits; it must not silently enter new-conversation mode. User-initiated cancellation is distinct from failure: it aborts the request and reveals the eager provisional new-conversation state.
 
 Future inline selection may display loading while retaining the current transcript. On failure, show a transient or inline error and return to the prior selected conversation. Keep this distinction controlled by `TuiConversationRestoreOrigin`, while all loader and materialization behavior remains shared.
 
@@ -217,7 +219,7 @@ Use existing `App::test` fixtures under `crates/warp_tui` to verify:
 - Transcript clear handling removes only agent blocks whose conversation IDs appear in the event payload.
 - The next submitted prompt carries the restored server token. (PRODUCT 16)
 - Inline-style replacement retains the old transcript on load failure and removes stale blocks/action state on success. (PRODUCT 19-20)
-- Loading cancellation and error states do not start a new conversation. (PRODUCT 21-24)
+- Startup loading cancellation reveals the existing eager provisional conversation, does not create a second replacement conversation, and ignores late loader completion. Error states remain blocking. (PRODUCT 21-24)
 
 ### CLI and exit tests
 
@@ -225,7 +227,7 @@ Use existing `App::test` fixtures under `crates/warp_tui` to verify:
 - No `--resume` preserves existing startup. (PRODUCT 1)
 - A malformed or missing token value fails clearly. (PRODUCT 2-4)
 - Successful exit prints the selected token after TUI teardown. (PRODUCT 25-27)
-- Empty selection, no selection, no selected token, worker mode, and error termination print no hint. (PRODUCT 28-31)
+- Empty selection, no selection, no selected token, cancelled startup restoration, worker mode, and error termination print no hint. (PRODUCT 28-31)
 
 ### End-to-end verification
 
@@ -239,6 +241,7 @@ Run `cargo nextest run -p warp_tui`, the focused `warp` restoration/history test
 - **Token patched too late:** inserting a conversation before its token is present can rebuild a stale reverse index. Verify or repair the token before `restore_conversations`, never after.
 - **Partial surface replacement:** clearing before a cloud load succeeds can destroy a usable transcript. Load and validate first, then replace the surface as one foreground-thread operation.
 - **Delayed provisional cleanup:** the provisional history clear event may be delivered after the restored conversation is selected and its blocks are inserted. Every clear subscriber must scope cleanup to the IDs carried by the event.
+- **Late completion after cancellation:** retain an abort handle and request generation for startup restoration; cancellation invalidates both before returning the provisional session to interactive state.
 - **Stale action results:** reusing an action model across conversation replacements can leak historical tool status. Clear or reinitialize per-conversation restoration state as part of replacement and test action-ID isolation.
 - **Hint printed inside the alternate screen:** only persist the exit summary during the run; print after `run_tui` returns.
 

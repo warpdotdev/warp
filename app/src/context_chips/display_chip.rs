@@ -45,7 +45,7 @@ use crate::context_chips::git_branch_on_click::{
 };
 use crate::context_chips::node_version_popup::{NodeVersionPopupEvent, NodeVersionPopupView};
 use crate::context_chips::spacing;
-use crate::settings::{AISettings, AISettingsChangedEvent, InputSettings};
+use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
@@ -59,7 +59,6 @@ use crate::util::truncation::truncate_from_beginning;
 use crate::view_components::action_button::{ActionButtonTheme, NakedTheme};
 use crate::view_components::{FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel};
 use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// Helper function to render git diff stats content (file icon or +- icons, file count, bullet, +/- counts)
 /// Used by both the context chips and the AI control panel
@@ -2129,19 +2128,6 @@ impl TypedActionView for DisplayChip {
                             });
                         }
                         ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: is_menu_open });
-                        if is_menu_open {
-                            let is_udi_enabled = InputSettings::as_ref(ctx)
-                                .is_universal_developer_input_enabled(ctx);
-
-                            send_telemetry_from_ctx!(
-                                TelemetryEvent::ContextChipInteracted {
-                                    chip_type: "git_branch".to_string(),
-                                    action: "opened".to_string(),
-                                    is_udi_enabled,
-                                },
-                                ctx
-                            );
-                        }
                         ctx.notify();
                     }
                     DisplayChipKind::WorkingDirectory {
@@ -2164,19 +2150,6 @@ impl TypedActionView for DisplayChip {
                             });
                         }
                         ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: is_menu_open });
-                        if is_menu_open {
-                            let is_udi_enabled = InputSettings::as_ref(ctx)
-                                .is_universal_developer_input_enabled(ctx);
-
-                            send_telemetry_from_ctx!(
-                                TelemetryEvent::ContextChipInteracted {
-                                    chip_type: "working_directory".to_string(),
-                                    action: "opened".to_string(),
-                                    is_udi_enabled,
-                                },
-                                ctx
-                            );
-                        }
                         ctx.notify();
                     }
                     DisplayChipKind::NodeVersion { popup, popup_open } => {

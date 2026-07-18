@@ -24,6 +24,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use base64::Engine as _;
 use chrono::Duration;
 use cli_controller::{CLISubagentController, CLISubagentEvent};
@@ -99,7 +100,6 @@ use crate::ai::agent::{
     SummarizationType, TodoOperation,
 };
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::NewConversationDecision;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewEntryOrigin};

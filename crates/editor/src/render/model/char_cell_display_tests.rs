@@ -15,12 +15,12 @@ fn state(text: &str, terminal_width: u16) -> CharCellState {
 }
 
 fn ghost(content: &str, insert_before: usize) -> CharCellTemporaryBlock {
-    CharCellTemporaryBlock {
-        content: content.to_string(),
-        insert_before: LineCount::from(insert_before),
-        line_decoration: None,
-        inline_decorations: Vec::new(),
-    }
+    CharCellTemporaryBlock::new(
+        content.to_string(),
+        LineCount::from(insert_before),
+        None,
+        Vec::new(),
+    )
 }
 
 /// The lattice's rows at `hidden`, for row-structure assertions.
@@ -98,15 +98,17 @@ fn ghosts_interleave_before_their_line_and_wrap() {
                 char_range(0..9),
                 false,
             ),
-            // The second ghost is 11 chars: wraps at width 9.
+            // The second ghost is 11 chars and wraps at width 9. Word-boundary
+            // wrapping breaks at the space (index 7), so "removed " (0..8) fits
+            // on row 0 and "b!!" (8..11) continues on row 1.
             (
                 DisplayRowKind::Ghost { ghost_index: 1 },
-                char_range(0..9),
+                char_range(0..8),
                 false,
             ),
             (
                 DisplayRowKind::Ghost { ghost_index: 1 },
-                char_range(9..11),
+                char_range(8..11),
                 true,
             ),
             (buffer(1), char_range(6..11), false),
@@ -150,7 +152,25 @@ fn oversized_grapheme_does_not_wrap_at_zero_width_continuation() {
     assert_eq!(point(&state, 1, &[]), Some((0, 2)));
     assert_eq!(point(&state, 2, &[]), Some((1, 0)));
 }
-
+#[test]
+fn ghosts_are_stably_sorted_by_insertion_line() {
+    let state = state("l0\nl1\nl2", 20);
+    state.set_temporary_blocks(vec![
+        ghost("last", 2),
+        ghost("same-a", 1),
+        ghost("first", 0),
+        ghost("same-b", 1),
+    ]);
+    let lattice = state.display_lattice(&[]);
+    assert_eq!(
+        lattice
+            .ghosts()
+            .iter()
+            .map(|ghost| ghost.content.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "same-a", "same-b", "last"]
+    );
+}
 #[test]
 fn interior_hidden_ranges_become_gaps_edges_render_nothing() {
     // Lines 0-1 hidden (leading), 3-5 hidden (interior), 7 hidden (trailing).
@@ -169,6 +189,22 @@ fn interior_hidden_ranges_become_gaps_edges_render_nothing() {
     );
 }
 
+#[test]
+fn hidden_ranges_are_sorted_and_merged_before_projection() {
+    let state = state("l0\nl1\nl2\nl3\nl4\nl5", 20);
+    assert_eq!(
+        summarize(&rows(&state, &[3..5, 1..3, 2..4])),
+        vec![
+            (buffer(0), char_range(0..2), false),
+            (
+                DisplayRowKind::Gap { line_range: 1..5 },
+                CharOffset::zero().empty_range(),
+                false,
+            ),
+            (buffer(5), char_range(15..17), false),
+        ]
+    );
+}
 #[test]
 fn ghost_inside_hidden_region_still_renders_and_splits_the_gap() {
     // Lines 1-4 hidden; a ghost inserts before line 3 (inside the hidden run).

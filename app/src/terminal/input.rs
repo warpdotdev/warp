@@ -163,6 +163,7 @@ use crate::ai::blocklist::agent_view::{
 };
 use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBar;
+use crate::ai::blocklist::conversation_selection::ConversationSelectionHandle;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::touched_repos::{
     pick_handoff_overlap_env, resolve_repo_for_path, TouchedWorkspace,
@@ -182,6 +183,8 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::conversation_export::export_conversation_markdown;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -288,11 +291,14 @@ use crate::terminal::input::profiles::{InlineProfileSelectorEvent, InlineProfile
 use crate::terminal::input::prompts::{InlinePromptsMenuEvent, InlinePromptsMenuView};
 use crate::terminal::input::repos::{InlineReposMenuEvent, InlineReposMenuView};
 use crate::terminal::input::rewind::{RewindMenuEvent, RewindMenuView};
-use crate::terminal::input::skills::{InlineSkillSelectorEvent, InlineSkillSelectorView};
+use crate::terminal::input::skills::{
+    InlineSkillSelectorEvent, InlineSkillSelectorView, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+};
 use crate::terminal::input::slash_command_model::{SlashCommandEntryState, SlashCommandModel};
 use crate::terminal::input::slash_commands::{
     slash_command_is_submitted_as_prompt, CloudModeV2SlashCommandView, GuiSlashCommandDataSource,
     InlineSlashCommandView, SlashCommandDataSource as _, SlashCommandTrigger,
+    UpdatedActiveCommands,
 };
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
@@ -2491,6 +2497,7 @@ impl Input {
         ai_context_model: ModelHandle<BlocklistAIContextModel>,
         ai_input_model: ModelHandle<BlocklistAIInputModel>,
         ai_action_model: ModelHandle<BlocklistAIActionModel>,
+        conversation_selection: ConversationSelectionHandle,
         cli_subagent_controller: ModelHandle<CLISubagentController>,
         terminal_view_id: EntityId,
         current_repo_path: Option<PathBuf>,
@@ -3459,6 +3466,13 @@ impl Input {
             };
             GuiSlashCommandDataSource::new(args, ctx)
         });
+        ctx.subscribe_to_model(
+            &slash_command_data_source,
+            |me, _, _: &UpdatedActiveCommands, ctx| {
+                me.set_zero_state_hint_text(ctx);
+                ctx.notify();
+            },
+        );
 
         let cloud_mode_composer_slash_command_data_source =
             if FeatureFlag::CloudModeInputV2.is_enabled() {
@@ -3490,6 +3504,7 @@ impl Input {
             InlineConversationMenuView::new(
                 suggestions_mode_model.clone(),
                 agent_view_controller.clone(),
+                conversation_selection,
                 &buffer_model,
                 &inline_terminal_menu_positioner,
                 active_session.clone(),
@@ -4455,10 +4470,7 @@ impl Input {
                     });
                 }
                 Err(e) => {
-                    report_error!(
-                        anyhow::Error::new(e).context("Failed to read file"),
-                        extra: { "path" => %file.file_path.display() }
-                    );
+                    log::warn!("Failed to read file {}: {e}", file.file_path.display());
                 }
             }
         }
@@ -5802,8 +5814,7 @@ impl Input {
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::default(
-                        "Local skills cannot run on a remote machine. Try forking the conversation locally and running the skill."
-                            .to_owned(),
+                        LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE.to_owned(),
                     ),
                     window_id,
                     ctx,
@@ -5875,11 +5886,6 @@ impl Input {
         filename_arg: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
-        use std::fs;
-        use std::path::PathBuf;
-
-        use chrono::Local;
-
         let history = BlocklistAIHistoryModel::handle(ctx);
         let Some(conversation) = history
             .as_ref(ctx)
@@ -5893,114 +5899,44 @@ impl Input {
             });
             return;
         };
-
-        // Determine the filename
-        let filename = if let Some(name) = filename_arg.as_ref().filter(|s| !s.trim().is_empty()) {
-            name.trim().to_string()
-        } else {
-            // Generate default filename: timestamp-conversation_title.md
-            let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-            let title = conversation
-                .title()
-                .unwrap_or_else(|| "conversation".to_string())
-                .chars()
-                .map(|c| {
-                    // Replace spaces with underscores, keep alphanumeric, underscores, and hyphens
-                    if c.is_whitespace() {
-                        '_'
-                    } else if c.is_alphanumeric() || c == '_' || c == '-' {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect::<String>();
-            format!("{timestamp}-{title}.md")
-        };
-
-        // Ensure the filename has .md extension
-        let filename = if !filename.ends_with(".md") {
-            format!("{filename}.md")
-        } else {
-            filename
-        };
-
-        let current_dir = self
+        let current_directory = self
             .active_block_metadata
             .as_ref()
             .and_then(|metadata| metadata.current_working_directory())
-            .map(PathBuf::from)
-            .or_else(|| {
-                log::debug!(
-                    "No CWD from active_block_metadata, falling back to std::env::current_dir()"
-                );
-                std::env::current_dir().ok()
-            })
-            .unwrap_or_else(|| {
-                log::warn!("Failed to determine current directory, using '.'");
-                PathBuf::from(".")
-            });
-
-        let file_path = current_dir.join(&filename);
+            .map(str::to_owned);
+        let conversation_title = conversation.title();
 
         let action_model = self.ai_action_model.as_ref(ctx);
         let conversation_text = conversation.export_to_markdown(Some(action_model));
-
-        // Check if file already exists and warn user
-        let file_exists = file_path.exists();
-        if file_exists {
-            let window_id = ctx.window_id();
-            let display_path = file_path.display().to_string();
-            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                let toast = DismissibleToast::default(format!(
-                    "File {display_path} already exists and will be overwritten"
-                ));
-                toast_stack.add_ephemeral_toast(toast, window_id, ctx);
-            });
-        }
-
-        // Write to file
-        match fs::write(&file_path, conversation_text) {
-            Ok(_) => {
-                // Show success toast
+        match export_conversation_markdown(
+            current_directory.as_deref(),
+            filename_arg.as_deref(),
+            conversation_title.as_deref(),
+            &conversation_text,
+        ) {
+            Ok(export) => {
                 let window_id = ctx.window_id();
-                let display_path = file_path.display().to_string();
+                let display_path = export.path().display().to_string();
                 ToastStack::handle(ctx).update(ctx, move |toast_stack, ctx| {
+                    if export.overwrote_existing() {
+                        let toast = DismissibleToast::default(format!(
+                            "File {display_path} already exists and will be overwritten"
+                        ));
+                        toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                    }
                     let toast = DismissibleToast::default(format!(
                         "Conversation exported to {display_path}"
                     ));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
-            Err(e) => {
-                // Show error toast with user-friendly message
-                let user_message = match e.kind() {
-                    std::io::ErrorKind::PermissionDenied => {
-                        format!(
-                            "Permission denied writing to {}. Check file permissions.",
-                            file_path.display()
-                        )
-                    }
-                    std::io::ErrorKind::NotFound => {
-                        format!(
-                            "Directory not found: {}",
-                            file_path
-                                .parent()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default()
-                        )
-                    }
-                    std::io::ErrorKind::AlreadyExists => {
-                        format!("File {} already exists", file_path.display())
-                    }
-                    _ => {
-                        format!("Failed to export to {}: {}", file_path.display(), e)
-                    }
-                };
+            Err(error) => {
+                let user_message = error.user_message();
+                let path = error.path().to_path_buf();
 
-                report_error!(
-                    anyhow::Error::new(e).context("Failed to write conversation to file"),
-                    extra: { "path" => %file_path.display() }
+                log::error!(
+                    "Failed to write conversation to file {}: {error}",
+                    path.display()
                 );
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, move |toast_stack, ctx| {
@@ -6009,8 +5945,6 @@ impl Input {
                 });
             }
         }
-
-        // Clear the buffer after execution
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
         });
@@ -6971,6 +6905,24 @@ impl Input {
     }
 
     pub fn set_zero_state_hint_text(&mut self, ctx: &mut ViewContext<Self>) {
+        let slash_command_hint_prefixes = COMMAND_REGISTRY
+            .all_commands()
+            .filter(|command| {
+                command
+                    .argument
+                    .as_ref()
+                    .and_then(|argument| argument.hint_text)
+                    .is_some()
+            })
+            .map(|command| format!("{} ", command.name))
+            .collect_vec();
+
+        self.editor.update(ctx, |editor, ctx| {
+            for prefix in slash_command_hint_prefixes {
+                editor.clear_placeholder_text_with_prefix(&prefix, ctx);
+            }
+        });
+
         if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id) {
             let hint = self.cli_agent_rich_input_hint_text(ctx);
             self.editor.update(ctx, |editor, ctx| {
@@ -7025,20 +6977,23 @@ impl Input {
 
         let toggled_on = *InputSettings::as_ref(ctx).show_hint_text;
 
-        // Loop through all static commands and set placeholders for those with hint text
-        self.editor.update(ctx, |editor, ctx| {
-            for command in COMMAND_REGISTRY.all_commands() {
-                if let Some(hint_text) = command
+        let slash_command_placeholders = self
+            .slash_command_data_source
+            .as_ref(ctx)
+            .active_commands()
+            .filter_map(|(_, command)| {
+                command
                     .argument
                     .as_ref()
                     .and_then(|argument| argument.hint_text)
-                {
-                    editor.set_placeholder_text_with_prefix(
-                        format!("{} ", command.name),
-                        hint_text,
-                        ctx,
-                    );
-                }
+                    .map(|hint_text| (command.name, hint_text))
+            })
+            .collect_vec();
+
+        // Loop through active static commands and set placeholders for those with hint text
+        self.editor.update(ctx, |editor, ctx| {
+            for (command_name, hint_text) in slash_command_placeholders {
+                editor.set_placeholder_text_with_prefix(format!("{command_name} "), hint_text, ctx);
             }
         });
 
@@ -10137,17 +10092,7 @@ impl Input {
                             input_render_state_model.set_editor_modified_since_block_finished(true);
                         },
                     );
-
-                    if !self
-                        .model
-                        .lock()
-                        .block_list()
-                        .active_block()
-                        .has_received_precmd()
-                    {
-                        send_telemetry_from_ctx!(TelemetryEvent::EditedInputBeforePrecmd, ctx);
-                        ctx.notify();
-                    }
+                    ctx.notify();
                 }
 
                 let is_editor_empty = self.editor.as_ref(ctx).is_empty(ctx);
@@ -10861,17 +10806,9 @@ impl Input {
                 }
             }
             EditorEvent::AutosuggestionAccepted {
-                insertion_length,
-                buffer_char_length,
                 autosuggestion_type,
+                ..
             } => {
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::AutosuggestionInserted {
-                        insertion_length: *insertion_length,
-                        buffer_length: *buffer_char_length
-                    },
-                    ctx
-                );
                 ctx.emit(Event::AutosuggestionAccepted);
 
                 self.input_suggestions
@@ -11035,24 +10972,12 @@ impl Input {
 
                 match token_at {
                     CommandXRayAnchor::Cursor => {
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::CommandXRayTriggered {
-                                trigger: CommandXRayTrigger::Keystroke
-                            },
-                            ctx
-                        );
                         let pos = self.start_byte_index_of_first_selection(ctx);
                         self.start_xray_at_offset(pos, CommandXRayTrigger::Keystroke, ctx);
                     }
                     CommandXRayAnchor::Hover(mouse_position) => {
                         if let Some(offset) = self.start_byte_index_at_point(mouse_position, ctx) {
                             if !self.suggestions_mode_model.as_ref(ctx).is_visible() {
-                                send_telemetry_from_ctx!(
-                                    TelemetryEvent::CommandXRayTriggered {
-                                        trigger: CommandXRayTrigger::Hover
-                                    },
-                                    ctx
-                                );
                                 self.start_xray_at_offset(offset, CommandXRayTrigger::Hover, ctx);
                             }
                         }
@@ -11553,9 +11478,7 @@ impl Input {
         if let Err(e) = self.agent_view_controller.update(ctx, |controller, ctx| {
             controller.try_enter_agent_view(None, AgentViewEntryOrigin::ImageAdded, ctx)
         }) {
-            report_error!(
-                anyhow::Error::new(e).context("Failed to enter agent view when adding images")
-            );
+            log::warn!("Failed to enter agent view when adding images: {e}");
         }
     }
 
@@ -12653,7 +12576,6 @@ impl Input {
                 ctx,
             );
         });
-        send_telemetry_from_ctx!(TelemetryEvent::TabSingleResultAutocompletion, ctx);
     }
 
     /// Whether the editor is in a state where we should tab complete instead of indenting text
@@ -13168,10 +13090,7 @@ impl Input {
             });
         }
         self.ai_controller.update(ctx, move |controller, ctx| {
-            controller.send_slash_command_request(
-                SlashCommandRequest::CreateNewProject { query: ai_query },
-                ctx,
-            )
+            controller.send_create_new_project_request(ai_query, ctx)
         });
     }
 
@@ -13792,9 +13711,9 @@ impl Input {
                     number_of_bottom_lines_per_grid,
                 )
             } else {
-                report_error!(
-                    "Failed to fetch predicted queries, could not find block with ID",
-                    extra: { "block_id" => ?block.serialized_block.id }
+                log::warn!(
+                    "Failed to fetch predicted queries, could not find block with ID {:?}",
+                    block.serialized_block.id
                 );
                 return;
             }
@@ -13826,9 +13745,7 @@ impl Input {
                 match server_api.predict_am_queries(&request).await {
                     Ok(resp) => Some(resp.suggestion),
                     Err(err) => {
-                        report_error!(
-                            anyhow::Error::new(err).context("Failed to fetch predicted queries")
-                        );
+                        log::warn!("Failed to fetch predicted queries: {err}");
                         None
                     }
                 }
@@ -14330,8 +14247,6 @@ impl Input {
             return;
         }
 
-        let has_requests_remaining = AIRequestUsageModel::as_ref(ctx).has_requests_remaining();
-
         let has_any_ai = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
         if !has_any_ai {
             AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
@@ -14340,15 +14255,6 @@ impl Input {
         }
 
         if PromptAlertView::does_alert_block_ai_requests(ctx) {
-            if !has_requests_remaining {
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::AgentModeUserAttemptedQueryAtRequestLimit {
-                        limit: AIRequestUsageModel::as_ref(ctx).request_limit()
-                    },
-                    ctx
-                );
-            }
-
             AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
                 // Rate limit requests to fetch the user's AI usage if triggered by enter
                 // keypress.
@@ -14646,10 +14552,7 @@ impl Input {
                     files_to_upload.push((file.file_name.clone(), file.mime_type.clone(), bytes));
                 }
                 Err(e) => {
-                    report_error!(
-                        anyhow::Error::new(e).context("Failed to read file"),
-                        extra: { "path" => %file.file_path.display() }
-                    );
+                    log::warn!("Failed to read file {}: {e}", file.file_path.display());
                 }
             }
         }
@@ -14670,9 +14573,8 @@ impl Input {
                 {
                     Ok(resp) => resp,
                     Err(e) => {
-                        report_error!(
-                            e.context("Failed to prepare attachment uploads for task"),
-                            extra: { "task_id" => %task_id }
+                        log::error!(
+                            "Failed to prepare attachment uploads for task {task_id}: {e:#}"
                         );
                         return None;
                     }
@@ -14698,16 +14600,13 @@ impl Input {
                             });
                         }
                         Ok(resp) => {
-                            report_error!(
-                                "Failed to upload attachment: unexpected HTTP status",
-                                extra: { "file_name" => %file_name, "status" => %resp.status() }
+                            log::warn!(
+                                "Failed to upload attachment {file_name}: unexpected HTTP status {}",
+                                resp.status()
                             );
                         }
                         Err(e) => {
-                            report_error!(
-                                anyhow::Error::new(e).context("Failed to upload attachment"),
-                                extra: { "file_name" => %file_name }
-                            );
+                            log::warn!("Failed to upload attachment {file_name}: {e}");
                         }
                     }
                 }

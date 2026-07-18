@@ -1,15 +1,58 @@
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::rc::Rc;
 
 use super::TuiClipped;
-use crate::elements::tui::test_support::{render_to_lines, with_paint_context};
+use crate::elements::tui::test_support::{dispatch_presented_event, render_to_lines};
 use crate::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPoint, TuiRect, TuiSize, TuiText,
+    TuiConstraint, TuiElement, TuiEvent, TuiFlex, TuiHoverable, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiText,
 };
-use crate::event::{KeyEventDetails, ModifiersState};
-use crate::keymap::Keystroke;
+use crate::elements::MouseStateHandle;
+use crate::event::ModifiersState;
+use crate::presenter::tui::TuiPresenter;
 use crate::{App, AppContext, EntityIdMap};
+struct MissingRetainedSize;
+
+impl TuiElement for MissingRetainedSize {
+    /// Returns a non-empty layout without retaining it.
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        constraint.clamp(TuiSize::new(1, 1))
+    }
+
+    /// Paints nothing.
+    fn render(
+        &mut self,
+        _origin: TuiScreenPosition,
+        _surface: &mut TuiPaintSurface<'_>,
+        _ctx: &mut TuiPaintContext,
+    ) {
+    }
+}
+
+/// Rejects children that violate the retained-size contract.
+#[test]
+#[should_panic(expected = "TuiClipped child size must be retained after layout")]
+fn render_requires_the_child_to_retain_its_layout_size() {
+    render_to_lines(
+        TuiClipped::new(MissingRetainedSize.finish()),
+        TuiSize::new(1, 1),
+    );
+}
+
+/// Composes absolute origins through nested scratch surfaces.
+#[test]
+fn nested_clipping_preserves_the_requested_logical_rows() {
+    let inner =
+        TuiClipped::new(TuiText::new("a\nb\nc\nd").truncate().finish()).with_viewport_origin_y(1);
+    let outer = TuiClipped::new(inner.finish()).with_viewport_origin_y(1);
+
+    assert_eq!(render_to_lines(outer, TuiSize::new(1, 2)), vec!["c", "d"],);
+}
 
 #[test]
 fn renders_from_the_requested_logical_row() {
@@ -17,7 +60,7 @@ fn renders_from_the_requested_logical_row() {
         TuiClipped::new(TuiText::new("a\nb\nc").truncate().finish()).with_viewport_origin_y(1);
 
     assert_eq!(
-        render_to_lines(&clipped, TuiSize::new(3, 2)),
+        render_to_lines(clipped, TuiSize::new(3, 2)),
         vec!["b  ", "c  "],
     );
 }
@@ -42,6 +85,8 @@ fn layout_preserves_child_width_and_reports_visible_height() {
 
 struct CursorElement {
     cursor: (u16, u16),
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiElement for CursorElement {
@@ -51,63 +96,60 @@ impl TuiElement for CursorElement {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        constraint.clamp(TuiSize::new(1, 3))
+        let size = constraint.clamp(TuiSize::new(1, 3));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
-
-    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        Some(self.cursor)
+    fn render(
+        &mut self,
+        position: TuiScreenPosition,
+        _surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        let origin = ctx.scene_point(position);
+        self.origin = Some(origin);
+        ctx.set_terminal_cursor(TuiScreenPoint::new(
+            origin.x.saturating_add(i32::from(self.cursor.0)),
+            origin.y.saturating_add(i32::from(self.cursor.1)),
+            origin.z_index,
+        ));
     }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
+    }
+}
+
+fn clipped_cursor_frame(cursor: (u16, u16)) -> crate::presenter::tui::TuiFrame {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let clipped = TuiClipped::new(
+                CursorElement {
+                    cursor,
+                    size: None,
+                    origin: None,
+                }
+                .finish(),
+            )
+            .with_viewport_origin_y(1);
+            TuiPresenter::new().present_element(clipped.finish(), TuiRect::new(0, 0, 3, 2), app_ctx)
+        })
+    })
 }
 
 #[test]
 fn cursor_position_is_shifted_into_the_visible_window() {
-    let clipped =
-        TuiClipped::new(CursorElement { cursor: (0, 2) }.finish()).with_viewport_origin_y(1);
-    let cursor = with_paint_context(|ctx| clipped.cursor_position(TuiRect::new(0, 0, 3, 2), ctx));
-    assert_eq!(cursor, Some((0, 1)));
+    assert_eq!(clipped_cursor_frame((0, 2)).cursor, Some((0, 1)));
 }
 
 #[test]
 fn cursor_position_above_the_visible_window_is_hidden() {
-    let clipped =
-        TuiClipped::new(CursorElement { cursor: (0, 0) }.finish()).with_viewport_origin_y(1);
-    let cursor = with_paint_context(|ctx| clipped.cursor_position(TuiRect::new(0, 0, 3, 2), ctx));
-    assert_eq!(cursor, None);
-}
-
-// A child element that records the `area` it received in `dispatch_event`,
-// used to verify `TuiClipped` translates coordinates correctly.
-struct DispatchRecorder {
-    seen_area: Rc<RefCell<Option<TuiRect>>>,
-    handle: bool,
-}
-
-impl TuiElement for DispatchRecorder {
-    fn layout(
-        &mut self,
-        constraint: TuiConstraint,
-        _ctx: &mut TuiLayoutContext,
-        _app: &AppContext,
-    ) -> TuiSize {
-        // Claim 3 rows so origin y=1 leaves a 2-row visible window.
-        constraint.clamp(TuiSize::new(1, 3))
-    }
-
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
-
-    fn dispatch_event(
-        &mut self,
-        _event: &TuiEvent,
-        area: TuiRect,
-        _event_ctx: &mut TuiEventContext,
-        _ctx: &mut TuiLayoutContext,
-        _app: &AppContext,
-    ) -> bool {
-        *self.seen_area.borrow_mut() = Some(area);
-        self.handle
-    }
+    assert_eq!(clipped_cursor_frame((0, 0)).cursor, None);
 }
 
 fn left_mouse_down(x: u16, y: u16) -> TuiEvent {
@@ -120,98 +162,32 @@ fn left_mouse_down(x: u16, y: u16) -> TuiEvent {
 }
 
 #[test]
-fn dispatch_translates_mouse_event_to_full_logical_area() {
+fn hoverable_inside_clipped_content_uses_visible_screen_geometry() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            let seen_area = Rc::new(RefCell::new(None));
-            let mut clipped = TuiClipped::new(
-                DispatchRecorder {
-                    seen_area: seen_area.clone(),
-                    handle: true,
-                }
-                .finish(),
-            )
-            .with_viewport_origin_y(1);
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let mut event_ctx = TuiEventContext::default();
-            // Visible slot (0, 1, 3, 2); the child's logical row 1 maps to y=1.
-            let area = TuiRect::new(0, 1, 3, 2);
-            let event = left_mouse_down(0, 1);
-            let handled = clipped.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx);
-            assert!(handled);
-            // Child sees its full logical area: y = 1 - 1 = 0, height = 2 + 1 = 3.
-            assert_eq!(*seen_area.borrow(), Some(TuiRect::new(0, 0, 3, 3)));
-        });
-    });
-}
+            let hits = Rc::new(Cell::new(0));
+            let counter = hits.clone();
+            let hoverable =
+                TuiHoverable::new(MouseStateHandle::default(), TuiText::new("hit").finish())
+                    .on_click(move |_, _| counter.set(counter.get() + 1));
+            let child = TuiFlex::column()
+                .child(TuiText::new("hidden").finish())
+                .child(hoverable.finish());
+            let clipped = TuiClipped::new(child.finish()).with_viewport_origin_y(1);
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(clipped.finish(), TuiRect::new(0, 0, 6, 1), app_ctx);
 
-#[test]
-fn dispatch_filters_mouse_events_outside_visible_window() {
-    App::test((), |app| async move {
-        app.read(|app_ctx| {
-            let seen_area = Rc::new(RefCell::new(None));
-            let mut clipped = TuiClipped::new(
-                DispatchRecorder {
-                    seen_area: seen_area.clone(),
-                    handle: true,
-                }
-                .finish(),
-            )
-            .with_viewport_origin_y(1);
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let mut event_ctx = TuiEventContext::default();
-            let area = TuiRect::new(0, 1, 3, 2);
-            // Click at y=0, above the visible window [1, 3).
-            let event = left_mouse_down(0, 0);
-            let handled = clipped.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx);
-            assert!(!handled);
-            assert!(
-                seen_area.borrow().is_none(),
-                "child should not see an out-of-window event"
-            );
-        });
-    });
-}
+            assert!(dispatch_presented_event(&mut presenter, &left_mouse_down(1, 0), app_ctx).0);
+            assert_eq!(hits.get(), 0, "click fires on release");
 
-#[test]
-fn dispatch_forwards_non_positional_events_without_filtering() {
-    App::test((), |app| async move {
-        app.read(|app_ctx| {
-            let seen_area = Rc::new(RefCell::new(None));
-            let mut clipped = TuiClipped::new(
-                DispatchRecorder {
-                    seen_area: seen_area.clone(),
-                    handle: true,
-                }
-                .finish(),
-            )
-            .with_viewport_origin_y(1);
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
+            let released = TuiEvent::LeftMouseUp {
+                position: TuiPoint::new(1, 0),
+                modifiers: ModifiersState::default(),
             };
-            let mut event_ctx = TuiEventContext::default();
-            let area = TuiRect::new(0, 1, 3, 2);
-            // A key event carries no position, so it bypasses the window filter
-            // and still reaches the child with its full logical area.
-            let event = TuiEvent::KeyDown {
-                keystroke: Keystroke {
-                    key: "a".to_owned(),
-                    ..Default::default()
-                },
-                chars: "a".to_owned(),
-                details: KeyEventDetails::default(),
-                is_composing: false,
-            };
-            let handled = clipped.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx);
-            assert!(handled);
-            assert_eq!(*seen_area.borrow(), Some(TuiRect::new(0, 0, 3, 3)));
+            assert!(dispatch_presented_event(&mut presenter, &released, app_ctx).0);
+            assert_eq!(hits.get(), 1);
+
+            assert!(!dispatch_presented_event(&mut presenter, &left_mouse_down(1, 1), app_ctx).0);
         });
     });
 }

@@ -881,7 +881,116 @@ impl AgentDriver {
                         report_error!(e);
                     }
                 }
-                let result = Self::run_internal(task, foreground.clone()).await;
+                // Primary: WARP_SANDBOX_DEADLINE client-side timer.
+                //
+                // The server injects WARP_SANDBOX_DEADLINE (Unix timestamp, seconds since
+                // epoch) into the container environment at sandbox creation time for both
+                // Docker Sandbox and Namespace. The sandbox deadline is set to
+                // MaxInstanceRuntime + SandboxShutdownWarningWindow (5 min); this timer
+                // fires SandboxShutdownWarningWindow before that hard kill, giving the
+                // normal AgentDriver teardown path — recording upload, snapshot upload —
+                // time to complete while the agent is still running.
+                //
+                // Backup: SIGTERM detection (Unix only).
+                //
+                // Both Docker Sandbox and Namespace send SIGTERM ~10-20 seconds before
+                // SIGKILL at the instance deadline. In practice this arm should never
+                // fire — the primary timer starts cleanup 5 minutes earlier and
+                // completes well before SIGTERM arrives. This is defense-in-depth for
+                // edge cases (e.g. WARP_SANDBOX_DEADLINE absent, or clock skew). The
+                // SIGTERM handler is unregistered after run_internal resolves to restore
+                // the default terminate disposition.
+                //
+                // When WARP_SANDBOX_DEADLINE is absent and no SIGTERM arrives, run_internal
+                // runs to completion as before (local and self-hosted runs are unaffected).
+                let result = {
+                    use std::time::SystemTime;
+                    use warpui::r#async::Timer;
+
+                    /// How far before the sandbox deadline to start the teardown sequence.
+                    const SHUTDOWN_WARNING_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+                    let maybe_wait = std::env::var("WARP_SANDBOX_DEADLINE")
+                        .ok()
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .and_then(|deadline_unix| {
+                            if deadline_unix <= 0 {
+                                return None;
+                            }
+                            let deadline = SystemTime::UNIX_EPOCH
+                                .checked_add(Duration::from_secs(deadline_unix as u64))?;
+                            let warning_at = deadline.checked_sub(SHUTDOWN_WARNING_WINDOW)?;
+                            match warning_at.duration_since(SystemTime::now()) {
+                                Ok(wait) => Some(wait),
+                                // Already inside the warning window — trigger immediately.
+                                Err(_) => Some(Duration::ZERO),
+                            }
+                        });
+
+                    // Timer future: fires at deadline minus warning window, mapped to
+                    // () to avoid std::time::Instant which is disallowed on wasm targets.
+                    // Pending forever (never fires) when no deadline is set.
+                    let timer_fut = maybe_wait
+                        .map(|w| Either::Left(Timer::after(w).map(|_| ())))
+                        .unwrap_or_else(|| Either::Right(future::pending::<()>()));
+
+                    // SIGTERM backup: catches provider-sent SIGTERM before SIGKILL.
+                    // Uses signal_hook::flag polling (100ms async sleep, no CPU cost)
+                    // on Unix; pending forever on non-Unix platforms. In practice this
+                    // arm should never fire — the primary timer provides 5 minutes of
+                    // cleanup time before SIGTERM arrives. The sig_id is held to
+                    // restore the default SIGTERM disposition after select! resolves.
+                    #[cfg(unix)]
+                    let (sigterm_fut, sigterm_sig_id) = {
+                        use std::sync::atomic::{AtomicBool, Ordering};
+                        let flag = std::sync::Arc::new(AtomicBool::new(false));
+                        let sig_id = signal_hook::flag::register(
+                            signal_hook::consts::SIGTERM,
+                            std::sync::Arc::clone(&flag),
+                        )
+                        .ok();
+                        let flag_clone = flag.clone();
+                        let fut = async move {
+                            loop {
+                                if flag_clone.load(Ordering::Acquire) {
+                                    break;
+                                }
+                                Timer::after(Duration::from_millis(100)).await;
+                            }
+                        };
+                        (fut, sig_id)
+                    };
+                    #[cfg(not(unix))]
+                    let sigterm_fut = future::pending::<()>();
+
+                    let result = futures::select! {
+                        r = Self::run_internal(task, foreground.clone()).fuse() => r,
+                        _ = timer_fut.fuse() => {
+                            log::info!(
+                                "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); \
+                                 aborting run_internal to allow recording finalization"
+                            );
+                            Ok(())
+                        }
+                        _ = sigterm_fut.fuse() => {
+                            // Backup path — should not fire in normal operation.
+                            // The primary timer provides 5 minutes of cleanup time;
+                            // SIGTERM only arrives ~10-20s before SIGKILL.
+                            log::warn!(
+                                "SIGTERM received; aborting run_internal to allow \
+                                 recording finalization (backup path, limited grace period)"
+                            );
+                            Ok(())
+                        }
+                    };
+                    // Restore the default SIGTERM disposition now that run_internal
+                    // has finished, so any subsequent SIGTERM terminates normally.
+                    #[cfg(unix)]
+                    if let Some(sig_id) = sigterm_sig_id {
+                        signal_hook::low_level::unregister(sig_id);
+                    }
+                    result
+                };
 
                 // Stop accepting CLI session status updates now that the run
                 // is done. Already accepted task updates remain queued until
@@ -2853,7 +2962,8 @@ impl AgentDriver {
                         ) {
                             log::info!(
                                 "Ignoring runtime failure for {harness_name}: \
-                                 session already marked Success (pattern={}, excerpt={})",
+                                 session already marked Success or Failed via plugin \
+                                 (pattern={}, excerpt={})",
                                 error.pattern,
                                 error.excerpt,
                             );
@@ -3435,7 +3545,9 @@ impl AgentDriver {
 
                     // Drive idle-on-complete timer for the harness exit signal.
                     match status {
-                        CLIAgentSessionStatus::Success | CLIAgentSessionStatus::Blocked { .. } => {
+                        CLIAgentSessionStatus::Success
+                        | CLIAgentSessionStatus::Failed { .. }
+                        | CLIAgentSessionStatus::Blocked { .. } => {
                             if let Some(idle_timeout) = me.idle_on_complete {
                                 log::info!(
                                     "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?}",

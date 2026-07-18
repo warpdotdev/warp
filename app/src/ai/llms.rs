@@ -135,12 +135,36 @@ fn is_using_team_byo_endpoint_for_model(llm: &LLMInfo, app: &AppContext) -> bool
 pub fn should_show_key_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
     byo_key_source_for_model(llm, app).is_some()
 }
-pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
-    UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app)
+
+fn should_show_host_icon_for_model(
+    llm: &LLMInfo,
+    host: &LLMModelHost,
+    credentials_enabled: bool,
+) -> bool {
+    credentials_enabled
         && llm
             .host_configs
-            .get(&LLMModelHost::AwsBedrock)
+            .get(host)
             .is_some_and(|config| config.enabled)
+}
+
+pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+    should_show_host_icon_for_model(
+        llm,
+        &LLMModelHost::AwsBedrock,
+        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app),
+    )
+}
+
+pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
+    llm: &LLMInfo,
+    app: &AppContext,
+) -> bool {
+    should_show_host_icon_for_model(
+        llm,
+        &LLMModelHost::GeminiEnterprise,
+        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(app),
+    )
 }
 
 /// Key for cached LLM metadata in user preferences.
@@ -704,10 +728,9 @@ struct AvailableLLMsUpdate {
 pub struct LLMPreferences {
     models_by_feature: ModelsByFeature,
     last_update: Option<AvailableLLMsUpdate>,
-    // Stores temporary model overrides for a given terminal view.
-    // NOTE: We only store an override if the model selected by the user is different
-    // from the base LLM for the active profile. This means that if the user selects the
-    // profile's default model and changes their profile, the model will update to that profile's default.
+    // Stores model overrides for a given terminal view. User selections are
+    // normalized against the GUI profile default, while explicit child-run
+    // selections remain pinned even when they currently equal the fallback.
     base_llm_for_terminal_view: HashMap<EntityId, LLMId>,
     /// Synthetic `LLMInfo` entries built from the user's `ApiKeyManager.custom_endpoints` so
     /// custom models surface in the model picker and resolve through `info_for_id` lookups.
@@ -817,14 +840,19 @@ impl LLMPreferences {
         app: &AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &LLMInfo {
-        // In the TUI, the file-backed `agents.model` setting is the source of
-        // truth for the base model: it overrides both per-surface overrides
-        // and the cloud-synced execution profile, keeping the TUI's TOML file
-        // the single place the model is configured.
-        if settings::settings_mode() == settings::SettingsMode::Tui {
-            return self.tui_agent_model_info(AISettings::as_ref(app).agent_model.value(), app);
-        }
+        self.get_preferred_base_model_for_settings_mode(
+            settings::settings_mode(),
+            app,
+            terminal_view_id,
+        )
+    }
 
+    fn get_preferred_base_model_for_settings_mode(
+        &self,
+        settings_mode: settings::SettingsMode,
+        app: &AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> &LLMInfo {
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override {
@@ -836,6 +864,12 @@ impl LLMPreferences {
             }
         }
 
+        // In the TUI, the file-backed `agents.model` setting is the default
+        // for every surface. Explicit per-surface overrides still take
+        // precedence for orchestrated children launched with a model override.
+        if settings_mode == settings::SettingsMode::Tui {
+            return self.tui_agent_model_info(AISettings::as_ref(app).agent_model.value(), app);
+        }
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
 
         profile
@@ -1460,13 +1494,41 @@ impl LLMPreferences {
                 .is_some()
         } else {
             self.base_llm_for_terminal_view
-                .insert(terminal_view_id, preferred_llm_id.clone());
-            true
+                .insert(terminal_view_id, preferred_llm_id.clone())
+                != Some(preferred_llm_id.clone())
         };
 
         if changed {
             self.trigger_snapshot_save(ctx);
             ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+        }
+    }
+
+    /// Pins an explicit child-run model independently of profile or TUI
+    /// defaults. Persist the pin whenever it changes, but notify active-model
+    /// subscribers only when the surface's effective selection changes.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn set_agent_mode_llm_override(
+        &mut self,
+        terminal_view_id: EntityId,
+        model_id: LLMId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let previous_effective_model_id = self
+            .get_active_base_model(ctx, Some(terminal_view_id))
+            .id
+            .clone();
+        let stored_selection_changed = self
+            .base_llm_for_terminal_view
+            .insert(terminal_view_id, model_id.clone())
+            != Some(model_id);
+        if stored_selection_changed {
+            self.trigger_snapshot_save(ctx);
+            if self.get_active_base_model(ctx, Some(terminal_view_id)).id
+                != previous_effective_model_id
+            {
+                ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+            }
         }
     }
 
@@ -1699,6 +1761,13 @@ impl LLMPreferences {
     ///
     /// Called both when the model list is refreshed from the server and when
     /// BYOK API keys change (since `RequiresUpgrade` usability is BYOK-aware).
+    ///
+    /// Note: model selections are only cleared when the model ID is *recognized*
+    /// on this device (present in the server catalog or the local custom endpoints).
+    /// An unrecognized ID is silently preserved so that cross-device profiles —
+    /// where a custom endpoint was configured on device A but not yet on device B —
+    /// are not erroneously reset and synced back to cloud, which would destroy the
+    /// user's settings on their primary device.
     fn reconcile_disabled_model_preferences(&self, ctx: &mut ModelContext<Self>) {
         let profiles_model = AIExecutionProfilesModel::handle(ctx);
         profiles_model.update(ctx, |profiles, ctx| {
@@ -1709,6 +1778,22 @@ impl LLMPreferences {
                     let effective_base_model_id = preferred_base_model
                         .as_ref()
                         .unwrap_or(&self.models_by_feature.agent_mode.default_id);
+
+                    // Only reconcile a preferred model when this device recognizes its ID.
+                    // If neither the server catalog nor local custom endpoints know it, the ID
+                    // likely belongs to a custom endpoint configured on another device. Clearing
+                    // it here would sync the removal back to cloud and erase the user's setting
+                    // on every other device.
+                    let preferred_base_model_is_recognized = preferred_base_model.is_none()
+                        || self
+                            .models_by_feature
+                            .agent_mode
+                            .info_for_id(effective_base_model_id)
+                            .is_some()
+                        || self
+                            .custom_llm_info_for_id(effective_base_model_id)
+                            .is_some();
+
                     let effective_base_model_usable = self
                         .models_by_feature
                         .agent_mode
@@ -1721,35 +1806,54 @@ impl LLMPreferences {
                         .is_some_and(|info| info.context_window.is_configurable);
                     let has_context_window_limit = profile_data.context_window_limit.is_some();
 
-                    if preferred_base_model.is_some() && effective_base_model_unusable {
+                    if preferred_base_model.is_some()
+                        && preferred_base_model_is_recognized
+                        && effective_base_model_unusable
+                    {
                         profiles.set_base_model(profile_id, None, ctx);
                     }
                     if has_context_window_limit
+                        && preferred_base_model_is_recognized
                         && (effective_base_model_unusable || !effective_base_model_is_configurable)
                     {
                         profiles.set_context_window_limit(profile_id, None, ctx);
                     }
                     if let Some(preferred_llm_id) = &profile.data().coding_model {
-                        if self
+                        // Same guard: only clear recognized IDs.
+                        let is_recognized = self
                             .models_by_feature
                             .coding
-                            .usable_info_for_id(preferred_llm_id, ctx)
-                            .or_else(|| {
-                                self.custom_llm_info_for_id_if_enabled(preferred_llm_id, ctx)
-                            })
-                            .is_none()
+                            .info_for_id(preferred_llm_id)
+                            .is_some()
+                            || self.custom_llm_info_for_id(preferred_llm_id).is_some();
+                        if is_recognized
+                            && self
+                                .models_by_feature
+                                .coding
+                                .usable_info_for_id(preferred_llm_id, ctx)
+                                .or_else(|| {
+                                    self.custom_llm_info_for_id_if_enabled(preferred_llm_id, ctx)
+                                })
+                                .is_none()
                         {
                             profiles.set_coding_model(profile_id, None, ctx);
                         }
                     }
                     if let Some(preferred_llm_id) = &profile.data().cli_agent_model {
-                        if self
+                        // Same guard: only clear recognized IDs.
+                        let is_recognized = self
                             .get_cli_agent_available()
-                            .usable_info_for_id(preferred_llm_id, ctx)
-                            .or_else(|| {
-                                self.custom_llm_info_for_id_if_enabled(preferred_llm_id, ctx)
-                            })
-                            .is_none()
+                            .info_for_id(preferred_llm_id)
+                            .is_some()
+                            || self.custom_llm_info_for_id(preferred_llm_id).is_some();
+                        if is_recognized
+                            && self
+                                .get_cli_agent_available()
+                                .usable_info_for_id(preferred_llm_id, ctx)
+                                .or_else(|| {
+                                    self.custom_llm_info_for_id_if_enabled(preferred_llm_id, ctx)
+                                })
+                                .is_none()
                         {
                             profiles.set_cli_agent_model(profile_id, None, ctx);
                         }

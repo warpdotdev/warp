@@ -272,7 +272,7 @@ serde_bytes = "0.11"
 serde-bytes-repr = "0.3"
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_urlencoded = "0.7"
-serde_with = "2.0.1"
+serde_with = "^3.21"
 serde_yaml = "0.8"
 session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "b30fdd06379a3d073b398eabd106abed5b443aae" }
 similar = { version = "2.7", features = ["inline"] }
@@ -333,6 +333,7 @@ arborium = { version = "2", default-features = false, features = [
   "lang-markdown",
 ] }
 unicode-general-category = "1.1.0"
+unicode-linebreak = "0.1.5"
 unicode-segmentation = "1.11.0"
 unicode-width = "0.1.12"
 uuid = { version = "1.1.2", features = ["v4", "serde", "js"] }
@@ -341,7 +342,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "2d0e8ddf5a946a663f7e0952144ccbced0068a81" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "3d26f166b74469d5c12080ef6a3423fadee4d0e3" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -385,7 +386,7 @@ dirs = "6.0.0"
 rayon = "1.10.0"
 sha2 = "0.10"
 shellexpand = "3.1.1"
-warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "a937ae35dfe20eaed030664ad52b36657390b162", default-features = false }
+warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "29cd61c3a9a96d8bde92e90f926e89d340e74cb6", default-features = false }
 winit = { git = "https://github.com/warpdotdev/winit.git", rev = "a4e0ecb5f9626ccac9445a73dc28354b52423abc" }
 x11rb = "0.13.0"
 mockito = "1.7.0"

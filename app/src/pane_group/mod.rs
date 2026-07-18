@@ -2417,7 +2417,11 @@ impl PaneGroup {
         );
     }
 
-    pub fn has_active_code_pane_with_unsaved_changes(&self, ctx: &AppContext) -> bool {
+    /// Whether the focused pane is a code pane whose active tab should show
+    /// the unsaved-changes indicator. Auto-save-aware: changes auto-save can
+    /// persist are excluded, but unsaveable changes (untitled buffers,
+    /// disconnected remotes) still count.
+    pub fn has_active_code_pane_with_unsaved_indicator(&self, ctx: &AppContext) -> bool {
         self.focused_pane_id(ctx).is_code_pane()
             && self
                 .pane_contents
@@ -2426,7 +2430,7 @@ impl PaneGroup {
                 .map(|pane| {
                     pane.file_view(ctx)
                         .as_ref(ctx)
-                        .active_tab_has_unsaved_changes(ctx)
+                        .active_tab_shows_unsaved_indicator(ctx)
                 })
                 .unwrap_or(false)
     }
@@ -4437,7 +4441,9 @@ impl PaneGroup {
         }
 
         let summary = UnsavedStateSummary::for_pane(self, pane_id, ctx);
-        if summary.should_display_warning(ctx) && ChannelState::channel() != Channel::Integration {
+        if summary.save_unsaved_code_and_should_warn(ctx)
+            && ChannelState::channel() != Channel::Integration
+        {
             log::info!("Displaying unsaved changes warning for pane");
             let confirm_self = ctx.handle();
             let show_process_self = ctx.handle();

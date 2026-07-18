@@ -17,6 +17,8 @@ use warpui_core::elements::tui::{
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
 use warpui_core::AppContext;
 
+use crate::orchestrated_agent_identity_styling::{agent_identity_palette, AgentIdentity};
+use crate::tab_bar::TuiTabBarStyles;
 use crate::terminal_background::probed_colors;
 
 /// Theme-derived styles and components for the TUI, mirroring the GUI's
@@ -119,6 +121,33 @@ impl TuiUiBuilder {
             self.warp_theme.terminal_colors().normal.cyan,
         )))
     }
+
+    /// Theme-blue link text, matching linked filenames in tool-call headers.
+    pub(crate) fn link_text_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
+    }
+    /// Blue command-name text used by the slash-command menu and recognized
+    /// slash-command prefixes in the input.
+    pub(crate) fn slash_command_text_style(&self) -> TuiStyle {
+        self.link_text_style()
+    }
+
+    /// Solid cyan selection background used by the slash-command menu.
+    pub(crate) fn slash_command_selection_background(&self) -> Color {
+        cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.cyan,
+        ))
+    }
+
+    /// Bold, contrast-derived text over the slash-command selection color.
+    pub(crate) fn slash_command_selection_text_style(&self) -> TuiStyle {
+        let background_fill = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        let foreground = self.warp_theme.font_color(background_fill.into_solid());
+        TuiStyle::default()
+            .fg(cell_color(foreground))
+            .bg(cell_color(background_fill))
+            .add_modifier(Modifier::BOLD)
+    }
     /// Bold accent prompt marker over the submitted-input background.
     pub(crate) fn input_prefix_style(&self) -> TuiStyle {
         self.accent_text_style()
@@ -134,6 +163,12 @@ impl TuiUiBuilder {
                 .blend(&accent.with_opacity(10))
                 .blend(&accent.with_opacity(10)),
         )
+    }
+    /// Blue-overlay background for inline plan bodies, matching the TUI
+    /// design's `blue_overlay_1` treatment.
+    pub(crate) fn plan_background(&self) -> Color {
+        let blue = ThemeFill::Solid(self.warp_theme.ansi_fg_blue());
+        cell_color(self.base_background().blend(&blue.with_opacity(10)))
     }
 
     /// The background the transcript actually renders over: default cells
@@ -188,6 +223,91 @@ impl TuiUiBuilder {
         TuiStyle::default().fg(cell_color(self.warping_base_fill()))
     }
 
+    /// The magenta-tinted background behind the orchestration permission
+    /// card, pre-blended over the probed base background.
+    pub(crate) fn orchestration_surface_background(&self) -> Color {
+        let magenta = ThemeFill::from(self.warp_theme.terminal_colors().normal.magenta);
+        cell_color(self.base_background().blend(&magenta.with_opacity(10)))
+    }
+
+    /// Stronger magenta tint for the orchestration permission title row:
+    /// the surface overlay applied twice, matching the design's stacked
+    /// header overlays.
+    pub(crate) fn orchestration_header_background(&self) -> Color {
+        let magenta = ThemeFill::from(self.warp_theme.terminal_colors().normal.magenta);
+        cell_color(
+            self.base_background()
+                .blend(&magenta.with_opacity(10))
+                .blend(&magenta.with_opacity(10)),
+        )
+    }
+
+    /// Bold magenta text for a selected option-selector row.
+    pub(crate) fn option_selector_selected_style(&self) -> TuiStyle {
+        TuiStyle::default()
+            .fg(cell_color(ThemeFill::from(
+                self.warp_theme.terminal_colors().normal.magenta,
+            )))
+            .add_modifier(Modifier::BOLD)
+    }
+
+    /// Bold primary text for selected configuration metadata.
+    pub(crate) fn orchestration_selected_value_style(&self) -> TuiStyle {
+        self.primary_text_style().add_modifier(Modifier::BOLD)
+    }
+
+    /// Styles for the reusable component when rendered as orchestration tabs.
+    pub(crate) fn orchestration_tab_bar_styles(&self) -> TuiTabBarStyles {
+        let background = self.orchestration_surface_background();
+        let selected_fill = ThemeFill::from(self.warp_theme.terminal_colors().normal.magenta);
+        let selected_background = cell_color(selected_fill);
+        let selected_foreground =
+            cell_color(self.warp_theme.font_color(selected_fill.into_solid()));
+        TuiTabBarStyles {
+            background: Some(background),
+            leading: self.orchestration_tab_bar_label_style(),
+            chrome: self.orchestration_tab_bar_chrome_style(),
+            tab: self.muted_text_style().bg(background),
+            selected_focused: TuiStyle::default()
+                .fg(selected_foreground)
+                .bg(selected_background)
+                .add_modifier(Modifier::BOLD),
+            selected_unfocused: self
+                .primary_text_style()
+                .bg(background)
+                .add_modifier(Modifier::BOLD),
+        }
+    }
+
+    /// Bold fixed-label style over the orchestration tab-bar background.
+    pub(crate) fn orchestration_tab_bar_label_style(&self) -> TuiStyle {
+        self.primary_text_style()
+            .bg(self.orchestration_surface_background())
+            .add_modifier(Modifier::BOLD)
+    }
+
+    /// Muted divider/overflow style over the orchestration tab background.
+    pub(crate) fn orchestration_tab_bar_chrome_style(&self) -> TuiStyle {
+        self.muted_text_style()
+            .bg(self.orchestration_surface_background())
+    }
+
+    /// The deterministic agent identity palette for this theme. See
+    /// [`crate::orchestrated_agent_identity_styling`].
+    pub(crate) fn agent_identity_palette(&self) -> Vec<AgentIdentity> {
+        agent_identity_palette(self.warp_theme.terminal_colors())
+    }
+    /// Bold cyan option text for the ask-question card.
+    pub(crate) fn question_option_selected_style(&self) -> TuiStyle {
+        self.accent_text_style().add_modifier(Modifier::BOLD)
+    }
+
+    /// Accent-tinted surface behind an interactive ask-question card.
+    pub(crate) fn question_surface_background(&self) -> Color {
+        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        cell_color(self.base_background().blend(&accent.with_opacity(10)))
+    }
+
     /// Collapsible-header style while the pointer hovers it.
     fn hovered_header_style(&self) -> TuiStyle {
         self.primary_text_style().add_modifier(Modifier::BOLD)
@@ -212,6 +332,40 @@ impl TuiUiBuilder {
             collapsed,
             [(label.into(), style)],
             style,
+            mouse_state,
+            move || body,
+            on_toggle,
+        )
+    }
+
+    /// Prominent [`tui_collapsible`] variant: a bold primary-text header of
+    /// a leading `glyph` and a `label` (e.g. the task-list header, which the
+    /// design renders bold white). Since the header is already bold, hover
+    /// signals with an underline instead of the muted collapsible's
+    /// brighten-on-hover — applied to the label only, so the decorative
+    /// glyph and the chevron don't pick up a clashing underline.
+    pub(crate) fn prominent_collapsible(
+        &self,
+        collapsed: bool,
+        glyph: impl Into<String>,
+        label: impl Into<String>,
+        mouse_state: MouseStateHandle,
+        body: Box<dyn TuiElement>,
+        on_toggle: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
+    ) -> Box<dyn TuiElement> {
+        let header_style = self.primary_text_style().add_modifier(Modifier::BOLD);
+        let label_style = if mouse_state.lock().unwrap().is_hovered() {
+            header_style.add_modifier(Modifier::UNDERLINED)
+        } else {
+            header_style
+        };
+        tui_collapsible(
+            collapsed,
+            [
+                (format!("{} ", glyph.into()), header_style),
+                (label.into(), label_style),
+            ],
+            header_style,
             mouse_state,
             move || body,
             on_toggle,

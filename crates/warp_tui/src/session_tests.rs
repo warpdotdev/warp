@@ -6,7 +6,7 @@ use super::{parse_resume_token, TuiArgs};
 fn parses_resume_server_token() {
     let token = uuid::Uuid::new_v4().to_string();
     let args = TuiArgs::try_parse_from([
-        "warp-tui",
+        "warp",
         "--resume",
         token.as_str(),
         "--api-key",
@@ -36,7 +36,7 @@ fn rejects_malformed_resume_server_token() {
 
 #[test]
 fn accepts_startup_without_resume() {
-    let args = TuiArgs::try_parse_from(["warp-tui"]).expect("empty arguments should parse");
+    let args = TuiArgs::try_parse_from(["warp"]).expect("empty arguments should parse");
 
     assert_eq!(args.resume, None);
     assert_eq!(args.api_key, None);

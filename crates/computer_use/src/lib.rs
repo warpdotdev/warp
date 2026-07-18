@@ -8,11 +8,12 @@ mod imp;
 #[cfg(macos)]
 mod mock;
 mod noop;
+mod overlay;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,6 +23,7 @@ use async_trait::async_trait;
 // module definition.
 #[cfg(noop)]
 use noop as imp;
+pub use overlay::{ActionLogEntry, overlay_labels_for};
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
@@ -231,10 +233,10 @@ pub trait Actor: Send + Sync + 'static {
 
 /// Returns a recorder that can capture a video of the computer-use display.
 ///
-/// A real recorder is only available on Linux (X11); every other platform, and
-/// any `test-util` build, gets a no-op recorder that reports recording as
-/// unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a mock
-/// recorder for UI testing (see `mock`).
+/// A real recorder is available on Linux (X11) and macOS (avfoundation); every
+/// other platform, and any `test-util` build, gets a no-op recorder that reports
+/// recording as unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a
+/// mock recorder for UI testing (see `mock`).
 pub fn create_recorder() -> Box<dyn Recorder> {
     #[cfg(macos)]
     if std::env::var_os("WARP_MOCK_RECORDER").is_some() {
@@ -244,6 +246,27 @@ pub fn create_recorder() -> Box<dyn Recorder> {
         Box::new(noop::Recorder::new())
     } else {
         Box::new(imp::Recorder::new())
+    }
+}
+
+/// Burns action labels into a recorded video, returning the path to the
+/// annotated file. The original file is left untouched; the caller owns cleanup
+/// of both. Real compositing (ffmpeg + libass) only runs on the Linux capture
+/// path; every other target returns `input` unchanged so callers can treat
+/// annotation as best-effort and upload the original on any failure.
+pub async fn burn_in_action_log(
+    input: &Path,
+    entries: &[ActionLogEntry],
+    dimensions: (u32, u32),
+) -> Result<PathBuf, RecordingError> {
+    #[cfg(all(linux, not(noop)))]
+    {
+        imp::burn_in_action_log(input, entries, dimensions).await
+    }
+    #[cfg(not(all(linux, not(noop))))]
+    {
+        let _ = (entries, dimensions);
+        Ok(input.to_path_buf())
     }
 }
 
@@ -273,6 +296,14 @@ pub struct RecordingConfig {
     pub max_duration: Duration,
     /// Maximum output size in bytes before the runtime auto-stops recording.
     pub max_size_bytes: u64,
+    /// How many times faster the output video should play back relative to real
+    /// time. For example, 4.0 makes a 4-minute recording play in 1 minute. A
+    /// value of 0.0 or 1.0 means real-time (no speedup). Applied via an ffmpeg
+    /// presentation-timestamp rescale filter on the output video.
+    pub playback_speed_multiplier: f32,
+    /// The surface to capture. `Screen` records the whole X display (legacy behavior);
+    /// `Window` records the targeted window after making it foreground-visible when supported.
+    pub target: Target,
 }
 
 impl Default for RecordingConfig {
@@ -283,6 +314,11 @@ impl Default for RecordingConfig {
             // NOTE: Bounds every capture so an unattended recording can't grow without bound (~10 min / 1 GiB).
             max_duration: Duration::from_secs(10 * 60),
             max_size_bytes: 1024 * 1024 * 1024,
+            // NOTE: 4x playback speed keeps demo videos short and watchable. A 4-minute
+            // recording plays in 1 minute. The server can override via the StartRecording
+            // tool call's playback_speed_multiplier field.
+            playback_speed_multiplier: 4.0,
+            target: Target::Screen,
         }
     }
 }
@@ -295,17 +331,17 @@ pub struct RecordingHandle {
     height: u32,
     exit_state: RecordingExitState,
     // The live capture process plus the fields used to finalize it are only
-    // populated by the real Linux recorder; the no-op recorders never construct
-    // a handle.
-    #[cfg(linux)]
+    // populated by the real Linux and macOS recorders; the no-op recorders never
+    // construct a handle.
+    #[cfg(any(linux, macos))]
     path: PathBuf,
-    #[cfg(linux)]
+    #[cfg(any(linux, macos))]
     started_at: instant::Instant,
-    #[cfg(linux)]
+    #[cfg(any(linux, macos))]
     process: Option<tokio::process::Child>,
     // The handle owns and deletes partial output until `Recorder::stop`
     // validates the file and transfers its path to `RecordingOutput`.
-    #[cfg(linux)]
+    #[cfg(any(linux, macos))]
     cleanup_on_drop: bool,
 }
 
@@ -330,7 +366,7 @@ impl RecordingHandle {
             return Some(kind);
         }
 
-        #[cfg(linux)]
+        #[cfg(any(linux, macos))]
         if let Some(process) = self.process.as_mut()
             && let Ok(Some(status)) = process.try_wait()
         {
@@ -356,20 +392,20 @@ impl RecordingHandle {
             width,
             height,
             exit_state: exit_state.clone(),
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             path: PathBuf::new(),
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             started_at: instant::Instant::now(),
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             process: None,
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             cleanup_on_drop: false,
         };
         (handle, exit_state)
     }
 }
 
-#[cfg(linux)]
+#[cfg(any(linux, macos))]
 impl Drop for RecordingHandle {
     fn drop(&mut self) {
         // A handle can be abandoned without reaching `Recorder::stop`, notably

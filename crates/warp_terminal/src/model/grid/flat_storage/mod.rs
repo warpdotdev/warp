@@ -19,6 +19,7 @@
 mod attribute_map;
 mod content;
 mod grapheme;
+mod hyperlink;
 mod index;
 mod row_iterator;
 mod style;
@@ -31,6 +32,7 @@ use attribute_map::AttributeMap;
 use content::Content;
 use get_size::GetSize;
 use grapheme::Grapheme;
+use hyperlink::HyperlinkIdMap;
 #[cfg(not(feature = "test-util"))]
 use index::Index;
 #[cfg(feature = "test-util")]
@@ -42,6 +44,7 @@ use style::BgAndStyle;
 use super::cell::LineLength as _;
 use super::row::Row;
 use super::{cell, CellType};
+use crate::model::grid::HyperlinkId;
 use crate::model::{ansi, Point};
 
 const DEFAULT_FG_COLOR: ansi::Color = ansi::Color::Named(ansi::NamedColor::Foreground);
@@ -64,6 +67,13 @@ pub struct FlatStorage {
 
     /// An interval map storing additional styling information.
     bg_and_style_map: style::BgAndStyleMap,
+
+    /// An interval map storing each cell's OSC 8 hyperlink id (or `None`
+    /// for cells that aren't part of a hyperlink span). RLE deduplicates
+    /// long runs of cells sharing the same id into a single entry. The
+    /// id resolves to a `Hyperlink` via the owning grid's
+    /// `HyperlinkRegistry`.
+    hyperlink_id_map: HyperlinkIdMap,
 
     /// The content offset with the end of prompt marker, if any.
     end_of_prompt_marker: Option<EndOfPromptMarker>,
@@ -88,6 +98,7 @@ impl FlatStorage {
             columns,
             fg_color_map: AttributeMap::new(DEFAULT_FG_COLOR),
             bg_and_style_map: AttributeMap::new(BgAndStyle::default()),
+            hyperlink_id_map: AttributeMap::new(None),
             end_of_prompt_marker: None,
             max_rows,
             num_truncated_rows: 0,
@@ -153,6 +164,7 @@ impl FlatStorage {
         self.content.truncate(new_content_len);
         self.fg_color_map.truncate(new_content_len);
         self.bg_and_style_map.truncate(new_content_len);
+        self.hyperlink_id_map.truncate(new_content_len);
 
         // Clear out the end-of-prompt marker if it was in a row we just
         // popped.
@@ -178,6 +190,7 @@ impl FlatStorage {
         self.content.truncate_front(new_start_offset);
         self.fg_color_map.truncate_front(new_start_offset);
         self.bg_and_style_map.truncate_front(new_start_offset);
+        self.hyperlink_id_map.truncate_front(new_start_offset);
 
         self.num_truncated_rows += count as u64;
     }
@@ -189,6 +202,7 @@ impl FlatStorage {
     fn push_rows_internal(&mut self, rows: &mut dyn Iterator<Item = &Row>) {
         let mut fg_color = self.fg_color_map.tail();
         let mut bg_and_style = self.bg_and_style_map.tail();
+        let mut hyperlink_id: Option<HyperlinkId> = self.hyperlink_id_map.tail();
 
         for row in rows {
             let start_offset = ByteOffset::from(self.content().end_offset());
@@ -200,6 +214,7 @@ impl FlatStorage {
                 &mut entry_builder,
                 &mut fg_color,
                 &mut bg_and_style,
+                &mut hyperlink_id,
             ) {
                 continue;
             }
@@ -245,6 +260,12 @@ impl FlatStorage {
                     bg_and_style = cell.into();
                     self.bg_and_style_map
                         .push_attribute_change(offset.., bg_and_style);
+                }
+                if hyperlink_id != cell.hyperlink_id() {
+                    needs_processing = true;
+                    hyperlink_id = cell.hyperlink_id();
+                    self.hyperlink_id_map
+                        .push_attribute_change(offset.., hyperlink_id);
                 }
                 if let Some(marker) = cell.end_of_prompt_marker() {
                     needs_processing = true;
@@ -293,6 +314,7 @@ impl FlatStorage {
         entry_builder: &mut index::EntryBuilder,
         fg_color: &mut ansi::Color,
         bg_and_style: &mut BgAndStyle,
+        hyperlink_id: &mut Option<HyperlinkId>,
     ) -> bool {
         if row.occ != row.len() {
             return false;
@@ -319,6 +341,11 @@ impl FlatStorage {
                 *bg_and_style = cell.into();
                 self.bg_and_style_map
                     .push_attribute_change(offset.., *bg_and_style);
+            }
+            if *hyperlink_id != cell.hyperlink_id() {
+                *hyperlink_id = cell.hyperlink_id();
+                self.hyperlink_id_map
+                    .push_attribute_change(offset.., *hyperlink_id);
             }
             if let Some(marker) = cell.end_of_prompt_marker() {
                 self.end_of_prompt_marker = Some(EndOfPromptMarker {

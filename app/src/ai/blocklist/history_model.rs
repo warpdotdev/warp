@@ -26,15 +26,16 @@ use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use super::RequestInput;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata,
+    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata, TodoStatus,
     UpdateConversationError,
 };
 use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
 use crate::ai::agent::task::TaskId;
+use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
-    CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError, RequestCost,
-    Suggestions,
+    AIAgentTodoId, CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError,
+    RequestCost, Suggestions,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::document::ai_document_model::AIDocumentModel;
@@ -96,6 +97,17 @@ pub struct AIConversationMetadata {
     /// Full server metadata for cloud conversations, including permissions.
     /// Used by the sharing dialog to display permissions when the full conversation isn't loaded.
     pub server_conversation_metadata: Option<ServerAIConversationMetadata>,
+
+    /// Local conversation ID of the parent that spawned this child, if any.
+    /// Mirrors [`AIConversation::parent_conversation_id`]; stored here so
+    /// child-agent status can be determined from metadata alone, without
+    /// loading the full conversation. See [`Self::is_child_agent_conversation`].
+    pub parent_conversation_id: Option<AIConversationId>,
+
+    /// Server-side parent agent identifier (the parent's run_id), if any.
+    /// Mirrors [`AIConversation::parent_agent_id`]; the same value the ambient
+    /// task carries as `parent_run_id`.
+    pub parent_agent_id: Option<String>,
 }
 
 impl From<&AIConversation> for AIConversationMetadata {
@@ -123,6 +135,8 @@ impl From<&AIConversation> for AIConversationMetadata {
             has_cloud_data,
             artifacts: conversation.artifacts().to_vec(),
             server_conversation_metadata: conversation.server_metadata().cloned(),
+            parent_conversation_id: conversation.parent_conversation_id(),
+            parent_agent_id: conversation.parent_agent_id().map(ToString::to_string),
         }
     }
 }
@@ -166,6 +180,11 @@ impl AIConversationMetadata {
             has_cloud_data: true, // Server metadata implies cloud data exists
             artifacts,
             server_conversation_metadata: Some(server_conversation_metadata),
+            // Server conversation metadata does not currently expose parent
+            // linkage; child cloud runs are detected via the ambient task's
+            // `parent_run_id` instead (see `AgentConversationsModel::get_entries`).
+            parent_conversation_id: None,
+            parent_agent_id: None,
         }
     }
 
@@ -175,6 +194,13 @@ impl AIConversationMetadata {
         self.server_conversation_metadata
             .as_ref()
             .is_some_and(|m| m.ambient_agent_task_id.is_some())
+    }
+
+    /// Whether this conversation was spawned by a parent orchestrator agent.
+    /// Uses the same predicate as [`AIConversation::is_child_agent_conversation`]
+    /// so the loaded and unloaded representations agree.
+    pub fn is_child_agent_conversation(&self) -> bool {
+        self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
     }
 }
 
@@ -812,6 +838,10 @@ impl BlocklistAIHistoryModel {
         }
         conversation.set_pinned(pinned);
         conversation.write_updated_conversation_state(ctx);
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+            terminal_surface_id: self.terminal_surface_id_for_conversation(&conversation_id),
+            conversation_id,
+        });
     }
 
     /// Sets a live conversation's server token, updates the reverse index, and
@@ -944,6 +974,23 @@ impl BlocklistAIHistoryModel {
     ) -> Option<&ConversationStatus> {
         self.conversation(conversation_id)
             .map(|conversation| conversation.status())
+    }
+
+    /// Returns the render status of one todo item in the conversation's todo
+    /// history (see [`AIConversation::todo_status`]) — a narrow projection
+    /// for consumers that don't need the whole `AIConversation`.
+    pub fn todo_status(
+        &self,
+        conversation_id: &AIConversationId,
+        todo_id: &AIAgentTodoId,
+    ) -> Option<TodoStatus> {
+        self.conversation(conversation_id)?.todo_status(todo_id)
+    }
+
+    /// Returns the conversation's active (most recent) todo list, if any — a
+    /// narrow projection (see [`Self::todo_status`]).
+    pub fn active_todo_list(&self, conversation_id: &AIConversationId) -> Option<&AIAgentTodoList> {
+        self.conversation(conversation_id)?.active_todo_list()
     }
 
     /// Returns the terminal surface ID for the given conversation, if any.
@@ -2137,6 +2184,11 @@ impl BlocklistAIHistoryModel {
 
         self.all_conversations_metadata.remove(&conversation_id);
         self.conversations_by_id.remove(&conversation_id);
+        self.children_by_parent.remove(&conversation_id);
+        self.children_by_parent.retain(|_, child_ids| {
+            child_ids.retain(|child_id| *child_id != conversation_id);
+            !child_ids.is_empty()
+        });
 
         if let Some(terminal_surface_id) = terminal_surface_id {
             if self
@@ -2458,14 +2510,19 @@ impl BlocklistAIHistoryModel {
             .copied()
     }
 
-    /// Returns local conversation metadata,
-    /// (excluding conversations from ambient agent runs).
+    /// Returns local conversation metadata, excluding conversations that are
+    /// not navigable: ambient agent runs (represented by their task) and
+    /// child (orchestrated) agent conversations (represented under their
+    /// parent's status card). This is the canonical filter for unloaded
+    /// conversations, mirroring `AIConversation::should_exclude_from_navigation`
+    /// for loaded ones. Individual conversations remain accessible by ID via
+    /// [`Self::get_conversation_metadata`].
     pub fn get_local_conversations_metadata(
         &self,
     ) -> impl Iterator<Item = &AIConversationMetadata> {
         self.all_conversations_metadata
             .values()
-            .filter(|m| !m.is_ambient_agent_conversation())
+            .filter(|m| !m.is_ambient_agent_conversation() && !m.is_child_agent_conversation())
     }
 
     /// Returns conversation metadata for a specific conversation ID.

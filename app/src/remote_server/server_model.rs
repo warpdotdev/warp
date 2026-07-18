@@ -969,7 +969,7 @@ impl ServerModel {
                         self.handle_navigated_to_directory(m, &request_id, conn_id, ctx)
                     }
                     Some(session_scoped_request::Message::LoadRepoMetadataDirectory(m)) => {
-                        self.handle_load_repo_metadata_directory(m, &request_id, ctx)
+                        self.handle_load_repo_metadata_directory(m, &request_id, conn_id, ctx)
                     }
                     Some(session_scoped_request::Message::RunCommand(m)) => {
                         self.handle_run_command(m, &request_id, conn_id, ctx)
@@ -2150,11 +2150,12 @@ impl ServerModel {
     }
 
     /// Handles `LoadRepoMetadataDirectory` by loading a subdirectory on the
-    /// server's local model and returning the children synchronously.
+    /// server's local model and returning the children after the async load completes.
     fn handle_load_repo_metadata_directory(
         &mut self,
         msg: super::proto::LoadRepoMetadataDirectory,
         request_id: &RequestId,
+        conn_id: ConnectionId,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
         log::info!(
@@ -2194,39 +2195,72 @@ impl ServerModel {
             }));
         }
 
-        // Load the directory on the server's local model.
-        let load_result = RepoMetadataModel::handle(ctx).update(ctx, |model, ctx| {
-            model.load_directory(&repo_path, &dir_path, ctx)
+        // Load the directory on the server's local model. The returned future resolves after the
+        // LocalRepoMetadataModel completion callback has applied or rejected the subtree.
+        let load_future = RepoMetadataModel::handle(ctx).update(ctx, |model, ctx| {
+            model.load_directory_with_completion(&repo_path, &dir_path, ctx)
         });
 
-        if let Err(e) = load_result {
-            log::warn!("LoadRepoMetadataDirectory failed: {e}");
-            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                code: ErrorCode::Internal.into(),
-                message: format!("Failed to load directory: {e}"),
-            }));
-        }
+        let load_future = match load_future {
+            Ok(load_future) => load_future,
+            Err(e) => {
+                log::warn!("LoadRepoMetadataDirectory failed: {e}");
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::Internal.into(),
+                    message: format!("Failed to load directory: {e}"),
+                }));
+            }
+        };
 
-        // Read back the loaded children and serialize them.
-        let id = RepositoryIdentifier::local(repo_path.clone());
-        let entries = RepoMetadataModel::handle(ctx)
-            .as_ref(ctx)
-            .get_repository(&id, ctx)
-            .map(|state| {
-                super::repo_metadata_proto::file_tree_children_to_proto_entries(
-                    &state.entry,
-                    &dir_path,
-                )
-            })
-            .unwrap_or_default();
+        let request_id_for_response = request_id.clone();
+        let repo_path_for_response = msg.repo_path;
+        let dir_path_for_response = msg.dir_path;
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            load_future,
+            move |me, load_result, ctx| {
+                if let Err(e) = load_result {
+                    log::warn!("LoadRepoMetadataDirectory failed: {e}");
+                    me.send_server_message(
+                        Some(conn_id),
+                        Some(&request_id_for_response),
+                        server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::Internal.into(),
+                            message: format!("Failed to load directory: {e}"),
+                        }),
+                    );
+                    return;
+                }
 
-        HandlerOutcome::Sync(server_message::Message::LoadRepoMetadataDirectoryResponse(
-            super::proto::LoadRepoMetadataDirectoryResponse {
-                repo_path: msg.repo_path,
-                dir_path: msg.dir_path,
-                entries,
+                // Read back the loaded children and serialize them after the completion callback
+                // has inserted the subtree.
+                let id = RepositoryIdentifier::local(repo_path.clone());
+                let entries = RepoMetadataModel::handle(ctx)
+                    .as_ref(ctx)
+                    .get_repository(&id, ctx)
+                    .map(|state| {
+                        super::repo_metadata_proto::file_tree_children_to_proto_entries(
+                            &state.entry,
+                            &dir_path,
+                        )
+                    })
+                    .unwrap_or_default();
+
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::LoadRepoMetadataDirectoryResponse(
+                        super::proto::LoadRepoMetadataDirectoryResponse {
+                            repo_path: repo_path_for_response,
+                            dir_path: dir_path_for_response,
+                            entries,
+                        },
+                    ),
+                );
             },
-        ))
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
     }
 
     /// Handles `WriteFile` by registering the path and triggering an async

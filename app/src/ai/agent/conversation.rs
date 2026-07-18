@@ -1152,16 +1152,12 @@ impl AIConversation {
         self.pinned = pinned;
     }
 
-    /// Returns true if this conversation was spawned by a parent orchestrator agent.
+    /// Returns true if this conversation was spawned by a parent orchestrator
+    /// agent — either via a local parent placeholder
+    /// (`parent_conversation_id`, set in the GUI parent) or via the parent's
+    /// server-side run identifier (`parent_agent_id`, stamped in
+    /// driver-hosted processes).
     pub fn is_child_agent_conversation(&self) -> bool {
-        self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
-    }
-
-    /// True iff this conversation knows about a parent agent — either via a
-    /// local parent placeholder (`parent_conversation_id`, set in the GUI
-    /// parent) or via the parent's server-side run identifier
-    /// (`parent_agent_id`, stamped in driver-hosted processes).
-    pub fn has_parent_agent(&self) -> bool {
         self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
     }
 
@@ -3414,6 +3410,13 @@ impl AIConversation {
 
     pub fn todo_lists(&self) -> &Vec<AIAgentTodoList> {
         &self.todo_lists
+    }
+
+    /// Replaces the conversation's todo lists directly, bypassing the normal
+    /// todo-operation replay, for projection tests.
+    #[cfg(test)]
+    pub(crate) fn set_todo_lists_for_test(&mut self, todo_lists: Vec<AIAgentTodoList>) {
+        self.todo_lists = todo_lists;
     }
 
     pub fn active_todo_list(&self) -> Option<&AIAgentTodoList> {
