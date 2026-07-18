@@ -235,6 +235,61 @@ The reasoning — and the precedent that decides it — is in design question 1.
    `BufferText`. Recursion reuses the existing top-level parse function rather
    than inventing a second grammar.
 
+   **Single-line `<p align="…">caption</p>` (product invariant 2, same-line
+   shape).** The own-line detector above assumes the opening tag, interior
+   content, and closing tag each occupy their own line(s) — but the product
+   spec's common "centered caption" case, and the acceptance test case itself
+   (`<p align="center">A centered caption line.</p>`), is a single *source*
+   line containing open-tag, inline content, and close-tag together. This needs
+   its own detection path because it doesn't have a separate own-line close tag
+   for the own-line scanner to find.
+
+   The parser is line-oriented at the top level (`parse_line`/
+   `not_markdown_line_ending`, `markdown_parser.rs:955-958`, split the input
+   into lines that each become one `FormattedTextLine`, e.g. `parse_markdown_line`
+   producing a single `Line`). The single-line `<p align>` case is detected at
+   that same grain: before falling through to ordinary paragraph/line parsing,
+   check whether the line, once leading whitespace is stripped, matches
+   `<p (align="…"|style="…")>...</p>` **entirely on that one line** — open tag,
+   then content, then close tag, with nothing before the open tag and nothing
+   after the close tag but trailing whitespace. On a match, extract the
+   alignment (design question 7's attribute/style parsing, applied to this
+   tag's attributes) and the inline content between the tags, then emit the
+   *same three-part shape* the own-line detector emits, collapsed onto one
+   source line: `AlignRegionStart(alignment)`, one interior `Line` built by
+   running the extracted content through `parse_phrasing_content` (the existing
+   inline-phrasing path, matching how the own-line `<p align>` case parses its
+   content per design question 4), then `AlignRegionEnd`. This is not a fourth
+   representation — it is the same `AlignRegionStart` / interior / `AlignRegionEnd`
+   triple as the own-line and `<div>` cases, just produced by a detector that
+   reads one line instead of scanning for a separate closing line. No wrapper
+   variant, no special buffer-side handling: the `edit` loop and TUI renderer
+   (design question 1, TUI surface disposition) see an ordinary
+   `AlignRegionStart` / `Line` / `AlignRegionEnd` run regardless of which
+   detector produced it.
+
+   **Mixed same-line cases (text sharing the line with the tags) — literal
+   fallback, deterministically.** If the line contains a same-line `<p align>`
+   open+content+close *plus* additional non-whitespace text before the open tag
+   or after the close tag (e.g. `Note: <p align="center">caption</p>` or
+   `<p align="center">caption</p> — see above`), the single-line detector does
+   **not** partially apply alignment to a fragment of the line. Consistent with
+   invariant 7's malformed-input philosophy ("content the block detector can't
+   safely group renders as the unaligned equivalent"), the simplest
+   deterministic rule is chosen: **the whole line is rejected by this detector
+   and falls through to ordinary paragraph/inline parsing**, exactly as it does
+   today — the `<p align="…">`/`</p>` tags render as literal text (the existing
+   fallthrough behavior for HTML tags without a dedicated block match, per the
+   `p`-tag handling already established in `html_parser.rs`'s `_ =>` catch-all
+   for the paste path), and no `AlignRegionStart`/`AlignRegionEnd` pair is
+   emitted. This avoids inventing a partial-region concept (e.g. "align only
+   the tag-bracketed substring, leave surrounding text unaligned on the same
+   line") that has no product requirement and no rendering precedent in this
+   codebase — `FormattedTextLine` has no sub-line alignment concept, only
+   whole-line/whole-region. A test case should assert this literal-fallback
+   behavior explicitly (see Testing and validation) so the boundary is
+   documented and doesn't regress into silent partial-application.
+
 4. **`<p align>` vs `<div align>` — single block vs. group.** Both route through
    the same detector and emit the same paired region markers; the only difference
    is `<p>`'s content is inline phrasing (parsed via `parse_phrasing_content`,
@@ -312,11 +367,50 @@ it — the GUI via the lowered buffer markers, the TUI via the boundary lines in
 the stream.)
 
 7. **Feature gating.** No existing flag covers this (`MarkdownTables` is
-   table-specific). Recommend a new flag, e.g. `FeatureFlag::MarkdownBlockAlign`,
-   following the same gating pattern used for `MarkdownTables` in
-   `crates/editor/src/content/buffer.rs:850-855` (the `from_markdown` parse-fn
-   switch), so the feature can ship dark and be enabled independently of
-   unrelated Markdown work.
+   table-specific). Recommend a new flag, `FeatureFlag::MarkdownBlockAlign`, and
+   gate it **in the parser crate**, at the same layer the detector lives in
+   (design question 3), rather than only at the `buffer.rs` call site — the
+   spec's own TUI disposition has `tui_markdown.rs` consuming
+   `FormattedTextLine` directly, so a gate that only wraps the buffer's
+   `from_markdown` selection would leave the TUI ungated and the two surfaces
+   would diverge on whether alignment is live.
+
+   The exact mechanism to mirror is `MarkdownTables`'s, verified end to end:
+   `crates/editor/src/content/buffer.rs:850-855` doesn't gate table parsing
+   itself — it selects between two *public parser-crate entry points*,
+   `parse_markdown` vs. `parse_markdown_with_gfm_tables`
+   (`crates/markdown_parser/src/markdown_parser.rs:111-117`), both of which
+   delegate to one internal function, `parse_markdown_impl(markdown,
+   parse_gfm_tables: bool)` (`markdown_parser.rs:119-134`) — the boolean is
+   what actually reaches the table detector inside the parser. `buffer.rs` is
+   just one of two call sites that make this choice today: `from_ipynb`
+   (`buffer.rs:890-891`) checks the *same* `FeatureFlag::MarkdownTables` and
+   threads the resulting bool into `ipynb_parser::ipynb_to_formatted_text`,
+   which re-exports and re-checks against the same `parse_markdown` /
+   `parse_markdown_with_gfm_tables` pair (`crates/ipynb_parser/src/lib.rs:16,
+   124`). Every call site reads the same flag and funnels it to the same
+   underlying boolean parameter — that's what keeps them from diverging, not
+   any single call site being canonical.
+
+   Apply the identical shape here: extend `parse_markdown_impl` with a second
+   boolean, `parse_block_align` (or fold both flags into a small options
+   struct once there are two — either is fine as long as it's one shared
+   internal function), add a `parse_markdown_with_block_align` public entry
+   point analogous to `parse_markdown_with_gfm_tables`, and have **each**
+   caller that currently chooses between `parse_markdown` /
+   `parse_markdown_with_gfm_tables` — `buffer.rs:850-855`, `buffer.rs:890-891`
+   / `ipynb_parser`, and any TUI call site that selects a parse entry point —
+   check `FeatureFlag::MarkdownBlockAlign` the same way it already checks
+   `FeatureFlag::MarkdownTables`, and route to the align-aware entry point.
+   Because the detector itself only runs when the bool it receives is true,
+   the align-region-boundary variants (`AlignRegionStart`/`AlignRegionEnd`)
+   are simply never emitted when the flag is off — every downstream consumer
+   (the `edit` lowering loop, the TUI renderer, `find.rs`) can assume the
+   variants don't exist in that mode without a separate runtime check,
+   identical to how `Table` lines don't appear unless `MarkdownTables` is on.
+   This lets the feature ship dark and be enabled independently of unrelated
+   Markdown work, with the GUI and TUI guaranteed to agree because they share
+   the same gated boolean rather than two independently-maintained checks.
 
 ## Security
 
@@ -338,10 +432,24 @@ now positioned differently."
   aligned region bracketing the expected interior `Vec<FormattedTextLine>`
   (assert the region markers are emitted around the interior, and the interior
   blocks parse as normal — invariant 1).
-- `<p align="right">caption</p>` → a `Right` aligned region bracketing exactly
-  one interior `Line` (invariant 2).
+- `<p align="right">caption</p>` (single source line: open tag, content, and
+  close tag together) → a `Right` aligned region bracketing exactly one
+  interior `Line` (invariant 2, design question 3's single-line detection
+  path).
+- `Note: <p align="center">caption</p>` and `<p align="center">caption</p> —
+  see above` (non-whitespace text sharing the line with the tags, before or
+  after) → literal fallback: the whole line renders as today (tags as literal
+  text via ordinary paragraph/inline parsing), no `AlignRegionStart`/
+  `AlignRegionEnd` emitted (design question 3's mixed-same-line rule).
 - `style="text-align: center"` → same result as `align="center"` (invariant 3).
 - `align` and conflicting `style` both present → `style` wins (invariant 3).
+- `style` micro-grammar cases (product invariant 3's subset): mixed case
+  property/value (`style="Text-Align: CENTER"`); whitespace around `:`/`;`
+  (`style="text-align : right ;"`); multiple declarations with an unrelated
+  property ignored (`style="color: red; text-align: center"`); multiple
+  `text-align` declarations where the last wins (`style="text-align: left;
+  text-align: center"`); unrecognized `text-align` value (`style="text-align:
+  justify"`) → unaligned, not an error.
 - Unrecognized value (`align="justify"`, `align="bogus"`) → unaligned
   (`Left`/no wrapping), not an error (invariant 4).
 - Nested content inside an aligned block still parses with normal semantics

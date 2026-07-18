@@ -99,6 +99,42 @@ Out of scope (explicit non-goals for this slice):
    conflict, `style` wins (matching CSS cascade expectations, since `style` is
    the more specific/modern mechanism).
 
+   Warp does not embed a CSS engine, so only a small literal subset of
+   `style` is recognized — exactly-N-literals matching, the same style used
+   for other raw-HTML-attribute subsets in this split, not general CSS
+   parsing:
+
+   - The `style` value is split into declarations on `;`. Each declaration is
+     split into `property:value` on the **first** `:`. Leading/trailing
+     whitespace around the whole declaration, around the property, and around
+     the value is ignored (`style="text-align : center ;"` is equivalent to
+     `style="text-align:center"`). A trailing `;` (or an empty declaration
+     from consecutive `;;`) is ignored, not an error.
+   - The property name is matched **case-insensitively** against `text-align`
+     (`Text-Align`, `TEXT-ALIGN`, etc. all match). Declarations whose property
+     isn't `text-align` (any other CSS property, e.g. `color: red`) are
+     **ignored** — their presence doesn't invalidate the rest of the `style`
+     value or fall back to literal text.
+   - If **multiple** `text-align` declarations appear in the same `style`
+     value (e.g. `style="text-align: left; text-align: center"`), the
+     **last** one wins, matching CSS cascade order within a single
+     declaration block (later declarations override earlier ones for the
+     same property).
+   - The value is matched **case-insensitively** against the three
+     recognized literals: `left`, `center`, `right`. No unit conversion, no
+     shorthand (`text-align: initial`/`inherit`/`justify`/anything else) is
+     recognized.
+   - An unrecognized `text-align` value, or a `style` attribute with no
+     `text-align` declaration at all, is treated as if `style` were absent
+     for alignment purposes — falls through to invariant 4 (unaligned,
+     normal Markdown semantics), consistent with "never an error or panic."
+   - This is a fixed literal-value matcher, not a CSS parser: no
+     `calc()`, custom properties, `!important`, or comments (`/* … */`)
+     inside `style` are supported. Any of these appearing in the
+     `text-align` declaration's value makes that declaration unrecognized
+     (falls through per the point above), rather than being partially
+     interpreted.
+
 4. An unrecognized or missing alignment value renders identically to today:
    left-aligned, attribute ignored — never an error or panic.
 
