@@ -176,11 +176,33 @@ the editor at click time via `find_matching_header`
 the live buffer (`content.text_in_range(...)`, :1371-1373) on every click. The fix is a single
 slug normalizer applied on both sides of the comparison inside that function.
 
-Slug algorithm (GitHub-compatible, since that's the ecosystem convention the product spec
-points to): lowercase, strip characters outside `[a-z0-9 -]`, collapse/trim spaces, replace
-spaces with `-`. Add it as a small pure function (natural home: alongside `find_matching_header`
-in `model.rs`, or a shared helper if a second caller appears). It should be unit-testable in
-isolation on `&str → String`.
+**Slug algorithm — genuinely GitHub-compatible, not ASCII-only.** GitHub's heading slugger
+(`gfm-auto-identifiers`, the same rule set GitHub Pages/`github/cmark-gfm` implement) does
+**not** strip non-ASCII text: it lowercases (Unicode-aware), removes characters that are
+punctuation/symbols per the Unicode categories it excludes, converts spaces to `-`, and
+otherwise **preserves any Unicode alphanumeric/word character**, including accented Latin,
+CJK, Cyrillic, etc. A heading `"Café Société"` slugs to `café-société`, not `caf-socit`;
+`"日本語"` slugs to `日本語`. An ASCII-only `[a-z0-9 -]` filter silently breaks every non-English
+README anchor, which is a real regression against the product goal, not a cosmetic gap.
+
+Concretely, the normalizer should:
+
+1. Lowercase the input (Unicode-aware lowercasing, e.g. Rust's `str::to_lowercase`, not an
+   ASCII-only lowercase — this already matters for e.g. Turkish/German/accented casing).
+2. Strip characters that are ASCII punctuation/symbols outside `-` and whitespace (mirroring
+   GFM's exclusion set: roughly `!"#$%&'()*+,./:;<=>?@[\]^`{|}~`), while leaving all other
+   Unicode letters/digits/marks (CJK, accented Latin, etc.) untouched. This is the one place
+   the two algorithms diverge from a naive "strip non-ASCII" reading — the exclusion set is
+   defined by *punctuation class*, not by *ASCII range*.
+3. Replace runs of whitespace with a single `-`, trim leading/trailing `-`.
+4. Do **not** apply `user-content-` or any other prefix (see the Security section's note on
+   why Warp doesn't need GitHub's DOM-collision prefix).
+
+Add it as a small pure function (natural home: alongside `find_matching_header` in
+`model.rs`, or a shared helper if a second caller appears). It should be unit-testable in
+isolation on `&str → String`, with cases spanning plain ASCII, accented Latin, and CJK
+headings (see the Testing section's updated case list) — the Unicode-preserving behavior is
+exactly the kind of thing that regresses silently if only ASCII cases are tested.
 
 `find_matching_header` already normalizes the incoming fragment as `target = fragment
 .strip_prefix('#')` → `urlencoding::decode` → `trim().to_lowercase()` (:1352-1357). Replace
@@ -203,8 +225,9 @@ a click is cheap, and re-reading the buffer each time means there is nothing to 
 with edits. **No new per-document cached state, no invalidation hook, no lifecycle question.**
 
 Phase 2 (`<a id>`/`<a name>` markers) needs the parsed anchor positions to be reachable at
-click time, and that is where any indexing question actually lives — deferred to that phase's
-design, not phase 1's.
+click time. It resolves this the same way phase 1 does — a live walk at click time, no cached
+index — detailed concretely in item 5 below, including the precedence rule for an explicit
+anchor and a heading slug that collide.
 
 ### 4. Fragment-aware click resolution — already exists (phase 1)
 
@@ -264,6 +287,42 @@ surfaces a reason `FormattedTextLine` fits better.
 non-goal — the phase-2 reader only needs to handle the empty/self-closing form
 (`<a id="x"></a>` or `<a id="x" />`), simplifying the parser considerably (no need to also
 apply link/text styling in this path).
+
+**Lookup strategy at click time: extend the same live walk, no cache.** `find_matching_header`
+already re-walks `content.outline_blocks()` on every click rather than consulting a cached
+index (item 3) — phase 2 extends that same function rather than introducing a second,
+differently-shaped lookup:
+
+- `outline_blocks()` returns block-level markers (`BlockType::Text(BufferBlockStyle::Header {
+  .. })`, `CodeBlock`, `PlainText`, list/table markers, etc.) — it does not itself walk inline
+  fragments within a block, so it cannot see an `anchor_id` marker sitting mid-paragraph.
+  `find_matching_header` therefore needs a second pass alongside the header scan: for each
+  block returned by `outline_blocks()`, additionally read that block's fragments (via the same
+  `content` accessor the header path already uses to pull heading text,
+  `content.text_in_range`/the fragment-level equivalent) and check each fragment's
+  `styles.anchor_id` for a match, before or interleaved with the existing header-text
+  comparison. Concretely: rename/extend `find_matching_header` (or add a sibling
+  `find_matching_anchor` called first) so the combined resolver checks explicit anchors and
+  heading slugs in one pass over the document, still with no persisted state — the walk itself
+  is the "index," recomputed per click exactly as phase 1 established.
+- This keeps phase 2 architecturally consistent with phase 1's core decision (item 3): no
+  `HashMap<String, CharOffset>`, no invalidation hook, no lifecycle question. The only new
+  per-click cost is reading fragment styles in addition to block outlines, which is the same
+  order of cost as the existing header-text read.
+
+**Precedence when an explicit `<a id>` and a heading slug collide on the same fragment.**
+Define one deterministic rule: **explicit anchors win.** Concretely, the combined resolver
+checks explicit `anchor_id` fragments for an exact match against the (undecoded, as-authored)
+id first; only if no explicit anchor matches does it fall back to the slug-normalized heading
+comparison from item 2. Rationale: an `<a id="x">` is an author's literal, intentional target
+string — it should never be shadowed by an incidental heading-slug collision the author didn't
+control (e.g. two different headings elsewhere in the doc normalizing to the same slug, see
+item 2's "first-wins" dedupe among headings). This rule composes cleanly with item 2's
+first-occurrence-wins rule, which continues to apply only *among* headings when no explicit
+anchor is present — i.e. the full ordering is: (1) exact match against an explicit `<a
+id>`/`<a name>` value, first occurrence wins if multiple share an id; (2) else, slug-normalized
+match against a heading, first occurrence wins among headings. Both levels reuse the same
+single-pass walk, so there is no separate index or second traversal for the fallback tier.
 
 ### 6. Feature gating
 
@@ -376,15 +435,25 @@ reviewer familiar with GitHub's scheme doesn't flag its absence as a bug.
 
 ## Testing and validation
 
-**Invert the existing negative-behavior probes first.** The master checkout carries an
-untracked probe file, `crates/markdown_parser/src/html_tag_support_tests.rs` (wired via
-`#[path] mod html_tag_support_tests;` at `markdown_parser.rs:1998-1999`), whose two anchor
-tests — `test_raw_html_anchor_href_not_parsed_as_hyperlink` and
-`test_raw_html_anchor_id_not_registered_as_target` — currently assert the **no-op** status
-quo (raw `<a href>` produces *no* hyperlink style; raw `<a id>` registers *no* target). Once
-item 1 lands, both assertions become false and CI goes red. The implementation must **invert
-them into positive assertions** (`<a href>` *does* produce a `Hyperlink::Url`; `<a id>` *does*
-register an anchor) as part of the same change, not leave them asserting the old behavior.
+**Validation is committed, tracked test cases — not the probe file.** All cases below live in
+tracked test modules (`markdown_parser_tests.rs`, editor-model tests) that CI runs today and
+will run against the implementation PR; nothing in this spec's validation depends on a file
+that isn't checked in.
+
+**Historical context on the probe file.** The master checkout currently carries an *untracked*
+scratch file, `crates/markdown_parser/src/html_tag_support_tests.rs` (wired via `#[path] mod
+html_tag_support_tests;` at `markdown_parser.rs:1998-1999`, itself marked "DO NOT COMMIT" in
+its header comment), whose two anchor probes —
+`test_raw_html_anchor_href_not_parsed_as_hyperlink` and
+`test_raw_html_anchor_id_not_registered_as_target` — assert today's **no-op** status quo (raw
+`<a href>` produces no hyperlink style; raw `<a id>` registers no target). These were exploratory
+probes used to confirm current behavior while scoping this spec, not a test suite the
+implementation is meant to build on. The implementation PR must **not** leave these assertions
+in place or rely on the untracked file continuing to exist — it must add the committed positive
+assertions listed below to `markdown_parser_tests.rs` directly (`<a href>` *does* produce a
+`Hyperlink::Url`; `<a id>` *does* register an anchor), which subsumes and inverts what the probe
+file was checking. If the probe file is still present at implementation time, delete it or fold
+any remaining useful cases into the committed suite — it should not ship as project state.
 
 ### Parser unit tests (`crates/markdown_parser/src/markdown_parser_tests.rs`)
 
@@ -396,9 +465,16 @@ register an anchor) as part of the same change, not leave them asserting the old
   effect on output (invariant 8).
 - Unterminated `<a href="…">` / missing closing `</a>` → literal text fallback, rest of
   paragraph intact (invariant 10).
-- Slug normalizer (item 2): plain text, text with punctuation/mixed case, multi-space runs
-  → normalized slug (invariant 4). Test the pure `&str → String` function directly; first-wins
-  collision behavior is covered by the resolution tests below, not the normalizer.
+- Slug normalizer (item 2), tested as a pure `&str → String` function, table-driven over:
+  - Plain ASCII text, text with punctuation/mixed case, multi-space runs → normalized slug
+    (invariant 4).
+  - **Unicode headings, to lock in genuine GitHub-compatibility (not ASCII-only):**
+    accented Latin (`"Café Société"` → `café-société`), CJK (`"日本語"` → `日本語`, unchanged —
+    no word characters to strip and no ASCII case to fold), and a mixed-script heading
+    (e.g. `"Section 日本語 Café"` → `section-日本語-café`). These guard against silently
+    reintroducing an ASCII-only filter.
+  - First-wins collision behavior is covered by the resolution tests below, not the
+    normalizer itself.
 - (Phase 2) `<a id="x"></a>` / `<a name="x"></a>` → zero-width anchor marker, no visible
   text emitted (invariant 5).
 - (Phase 2) `<a id="x">text</a>` (both id and content on one tag) — confirm documented
@@ -411,6 +487,9 @@ These target the matcher directly, since that is where the phase-1 change lives.
 - Heading `## Target Section` + fragment `#target-section` → `find_matching_header` returns
   the heading's range; today (exact-text match) it returns `None`. This is the regression the
   slug normalizer fixes (invariants 2, 3, 4).
+- Heading with a non-English title (e.g. `## Café Société`) + fragment `#café-société` →
+  resolves, exercising the Unicode-preserving normalizer end-to-end through the matcher, not
+  just the pure function in isolation.
 - `<a href="#slug">` and markdown `[text](#slug)` targeting the same heading resolve to the
   same range (invariant 3 — the two syntaxes are equivalent because both reach
   `find_matching_header` via the same `#`-branch in `maybe_open_url`).
@@ -418,8 +497,14 @@ These target the matcher directly, since that is where the phase-1 change lives.
   `scroll_to_matching_header` returns `false`, no panic (invariant 7).
 - First-wins collision: two headings normalizing to the same slug → the fragment resolves to
   the first, exercised by asserting the returned range is the earlier heading's.
-- (Phase 2) Explicit `<a id="x">` colocated with a heading whose implicit slug is also `x`
-  → explicit anchor wins per invariant 6, or documented fallback if not achievable.
+- (Phase 2) Explicit `<a id="x">` sharing a fragment/document with a heading whose implicit
+  slug is also `x` → the combined resolver's explicit-anchor-first pass (item 5) returns the
+  anchor's position, not the heading's, per the defined precedence rule (invariant 6).
+- (Phase 2) Explicit anchor lookup when no heading collides: `<a id="x"></a>` alone resolves
+  via the fragment-styles pass added to the combined resolver (item 5), independent of the
+  header-outline pass.
+- (Phase 2) Two `<a id="x">` markers with the same id → first occurrence wins, mirroring the
+  heading first-wins rule.
 - (Phase 3) Fragment-split in `resolve`: `other-file.md#section` yields cleaned path
   `other-file.md` + anchor `section`; `other-file.md` (no fragment) yields no anchor;
   `other-file.md#L10` still routes to the existing line-number path, not the anchor path
