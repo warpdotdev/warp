@@ -3034,3 +3034,16 @@ fn test_parse_table_with_strikethrough() {
         panic!("Expected table");
     }
 }
+
+#[test]
+fn test_parse_backslash_escaped_sub_tag_stays_literal() {
+    // Backslash-escaping `<` (CommonMark escape machinery, shared with `\*`, `\_`, etc.)
+    // takes priority over the sub/sup tag parsers, so `\<sub>`/`\</sub>` never open or
+    // close a subscript region — regression guard for #13734.
+    assert_eq!(
+        parse_all("Escaped: \\<sub>x\\</sub> stays literal", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "Escaped: <sub>x</sub> stays literal"
+        )]
+    );
+}
