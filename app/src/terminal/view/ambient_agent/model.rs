@@ -5,6 +5,7 @@ use session_sharing_protocol::common::SessionId;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warp_terminal::model::BlockId;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
@@ -49,6 +50,25 @@ use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandStat
 use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
+
+/// Wire prompt substituted for an empty-prompt handoff against an active source
+/// conversation that also carries uploaded snapshot content.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+const HANDOFF_CONTINUE_WITH_SNAPSHOT_PROMPT: &str =
+    "Continue. Apply the workspace changes from my previous session.";
+/// Wire prompt substituted for an empty-prompt handoff against an active source
+/// conversation with no snapshot content.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
+/// Wire prompt substituted for an empty-prompt handoff against an idle source
+/// conversation that carries uploaded snapshot content.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
+
+/// Cloud `config.model_id` fallback slug used when the pane's active Oz model
+/// is not cloud-runnable (e.g. a custom-endpoint/BYOK model or local custom
+/// router). `auto` defers to Warp's automatic server-side model selection.
+const CLOUD_FALLBACK_OZ_MODEL_ID: &str = "auto";
 
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
@@ -163,6 +183,11 @@ pub(crate) struct PendingHandoff {
     /// True when the source conversation was orchestrated at handoff time.
     /// Forwarded to the server as `SpawnAgentRequest.orchestration_handoff`.
     pub(crate) orchestration_handoff: Option<bool>,
+    /// Inject `"Continue"` into the wire prompt for empty-prompt submits,
+    /// so the cloud agent picks up where the cancelled local source left
+    /// off. Captured at handoff init since the source is cancelled before
+    /// submit.
+    pub(crate) should_inject_continue: bool,
 }
 
 /// Status of the ambient agent run.
@@ -265,15 +290,18 @@ pub struct AmbientAgentViewModel {
 
 impl AmbientAgentViewModel {
     pub fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
 
-        ctx.subscribe_to_model(&HarnessAvailabilityModel::handle(ctx), |me, _event, ctx| {
-            me.validate_selected_harness(ctx);
-        });
+        ctx.subscribe_to_model(
+            &HarnessAvailabilityModel::handle(ctx),
+            |me, _, _event, ctx| {
+                me.validate_selected_harness(ctx);
+            },
+        );
 
-        ctx.subscribe_to_model(&GitHubAuthNotifier::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&GitHubAuthNotifier::handle(ctx), |me, _, event, ctx| {
             if matches!(event, GitHubAuthEvent::AuthCompleted) {
                 me.handle_github_auth_completed(ctx);
             }
@@ -333,6 +361,17 @@ impl AmbientAgentViewModel {
         self.request.as_ref()
     }
 
+    /// The terminal view this model belongs to. Used by the handoff open path
+    /// to seed the source conversation's selected model onto this pane.
+    ///
+    /// Only the local→cloud handoff callers use this, and they are gated to
+    /// non-wasm targets; gate the getter the same way so it isn't flagged as
+    /// dead code on the wasm build.
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    pub(crate) fn terminal_view_id(&self) -> EntityId {
+        self.terminal_view_id
+    }
+
     pub fn setup_command_state(&self) -> &SetupCommandState {
         &self.setup_commands_state
     }
@@ -378,6 +417,16 @@ impl AmbientAgentViewModel {
     ) {
         let group_id = self.setup_commands_state.current_group_id();
         self.set_setup_command_group_visibility(group_id, is_visible, ctx);
+    }
+
+    /// Tear down the active "Running setup commands…" chip in response to the
+    /// `CloudModeSetupPhaseEnded` shared-session marker. Idempotent: the inner
+    /// `finish_setup_command_group` no-ops when the group is not running, and
+    /// `set_setup_command_group_visibility(false)` no-ops when already collapsed.
+    pub(crate) fn tear_down_active_setup_command_group(&mut self, ctx: &mut ModelContext<Self>) {
+        let group_id = self.setup_commands_state.current_group_id();
+        self.finish_setup_command_group(group_id, ctx);
+        self.set_setup_command_group_visibility(group_id, false, ctx);
     }
 
     /// Handles CloudModel events to keep environment_id in sync.
@@ -519,7 +568,7 @@ impl AmbientAgentViewModel {
 
     /// True when the run is configured to use a non-Oz execution harness and the
     /// required feature flags are enabled.
-    pub(super) fn is_third_party_harness(&self) -> bool {
+    pub fn is_third_party_harness(&self) -> bool {
         FeatureFlag::AgentHarness.is_enabled() && self.selected_harness() != Harness::Oz
     }
 
@@ -582,8 +631,9 @@ impl AmbientAgentViewModel {
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
     }
 
-    /// Updates the touched workspace once async derivation completes.
-    /// No-op when no handoff context is set.
+    /// Updates the touched workspace once async derivation completes and emits
+    /// `HandoffSnapshotPrepared` so analytics can join it against the earlier
+    /// `HandoffInitiated.injection_path`. No-op when no handoff context is set.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     pub(crate) fn set_pending_handoff_workspace(
         &mut self,
@@ -593,7 +643,15 @@ impl AmbientAgentViewModel {
         let Some(handoff) = self.pending_handoff.as_mut() else {
             return;
         };
+        let derived_workspace_had_content =
+            !workspace.repos.is_empty() || !workspace.orphan_files.is_empty();
         handoff.touched_workspace = Some(workspace);
+        send_telemetry_from_ctx!(
+            CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
+                derived_workspace_had_content,
+            },
+            ctx
+        );
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
     }
 
@@ -627,19 +685,45 @@ impl AmbientAgentViewModel {
         ctx.emit(AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { error_message });
     }
 
+    /// Build the `SpawnAgentRequest` for a handoff submit. Callers MUST
+    /// normalize an empty prompt to `None` before calling; the empty-prompt
+    /// arms below treat `None` as the empty-prompt signal. All substitutions
+    /// are local-to-cloud-only; the server never sees an in-progress signal
+    /// it has to interpret.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn build_handoff_spawn_request(
         &self,
-        prompt: String,
+        prompt: Option<String>,
         attachments: Vec<AttachmentInput>,
         forked_conversation_id: Option<String>,
         initial_snapshot_token: Option<InitialSnapshotToken>,
+        should_inject_continue: bool,
         ctx: &AppContext,
     ) -> SpawnAgentRequest {
         let config = Some(self.build_default_spawn_config(ctx));
-        let (prompt, mode) = extract_user_query_mode(prompt);
+        let has_snapshot_content = initial_snapshot_token
+            .as_ref()
+            .is_some_and(|token| !token.as_str().is_empty());
+
+        let prompt = prompt.filter(|p| !p.trim().is_empty());
+        let raw_wire_prompt = match (prompt, should_inject_continue, has_snapshot_content) {
+            (Some(p), _, _) => Some(p),
+            (None, true, true) => Some(HANDOFF_CONTINUE_WITH_SNAPSHOT_PROMPT.to_owned()),
+            (None, true, false) => Some(HANDOFF_CONTINUE_PROMPT.to_owned()),
+            (None, false, true) => Some(HANDOFF_APPLY_SNAPSHOT_PROMPT.to_owned()),
+            (None, false, false) => None,
+        };
+
+        let (wire_prompt, mode) = match raw_wire_prompt {
+            Some(p) => {
+                let (p, mode) = extract_user_query_mode(p);
+                (Some(p), mode)
+            }
+            None => (None, Default::default()),
+        };
+
         SpawnAgentRequest {
-            prompt: Some(prompt),
+            prompt: wire_prompt,
             mode,
             config,
             title: self.pending_handoff.as_ref().and_then(|h| h.title.clone()),
@@ -663,7 +747,7 @@ impl AmbientAgentViewModel {
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     pub(crate) fn queue_handoff_auto_submit(&mut self, ctx: &mut ModelContext<Self>) -> bool {
-        let Some((launch, forked_conversation_id)) = ({
+        let Some((launch, forked_conversation_id, should_inject_continue)) = ({
             let handoff = self.pending_handoff.as_mut();
             handoff.and_then(|handoff| {
                 if !matches!(handoff.submission_state, HandoffSubmissionState::Idle) {
@@ -671,17 +755,26 @@ impl AmbientAgentViewModel {
                 }
                 let launch = handoff.auto_submit.as_ref()?.clone();
                 handoff.submission_state = HandoffSubmissionState::Queued;
-                Some((launch, handoff.forked_conversation_id.clone()))
+                Some((
+                    launch,
+                    handoff.forked_conversation_id.clone(),
+                    handoff.should_inject_continue,
+                ))
             })
         }) else {
             return false;
         };
 
+        // The queue path never has the snapshot token yet — `submit_handoff`
+        // is the only entry point that does. Empty prompts on this path resolve
+        // to either `"Continue"` (active source) or `None` (idle source).
+        let prompt = (!launch.prompt.is_empty()).then_some(launch.prompt);
         self.request = Some(self.build_handoff_spawn_request(
-            launch.prompt,
+            prompt,
             launch.attachments.request_attachments,
             forked_conversation_id,
             None,
+            should_inject_continue,
             ctx,
         ));
         self.status = Status::WaitingForSession {
@@ -709,6 +802,9 @@ impl AmbientAgentViewModel {
         {
             return None;
         }
+        // An empty `PendingCloudLaunch.prompt` is still a valid auto-submit;
+        // `submit_handoff` and `build_handoff_spawn_request` decide what gets
+        // sent on the wire.
         let launch = handoff.auto_submit.take()?;
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
         Some(launch)
@@ -899,18 +995,28 @@ impl AmbientAgentViewModel {
         // queued-prompt / harness-command-started flow).
         ctx.spawn(
             async move { ai_client.get_ambient_agent_task(&task_id).await },
-            |me, result, ctx| match result {
+            move |me, result, ctx| match result {
                 Ok(task) => {
                     me.source = task.source.clone();
                     me.apply_viewed_task_config_snapshot(task.agent_config_snapshot.as_ref(), ctx);
                     ctx.emit(AmbientAgentViewModelEvent::ViewerHarnessResolved);
                 }
-                Err(err) => {
-                    log::warn!("Failed to fetch ambient agent task for shared session: {err}");
+                Err(_) => {
                     me.set_environment_id(None, ctx);
                 }
             },
         );
+    }
+
+    /// Records the live execution session for a viewer that just joined an already-running
+    /// ambient session. Unlike [`Self::attach_execution_session`], this does not emit
+    /// `ExecutionSessionReady` (the viewer is already connected to this session), so it does
+    /// not trigger a session swap. Setting `active_execution_session_id` keeps
+    /// `is_ready_for_cloud_followup_prompt` false while the session is live; the end path
+    /// clears it via [`Self::record_ambient_execution_ended`] so follow-ups become available.
+    pub fn set_live_execution_session(&mut self, session_id: SessionId) {
+        self.active_execution_session_id = Some(session_id);
+        self.last_ended_execution_session_id = None;
     }
 
     /// Applies the run configuration for an existing shared ambient session.
@@ -1092,10 +1198,19 @@ impl AmbientAgentViewModel {
         };
 
         let oz_model = (selected_harness == Harness::Oz).then(|| {
-            LLMPreferences::as_ref(ctx)
+            let prefs = LLMPreferences::as_ref(ctx);
+            let active_id = &prefs
                 .get_active_base_model(ctx, Some(self.terminal_view_id))
-                .id
-                .to_string()
+                .id;
+            // The cloud `start_agent` endpoint only accepts Oz model slugs; a
+            // custom-endpoint (BYOK) model or local custom router id would be
+            // rejected, so fall back to `auto`. See
+            // `LLMPreferences::is_cloud_runnable_oz_model_id`.
+            if prefs.is_cloud_runnable_oz_model_id(active_id) {
+                active_id.to_string()
+            } else {
+                CLOUD_FALLBACK_OZ_MODEL_ID.to_owned()
+            }
         });
         let third_party_harness = (selected_harness != Harness::Oz).then(|| HarnessConfig {
             harness_type: selected_harness,
@@ -1265,10 +1380,9 @@ impl AmbientAgentViewModel {
                     ctx.spawn(
                         async move {
                             if let Err(e) = ai_client.cancel_ambient_agent_task(&task_id).await {
-                                log::error!(
-                                    "Failed to cancel ambient agent task {}: {:?}",
-                                    task_id,
-                                    e
+                                report_error!(
+                                    e.context("Failed to cancel ambient agent task"),
+                                    extra: { "task_id" => %task_id }
                                 );
                             }
                         },
@@ -1629,14 +1743,19 @@ impl AmbientAgentViewModel {
         let initial_snapshot_token = handoff.snapshot_upload.initial_snapshot_token();
         let forked_conversation_id = handoff.forked_conversation_id.clone();
         let already_dispatched = matches!(handoff.submission_state, HandoffSubmissionState::Queued);
+        let should_inject_continue = handoff.should_inject_continue;
         handoff.submission_state = HandoffSubmissionState::Starting;
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
 
+        // Normalize the empty-prompt case to `None` for the builder; the
+        // builder's substitution arms treat `None` as the empty-prompt signal.
+        let prompt = (!prompt.is_empty()).then_some(prompt);
         let request = self.build_handoff_spawn_request(
             prompt,
             attachments,
             forked_conversation_id,
             initial_snapshot_token,
+            should_inject_continue,
             ctx,
         );
         if already_dispatched {
@@ -1671,7 +1790,7 @@ impl AmbientAgentViewModel {
                 async move { ai_client.cancel_ambient_agent_task(&task_id).await },
                 |_me, result, _ctx| {
                     if let Err(err) = result {
-                        log::error!("Failed to cancel ambient agent task: {err}");
+                        report_error!(err.context("Failed to cancel ambient agent task"));
                     }
                 },
             );

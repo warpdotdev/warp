@@ -9,6 +9,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use rust_embed::RustEmbed;
 use warp_completer::ParsedTokensSnapshot;
+use warp_errors::report_error;
 
 use crate::parser::parse_query_into_tokens;
 use crate::util::{
@@ -24,12 +25,14 @@ use crate::{
 #[include = "bert_tiny_tokenizer.json"]
 #[cfg_attr(feature = "nld_classifier_v1", include = "bert_tiny_v1.onnx")]
 #[cfg_attr(feature = "nld_classifier_v2", include = "bert_tiny_v2.onnx")]
+#[cfg_attr(feature = "nld_classifier_v3", include = "bert_tiny_v3.onnx")]
 struct Models;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Model {
     BertTinyV1,
     BertTinyV2,
+    BertTinyV3,
 }
 
 impl Model {
@@ -45,12 +48,13 @@ impl Model {
         match self {
             Model::BertTinyV1 => "bert_tiny_v1.onnx",
             Model::BertTinyV2 => "bert_tiny_v2.onnx",
+            Model::BertTinyV3 => "bert_tiny_v3.onnx",
         }
     }
 
     fn tokenizer_path(&self) -> &'static str {
         match self {
-            Model::BertTinyV1 | Model::BertTinyV2 => "bert_tiny_tokenizer.json",
+            Model::BertTinyV1 | Model::BertTinyV2 | Model::BertTinyV3 => "bert_tiny_tokenizer.json",
         }
     }
 }
@@ -178,14 +182,14 @@ impl InputClassifier for OnnxClassifier {
                     Ok(result)
                 }
                 Err(e) => {
-                    log::error!("Failed to run inference (took {duration_ms:.2} ms): {e:#}");
+                    report_error!(&e, extra: { "duration_ms" => duration_ms });
                     Err(e)
                 }
             }
         }) {
             Ok(result) => result,
             Err(_) => {
-                log::error!(
+                report_error!(
                     "Caught panic while running inference; falling back to heuristic classifier."
                 );
                 self.has_panicked.on_panic();

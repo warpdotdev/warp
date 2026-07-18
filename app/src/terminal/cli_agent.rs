@@ -87,6 +87,14 @@ const PI_COLOR: ColorU = ColorU {
     a: 255,
 };
 
+/// Antigravity brand color (white, monochrome logo)
+const ANTIGRAVITY_COLOR: ColorU = ColorU {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 255,
+};
+
 /// Auggie brand color (white, monochrome logo)
 const AUGGIE_COLOR: ColorU = ColorU {
     r: 255,
@@ -143,6 +151,7 @@ pub enum CLIAgent {
     Goose,
     Hermes,
     Vibe,
+    Antigravity,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
     Unknown,
 }
@@ -164,6 +173,7 @@ impl CLIAgent {
             CLIAgent::Goose => "goose",
             CLIAgent::Hermes => "hermes",
             CLIAgent::Vibe => "vibe",
+            CLIAgent::Antigravity => "agy",
             CLIAgent::Unknown => "",
         }
     }
@@ -211,6 +221,7 @@ impl CLIAgent {
             CLIAgent::Goose => "Goose",
             CLIAgent::Hermes => "Hermes",
             CLIAgent::Vibe => "Mistral Vibe",
+            CLIAgent::Antigravity => "Antigravity",
             CLIAgent::Unknown => "CLI Agent",
         }
     }
@@ -234,6 +245,7 @@ impl CLIAgent {
             // still drives the toolbar tile; an `Icon::MistralLogo` can be wired
             // up in a follow-up once an officially licensed SVG is available.
             CLIAgent::Vibe => None,
+            CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
             CLIAgent::Unknown => None,
         }
     }
@@ -264,6 +276,7 @@ impl CLIAgent {
             CLIAgent::Goose => &[SkillProvider::Agents],
             CLIAgent::Hermes => &[SkillProvider::Agents],
             CLIAgent::Vibe => &[SkillProvider::Agents],
+            CLIAgent::Antigravity => &[],
             CLIAgent::Unknown => &[],
         }
     }
@@ -306,6 +319,7 @@ impl CLIAgent {
             CLIAgent::Goose => Some(GOOSE_COLOR),
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
+            CLIAgent::Antigravity => Some(ANTIGRAVITY_COLOR),
             CLIAgent::Unknown => None,
         }
     }
@@ -314,7 +328,9 @@ impl CLIAgent {
     /// Agents with light brand colors use a dark icon for contrast.
     pub fn brand_icon_color(&self) -> ColorU {
         match self {
-            CLIAgent::Pi | CLIAgent::Auggie | CLIAgent::Droid => ColorU::new(0, 0, 0, 255),
+            CLIAgent::Pi | CLIAgent::Auggie | CLIAgent::Droid | CLIAgent::Antigravity => {
+                ColorU::new(0, 0, 0, 255)
+            }
             _ => ColorU::white(),
         }
     }
@@ -394,6 +410,27 @@ impl CLIAgent {
             .iter()
             .flat_map(|workspace| workspace.teams.iter())
             .any(|team| team.uid.uid() == UBER_TEAM_UID)
+    }
+
+    /// Returns whether `command` launches Warp's own headless TUI (`warp_tui`) —
+    /// e.g. `warp`, the legacy `warp-tui` alias, `warp-tui-oss`, an
+    /// absolute/relative path to one of those, or the `./script/run-tui` dev
+    /// launcher.
+    ///
+    /// This mirrors [`Self::detect`] (which decides when to show the CLI agent
+    /// footer), but callers use it to *hide* the "Use agent" footer for the Warp
+    /// TUI, which is itself an agent surface. It is the single source of truth
+    /// for Warp-TUI command detection — update the matching here if the launch
+    /// surface changes.
+    pub fn command_is_warp_tui(command: &str, escape_char: Option<EscapeChar>) -> bool {
+        let Some(first_word) = Self::extract_first_command(command.trim_start(), escape_char)
+        else {
+            return false;
+        };
+        // Match on the executable's file name so absolute/relative paths work
+        // (e.g. `/path/to/warp-tui`, `./target/debug/warp-tui`).
+        let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(&first_word);
+        matches!(basename, "warp" | "warp-tui" | "warp-tui-oss" | "run-tui")
     }
 }
 
@@ -569,6 +606,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Goose => CLIAgentType::Goose,
             CLIAgent::Hermes => CLIAgentType::Hermes,
             CLIAgent::Vibe => CLIAgentType::Vibe,
+            CLIAgent::Antigravity => CLIAgentType::Antigravity,
             CLIAgent::Unknown => CLIAgentType::Unknown,
         }
     }

@@ -20,6 +20,7 @@ pub use step::{
     PersistedDataMap, StepData, StepDataMap, TestStep,
 };
 pub use video_recorder::{save_captured_frame_as_png, VideoRecorder};
+use warp_errors::report_error;
 
 #[macro_export]
 macro_rules! async_assert {
@@ -215,7 +216,7 @@ impl TestSetupUtils {
 
     pub fn cleanup_dir(&mut self) {
         if let Err(err) = fs::remove_dir_all(self.root_dir.as_path()) {
-            log::error!("Could not cleanup directory {err:?}");
+            report_error!("Could not cleanup directory", extra: { "error" => ?err });
         }
     }
 }

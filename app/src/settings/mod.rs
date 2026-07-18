@@ -20,6 +20,7 @@ mod input;
 mod input_mode;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
+mod local_control;
 pub mod macros;
 pub mod manager;
 pub mod native_preference;
@@ -31,6 +32,7 @@ mod scroll;
 mod select;
 mod ssh;
 mod theme;
+mod tui_autoupdate;
 mod vim_banner;
 
 #[cfg(test)]
@@ -54,6 +56,7 @@ pub use input::*;
 pub use input_mode::*;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use linux::*;
+pub use local_control::*;
 pub use native_preference::*;
 pub use onboarding::*;
 pub use pane::*;
@@ -63,6 +66,7 @@ pub use scroll::*;
 pub use select::*;
 pub use ssh::*;
 pub use theme::*;
+pub use tui_autoupdate::*;
 pub use vim_banner::*;
 use warp_core::user_preferences::GetUserPreferences as _;
 
@@ -590,7 +594,16 @@ pub fn user_preferences_file_path() -> PathBuf {
     warp_core::paths::config_local_dir().join("user_preferences.json")
 }
 
-/// Returns the path to the TOML settings file.
+/// Returns the path to the TOML settings file for the active settings surface.
+///
+/// Both surfaces use the same `settings.toml` file name but live in different
+/// config directories (the GUI under [`warp_core::paths::config_local_dir`], the
+/// TUI under [`warp_core::paths::tui_config_local_dir`]) so an installed GUI and
+/// TUI never share (and clobber) one file.
 pub fn user_preferences_toml_file_path() -> PathBuf {
-    warp_core::paths::config_local_dir().join("settings.toml")
+    let config_dir = match settings::settings_mode() {
+        settings::SettingsMode::Gui => warp_core::paths::config_local_dir(),
+        settings::SettingsMode::Tui => warp_core::paths::tui_config_local_dir(),
+    };
+    config_dir.join("settings.toml")
 }

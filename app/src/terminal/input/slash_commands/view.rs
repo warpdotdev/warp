@@ -1,30 +1,20 @@
-use std::collections::HashSet;
-
 use ai::skills::SkillReference;
-use lazy_static::lazy_static;
 use warpui::elements::ChildView;
 use warpui::{AppContext, Element, Entity, ModelHandle, View, ViewContext, ViewHandle};
 
 use crate::ai::blocklist::agent_view::AgentViewController;
-use crate::search::data_source::{Query, QueryFilter};
-use crate::search::mixer::{AddAsyncSourceOptions, SearchMixer};
 use crate::search::slash_command_menu::SlashCommandId;
 use crate::server::ids::SyncId;
 use crate::terminal::input::buffer_model::InputBufferModel;
 use crate::terminal::input::inline_menu::{InlineMenuEvent, InlineMenuPositioner, InlineMenuView};
 use crate::terminal::input::slash_command_model::{SlashCommandEntryState, SlashCommandModel};
 use crate::terminal::input::slash_commands::{
-    AcceptSlashCommandOrSavedPrompt, SlashCommandDataSource, UpdatedActiveCommands,
-    ZeroStateDataSource,
+    build_slash_command_mixer, slash_command_query, AcceptSlashCommandOrSavedPrompt,
+    GuiSlashCommandDataSource, GuiZeroStateDataSource, SlashCommandMixer, UpdatedActiveCommands,
 };
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };
-
-lazy_static! {
-    static ref SLASH_COMMAND_FILTERS: HashSet<QueryFilter> =
-        HashSet::from([QueryFilter::StaticSlashCommands]);
-}
 
 #[derive(Debug, Clone, Copy)]
 pub enum CloseReason {
@@ -72,7 +62,7 @@ pub enum SlashCommandsEvent {
 pub struct InlineSlashCommandView {
     menu_view: ViewHandle<InlineMenuView<AcceptSlashCommandOrSavedPrompt>>,
     suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
-    mixer: ModelHandle<SearchMixer<AcceptSlashCommandOrSavedPrompt>>,
+    mixer: ModelHandle<SlashCommandMixer>,
     input_buffer_model: ModelHandle<InputBufferModel>,
 }
 
@@ -81,7 +71,7 @@ impl InlineSlashCommandView {
     pub fn new(
         slash_command_model: &ModelHandle<SlashCommandModel>,
         positioner: &ModelHandle<InlineMenuPositioner>,
-        slash_commands_source: ModelHandle<SlashCommandDataSource>,
+        slash_commands_source: ModelHandle<GuiSlashCommandDataSource>,
         suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
         agent_view_controller: ModelHandle<AgentViewController>,
         input_buffer_model: ModelHandle<InputBufferModel>,
@@ -98,35 +88,9 @@ impl InlineSlashCommandView {
                 });
             },
         );
-        let zero_state_source =
-            ctx.add_model(|_| ZeroStateDataSource::new(&slash_commands_source, false));
-        let saved_prompts_source = super::saved_prompts_data_source();
-
+        let zero_state_source = GuiZeroStateDataSource::new(&slash_commands_source);
         let mixer = ctx.add_model(|ctx| {
-            let mut mixer = SearchMixer::<AcceptSlashCommandOrSavedPrompt>::new();
-            // All sources share the StaticSlashCommands filter because the mixer only runs
-            // async sources when the query's filters intersect with the source's filters.
-            mixer.add_sync_source(
-                slash_commands_source.clone(),
-                [QueryFilter::StaticSlashCommands],
-            );
-            mixer.add_async_source(
-                saved_prompts_source,
-                [QueryFilter::StaticSlashCommands],
-                AddAsyncSourceOptions {
-                    // Any debounce makes the loading state flicker longer.
-                    debounce_interval: None,
-                    run_in_zero_state: false,
-                    run_when_unfiltered: false,
-                },
-                ctx,
-            );
-            mixer.add_sync_source(
-                zero_state_source.clone(),
-                [QueryFilter::StaticSlashCommands],
-            );
-            mixer.run_query(slash_command_query(""), ctx);
-            mixer
+            build_slash_command_mixer(slash_commands_source.clone(), zero_state_source, ctx)
         });
 
         let menu_view = ctx.add_typed_action_view(|ctx| {
@@ -269,13 +233,6 @@ impl View for InlineSlashCommandView {
 
     fn render(&self, _app: &warpui::AppContext) -> Box<dyn Element> {
         ChildView::new(&self.menu_view).finish()
-    }
-}
-
-pub(super) fn slash_command_query(text: &str) -> Query {
-    Query {
-        text: text.to_owned(),
-        filters: SLASH_COMMAND_FILTERS.clone(),
     }
 }
 

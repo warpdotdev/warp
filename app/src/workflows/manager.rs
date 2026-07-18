@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
+use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::workflow::Workflow;
 use super::CloudWorkflowModel;
@@ -179,6 +179,7 @@ impl WorkflowManager {
 
     fn handle_update_manager_event(
         &mut self,
+        _: ModelHandle<UpdateManager>,
         event: &UpdateManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {

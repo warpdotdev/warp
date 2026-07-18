@@ -19,7 +19,7 @@ use crate::content::buffer::{
 use crate::content::selection_model::BufferSelectionModel;
 use crate::content::text::{BufferBlockStyle, IndentBehavior, IndentUnit};
 use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph};
-use crate::render::model::{BlockItem, COMMAND_SPACING, ImageBlockConfig, RenderState};
+use crate::render::model::{BlockItem, COMMAND_SPACING, ColumnUnit, ImageBlockConfig, RenderState};
 use crate::selection::SelectionMode;
 
 impl SelectionModel {
@@ -240,14 +240,14 @@ fn test_horizontal_movement_resets_goal_column() {
 
         // Moving via the high-level navigation APIs should reset the goal column.
         selection.update(&mut app, |selection, ctx| {
-            selection.goal_xs = Some(vec1::vec1![12.34.into_pixels()]);
+            selection.goal_xs = Some(vec1::vec1![ColumnUnit::Pixels(12.34.into_pixels())]);
             selection.move_selection(TextDirection::Forwards, TextUnit::LineBoundary, ctx);
             assert_eq!(selection.goal_xs, None);
         });
 
         // Moving via a buffer-level action should as well (as long as it's via the selection model).
         selection.update(&mut app, |selection, ctx| {
-            selection.goal_xs = Some(vec1::vec1![12.34.into_pixels()]);
+            selection.goal_xs = Some(vec1::vec1![ColumnUnit::Pixels(12.34.into_pixels())]);
             selection.update_selection(
                 BufferSelectAction::MoveLeft,
                 AutoScrollBehavior::Selection,
@@ -258,7 +258,7 @@ fn test_horizontal_movement_resets_goal_column() {
 
         // Editing resets the goal too.
         selection.update(&mut app, |selection, ctx| {
-            selection.goal_xs = Some(vec1::vec1![12.34.into_pixels()]);
+            selection.goal_xs = Some(vec1::vec1![ColumnUnit::Pixels(12.34.into_pixels())]);
             selection.content.update(ctx, |buffer, ctx| {
                 buffer.update_content(
                     BufferEditAction::Insert {

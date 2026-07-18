@@ -61,9 +61,8 @@ struct SseConnectionState {
     generation: u64,
     /// Abort handle for the spawned SSE driver task, used to cancel on teardown.
     abort_handle: futures::future::AbortHandle,
-    /// Snapshot of `watched_run_ids` at the time this connection was opened;
-    /// compared in `reevaluate_eligibility` to skip same-set reconnects.
-    connected_run_ids: HashSet<String>,
+    /// Wire filter this connection was opened with.
+    connected_filter: AgentEventFilter,
 }
 
 struct SseForwardingConsumer {
@@ -317,6 +316,14 @@ pub enum OrchestrationEventStreamerEvent {
     },
 }
 
+/// Outcome of selecting the SSE wire filter for an owner-side conversation.
+enum DesiredSseFilter {
+    /// Open (or keep) a stream with this filter.
+    Filter(AgentEventFilter),
+    /// Nothing to watch yet; do not open a stream.
+    NoFilter,
+}
+
 impl OrchestrationEventStreamer {
     fn message_hydrator_for_run_id(&self, run_id: &str) -> MessageHydrator {
         match run_id.parse::<AmbientAgentTaskId>() {
@@ -409,7 +416,7 @@ impl OrchestrationEventStreamer {
         let ai_client = provider.get_ai_client();
         let server_api = provider.get();
         let history_model = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&history_model, |me, _, event, ctx| {
             me.handle_history_event(event, ctx);
         });
         Self {
@@ -434,7 +441,7 @@ impl OrchestrationEventStreamer {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&history_model, |me, _, event, ctx| {
             me.handle_history_event(event, ctx);
         });
         Self {
@@ -537,6 +544,101 @@ impl OrchestrationEventStreamer {
         if inserted || self_inserted {
             self.reevaluate_eligibility(conversation_id, ctx);
         }
+    }
+
+    /// Confirms parent status against the server when an orchestrator blocks
+    /// on `wait_for_events`, registering it for the owner-side ancestor
+    /// stream. This is the trigger that lets a parent learn about children
+    /// created out-of-band (Oz CLI / web API), which never flowed through
+    /// [`Self::register_watched_run_id`]. Once the parent role is established
+    /// it is permanent for the conversation's life, so subsequent waits
+    /// short-circuit on the already-parent check below.
+    pub fn register_parent_on_wait(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !FeatureFlag::WaitForEventsParentRegistration.is_enabled() {
+            return;
+        }
+        // One-level-tree invariant: a child can never also be a parent, so
+        // skip the server fetch. The child still receives its own inbox via
+        // the existing `is_eligible` -> `RunIds(self)` stream, so there is no
+        // regression.
+        let is_child = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|c| c.is_child_agent_conversation());
+        if is_child {
+            return;
+        }
+        // Passive views of a run hosted elsewhere (shared-session viewers,
+        // remote-child placeholders) must not register: the owning process
+        // owns the inbox. Mirrors the `is_eligible` exclusion and avoids a
+        // wasted `get_ambient_agent_task` fetch.
+        if self.is_remote_run_view(conversation_id, ctx) {
+            return;
+        }
+        // Already a known parent: the live ancestor stream already discovers
+        // new children via the server `parent_run_id` JOIN, so no re-fetch is
+        // needed. The fetch below exists only to make the initial
+        // not-parent -> parent transition.
+        if self.is_parent_agent_conversation(conversation_id, ctx) {
+            return;
+        }
+        // No run_id yet (rare): nothing to query the server with; the next
+        // wait re-checks.
+        let Some(self_run_id) = self.self_run_id(conversation_id, ctx) else {
+            return;
+        };
+        let Ok(task_id) = self_run_id.parse::<AmbientAgentTaskId>() else {
+            return;
+        };
+        let ai_client = self.ai_client.clone();
+        ctx.spawn(
+            async move { ai_client.get_ambient_agent_task(&task_id).await },
+            move |me, result, ctx| {
+                me.finish_register_parent_on_wait(conversation_id, result, ctx);
+            },
+        );
+    }
+
+    /// Completes the wait-time parent registration fetch. A non-empty
+    /// `children` list confirms the conversation is an orchestrator: install
+    /// the children and reevaluate eligibility, opening the
+    /// `AncestorRunId { include_self: true }` stream that thereafter tracks
+    /// all children dynamically. Empty children means it is not a parent; an
+    /// error is a graceful no-op (the next wait re-checks).
+    fn finish_register_parent_on_wait(
+        &mut self,
+        conversation_id: AIConversationId,
+        result: anyhow::Result<crate::ai::ambient_agents::task::AmbientAgentTask>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let task = match result {
+            Ok(task) => task,
+            Err(err) => {
+                log::warn!(
+                    "wait_for_events parent registration fetch failed for \
+                     {conversation_id:?}: {err:#}; will re-check on next wait"
+                );
+                return;
+            }
+        };
+        if task.children.is_empty() {
+            return;
+        }
+        let base_cursor = self
+            .streams
+            .get(&conversation_id)
+            .map(|stream| stream.event_cursor)
+            .unwrap_or(0);
+        self.apply_task_children(conversation_id, &task, base_cursor);
+        // Also watch `self_run_id` — a no-op on the ancestor-stream path
+        // (which covers self via `include_self`), but needed defensively
+        // for the no-self_run_id fallback where `RunIds` would otherwise
+        // watch only the children.
+        self.ensure_self_run_id_watched(conversation_id, ctx);
+        self.reevaluate_eligibility(conversation_id, ctx);
     }
 
     // ---- Viewer-mode consumer registry --------------------------------
@@ -803,7 +905,13 @@ impl OrchestrationEventStreamer {
              (gen={generation}, since={cursor})"
         );
 
-        let filter = AgentEventFilter::AncestorRunId(parent_task_id.to_string());
+        // Viewer mode subscribes to direct children only: it surfaces child
+        // lifecycle in the pill bar and never needs the orchestrator's inbox,
+        // so `include_self` stays false to preserve the existing contract.
+        let filter = AgentEventFilter::AncestorRunId {
+            ancestor_run_id: parent_task_id.to_string(),
+            include_self: false,
+        };
         let config = AgentEventDriverConfig::retry_forever(filter, cursor);
         let source = ServerApiAgentEventSource::new(server_api);
 
@@ -1014,12 +1122,13 @@ impl OrchestrationEventStreamer {
             | BlocklistAIHistoryEvent::ReassignedExchange { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
             | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-            | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+            | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
             | BlocklistAIHistoryEvent::SplitConversation { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
-            | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
+            | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
@@ -1107,7 +1216,7 @@ impl OrchestrationEventStreamer {
             let Some(run_id) = conversation.run_id() else {
                 return false;
             };
-            (run_id, conversation.has_parent_agent())
+            (run_id, conversation.is_child_agent_conversation())
         };
 
         // Parent role: any watched run_id that isn't this conversation's
@@ -1254,14 +1363,6 @@ impl OrchestrationEventStreamer {
         conversation_ids: Vec<AIConversationId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Orchestration v2 owns the events endpoints and the cursor model.
-        // V1 conversations may carry a run_id but the v2-only event APIs
-        // would return spurious 4xx responses, so skip restore entirely
-        // when V2 is disabled.
-        if !FeatureFlag::OrchestrationV2.is_enabled() {
-            return;
-        }
-
         for conv_id in conversation_ids {
             let (run_id, cursor, is_remote_view) = {
                 let history = BlocklistAIHistoryModel::as_ref(ctx);
@@ -1354,8 +1455,6 @@ impl OrchestrationEventStreamer {
                 // in-flight, the removal handler already cleaned up all
                 // streamer state. Return early to avoid recreating
                 // state for a deleted conversation.
-                let had_sse;
-                let any_new_children;
                 {
                     let Some(stream) = self.streams.get_mut(&conv_id) else {
                         return;
@@ -1364,32 +1463,12 @@ impl OrchestrationEventStreamer {
                     // Reset the retry counter on success.
                     stream.restore_fetch_failures = 0;
                     stream.harness = agent_task_harness(&task).or(stream.harness);
-
-                    // Merge the server cursor: use the max of SQLite and
-                    // server values so we don't re-deliver events the
-                    // client already acknowledged locally.
-                    let server_seq = task.last_event_sequence.unwrap_or(0);
-                    stream.event_cursor = sqlite_cursor.max(server_seq);
-
-                    // Insert any new children. If new run_ids were added
-                    // and an SSE connection is already open (e.g. a
-                    // status race opened SSE with only the parent's own
-                    // run_id), reconnect so the new run_ids are included
-                    // in the filter; otherwise re-evaluate eligibility.
-                    had_sse = stream.sse_connection.is_some();
-                    let mut added = false;
-                    for child in task.children {
-                        if stream.watched_run_ids.insert(child) {
-                            added = true;
-                        }
-                    }
-                    any_new_children = added;
                 }
-                if any_new_children && had_sse {
-                    self.reconnect_sse(conv_id, ctx);
-                } else {
-                    self.reevaluate_eligibility(conv_id, ctx);
-                }
+                // Install server-reported children (which may be absent from
+                // local history) and merge the server cursor against the
+                // SQLite value so already-acknowledged events aren't replayed.
+                self.apply_task_children(conv_id, &task, sqlite_cursor);
+                self.reevaluate_eligibility(conv_id, ctx);
             }
             Err(err) => {
                 // If the conversation was removed mid-flight, drop the
@@ -1446,6 +1525,29 @@ impl OrchestrationEventStreamer {
                 me.spawn_restore_fetch(conv_id, task_id, sqlite_cursor, ctx);
             },
         );
+    }
+
+    /// Installs server-reported child run_ids into `conversation_id`'s watched
+    /// set and merges the event cursor to `max(base_cursor,
+    /// task.last_event_sequence)`. Shared by the post-restore fetch and the
+    /// wait-time parent registration: both must pick up children that may be
+    /// absent from local history (including out-of-band CLI/API children)
+    /// without replaying events already acknowledged locally. No-op if the
+    /// stream was removed while the fetch was in flight.
+    fn apply_task_children(
+        &mut self,
+        conversation_id: AIConversationId,
+        task: &crate::ai::ambient_agents::task::AmbientAgentTask,
+        base_cursor: i64,
+    ) {
+        let Some(stream) = self.streams.get_mut(&conversation_id) else {
+            return;
+        };
+        let server_seq = task.last_event_sequence.unwrap_or(0);
+        stream.event_cursor = base_cursor.max(server_seq);
+        for child in &task.children {
+            stream.watched_run_ids.insert(child.clone());
+        }
     }
 
     // ---- Eligibility predicate ---------------------------------------
@@ -1542,7 +1644,7 @@ impl OrchestrationEventStreamer {
         }
         let has_parent = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .is_some_and(|c| c.has_parent_agent());
+            .is_some_and(|c| c.is_child_agent_conversation());
         has_parent || self.is_parent_agent_conversation(conversation_id, ctx)
     }
 
@@ -1573,6 +1675,39 @@ impl OrchestrationEventStreamer {
             .unwrap_or_default()
     }
 
+    /// Selects the owner-side event stream filter for a conversation.
+    fn desired_sse_filter(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &warpui::AppContext,
+    ) -> DesiredSseFilter {
+        if self.is_parent_agent_conversation(conversation_id, ctx) {
+            // A parent always has self_run_id by the time it has children
+            // (the server must assign the parent a run before any child can
+            // be created). Return NoFilter defensively if it's absent so
+            // `on_server_token_assigned` re-evaluates when the token arrives.
+            return match self.self_run_id(conversation_id, ctx) {
+                Some(self_run_id) => DesiredSseFilter::Filter(AgentEventFilter::AncestorRunId {
+                    ancestor_run_id: self_run_id,
+                    include_self: true,
+                }),
+                None => {
+                    log::warn!(
+                        "Parent conversation {conversation_id:?} has watched children \
+                         but no self_run_id; deferring SSE until token arrives"
+                    );
+                    DesiredSseFilter::NoFilter
+                }
+            };
+        }
+
+        let run_ids = self.run_ids_for_sse(conversation_id);
+        if run_ids.is_empty() {
+            return DesiredSseFilter::NoFilter;
+        }
+        DesiredSseFilter::Filter(AgentEventFilter::RunIds(run_ids))
+    }
+
     /// Re-evaluates eligibility and either opens / reconnects or tears
     /// down the SSE connection for the given conversation.
     fn reevaluate_eligibility(
@@ -1590,9 +1725,11 @@ impl OrchestrationEventStreamer {
             (true, false) => self.start_sse_connection(conversation_id, ctx),
             (true, true) => {
                 // Status / metadata updates fire `reevaluate_eligibility` on
-                // every exchange transition; only reconnect when the run-id
-                // filter actually changed.
-                if self.watched_run_ids_differ_from_connected(conversation_id) {
+                // every exchange transition; only reconnect when the desired
+                // filter shape actually changed. Registering more children
+                // while a parent-family ancestor stream is connected leaves
+                // the filter unchanged, so it does not reconnect.
+                if self.stream_filter_stale(conversation_id, ctx) {
                     self.reconnect_sse(conversation_id, ctx);
                 }
             }
@@ -1749,10 +1886,10 @@ impl OrchestrationEventStreamer {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let run_ids = self.run_ids_for_sse(conversation_id);
-        if run_ids.is_empty() {
-            return;
-        }
+        let filter = match self.desired_sse_filter(conversation_id, ctx) {
+            DesiredSseFilter::Filter(filter) => filter,
+            DesiredSseFilter::NoFilter => return,
+        };
 
         let cursor = self
             .streams
@@ -1770,10 +1907,11 @@ impl OrchestrationEventStreamer {
 
         log::info!(
             "Opening SSE stream for {conversation_id:?} (gen={generation}, \
-             run_ids={run_ids:?}, since={cursor})"
+             filter={}, since={cursor})",
+            filter.log_label()
         );
 
-        let config = AgentEventDriverConfig::retry_forever_run_ids(run_ids.clone(), cursor);
+        let config = AgentEventDriverConfig::retry_forever(filter.clone(), cursor);
         let source = ServerApiAgentEventSource::new(server_api);
         let hydrator = self.message_hydrator_for_run_id(&self_run_id);
 
@@ -1808,29 +1946,41 @@ impl OrchestrationEventStreamer {
             },
         );
 
-        let connected_run_ids: HashSet<String> = run_ids.iter().cloned().collect();
         let stream = self.streams.entry(conversation_id).or_default();
         stream.sse_connection = Some(SseConnectionState {
             event_receiver: rx,
             generation,
             abort_handle: handle.abort_handle(),
-            connected_run_ids,
+            connected_filter: filter,
         });
 
         // Start periodic event drain.
         self.start_sse_drain_timer(conversation_id, generation, ctx);
     }
 
-    /// True iff the open SSE's recorded run-id set is stale relative to the
-    /// conversation's current `watched_run_ids`.
-    fn watched_run_ids_differ_from_connected(&self, conversation_id: AIConversationId) -> bool {
+    /// True iff the open SSE's connected filter is stale relative to the
+    /// filter the conversation should currently use. Compares the desired
+    /// filter shape (run-id set or parent-family ancestor scope) rather than
+    /// the raw `watched_run_ids` set, so a parent-family stream is not
+    /// reconnected just because additional child IDs were registered.
+    fn stream_filter_stale(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &warpui::AppContext,
+    ) -> bool {
         let Some(stream) = self.streams.get(&conversation_id) else {
             return false;
         };
         let Some(connection) = stream.sse_connection.as_ref() else {
             return false;
         };
-        stream.watched_run_ids != connection.connected_run_ids
+        match self.desired_sse_filter(conversation_id, ctx) {
+            DesiredSseFilter::Filter(desired) => {
+                !agent_event_filters_equivalent(&desired, &connection.connected_filter)
+            }
+            // Nothing watchable tears down through the eligibility predicate.
+            DesiredSseFilter::NoFilter => false,
+        }
     }
 
     /// Periodically fires to drain buffered SSE events into the event
@@ -1957,7 +2107,7 @@ impl OrchestrationEventStreamer {
             return;
         }
 
-        let pending = build_pending_events(&events, messages, lifecycle_events);
+        let pending = build_pending_events(messages, lifecycle_events);
         OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
             svc.enqueue_event_batch(conversation_id, pending, ctx);
         });
@@ -2019,6 +2169,28 @@ async fn resolve_dormant_claude_wake_cursor(
             );
             local_cursor
         }
+    }
+}
+
+fn agent_event_filters_equivalent(a: &AgentEventFilter, b: &AgentEventFilter) -> bool {
+    match (a, b) {
+        (AgentEventFilter::RunIds(a), AgentEventFilter::RunIds(b)) => {
+            a.len() == b.len() && {
+                let set: HashSet<&String> = a.iter().collect();
+                b.iter().all(|id| set.contains(id))
+            }
+        }
+        (
+            AgentEventFilter::AncestorRunId {
+                ancestor_run_id: a_run,
+                include_self: a_self,
+            },
+            AgentEventFilter::AncestorRunId {
+                ancestor_run_id: b_run,
+                include_self: b_self,
+            },
+        ) => a_run == b_run && a_self == b_self,
+        _ => false,
     }
 }
 
@@ -2150,32 +2322,20 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
 }
 
 fn build_pending_events(
-    events: &[AgentRunEvent],
     messages: Vec<ReceivedMessageInput>,
     lifecycle_events: Vec<api::AgentEvent>,
 ) -> Vec<PendingEvent> {
     let mut pending = Vec::with_capacity(messages.len() + lifecycle_events.len());
     for msg in &messages {
-        let metadata = events
-            .iter()
-            .find(|event| {
-                event.event_type == "new_message"
-                    && event.ref_id.as_deref() == Some(msg.message_id.as_str())
-            })
-            .map(|event| (event.sequence, event.occurred_at.clone()));
-        let (sequence, occurred_at) =
-            metadata.unwrap_or_else(|| (0, chrono::Utc::now().to_rfc3339()));
         pending.push(PendingEvent {
             event_id: msg.message_id.clone(),
             source_agent_id: msg.sender_agent_id.clone(),
             attempt_count: 0,
             detail: PendingEventDetail::Message {
-                sequence,
                 message_id: msg.message_id.clone(),
                 addresses: msg.addresses.clone(),
                 subject: msg.subject.clone(),
                 message_body: msg.message_body.clone(),
-                occurred_at,
             },
         });
     }
@@ -2192,9 +2352,9 @@ fn build_pending_events(
 
 // ---- Free-function consumer registration helpers ---------------------
 //
-// Wrap the feature-flag check + singleton handle update so call sites
-// in `ActiveAgentViewsModel` and the agent_sdk driver don't have to
-// repeat the boilerplate. The generic bound covers both
+// Wrap the singleton handle update so call sites in `ActiveAgentViewsModel`
+// and the agent_sdk driver don't have to repeat the boilerplate.
+// The generic bound covers both
 // `&mut AppContext` and `&mut ModelContext<T>` / `&mut ViewContext<T>`.
 //
 // Consumers are identified by an `EntityId` — the terminal pane's id
@@ -2202,8 +2362,7 @@ fn build_pending_events(
 // streamer never branches on consumer kind, so a single pair of helpers
 // covers both call sites.
 
-/// Registers a consumer of orchestration agent events for
-/// `conversation_id`. No-op when `OrchestrationV2` is disabled.
+/// Registers a consumer of orchestration agent events for `conversation_id`.
 pub fn register_agent_event_consumer<C>(
     conversation_id: AIConversationId,
     consumer_id: EntityId,
@@ -2211,9 +2370,6 @@ pub fn register_agent_event_consumer<C>(
 ) where
     C: GetSingletonModelHandle + UpdateModel,
 {
-    if !FeatureFlag::OrchestrationV2.is_enabled() {
-        return;
-    }
     OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
         streamer.register_consumer(conversation_id, consumer_id, ctx);
     });
@@ -2227,9 +2383,6 @@ pub fn unregister_agent_event_consumer<C>(
 ) where
     C: GetSingletonModelHandle + UpdateModel,
 {
-    if !FeatureFlag::OrchestrationV2.is_enabled() {
-        return;
-    }
     OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
         streamer.unregister_consumer(conversation_id, consumer_id, ctx);
     });

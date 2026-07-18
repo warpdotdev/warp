@@ -1,6 +1,6 @@
 use settings::Setting;
-use warp_core::report_if_error;
 use warp_core::ui::Icon;
+use warp_errors::report_if_error;
 use warpui::elements::{
     ChildAnchor, Container, CrossAxisAlignment, Flex, MainAxisSize, OffsetPositioning,
     ParentAnchor, ParentElement, ParentOffsetBounds, Shrinkable, Stack, Text,
@@ -16,8 +16,8 @@ use warpui::{
 };
 
 use crate::ai::blocklist::agent_view::{
-    AgentViewController, AgentViewControllerEvent, ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
-    ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
+    AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin,
+    ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE, ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
 };
 use crate::appearance::Appearance;
 use crate::settings::{AISettings, AISettingsChangedEvent, InputModeSettings};
@@ -188,7 +188,11 @@ impl View for TerminalViewZeroStateBlock {
                         MessageItem::text("start a new agent conversation"),
                     ],
                     |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation);
+                        ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation {
+                            origin: AgentViewEntryOrigin::Input {
+                                was_prompt_autodetected: false,
+                            },
+                        });
                     },
                     self.state_handles.start_new_conversation.clone(),
                 )]),

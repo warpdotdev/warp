@@ -244,6 +244,7 @@ pub struct ExecutionProfileEditorView {
     context_window_slider_state: SliderStateHandle,
     context_window_editor: ViewHandle<EditorView>,
     last_synced_context_window_editor_value: Option<u32>,
+    dragged_context_window_value: Option<u32>,
     coding_model_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
     full_terminal_use_model_dropdown:
         ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
@@ -650,6 +651,7 @@ impl ExecutionProfileEditorView {
             context_window_slider_state,
             context_window_editor,
             last_synced_context_window_editor_value,
+            dragged_context_window_value: None,
             coding_model_dropdown,
             full_terminal_use_model_dropdown,
             computer_use_model_dropdown,
@@ -755,7 +757,7 @@ impl ExecutionProfileEditorView {
                         current_permissions.base_model.clone(),
                         |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
                         |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-                        |prefs| prefs.get_default_base_model().id.clone(),
+                        |prefs, app| prefs.get_default_base_model(app).id.clone(),
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -769,7 +771,7 @@ impl ExecutionProfileEditorView {
                         current_permissions.cli_agent_model.clone(),
                         |prefs, app| prefs.get_cli_agent_llm_choices(app).collect_vec(),
                         |id| ExecutionProfileEditorViewAction::SetFullTerminalUseModel { id },
-                        |prefs| prefs.get_default_cli_agent_model().id.clone(),
+                        |prefs, app| prefs.get_default_cli_agent_model(app).id.clone(),
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -778,7 +780,7 @@ impl ExecutionProfileEditorView {
                         current_permissions.computer_use_model.clone(),
                         |prefs, _| prefs.get_computer_use_llm_choices().collect_vec(),
                         |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
-                        |prefs| prefs.get_default_computer_use_model().id.clone(),
+                        |prefs, app| prefs.get_default_computer_use_model(app).id.clone(),
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -790,7 +792,7 @@ impl ExecutionProfileEditorView {
                         current_permissions.base_model.clone(),
                         |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
                         |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-                        |prefs| prefs.get_default_base_model().id.clone(),
+                        |prefs, app| prefs.get_default_base_model(app).id.clone(),
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -818,7 +820,7 @@ impl ExecutionProfileEditorView {
                     current_permissions.base_model.clone(),
                     |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
                     |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-                    |prefs| prefs.get_default_base_model().id.clone(),
+                    |prefs, app| prefs.get_default_base_model(app).id.clone(),
                     &me.upgrade_footer_mouse_state,
                     ctx,
                 );
@@ -934,7 +936,7 @@ impl ExecutionProfileEditorView {
             current_permissions.base_model.clone(),
             |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-            |prefs| prefs.get_default_base_model().id.clone(),
+            |prefs, app| prefs.get_default_base_model(app).id.clone(),
             &self.upgrade_footer_mouse_state,
             ctx,
         );
@@ -948,7 +950,7 @@ impl ExecutionProfileEditorView {
             current_permissions.cli_agent_model.clone(),
             |prefs, app| prefs.get_cli_agent_llm_choices(app).collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetFullTerminalUseModel { id },
-            |prefs| prefs.get_default_cli_agent_model().id.clone(),
+            |prefs, app| prefs.get_default_cli_agent_model(app).id.clone(),
             &self.upgrade_footer_mouse_state,
             ctx,
         );
@@ -957,7 +959,7 @@ impl ExecutionProfileEditorView {
             current_permissions.computer_use_model.clone(),
             |prefs, _| prefs.get_computer_use_llm_choices().collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
-            |prefs| prefs.get_default_computer_use_model().id.clone(),
+            |prefs, app| prefs.get_default_computer_use_model(app).id.clone(),
             &self.upgrade_footer_mouse_state,
             ctx,
         );
@@ -1166,7 +1168,7 @@ impl ExecutionProfileEditorView {
     ) where
         G: for<'a> FnOnce(&'a LLMPreferences, &AppContext) -> Vec<&'a LLMInfo>,
         A: Fn(LLMId) -> ExecutionProfileEditorViewAction,
-        D: FnOnce(&LLMPreferences) -> LLMId,
+        D: FnOnce(&LLMPreferences, &AppContext) -> LLMId,
     {
         menu.update(ctx, |dropdown, ctx| {
             let disabled_by_ai_toggle = !AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
@@ -1208,7 +1210,7 @@ impl ExecutionProfileEditorView {
 
             let llm_prefs = LLMPreferences::handle(ctx);
             let llm_prefs = llm_prefs.as_ref(ctx);
-            let model_to_select = profile_model.unwrap_or_else(|| get_default_id(llm_prefs));
+            let model_to_select = profile_model.unwrap_or_else(|| get_default_id(llm_prefs, ctx));
             dropdown.set_selected_by_action(create_action(model_to_select), ctx);
             ctx.notify();
         });
@@ -1250,7 +1252,7 @@ impl ExecutionProfileEditorView {
 
             let model_to_select = profile_coding_model.unwrap_or_else(|| {
                 LLMPreferences::as_ref(ctx)
-                    .get_default_coding_model()
+                    .get_default_coding_model(ctx)
                     .id
                     .clone()
             });
@@ -1443,6 +1445,7 @@ impl ExecutionProfileEditorView {
     }
 
     fn sync_context_window_editor(&mut self, ctx: &mut ViewContext<Self>, force: bool) {
+        self.dragged_context_window_value = None;
         let Some(value) = self.current_context_window_display_value(ctx) else {
             self.last_synced_context_window_editor_value = None;
             self.context_window_slider_state.reset_offset();
@@ -1484,7 +1487,7 @@ fn initial_context_window_display_value(
         .context_window_display_value(app)
         .unwrap_or_else(|| {
             LLMPreferences::as_ref(app)
-                .get_default_base_model()
+                .get_default_base_model(app)
                 .context_window
                 .default_max
         })
@@ -1579,6 +1582,7 @@ impl TypedActionView for ExecutionProfileEditorView {
                 // in the input box without persisting to the profile yet.
                 // Persistence happens on SetContextWindowSize (drop / commit).
                 if self.configurable_context_window(ctx).is_some() {
+                    self.dragged_context_window_value = Some(*value);
                     let formatted = value.separate_with_commas();
                     self.context_window_editor.update(ctx, |editor, ctx| {
                         editor.system_reset_buffer_text(&formatted, ctx);
@@ -1587,6 +1591,7 @@ impl TypedActionView for ExecutionProfileEditorView {
                 }
             }
             ExecutionProfileEditorViewAction::SetContextWindowSize { value } => {
+                self.dragged_context_window_value = None;
                 if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                     self.sync_context_window_editor(ctx, true);
                     return;

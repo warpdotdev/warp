@@ -33,6 +33,7 @@ use warp_editor::render::model::{
 };
 use warp_editor::search::Searcher;
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
+use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::ListIndentLevel;
@@ -176,7 +177,7 @@ impl NotebooksEditorModel {
             Buffer::new(Box::new(notebook_tab_indentation))
                 .with_embedded_item_conversion(super::notebook_embedded_item_conversion)
         });
-        ctx.subscribe_to_model(&content, |me, event, ctx| {
+        ctx.subscribe_to_model(&content, |me, _, event, ctx| {
             me.handle_content_model_event(event, ctx);
         });
 
@@ -203,7 +204,7 @@ impl NotebooksEditorModel {
         );
 
         let cloud_model = CloudModel::handle(ctx);
-        ctx.subscribe_to_model(&cloud_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&cloud_model, |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx)
         });
 
@@ -310,11 +311,20 @@ impl NotebooksEditorModel {
         <Self as RichTextEditorModel>::reset_with_markdown(self, markdown, ctx);
     }
 
+    pub fn reset_with_ipynb(&mut self, ipynb: &str, ctx: &mut ModelContext<Self>) {
+        <Self as RichTextEditorModel>::reset_with_ipynb(self, ipynb, ctx);
+    }
+
     pub fn update_to_new_markdown(&mut self, markdown: &str, ctx: &mut ModelContext<Self>) {
         <Self as RichTextEditorModel>::update_to_new_markdown(self, markdown, ctx);
     }
 
-    fn handle_render_model_event(&mut self, event: &RenderEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_render_model_event(
+        &mut self,
+        _: ModelHandle<RenderState>,
+        event: &RenderEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         // Ignore render events until bound to a real window, and when the window is closed.
         let Some(window_id) = self.rte_window_id else {
             return;
@@ -348,6 +358,7 @@ impl NotebooksEditorModel {
 
     fn handle_interaction_state_model_event(
         &mut self,
+        _: ModelHandle<InteractionStateModel>,
         event: &InteractionStateModelEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1413,7 +1424,10 @@ impl NotebooksEditorModel {
                 });
             }
             None => {
-                log::error!("Child model at {block_start} has end offset with value None");
+                report_error!(
+                    "Child model has end offset with value None",
+                    extra: { "block_start" => %block_start }
+                );
             }
         };
 

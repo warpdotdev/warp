@@ -2,14 +2,13 @@ pub mod block;
 pub mod cloud_objects;
 pub mod experiments;
 pub mod graphql;
-// IAP items are only referenced from native code paths; on wasm the
-// module compiles but every function is dead code.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub(crate) mod iap;
+// Runner-only: the minter is constructed solely in the native, ambient-agent-run
+// code path (see lib.rs), so it doesn't compile or ship on wasm.
+#[cfg(not(target_family = "wasm"))]
+pub mod iap_identity_minter;
 pub mod ids;
 pub mod network_log_pane_manager;
 pub mod network_log_view;
-pub mod network_logging;
 pub mod retry_strategies;
 pub mod server_api;
 pub mod sync_queue;

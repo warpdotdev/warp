@@ -50,7 +50,6 @@ fn build_own_usage_row_drops_team_subject_entries() {
         &entries,
         Some(VIEWER_UID),
         "viewer".to_string(),
-        None,
         SourceFilter::All,
     );
     assert_eq!(row.total_credits, 10);
@@ -79,7 +78,6 @@ fn build_own_usage_row_drops_other_users_entries() {
         &entries,
         Some(VIEWER_UID),
         "viewer".to_string(),
-        None,
         SourceFilter::All,
     );
     assert_eq!(row.total_credits, 10);
@@ -108,7 +106,6 @@ fn build_own_usage_row_local_filter_drops_cloud_entries() {
         &entries,
         Some(VIEWER_UID),
         "viewer".to_string(),
-        None,
         SourceFilter::Local,
     );
     assert_eq!(row.total_credits, 10);
@@ -136,20 +133,7 @@ fn build_own_usage_row_cloud_filter_drops_local_entries() {
         &entries,
         Some(VIEWER_UID),
         "viewer".to_string(),
-        None,
         SourceFilter::Cloud,
     );
     assert_eq!(row.total_credits, 20);
-}
-
-#[test]
-fn build_own_usage_row_surfaces_supplied_base_limit() {
-    let row = MemberUsageRow::for_viewer(
-        &[],
-        Some(VIEWER_UID),
-        "viewer".to_string(),
-        Some(1500),
-        SourceFilter::All,
-    );
-    assert_eq!(row.base_limit, Some(1500));
 }

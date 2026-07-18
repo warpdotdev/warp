@@ -34,11 +34,9 @@ use crate::ai::agent::{
     SummarizationType,
 };
 use crate::ai::agent_tips::AITipModel;
-use crate::ai::blocklist::agent_view::child_agent_status_card::ChildAgentStatusCard;
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
 use crate::ai::blocklist::agent_view::{
-    agent_view_bg_fill, is_in_cloud_context, AgentMessageBar, AgentViewController,
-    EphemeralMessageModel,
+    is_in_cloud_context, AgentMessageBar, AgentViewController, EphemeralMessageModel,
 };
 use crate::ai::blocklist::model::AIBlockModelHelper;
 use crate::ai::blocklist::summarization_cancel_dialog::{
@@ -125,7 +123,6 @@ pub struct BlocklistAIStatusBar {
 
     ephemeral_message_model: ModelHandle<EphemeralMessageModel>,
     agent_message_bar: ViewHandle<AgentMessageBar>,
-    child_agent_status_card: ViewHandle<ChildAgentStatusCard>,
 }
 
 impl BlocklistAIStatusBar {
@@ -152,7 +149,7 @@ impl BlocklistAIStatusBar {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         ctx.subscribe_to_model(&history_model, move |me, _, event, ctx| {
             if event
-                .terminal_view_id()
+                .terminal_surface_id()
                 .is_some_and(|id| id != terminal_view_id)
             {
                 return;
@@ -169,7 +166,7 @@ impl BlocklistAIStatusBar {
                     }
                     me.reset_model_for_exchange(*exchange_id, *conversation_id, ctx);
                 }
-                BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. } => {
+                BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. } => {
                     me.active_exchange_model = None;
                     ctx.notify();
                 }
@@ -335,7 +332,7 @@ impl BlocklistAIStatusBar {
             ctx.notify();
         });
 
-        let agent_message_bar = ctx.add_view(|ctx| {
+        let agent_message_bar = ctx.add_typed_action_view(|ctx| {
             AgentMessageBar::new(
                 agent_view_controller.clone(),
                 ephemeral_message_model.clone(),
@@ -351,27 +348,7 @@ impl BlocklistAIStatusBar {
             )
         });
 
-        let child_agent_status_card = ctx.add_typed_action_view(|ctx| {
-            ChildAgentStatusCard::new(agent_view_controller.clone(), ctx)
-        });
-        if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {
-            ctx.subscribe_to_model(ambient_agent_view_model, |me, _, event, ctx| match event {
-                AmbientAgentViewModelEvent::DispatchedAgent
-                | AmbientAgentViewModelEvent::ProgressUpdated => {
-                    me.update_agent_tip(ctx);
-                    ctx.notify();
-                }
-                AmbientAgentViewModelEvent::SessionReady { .. }
-                | AmbientAgentViewModelEvent::Failed { .. }
-                | AmbientAgentViewModelEvent::NeedsGithubAuth
-                | AmbientAgentViewModelEvent::Cancelled => {
-                    ctx.notify();
-                }
-                _ => (),
-            });
-        }
-
-        Self {
+        let mut me = Self {
             active_exchange_model: None,
             shimmering_text_handle: ShimmeringTextStateHandle::new(),
             action_model,
@@ -393,12 +370,52 @@ impl BlocklistAIStatusBar {
             summarization_timer_handle: None,
             summarization_start_time: None,
             last_read_refresh_handle: None,
-            ambient_agent_view_model,
+            ambient_agent_view_model: None,
             current_tip: None,
             ephemeral_message_model,
             agent_message_bar,
-            child_agent_status_card,
+        };
+        // Route ambient wiring through the setter so construction and the lazy shared-session
+        // viewer path share one implementation.
+        if let Some(ambient_agent_view_model) = ambient_agent_view_model {
+            me.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
         }
+        me
+    }
+
+    /// Attaches an ambient agent view model to an already-constructed status bar. Used on the
+    /// shared-session viewer path where the model is created lazily at `SessionJoined` (a raw
+    /// `shared_session` link that turns out to be a cloud run), after the status bar was built
+    /// with `None`. Without this, `render_cloud_mode_setup_status` has no model and the
+    /// "connecting to host / creating environment" progress never renders for the viewer's
+    /// follow-up. Wires the same subscription as [`Self::new`] so the status bar re-renders as
+    /// setup progress updates. Idempotent: a no-op when a model is already set.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        ctx.subscribe_to_model(&view_model, |me, _, event, ctx| match event {
+            AmbientAgentViewModelEvent::DispatchedAgent
+            | AmbientAgentViewModelEvent::FollowupDispatched
+            | AmbientAgentViewModelEvent::ProgressUpdated => {
+                me.update_agent_tip(ctx);
+                ctx.notify();
+            }
+            AmbientAgentViewModelEvent::SessionReady { .. }
+            | AmbientAgentViewModelEvent::ExecutionSessionReady { .. }
+            | AmbientAgentViewModelEvent::Failed { .. }
+            | AmbientAgentViewModelEvent::NeedsGithubAuth
+            | AmbientAgentViewModelEvent::Cancelled => {
+                ctx.notify();
+            }
+            _ => (),
+        });
+        self.ambient_agent_view_model = Some(view_model);
+        ctx.notify();
     }
 
     pub fn should_show_summarization_cancel_dialog(&self, app: &AppContext) -> bool {
@@ -835,18 +852,18 @@ impl BlocklistAIStatusBar {
                             .conversation(app)
                             .map(|c| c.autoexecute_any_action())
                             .unwrap_or(false),
-                        is_locked: is_in_cloud_context(
-                            terminal_model.block_list().agent_view_state(),
-                            &terminal_model,
-                        ),
+                        is_locked: is_in_cloud_context(&terminal_model),
                     },
                 ),
                 queue_next_prompt_button: FeatureFlag::QueueSlashCommand.is_enabled().then_some(
                     ButtonProps {
                         button_handle: &self.state_handles.queue_next_prompt_button,
                         keystroke: self.queue_next_prompt_keystroke.as_ref(),
-                        is_active: QueuedQueryModel::as_ref(app)
-                            .is_queue_next_prompt_enabled(conversation.id()),
+                        is_active: QueuedQueryModel::as_ref(app).is_queue_next_prompt_enabled(
+                            conversation.id(),
+                            active_block,
+                            app,
+                        ),
                     },
                 ),
                 stop_button: Some(ButtonProps {
@@ -990,6 +1007,7 @@ fn latest_model_used_before_exchange<V: View>(
                 model_id: model_info.model_id.to_string(),
                 model_display_name: model_info.display_name.clone(),
                 is_fallback: model_info.is_fallback,
+                prompt_cache_expires_at: None,
             })
         })
 }
@@ -1231,25 +1249,19 @@ impl View for BlocklistAIStatusBar {
                 // Don't render warping indicator - the loading screen is shown in the main view
                 return Empty::new().finish();
             } else if agent_view_controller.is_active() {
-                // The new orchestration pill bar in the agent view header
-                // replaces the legacy child-agent status card rows; when
-                // it's enabled, render only the message bar here.
-                let mut column = Flex::column();
-                if !FeatureFlag::OrchestrationPillBar.is_enabled() {
-                    column =
-                        column.with_child(ChildView::new(&self.child_agent_status_card).finish());
-                }
-                column = column.with_child(ChildView::new(&self.agent_message_bar).finish());
-                return column.finish();
+                // The orchestration pill bar in the agent view header
+                // replaces the legacy child-agent status card rows;
+                // render only the message bar here.
+                return Flex::column()
+                    .with_child(ChildView::new(&self.agent_message_bar).finish())
+                    .finish();
             } else {
                 return Empty::new().finish();
             };
 
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let background = if agent_view_controller.is_inline() {
-            agent_view_bg_fill(app)
-        } else if InputSettings::as_ref(app).is_universal_developer_input_enabled(app)
+        let background = if InputSettings::as_ref(app).is_universal_developer_input_enabled(app)
             || FeatureFlag::AgentView.is_enabled()
         {
             // Use a fully transparent background for universal developer input (or unconditionally, if the new
@@ -1302,17 +1314,6 @@ impl View for BlocklistAIStatusBar {
             }
         } else {
             container = container.with_vertical_padding(8.);
-        }
-
-        // When the agent view is active, keep the child agent status card
-        // visible above the warping/status indicator so it doesn't disappear
-        // while the agent is working. The new orchestration pill bar
-        // replaces this card, so skip it when that flag is on.
-        if agent_view_controller.is_active() && !FeatureFlag::OrchestrationPillBar.is_enabled() {
-            return Flex::column()
-                .with_child(ChildView::new(&self.child_agent_status_card).finish())
-                .with_child(container.finish())
-                .finish();
         }
 
         container.finish()

@@ -18,9 +18,12 @@ use super::tab_settings::{
 };
 use super::view::{OnboardingTutorial, WorkspaceBanner};
 use crate::ai::agent::api::ServerConversationToken;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent::conversation::AIAgentHarness;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::PendingAttachment;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::auth::auth_manager::LoginGatedFeature;
 use crate::drive::items::WarpDriveItemId;
@@ -153,6 +156,13 @@ pub enum WorkspaceAction {
         tab_index: usize,
         anchor: TabContextMenuAnchor,
     },
+    /// Toggles the multi-tab selection right-click menu.
+    /// Dispatched by the UI when the right-clicked tab is part of a multi-tab
+    /// selection (cmd-click or shift-click).
+    ToggleTabSelectionRightClickMenu {
+        tab_index: usize,
+        anchor: TabContextMenuAnchor,
+    },
     ToggleVerticalTabsPaneContextMenu {
         tab_index: usize,
         target: VerticalTabsPaneContextMenuTarget,
@@ -176,6 +186,10 @@ pub enum WorkspaceAction {
     ToggleTabGroupCollapsed(TabGroupId),
     /// Opens an inline editor over the given group's header for renaming.
     RenameTabGroup(TabGroupId),
+    /// Cancels any active rename (tab, pane, or group) without committing the
+    /// new name. Dispatched when clicking on the vtab panel background while a
+    /// rename editor is open.
+    CancelActiveRename,
     /// Creates a new tab group containing the tab at the given index.
     NewTabGroupFromTab(usize),
     /// Moves the tab at `tab_index` into `group_id`, appending it to the
@@ -186,6 +200,34 @@ pub enum WorkspaceAction {
     },
     /// Removes the tab at the given index from its current group.
     RemoveTabFromGroup(usize),
+    /// Selects every tab between the active tab and the shift-clicked row (inclusive).
+    ShiftSelectTabRange {
+        locator: PaneViewLocator,
+    },
+    /// Toggles whether the tab at `locator` is part of the active multi-selection.
+    /// Dispatched on cmd-click of a vertical tab row.
+    ToggleTabMultiSelection {
+        locator: PaneViewLocator,
+    },
+    /// Clears the tab multi-selection. Dispatched from the UI when the user takes
+    /// an action that should cancel any active selections.
+    ClearTabMultiSelection,
+    /// Creates a new tab group from the current tab multi-selection.
+    NewTabGroupFromSelectedTabs,
+    /// Context-aware "create group" entry point for the keybinding: groups
+    /// the multi-selection when 2+ tabs are selected, otherwise groups the
+    /// active tab.
+    NewTabGroupFromActiveOrSelectedTabs,
+    /// Moves every selected tab into `group_id`.
+    MoveSelectedTabsToGroup {
+        group_id: TabGroupId,
+    },
+    /// Removes every selected tab from its group (requires a single shared group).
+    RemoveSelectedTabsFromGroup,
+    /// Context-aware "remove from group" entry point for the keybinding:
+    /// removes the multi-selection from its shared group when 2+ tabs are
+    /// selected, otherwise removes the active tab.
+    RemoveActiveOrSelectedTabsFromGroup,
     ToggleTabGroupRightClickMenu {
         group_id: TabGroupId,
         anchor: TabContextMenuAnchor,
@@ -197,6 +239,25 @@ pub enum WorkspaceAction {
     CloseTabsOutsideGroup(TabGroupId),
     CloseTabsAboveGroup(TabGroupId),
     CloseTabsBelowGroup(TabGroupId),
+    /// Pins the tab at the given index. If the tab is part of a group, it
+    /// is first extracted from the group and then pinned as ungrouped.
+    PinTab(usize),
+    /// Unpins the tab at the given index.
+    UnpinTab(usize),
+    /// Pins the active tab.
+    PinActiveTab,
+    /// Unpins the active tab.
+    UnpinActiveTab,
+    /// Pins the entire tab group: sets the group as pinned
+    /// and moves the group block to the end of the pinned region.
+    PinTabGroup(TabGroupId),
+    /// Unpins the entire tab group: clears the pinned flag on the group
+    /// and moves the group block to the start of the unpinned region.
+    UnpinTabGroup(TabGroupId),
+    /// Pins the active tab's group.
+    PinActiveTabGroup,
+    /// Unpins the active tab's group.
+    UnpinActiveTabGroup,
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -273,6 +334,12 @@ pub enum WorkspaceAction {
         color: AnsiColorIdentifier,
         tab_index: usize,
     },
+    /// Toggles the color for a tab group. Clears the color if it was already
+    /// set to `color`; otherwise applies `color` as the uniform group color.
+    ToggleTabGroupColor {
+        color: AnsiColorIdentifier,
+        group_id: TabGroupId,
+    },
     OpenLaunchConfigSaveModal,
     SelectTabConfig(TabConfig),
     DispatchToSettingsTab(SettingsTabAction),
@@ -306,7 +373,10 @@ pub enum WorkspaceAction {
     StartGroupDrag(TabGroupId),
     DragGroup {
         group_id: TabGroupId,
+        /// The dragged group's painted rect.
         position: RectF,
+        /// The position of the cursor while dragging a group.
+        cursor_position: Vector2F,
     },
     DropGroup,
     /// Toggles the left panel. In Code Mode V1 this toggles Warp Drive.
@@ -325,6 +395,7 @@ pub enum WorkspaceAction {
     OpenCodeReviewPanel(PaneViewLocator),
     /// Toggles the vertical tabs panel. This happens as an explicit action from the user.
     ToggleVerticalTabsPanel,
+    OpenVerticalTabsPanel,
     ToggleVerticalTabsSettingsPopup,
     SetVerticalTabsDisplayGranularity(VerticalTabsDisplayGranularity),
     SetVerticalTabsTabItemMode(VerticalTabsTabItemMode),
@@ -337,6 +408,10 @@ pub enum WorkspaceAction {
     /// Closes the focused panel. This happens as an explicit action from the user.
     ClosePanel,
     CopyTextToClipboard(String),
+    /// Copies a path to the clipboard based on the focused pane: the open file's display path
+    /// if the focused pane is the rendered file viewer (`FilePane`), otherwise the focused
+    /// terminal session's working directory. No-op if neither yields a path.
+    CopyCurrentPath,
     /// An action only registered in dev and local builds, which writes the user's current access
     /// token to the system clipboard to aid debugging and development.
     CopyAccessTokenToClipboard,
@@ -347,8 +422,7 @@ pub enum WorkspaceAction {
     /// An action only registered in dev and local builds, which triggers a
     /// panic immediately when called.
     Panic,
-    /// Stops the heap profiler (if one is running) and writes the profiling
-    /// data to disk.
+    /// Writes a heap profile to disk.
     DumpHeapProfile,
     ShowAIAssistantWarmWelcome,
     ClickedAIAssistantWarmWelcome,
@@ -453,6 +527,8 @@ pub enum WorkspaceAction {
     },
     OpenCloudAgentSetupGuide,
     AttemptLoginGatedAIUpgrade,
+    /// Open the modal explaining Prompt Suggestions aren't available on the Free plan.
+    OpenPromptSuggestionsUnavailableModal,
     /// Dismisses the Wayland crash recovery banner and opens a link to our docs page with more
     /// information.
     #[cfg(target_os = "linux")]
@@ -532,6 +608,8 @@ pub enum WorkspaceAction {
         summarization_prompt: Option<String>,
         /// Initial prompt to send in the forked conversation (sent after summarization if enabled).
         initial_prompt: Option<String>,
+        /// Attachments (images/files) to send along with the initial prompt in the forked pane.
+        initial_attachments: Vec<PendingAttachment>,
         /// Where to open the forked conversation.
         destination: ForkedConversationDestination,
     },
@@ -540,6 +618,12 @@ pub enum WorkspaceAction {
     #[cfg(not(target_family = "wasm"))]
     ContinueConversationLocally {
         conversation_id: AIConversationId,
+    },
+    /// Continue a completed third-party cloud harness run in a local split pane.
+    #[cfg(not(target_family = "wasm"))]
+    ContinueThirdPartyConversationLocally {
+        task_id: AmbientAgentTaskId,
+        harness: AIAgentHarness,
     },
     /// Insert the /fork slash command into the active terminal's input.
     InsertForkSlashCommand,
@@ -581,12 +665,18 @@ pub enum WorkspaceAction {
         /// Optional prompt to send after summarization completes successfully.
         initial_prompt: Option<String>,
     },
-    /// Install the Warp CLI command to /usr/local/bin
+    /// Install the Oz CLI command to /usr/local/bin
     #[cfg(target_os = "macos")]
-    InstallCLI,
-    /// Uninstall the Warp CLI command from /usr/local/bin
+    InstallOz,
+    /// Uninstall the Oz CLI command from /usr/local/bin
     #[cfg(target_os = "macos")]
-    UninstallCLI,
+    UninstallOz,
+    /// Install the Warp Control CLI command to /usr/local/bin
+    #[cfg(target_os = "macos")]
+    InstallWarpctrl,
+    /// Uninstall the Warp Control CLI command from /usr/local/bin
+    #[cfg(target_os = "macos")]
+    UninstallWarpctrl,
     UndoRevertInCodeReviewPane {
         window_id: WindowId,
         view_id: EntityId,
@@ -620,9 +710,13 @@ pub enum WorkspaceAction {
     NavigatePrevPaneOrPanel,
     NavigateNextPaneOrPanel,
     ToggleProjectExplorer,
+    OpenProjectExplorer,
     ToggleGlobalSearch,
+    ToggleHiddenFiles,
     OpenGlobalSearch,
     ToggleConversationListView,
+    OpenConversationListView,
+    OpenAgentManagementView,
     /// Open the Build Plan Migration Modal (for debugging)
     #[cfg(debug_assertions)]
     OpenBuildPlanMigrationModal,
@@ -650,6 +744,28 @@ pub enum WorkspaceAction {
     /// Reset the orchestration launch modal dismissed state (for debugging)
     #[cfg(debug_assertions)]
     ResetOrchestrationLaunchModalState,
+    /// Open the Feature Intro Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenFeatureIntroModal,
+    /// Reset the feature intro seen state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetFeatureIntroModalState,
+    /// Open the auto-handoff sleep modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenAutoHandoffSleepModal,
+    /// Reset the auto-handoff sleep modal shown state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetAutoHandoffSleepModalState,
+    /// Trigger the auto-handoff-to-cloud flow in-process, as if the machine
+    /// were about to sleep (for debugging)
+    #[cfg(debug_assertions)]
+    TriggerAutoHandoffToCloud,
+    /// Open the Free AI Removal Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenFreeAiRemovalModal,
+    /// Reset the free AI removal modal seen state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetFreeAiRemovalModalState,
     /// Install the opencode-warp plugin from GitHub into the global opencode config.
     #[cfg(debug_assertions)]
     InstallOpenCodeWarpPlugin,
@@ -711,6 +827,8 @@ pub enum WorkspaceAction {
     StartAgentOnboardingTutorial(OnboardingTutorial),
     ShowSessionConfigModal,
     DismissSessionConfigTabConfigChip,
+    /// Dismiss the non-blocking feature-intro popover without requiring it to hold focus.
+    DismissFeatureIntroModal,
     /// Start the HOA onboarding flow (for debugging)
     #[cfg(debug_assertions)]
     ShowHoaOnboardingFlow,
@@ -798,6 +916,8 @@ impl WorkspaceAction {
         match self {
             #[cfg(not(target_family = "wasm"))]
             ContinueConversationLocally { .. } => true,
+            #[cfg(not(target_family = "wasm"))]
+            ContinueThirdPartyConversationLocally { .. } => true,
             ActivateTab(_)
             | ActivateTabByNumber(_)
             | ActivatePrevTab
@@ -831,6 +951,11 @@ impl WorkspaceAction {
             | NewTabGroupFromTab(_)
             | MoveTabToGroup { .. }
             | RemoveTabFromGroup(_)
+            | NewTabGroupFromSelectedTabs
+            | NewTabGroupFromActiveOrSelectedTabs
+            | MoveSelectedTabsToGroup { .. }
+            | RemoveSelectedTabsFromGroup
+            | RemoveActiveOrSelectedTabsFromGroup
             | UngroupTabs(_)
             | NewTabInGroup(_)
             | MoveTabGroupUp(_)
@@ -838,7 +963,16 @@ impl WorkspaceAction {
             | CloseTabsOutsideGroup(_)
             | CloseTabsAboveGroup(_)
             | CloseTabsBelowGroup(_)
+            | PinTab(_)
+            | UnpinTab(_)
+            | PinActiveTab
+            | UnpinActiveTab
+            | PinTabGroup(_)
+            | UnpinTabGroup(_)
+            | PinActiveTabGroup
+            | UnpinActiveTabGroup
             | ToggleTabColor { .. }
+            | ToggleTabGroupColor { .. }
             | AddDefaultTab
             | AddTerminalTab { .. }
             | AddTabWithShell { .. }
@@ -862,7 +996,8 @@ impl WorkspaceAction {
             | SummarizeAIConversation { .. }
             | OpenRepository { .. }
             | SelectTabConfig(_)
-            | ToggleVerticalTabsPanel => true, // actions that actually change a state of the state of user's
+            | ToggleVerticalTabsPanel
+            | OpenVerticalTabsPanel => true, // actions that actually change a state of the state of user's
             // workspace would most likely require a save, so that if the app gets
             // restarted, the user can continue working
             AutoupdateFailureLink
@@ -897,6 +1032,7 @@ impl WorkspaceAction {
             | ToggleSyntaxHighlighting
             | OpenLaunchConfigSaveModal
             | ToggleTabRightClickMenu { .. }
+            | ToggleTabSelectionRightClickMenu { .. }
             | ToggleTabGroupRightClickMenu { .. }
             | ToggleVerticalTabsPaneContextMenu { .. }
             | OpenNewSessionMenu { .. }
@@ -913,6 +1049,7 @@ impl WorkspaceAction {
             | ClickedAIAssistantIcon
             | ToggleAIAssistant
             | OpenCloudAgentSetupGuide
+            | OpenPromptSuggestionsUnavailableModal
             | ToggleKeybindingsPage
             | ShowCommandSearch(_)
             | ToggleMouseReporting
@@ -952,6 +1089,7 @@ impl WorkspaceAction {
             | ToggleVerticalTabsShowDetailsOnHover
             | ToggleWelcomeTips
             | CopyTextToClipboard(_)
+            | CopyCurrentPath
             | CopyAccessTokenToClipboard
             | OpenTabConfigRepoPicker { .. }
             | OpenNewWorktreeModal
@@ -1011,17 +1149,25 @@ impl WorkspaceAction {
             | OpenMCPServerCollection
             | FocusTerminalViewInWorkspace { .. }
             | FocusPane(..)
+            | ShiftSelectTabRange { .. }
+            | ToggleTabMultiSelection { .. }
+            | ClearTabMultiSelection
+            | CancelActiveRename
             | StartNewConversation { .. }
             | UndoRevertInCodeReviewPane { .. }
             | JumpToLatestToast
             | NavigatePrevPaneOrPanel
             | NavigateNextPaneOrPanel
             | ToggleProjectExplorer
+            | OpenProjectExplorer
             | ToggleGlobalSearch
+            | ToggleHiddenFiles
             | OpenGlobalSearch
             | ToggleConversationListView
+            | OpenConversationListView
             | ToggleNotificationMailbox { .. }
             | ToggleAgentManagementView
+            | OpenAgentManagementView
             | ViewAgentRunsForEnvironment { .. }
             | ToggleAIDocumentPane { .. }
             | HideAIDocumentPanes
@@ -1036,6 +1182,7 @@ impl WorkspaceAction {
             | StartAgentOnboardingTutorial(_)
             | ShowSessionConfigModal
             | DismissSessionConfigTabConfigChip
+            | DismissFeatureIntroModal
             | SaveCurrentTabAsNewConfig(_)
             | SyncTrafficLights
             | OpenTabConfigErrorFile { .. }
@@ -1064,6 +1211,13 @@ impl WorkspaceAction {
             | ResetOpenWarpLaunchModalState
             | OpenOrchestrationLaunchModal
             | ResetOrchestrationLaunchModalState
+            | OpenFeatureIntroModal
+            | ResetFeatureIntroModalState
+            | OpenAutoHandoffSleepModal
+            | ResetAutoHandoffSleepModalState
+            | TriggerAutoHandoffToCloud
+            | OpenFreeAiRemovalModal
+            | ResetFreeAiRemovalModalState
             | InstallOpenCodeWarpPlugin
             | UseLocalOpenCodeWarpPlugin => false,
             #[cfg(not(target_family = "wasm"))]
@@ -1071,7 +1225,9 @@ impl WorkspaceAction {
             #[cfg(target_os = "macos")]
             SampleProcess => false,
             #[cfg(target_os = "macos")]
-            InstallCLI | UninstallCLI => false,
+            InstallOz | UninstallOz => false,
+            #[cfg(target_os = "macos")]
+            InstallWarpctrl | UninstallWarpctrl => false,
             #[cfg(feature = "local_fs")]
             FileRenamed { .. } => false, // File rename doesn't change workspace state
             #[cfg(feature = "local_fs")]

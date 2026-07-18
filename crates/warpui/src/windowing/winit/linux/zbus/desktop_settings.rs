@@ -5,6 +5,7 @@ use std::ops::Deref as _;
 use std::time::Duration;
 
 use futures::StreamExt as _;
+use warp_errors::report_error;
 use winit::event_loop::EventLoopProxy;
 use zbus::{proxy, zvariant};
 
@@ -61,19 +62,25 @@ impl From<&zvariant::Value<'_>> for SystemColorScheme {
             zvariant::Value::Value(boxed_v) => match boxed_v.downcast_ref::<u32>() {
                 Ok(v) => SystemColorScheme::from(&v),
                 Err(err) => {
-                    log::error!(
-                            "D-Bus inner variant type {:#?}: {:#?} could not be converted to SystemThemePreference: {err:#}",
-                            value.value_signature(),
-                            value
-                        );
+                    report_error!(
+                        anyhow::Error::new(err).context(
+                            "D-Bus inner variant could not be converted to SystemThemePreference"
+                        ),
+                        extra: {
+                            "signature" => ?value.value_signature(),
+                            "value" => ?value
+                        }
+                    );
                     SystemColorScheme::NoPreference
                 }
             },
             _ => {
-                log::error!(
-                    "D-Bus outer variant type {:#?}: {:#?} could not be converted to SystemThemePreference",
-                    value.value_signature(),
-                    value
+                report_error!(
+                    "D-Bus outer variant could not be converted to SystemThemePreference",
+                    extra: {
+                        "signature" => ?value.value_signature(),
+                        "value" => ?value
+                    }
                 );
                 SystemColorScheme::NoPreference
             }

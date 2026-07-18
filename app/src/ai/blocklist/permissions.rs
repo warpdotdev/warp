@@ -3,11 +3,12 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use warp_completer::parsers::simple::decompose_command;
+use warp_completer::parsers::simple::{command_without_leading_env_vars, decompose_command};
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::{report_error, report_if_error};
 use warp_util::path::EscapeChar;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -20,7 +21,6 @@ use crate::ai::execution_profiles::{
 use crate::ai::mcp::mcp_provider_from_file_path;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::report_if_error;
 use crate::settings::{
     AISettings, AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate,
 };
@@ -152,7 +152,8 @@ impl BlocklistAIPermissions {
                 .private_user_preferences()
                 .remove_value("AgentModeAutoReadFiles")
             {
-                log::error!("Failed to remove old AgentModeAutoReadFiles user pref: {e}");
+                report_error!(anyhow::Error::new(e)
+                    .context("Failed to remove old AgentModeAutoReadFiles user pref"));
             }
             if can_read_files {
                 report_if_error!(AISettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -887,10 +888,14 @@ impl BlocklistAIPermissions {
         // The command string might be composed of multiple commands so let's
         // break it up first.
         let (commands, contains_redirection) = decompose_command(&normalized_command, escape_char);
+        let commands_for_denylist = commands
+            .iter()
+            .map(|command| command_for_execution_predicates(command, escape_char))
+            .collect::<Vec<_>>();
 
         // The denylist takes precedence over all other conditions.
         let denylist = self.get_execute_commands_denylist(ctx, terminal_view_id);
-        if commands
+        if commands_for_denylist
             .iter()
             .any(|c| denylist.iter().any(|d| d.matches(c)))
         {
@@ -1195,6 +1200,12 @@ impl BlocklistAIPermissions {
             AskUserQuestionPermission::AlwaysAsk => true,
         }
     }
+}
+
+fn command_for_execution_predicates(command: &str, escape_char: EscapeChar) -> String {
+    command_without_leading_env_vars(command, escape_char)
+        .filter(|command| !command.is_empty())
+        .unwrap_or_else(|| command.to_string())
 }
 
 /// Returns `Some(Denied(ProtectedPath))` if any of the given paths are system-protected

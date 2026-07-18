@@ -4,6 +4,7 @@ use async_channel::Sender;
 use async_trait::async_trait;
 use ipc::{Client, ConnectionAddress};
 use url::Url;
+use warp_errors::report_error;
 use warpui::r#async::executor::Background;
 
 use super::single_instance_manager::uri_named_pipe_name;
@@ -32,9 +33,10 @@ impl ipc::ServiceImpl for UriServiceImpl {
     type Service = UriService;
 
     async fn handle_request(&self, request: Vec<Url>) -> () {
-        log::info!("Uri Service received request: {request:?}");
         if let Err(send_error) = self.tx.send(request).await {
-            log::error!("Error sending urls to local stream: {send_error:#}");
+            report_error!(
+                anyhow::Error::new(send_error).context("Error sending urls to local stream")
+            );
         }
     }
 }

@@ -455,21 +455,26 @@ pub fn convert_wsl_to_windows_host_path(
     }
     let components = unix_path.components();
     let prefix = components.take(3).collect::<Vec<_>>();
-    let windows_path = match prefix.as_slice() {
+    let mut windows_path = TypedPathBuf::new(PathType::Windows);
+    match prefix.as_slice() {
         // Check if the prefix is "/mnt/c/" or similar, which is how WSL refers to Windows drive
         // "C:\". Valid drive names are a..=z, which are bytes 97..=122.
         [TypedComponent::Unix(UnixComponent::RootDir), TypedComponent::Unix(UnixComponent::Normal(b"mnt")), TypedComponent::Unix(UnixComponent::Normal(bytes))]
             if bytes.len() == 1 && (97..=122).contains(&bytes[0]) =>
         {
-            let mut windows_path = TypedPathBuf::new(PathType::Windows);
             windows_path.push([*bytes, b":\\"].concat());
             for component in unix_path.with_windows_encoding().components().skip(3) {
                 windows_path.push(component.as_bytes());
             }
-            windows_path
+            let pathbuf = PathBuf::try_from(windows_path)
+                .map_err(WSLPathConversionError::CouldNotConvertToPath)?;
+            // Many directories are symlinks into the underlying file-system location in Windows.
+            match std::fs::read_link(&pathbuf) {
+                Ok(linked_file) => Ok(linked_file),
+                Err(_) => Ok(pathbuf),
+            }
         }
         _ => {
-            let mut windows_path = TypedPathBuf::new(PathType::Windows);
             windows_path.push(format!(r"\\WSL$\{distro_name}"));
             for component in unix_path
                 .with_windows_encoding()
@@ -478,15 +483,8 @@ pub fn convert_wsl_to_windows_host_path(
             {
                 windows_path.push(component.as_bytes());
             }
-            windows_path
+            PathBuf::try_from(windows_path).map_err(WSLPathConversionError::CouldNotConvertToPath)
         }
-    };
-    let pathbuf =
-        PathBuf::try_from(windows_path).map_err(WSLPathConversionError::CouldNotConvertToPath)?;
-    // Many directories are symlinks into the underlying file-system location in Windows.
-    match std::fs::read_link(&pathbuf) {
-        Ok(linked_file) => Ok(linked_file),
-        Err(_) => Ok(pathbuf),
     }
 }
 
@@ -699,6 +697,31 @@ pub fn convert_windows_path_to_wsl(windows_path: &str) -> String {
 /// Converts a Windows-native path to an MSYS2 POSIX-style path, e.g. `C:\foo` → `/c/foo`.
 pub fn convert_windows_path_to_msys2(windows_path: &str) -> String {
     convert_windows_path_with_drive_prefix(windows_path, "/")
+}
+
+/// Converts a `file://` URI drive path back into a Windows-native path, e.g.
+/// `/E:/CLAUDE-BASE` → `E:\CLAUDE-BASE` and `/E:/` → `E:\`.
+///
+/// # Examples
+/// ```
+/// use warp_util::path::file_uri_drive_path_to_windows;
+///
+/// assert_eq!(file_uri_drive_path_to_windows("/E:/CLAUDE-BASE"), "E:\\CLAUDE-BASE");
+/// assert_eq!(file_uri_drive_path_to_windows("/E:/"), "E:\\");
+/// assert_eq!(file_uri_drive_path_to_windows("/Users/foo/bar"), "/Users/foo/bar");
+/// ```
+pub fn file_uri_drive_path_to_windows(path: &str) -> Cow<'_, str> {
+    let bytes = path.as_bytes();
+    let is_drive_path = bytes.len() >= 3
+        && bytes[0] == b'/'
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+        && (bytes.len() == 3 || bytes[3] == b'/');
+    if is_drive_path {
+        Cow::Owned(path[1..].replace('/', "\\"))
+    } else {
+        Cow::Borrowed(path)
+    }
 }
 
 /// Trait for path-like values that can participate in ancestor-aware

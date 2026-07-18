@@ -12,7 +12,9 @@ use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, HDESK, OpenInputDesktop,
 };
 
-use crate::{Action, ActionResult, Options};
+// Video recording is not yet implemented on Windows; reuse the no-op recorder.
+pub use crate::noop::Recorder;
+use crate::{Action, ActionResult, Options, TargetedAction};
 
 /// Returns whether computer_use can drive input on this machine right now.
 ///
@@ -22,6 +24,12 @@ use crate::{Action, ActionResult, Options};
 /// fails, so we'd rather fail fast here than surface the error mid-action.
 pub fn is_supported_on_current_platform() -> bool {
     probe_input_desktop_available()
+}
+
+/// Reports whether background, per-window control is available. The Windows input stack drives the
+/// screen / foreground window, so per-window background control is unsupported.
+pub fn background_supported() -> bool {
+    false
 }
 
 /// Shared probe used by both [`is_supported_on_current_platform`] and [`Actor::new`] so the
@@ -103,7 +111,7 @@ impl super::Actor for Actor {
 
     async fn perform_actions(
         &mut self,
-        actions: &[Action],
+        actions: &[TargetedAction],
         options: Options,
     ) -> Result<ActionResult, String> {
         // Probe at the top of every call so transient loss of the input desktop (workstation
@@ -115,7 +123,10 @@ impl super::Actor for Actor {
         let keyboard = &mut self.keyboard;
         let mouse = &mut self.mouse;
 
-        for action in actions {
+        for targeted in actions {
+            // Per-window targeting is not supported on Windows; act on the screen / foreground
+            // window regardless of the requested target.
+            let action: &Action = &targeted.action;
             match action {
                 Action::Wait(duration) => {
                     Timer::after(*duration).await;
@@ -152,9 +163,9 @@ impl super::Actor for Actor {
             None
         };
 
-        Ok(ActionResult {
+        Ok(ActionResult::legacy(
             screenshot,
-            cursor_position: Some(mouse.current_position()?),
-        })
+            Some(mouse.current_position()?),
+        ))
     }
 }

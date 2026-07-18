@@ -1,25 +1,31 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
 use ai::agent::action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult};
+use ai::agent::{
+    AskUserQuestionAction, AskUserQuestionCurrent, AskUserQuestionEffect, AskUserQuestionPhase,
+    AskUserQuestionSession, QuestionDraft,
+};
 use itertools::Itertools;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
     Border, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Expanded, Fill, Flex, FormattedTextElement, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    CrossAxisAlignment, Fill, Flex, FormattedTextElement, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Point, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
+use warpui::event::DispatchedEvent;
+use warpui::geometry::vector::Vector2F;
 use warpui::keymap::{FixedBinding, Keystroke};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::components::Coords;
 use warpui::units::Pixels;
 use warpui::{
-    AppContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
-    TypedActionView, View, ViewContext, ViewHandle,
+    AfterLayoutContext, AppContext, Element, Entity, EntityId, EventContext, FocusContext,
+    LayoutContext, ModelHandle, PaintContext, SingletonEntity, SizeConstraint, TypedActionView,
+    View, ViewContext, ViewHandle,
 };
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -62,28 +68,14 @@ use crate::Appearance;
 const ASK_USER_QUESTION_ACTIVE: &str = "AskUserQuestionActive";
 
 pub(crate) const ASK_USER_QUESTION_AUTO_ADVANCE_DELAY: Duration = Duration::from_millis(300);
-pub(crate) const ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT: f32 = 320.;
-pub(crate) const ASK_USER_QUESTION_OPTION_BUTTON_VERTICAL_SPACING: f32 = 4.;
+pub(crate) const ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT: f32 = 520.;
+pub(crate) const ASK_USER_QUESTION_SINGLE_MAX_CONTAINER_HEIGHT: f32 = 800.;
+// Must match `MARGIN_BETWEEN_BUTTONS` in number_shortcut_buttons.rs so off-screen measurement
+// copies match the interactive option list's height.
+const ASK_USER_QUESTION_OPTION_BUTTON_VERTICAL_SPACING: f32 = 4.;
 pub(crate) const ASK_USER_QUESTION_TEXT_TOP_PADDING: f32 = 16.;
 pub(crate) const ASK_USER_QUESTION_TEXT_BOTTOM_PADDING: f32 = 8.;
 pub(crate) const ASK_USER_QUESTION_OPTIONS_BOTTOM_PADDING: f32 = 16.;
-
-// Assumes single-line labels; wrapped text will be taller but the container
-// caps at ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT and scrolls on overflow.
-fn estimated_min_height_for_all_options(max_option_count: usize, monospace_font_size: f32) -> f32 {
-    (max_option_count as f32 * (monospace_font_size + 16.))
-        + (max_option_count.saturating_sub(1) as f32
-            * ASK_USER_QUESTION_OPTION_BUTTON_VERTICAL_SPACING)
-        + ASK_USER_QUESTION_OPTIONS_BOTTOM_PADDING
-}
-
-fn ask_user_question_text_height(appearance: &Appearance, app: &AppContext) -> f32 {
-    app.font_cache().line_height(
-        appearance.monospace_font_size(),
-        appearance.line_height_ratio(),
-    ) + ASK_USER_QUESTION_TEXT_TOP_PADDING
-        + ASK_USER_QUESTION_TEXT_BOTTOM_PADDING
-}
 
 fn ask_user_question_header_height(appearance: &Appearance, app: &AppContext) -> f32 {
     let title_line_height = app.font_cache().line_height(
@@ -94,25 +86,6 @@ fn ask_user_question_header_height(appearance: &Appearance, app: &AppContext) ->
         .max(icon_size(app))
         .max(ButtonSize::InlineActionHeader.button_height(appearance, app))
         + (2. * INLINE_ACTION_HEADER_VERTICAL_PADDING)
-}
-
-fn ask_user_question_container_height(
-    max_option_count: usize,
-    appearance: &Appearance,
-    has_nav_footer: bool,
-    app: &AppContext,
-) -> f32 {
-    let mut natural_height = ask_user_question_header_height(appearance, app)
-        + ask_user_question_text_height(appearance, app)
-        + estimated_min_height_for_all_options(max_option_count, appearance.monospace_font_size());
-    if has_nav_footer {
-        natural_height += standard_message_bar_height(app) + 1.;
-    }
-    natural_height.min(ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT)
-}
-
-fn ask_user_question_auto_advance_enabled(is_multiselect: bool, is_last_question: bool) -> bool {
-    is_last_question || !is_multiselect
 }
 
 pub fn init(app: &mut AppContext) {
@@ -167,150 +140,6 @@ pub enum AskUserQuestionViewEvent {
     SpeedbumpPermissionChanged(AskUserQuestionPermission),
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-/// In-progress answer data for a single question while the user is editing.
-/// Tracks selected choices plus optional free-text "Other" input.
-pub(crate) struct QuestionDraft {
-    pub selected_option_indices: HashSet<usize>,
-    pub other_text: Option<String>,
-    pub is_other_input_active: bool,
-}
-
-impl QuestionDraft {
-    fn has_answer(&self) -> bool {
-        !self.selected_option_indices.is_empty()
-            || self
-                .other_text
-                .as_deref()
-                .is_some_and(|text| !text.is_empty())
-    }
-    fn is_empty(&self) -> bool {
-        !self.has_answer() && !self.is_other_input_active
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-/// Per-question draft slot used by the questionnaire state machine.
-/// `Unanswered` is intentionally distinct from an empty `Answered` draft.
-enum QuestionDraftState {
-    #[default]
-    Unanswered,
-    Answered(QuestionDraft),
-}
-
-/// Snapshot of the currently visible question and its optional draft.
-#[derive(Clone, Copy)]
-struct AskUserQuestionCurrent<'a> {
-    question: &'a AskUserQuestionItem,
-    draft: Option<&'a QuestionDraft>,
-}
-
-/// Rendering phase for this questionnaire block.
-#[derive(Clone, Copy)]
-enum AskUserQuestionPhase<'a> {
-    Editing,
-    Completed {
-        answers: &'a [AskUserQuestionAnswerItem],
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-/// Editing-phase state for the questionnaire.
-/// Holds the active question index and one draft slot per question.
-struct AskUserQuestionEditingState {
-    current_question_index: usize,
-    drafts: Vec<QuestionDraftState>,
-}
-
-impl AskUserQuestionEditingState {
-    // Helpers for reading/updating the active question cursor and per-question draft slots.
-    fn new(draft_count: usize) -> Self {
-        Self {
-            current_question_index: 0,
-            drafts: vec![QuestionDraftState::Unanswered; draft_count],
-        }
-    }
-
-    fn current_question_index(&self) -> usize {
-        self.current_question_index
-    }
-
-    fn current_draft(&self) -> Option<&QuestionDraft> {
-        self.draft_for_question(self.current_question_index)
-    }
-
-    fn draft_for_question(&self, index: usize) -> Option<&QuestionDraft> {
-        let QuestionDraftState::Answered(draft) = self.drafts.get(index)? else {
-            return None;
-        };
-        Some(draft)
-    }
-
-    fn is_last_question(&self, question_count: usize) -> bool {
-        self.current_question_index + 1 >= question_count
-    }
-
-    fn update_current_draft(&mut self, update: impl FnOnce(&mut QuestionDraft)) {
-        let Some(slot) = self.drafts.get_mut(self.current_question_index) else {
-            return;
-        };
-
-        // Store unanswered questions as a distinct state instead of an empty draft so later logic
-        // can tell the difference between "no answer yet" and "there is answer state to render".
-        let mut draft = match std::mem::take(slot) {
-            QuestionDraftState::Unanswered => QuestionDraft::default(),
-            QuestionDraftState::Answered(draft) => draft,
-        };
-        update(&mut draft);
-        *slot = if draft.is_empty() {
-            QuestionDraftState::Unanswered
-        } else {
-            QuestionDraftState::Answered(draft)
-        };
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-/// Lifecycle state for the questionnaire flow.
-/// `Editing` is mutable local draft state; `Completed` is the frozen submitted summary.
-enum AskUserQuestionState {
-    Editing(AskUserQuestionEditingState),
-    Completed {
-        answers: Vec<AskUserQuestionAnswerItem>,
-    },
-}
-
-/// State-machine inputs derived from UI interactions.
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum AskUserQuestionAction {
-    ToggleOption {
-        option_index: usize,
-    },
-    OpenOtherInput,
-    SaveOtherText {
-        text: Option<String>,
-    },
-    NavigatePrev,
-    NavigateNext,
-    PressEnter {
-        highlighted_index: Option<usize>,
-        active_other_text: Option<String>,
-    },
-    Confirm,
-    SkipAll,
-}
-
-/// State-machine outputs that tell the view which follow-up UI work to do.
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum AskUserQuestionEffect {
-    Noop,
-    RefreshCurrent,
-    FocusOtherInput,
-    ShowQuestion,
-    ScheduleAutoAdvance,
-    Submit(Vec<AskUserQuestionAnswerItem>),
-}
-
 /// Derived render state for controls that depend on the active question/draft.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AskUserQuestionViewState {
@@ -344,378 +173,6 @@ struct AskUserQuestionInteractiveViews {
 struct AskUserQuestionCompletionState {
     label: String,
     status_icon: warpui::elements::Icon,
-}
-
-/// Local questionnaire state machine used by the view.
-/// UI events are translated into actions here, which update internal state and return effects for
-/// follow-up view work (focus, refresh, navigation, submit).
-struct AskUserQuestionSession {
-    questions: Vec<AskUserQuestionItem>,
-    state: AskUserQuestionState,
-}
-
-/// Owns questionnaire prompts and applies state transitions independently of persisted action
-/// status, returning effects for the view to execute.
-impl AskUserQuestionSession {
-    fn new(mut questions: Vec<AskUserQuestionItem>) -> Self {
-        // Put multi-select questions before single-select so the last question
-        // can auto-submit after a single option toggle.
-        questions.sort_by_key(|q| !q.is_multiselect());
-        Self {
-            state: AskUserQuestionState::Editing(AskUserQuestionEditingState::new(questions.len())),
-            questions,
-        }
-    }
-
-    fn phase(&self) -> AskUserQuestionPhase<'_> {
-        match &self.state {
-            AskUserQuestionState::Editing(_) => AskUserQuestionPhase::Editing,
-            AskUserQuestionState::Completed { answers } => {
-                AskUserQuestionPhase::Completed { answers }
-            }
-        }
-    }
-
-    fn is_editing(&self) -> bool {
-        matches!(self.state, AskUserQuestionState::Editing(_))
-    }
-
-    fn questions(&self) -> &[AskUserQuestionItem] {
-        &self.questions
-    }
-
-    fn question_count(&self) -> usize {
-        self.questions.len()
-    }
-
-    fn has_multiple_questions(&self) -> bool {
-        self.question_count() > 1
-    }
-
-    fn current(&self) -> Option<AskUserQuestionCurrent<'_>> {
-        let AskUserQuestionState::Editing(editing) = &self.state else {
-            return None;
-        };
-
-        Some(AskUserQuestionCurrent {
-            question: self.questions.get(editing.current_question_index())?,
-            draft: editing.current_draft(),
-        })
-    }
-
-    fn current_question_index(&self) -> usize {
-        match &self.state {
-            AskUserQuestionState::Editing(editing) => editing.current_question_index(),
-            AskUserQuestionState::Completed { .. } => 0,
-        }
-    }
-
-    fn is_last_question(&self) -> bool {
-        match &self.state {
-            AskUserQuestionState::Editing(editing) => {
-                editing.is_last_question(self.questions.len())
-            }
-            AskUserQuestionState::Completed { .. } => false,
-        }
-    }
-
-    fn max_option_count(&self) -> usize {
-        self.questions
-            .iter()
-            .map(AskUserQuestionItem::numbered_option_count)
-            .max()
-            .unwrap_or(1)
-    }
-
-    // Centralize all state transitions so the view layer only maps UI events to actions and then
-    // applies the returned effect.
-    fn apply(&mut self, action: AskUserQuestionAction) -> AskUserQuestionEffect {
-        match action {
-            AskUserQuestionAction::ToggleOption { option_index } => {
-                self.toggle_option(option_index)
-            }
-            AskUserQuestionAction::OpenOtherInput => self.open_other_input(),
-            AskUserQuestionAction::SaveOtherText { text } => self.save_other_text(text),
-            AskUserQuestionAction::NavigatePrev => self.navigate_prev(),
-            AskUserQuestionAction::NavigateNext => self.navigate_next(),
-            AskUserQuestionAction::PressEnter {
-                highlighted_index,
-                active_other_text,
-            } => self.press_enter(highlighted_index, active_other_text),
-            AskUserQuestionAction::Confirm => self.confirm(),
-            AskUserQuestionAction::SkipAll => self.skip_all(),
-        }
-    }
-
-    fn editing_state_mut(&mut self) -> Option<&mut AskUserQuestionEditingState> {
-        let AskUserQuestionState::Editing(editing) = &mut self.state else {
-            return None;
-        };
-        Some(editing)
-    }
-
-    fn toggle_option(&mut self, option_index: usize) -> AskUserQuestionEffect {
-        let Some((is_multi_select, auto_advance_enabled)) = self.current().map(|current| {
-            let is_multi_select = current.question.is_multiselect();
-            (
-                is_multi_select,
-                ask_user_question_auto_advance_enabled(is_multi_select, self.is_last_question()),
-            )
-        }) else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        let Some(editing) = self.editing_state_mut() else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        let mut should_auto_advance_after_toggle = false;
-        editing.update_current_draft(|draft| {
-            if is_multi_select {
-                // Multiselect behaves like a checklist: toggling one option should not affect any
-                // of the other selected options, and only the last question is allowed to auto-advance.
-                if !draft.selected_option_indices.insert(option_index) {
-                    draft.selected_option_indices.remove(&option_index);
-                }
-                should_auto_advance_after_toggle =
-                    auto_advance_enabled && !draft.selected_option_indices.is_empty();
-                return;
-            }
-            // Single-select behaves like a radio group, except clicking the selected option again
-            // clears the answer entirely.
-            if draft.selected_option_indices.contains(&option_index) {
-                draft.selected_option_indices.clear();
-                draft.other_text = None;
-                draft.is_other_input_active = false;
-                return;
-            }
-
-            draft.selected_option_indices.clear();
-            draft.selected_option_indices.insert(option_index);
-            draft.other_text = None;
-            draft.is_other_input_active = false;
-            should_auto_advance_after_toggle = auto_advance_enabled;
-        });
-
-        if should_auto_advance_after_toggle {
-            AskUserQuestionEffect::ScheduleAutoAdvance
-        } else {
-            AskUserQuestionEffect::RefreshCurrent
-        }
-    }
-
-    fn open_other_input(&mut self) -> AskUserQuestionEffect {
-        let Some(is_multi_select) = self
-            .current()
-            .map(|current| current.question.is_multiselect())
-        else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        let Some(editing) = self.editing_state_mut() else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        editing.update_current_draft(|draft| {
-            if !is_multi_select {
-                draft.selected_option_indices.clear();
-            }
-            draft.is_other_input_active = true;
-        });
-        AskUserQuestionEffect::FocusOtherInput
-    }
-
-    fn save_other_text(&mut self, text: Option<String>) -> AskUserQuestionEffect {
-        let Some(auto_advance_enabled) = self.current().map(|current| {
-            ask_user_question_auto_advance_enabled(
-                current.question.is_multiselect(),
-                self.is_last_question(),
-            )
-        }) else {
-            return AskUserQuestionEffect::Noop;
-        };
-        let Some(editing) = self.editing_state_mut() else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        editing.update_current_draft(|draft| {
-            draft.other_text = text;
-            draft.is_other_input_active = false;
-        });
-        if editing
-            .current_draft()
-            .is_some_and(|draft| draft.other_text.is_some())
-        {
-            if auto_advance_enabled {
-                AskUserQuestionEffect::ScheduleAutoAdvance
-            } else {
-                AskUserQuestionEffect::RefreshCurrent
-            }
-        } else {
-            AskUserQuestionEffect::RefreshCurrent
-        }
-    }
-
-    fn navigate_prev(&mut self) -> AskUserQuestionEffect {
-        let Some(editing) = self.editing_state_mut() else {
-            return AskUserQuestionEffect::Noop;
-        };
-        if editing.current_question_index == 0 {
-            return AskUserQuestionEffect::Noop;
-        }
-
-        editing.current_question_index -= 1;
-        AskUserQuestionEffect::ShowQuestion
-    }
-
-    fn navigate_next(&mut self) -> AskUserQuestionEffect {
-        let question_count = self.questions.len();
-        let Some(editing) = self.editing_state_mut() else {
-            return AskUserQuestionEffect::Noop;
-        };
-        if editing.is_last_question(question_count) {
-            return AskUserQuestionEffect::Noop;
-        }
-
-        editing.current_question_index += 1;
-        AskUserQuestionEffect::ShowQuestion
-    }
-
-    fn press_enter(
-        &mut self,
-        highlighted_index: Option<usize>,
-        active_other_text: Option<String>,
-    ) -> AskUserQuestionEffect {
-        let Some((supports_other, option_count)) = self.current().map(|current| {
-            (
-                current.question.supports_other(),
-                current
-                    .question
-                    .multiple_choice_options()
-                    .map_or(0, |options| options.len()),
-            )
-        }) else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        if supports_other && highlighted_index == Some(option_count) {
-            return self.open_other_input();
-        }
-
-        if let Some(option_index) = highlighted_index.filter(|index| *index < option_count) {
-            let _ = self.toggle_option(option_index);
-            return self.enter_submit_effect();
-        }
-
-        if self
-            .current()
-            .and_then(|current| current.draft)
-            .is_some_and(|draft| draft.is_other_input_active)
-        {
-            let _ = self.save_other_text(active_other_text);
-        }
-
-        self.enter_submit_effect()
-    }
-
-    fn enter_submit_effect(&mut self) -> AskUserQuestionEffect {
-        if self
-            .current()
-            .and_then(|current| current.draft)
-            .is_some_and(QuestionDraft::has_answer)
-        {
-            AskUserQuestionEffect::ScheduleAutoAdvance
-        } else {
-            self.confirm()
-        }
-    }
-
-    fn confirm(&mut self) -> AskUserQuestionEffect {
-        let question_count = self.questions.len();
-        let drafts = {
-            let Some(editing) = self.editing_state_mut() else {
-                return AskUserQuestionEffect::Noop;
-            };
-            if !editing.is_last_question(question_count) {
-                editing.current_question_index += 1;
-                return AskUserQuestionEffect::ShowQuestion;
-            }
-
-            editing.drafts.clone()
-        };
-        let answers = Self::build_answers(&self.questions, &drafts);
-
-        self.state = AskUserQuestionState::Completed {
-            answers: answers.clone(),
-        };
-        AskUserQuestionEffect::Submit(answers)
-    }
-
-    fn skip_all(&mut self) -> AskUserQuestionEffect {
-        let drafts = {
-            let Some(editing) = self.editing_state_mut() else {
-                return AskUserQuestionEffect::Noop;
-            };
-            for draft in &mut editing.drafts {
-                *draft = QuestionDraftState::Unanswered;
-            }
-
-            editing.drafts.clone()
-        };
-        let answers = Self::build_answers(&self.questions, &drafts);
-
-        self.state = AskUserQuestionState::Completed {
-            answers: answers.clone(),
-        };
-        AskUserQuestionEffect::Submit(answers)
-    }
-
-    fn build_answers(
-        questions: &[AskUserQuestionItem],
-        drafts: &[QuestionDraftState],
-    ) -> Vec<AskUserQuestionAnswerItem> {
-        questions
-            .iter()
-            .enumerate()
-            .map(|(index, question)| Self::build_answer(question, drafts.get(index)))
-            .collect_vec()
-    }
-
-    fn build_answer(
-        question: &AskUserQuestionItem,
-        draft: Option<&QuestionDraftState>,
-    ) -> AskUserQuestionAnswerItem {
-        // The executor expects one answer entry per question, so unanswered drafts and drafts that
-        // collapse back to "no actual content" are both normalized to Skipped here.
-        let Some(QuestionDraftState::Answered(draft)) = draft else {
-            return AskUserQuestionAnswerItem::Skipped {
-                question_id: question.question_id.clone(),
-            };
-        };
-
-        let selected_options = match &question.question_type {
-            AskUserQuestionType::MultipleChoice { options, .. } => draft
-                .selected_option_indices
-                .iter()
-                .copied()
-                .sorted_unstable()
-                .filter_map(|index| options.get(index).map(|option| option.label.clone()))
-                .collect_vec(),
-        };
-        let other_text = draft.other_text.clone().unwrap_or_default();
-
-        if selected_options.is_empty() && other_text.is_empty() {
-            AskUserQuestionAnswerItem::Skipped {
-                question_id: question.question_id.clone(),
-            }
-        } else {
-            AskUserQuestionAnswerItem::Answered {
-                question_id: question.question_id.clone(),
-                selected_options,
-                other_text,
-            }
-        }
-    }
 }
 
 /// Stateful inline-action view that renders questionnaire UI and coordinates with the action model.
@@ -860,6 +317,7 @@ impl AskUserQuestionView {
             );
             dropdown.set_vertical_margin(0., ctx);
             dropdown.set_top_bar_height(24., ctx);
+            dropdown.set_main_axis_size(MainAxisSize::Min, ctx);
             let permissions = [
                 AskUserQuestionPermission::Never,
                 AskUserQuestionPermission::AskExceptInAutoApprove,
@@ -1262,20 +720,23 @@ impl AskUserQuestionView {
     fn render_active(&self, appearance: &Appearance, app: &AppContext) -> Option<Box<dyn Element>> {
         let theme = appearance.theme();
         let current = self.session.current()?;
-        let mut question_text = current.question.question.clone();
-        if current.question.is_multiselect() {
-            question_text.push_str(" (select all that apply)");
+        let question_text = Self::question_display_text(current.question);
+        let is_single_question = !self.session.has_multiple_questions();
+        let has_nav_footer = !is_single_question;
+
+        let max_height = if is_single_question {
+            ASK_USER_QUESTION_SINGLE_MAX_CONTAINER_HEIGHT
+        } else {
+            ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT
+        };
+        let mut non_body_height = ask_user_question_header_height(appearance, app);
+        if has_nav_footer {
+            non_body_height += standard_message_bar_height(app) + 1.;
         }
-        let has_nav_footer = self.session.has_multiple_questions();
-        let container_height = ask_user_question_container_height(
-            self.session.max_option_count(),
-            appearance,
-            has_nav_footer,
-            app,
-        );
+        let body_max_height = (max_height - non_body_height).max(0.);
 
         let mut content = Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         let mut header_right = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
@@ -1291,12 +752,33 @@ impl AskUserQuestionView {
                 .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(8.)))
                 .render_header(app, Some(header_right.finish())),
         );
+
+        // The body sizes to its content, capped at `body_max_height` (scrolling beyond that). For
+        // multi-question cards we stack an off-screen, non-interactive measurement copy of every
+        // question behind the visible one. `Stack` sizes to its tallest child, so the card collapses
+        // to the height of the tallest question and stays fixed as the user navigates, rather than
+        // resizing per question (only the visible question can be measured directly otherwise).
+        let visible_body = self.render_question_body(&question_text, appearance, theme);
+        let body: Box<dyn Element> = if is_single_question {
+            visible_body
+        } else {
+            let mut stack = Stack::new();
+            for (index, question) in self.session.questions().iter().enumerate() {
+                stack.add_child(Self::render_measurement_body(
+                    question,
+                    self.session.draft_for_question(index),
+                    appearance,
+                    theme,
+                    app,
+                ));
+            }
+            stack.add_child(visible_body);
+            stack.finish()
+        };
         content.add_child(
-            Expanded::new(
-                1.,
-                self.render_question_body(&question_text, appearance, theme),
-            )
-            .finish(),
+            ConstrainedBox::new(body)
+                .with_max_height(body_max_height)
+                .finish(),
         );
 
         if has_nav_footer {
@@ -1307,7 +789,7 @@ impl AskUserQuestionView {
         Some(
             wrap_with_content_item_spacing(
                 ConstrainedBox::new(content.finish())
-                    .with_height(container_height)
+                    .with_max_height(max_height)
                     .finish(),
             )
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
@@ -1464,6 +946,16 @@ impl AskUserQuestionView {
         )
     }
 
+    /// The question prompt as shown to the user, with the multiselect hint appended. Shared by the
+    /// live body and its measurement copies so both wrap at the same height.
+    fn question_display_text(question: &AskUserQuestionItem) -> String {
+        let mut text = question.question.clone();
+        if question.is_multiselect() {
+            text.push_str(" (select all that apply)");
+        }
+        text
+    }
+
     fn render_question_text(
         question_text: &str,
         appearance: &Appearance,
@@ -1493,16 +985,45 @@ impl AskUserQuestionView {
         appearance: &Appearance,
         theme: &WarpTheme,
     ) -> Box<dyn Element> {
-        let body = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(Self::render_question_text(question_text, appearance, theme))
-            .with_child(self.render_options_list())
-            .finish();
+        Self::wrap_scrollable_body(
+            Self::render_question_text(question_text, appearance, theme),
+            self.render_options_list(),
+            self.options_scroll_state.clone(),
+            theme,
+        )
+    }
 
+    /// Stacks the question text above its options. Shared by the live body and its measurement
+    /// copies. `MainAxisSize::Min` keeps the column content-sized so the surrounding scrollable
+    /// reports the natural height (clamped to the cap) instead of filling the available space.
+    fn body_column(question_text: Box<dyn Element>, options: Box<dyn Element>) -> Box<dyn Element> {
+        Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(question_text)
+            .with_child(options)
+            .finish()
+    }
+
+    /// Applies the body's horizontal insets. Shared so the live body and its measurement copies
+    /// wrap text at exactly the same width.
+    fn with_body_insets(content: Box<dyn Element>) -> Box<dyn Element> {
+        Container::new(content)
+            .with_margin_left(INLINE_ACTION_HORIZONTAL_PADDING)
+            .with_margin_right(12.)
+            .finish()
+    }
+
+    fn wrap_scrollable_body(
+        question_text: Box<dyn Element>,
+        options: Box<dyn Element>,
+        scroll_state: ClippedScrollStateHandle,
+        theme: &WarpTheme,
+    ) -> Box<dyn Element> {
         let scrollable = warpui::elements::NewScrollable::vertical(
             SingleAxisConfig::Clipped {
-                handle: self.options_scroll_state.clone(),
-                child: body,
+                handle: scroll_state,
+                child: Self::body_column(question_text, options),
             },
             theme.nonactive_ui_detail().into(),
             theme.active_ui_detail().into(),
@@ -1510,9 +1031,55 @@ impl AskUserQuestionView {
         )
         .finish();
 
-        Container::new(Clipped::new(scrollable).finish())
-            .with_margin_left(INLINE_ACTION_HORIZONTAL_PADDING)
-            .with_margin_right(12.)
+        Self::with_body_insets(Clipped::new(scrollable).finish())
+    }
+
+    /// Builds a non-interactive, non-painted copy of a question's body purely for layout
+    /// measurement. It goes through the same `wrap_scrollable_body` wrapper as the live body so the
+    /// two measure identically once a question overflows (the scrollable affects wrapping and
+    /// clamping); `MeasureOnly` keeps it off-screen and inert. The question's saved `draft` is
+    /// passed through so the copy reflects its real answer state (e.g. a long custom "Other..."
+    /// answer) and the card stays a fixed height across navigation.
+    fn render_measurement_body(
+        question: &AskUserQuestionItem,
+        draft: Option<&QuestionDraft>,
+        appearance: &Appearance,
+        theme: &WarpTheme,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let current = AskUserQuestionCurrent { question, draft };
+        let body = Self::wrap_scrollable_body(
+            Self::render_question_text(&Self::question_display_text(question), appearance, theme),
+            Self::render_static_options(current, app),
+            ClippedScrollStateHandle::new(),
+            theme,
+        );
+        MeasureOnly::new(body).finish()
+    }
+
+    /// Renders a question's option buttons as static, non-interactive elements matching the live
+    /// `NumberShortcutButtons` layout. Used only for measurement copies.
+    fn render_static_options(
+        current: AskUserQuestionCurrent<'_>,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let builders = Self::build_question_buttons(Some(current), None);
+        let button_count = builders.len();
+        let mut options = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        for (index, builder) in builders.iter().enumerate() {
+            let margin_bottom = if index + 1 == button_count {
+                0.
+            } else {
+                ASK_USER_QUESTION_OPTION_BUTTON_VERTICAL_SPACING
+            };
+            options.add_child(
+                Container::new(builder.build_measurement_element(app))
+                    .with_margin_bottom(margin_bottom)
+                    .finish(),
+            );
+        }
+        Container::new(options.finish())
+            .with_padding_bottom(ASK_USER_QUESTION_OPTIONS_BOTTOM_PADDING)
             .finish()
     }
 
@@ -1708,7 +1275,7 @@ impl TypedActionView for AskUserQuestionView {
                     .buttons
                     .read(ctx, |buttons, _| buttons.selected_button_index());
                 let active_other_text = self.read_active_other_text(ctx);
-                let effect = self.session.apply(AskUserQuestionAction::PressEnter {
+                let effect = self.session.apply(AskUserQuestionAction::SubmitAnswer {
                     highlighted_index,
                     active_other_text,
                 });
@@ -1839,6 +1406,58 @@ pub(crate) fn render_text_with_markdown_support(
             .soft_wrap(true)
             .with_color(text_color)
             .finish()
+    }
+}
+
+/// An element that lays out its child—so the child contributes to sizing—but never paints it or
+/// routes events to it, clamping the reported size to the incoming constraint. Combined with
+/// `Stack`, this lets a multi-question card measure off-screen copies of every question and size to
+/// the tallest one, without showing or interacting with them.
+struct MeasureOnly {
+    child: Box<dyn Element>,
+}
+
+impl MeasureOnly {
+    fn new(child: Box<dyn Element>) -> Self {
+        Self { child }
+    }
+}
+
+impl Element for MeasureOnly {
+    fn layout(
+        &mut self,
+        constraint: SizeConstraint,
+        ctx: &mut LayoutContext,
+        app: &AppContext,
+    ) -> Vector2F {
+        // Clamp to the incoming constraint so an over-tall copy can't push the `Stack` past the
+        // available height (the copy has no scrollable of its own to do this clamping).
+        self.child.layout(constraint, ctx, app).min(constraint.max)
+    }
+
+    fn after_layout(&mut self, _ctx: &mut AfterLayoutContext, _app: &AppContext) {
+        // Measurement-only: the child is never painted, so there is nothing to register here.
+    }
+
+    fn paint(&mut self, _origin: Vector2F, _ctx: &mut PaintContext, _app: &AppContext) {
+        // Intentionally not painted.
+    }
+
+    fn size(&self) -> Option<Vector2F> {
+        self.child.size()
+    }
+
+    fn origin(&self) -> Option<Point> {
+        None
+    }
+
+    fn dispatch_event(
+        &mut self,
+        _event: &DispatchedEvent,
+        _ctx: &mut EventContext,
+        _app: &AppContext,
+    ) -> bool {
+        false
     }
 }
 

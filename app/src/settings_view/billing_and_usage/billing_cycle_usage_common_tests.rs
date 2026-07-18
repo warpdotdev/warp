@@ -1,4 +1,6 @@
-use super::{aggregate_segments, filter_legacy_buckets, has_non_viewer_data, BarSegment};
+use super::{
+    aggregate_segments, filter_legacy_buckets, has_non_viewer_data, legend_cost_types, BarSegment,
+};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry,
@@ -273,4 +275,102 @@ fn aggregate_segments_merges_dupes_drops_zeros_and_sorts() {
     // stray 42 cents on the Payg/Ai entry must not appear here.
     assert_eq!(total_credits, 20 + 17);
     assert_eq!(total_cost_cents, 8);
+}
+
+#[test]
+fn legend_cost_types_excludes_zero_credit_bucket() {
+    // Regression: a base-limit row with no usage must not surface "Base" in
+    // the legend while only Pay-as-you-go credits were actually spent.
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            0,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::Payg,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            50,
+            120,
+        ),
+    ];
+
+    assert_eq!(
+        legend_cost_types(&entries),
+        vec![AiCreditsUsageAndCostType::Payg],
+        "zero-credit BaseLimit row must be dropped from the legend"
+    );
+}
+
+#[test]
+fn legend_cost_types_includes_used_buckets_in_display_order() {
+    // Buckets with real usage appear in the canonical legend order regardless
+    // of input order (Payg listed before BaseLimit here).
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::Payg,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            5,
+            10,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            8,
+            0,
+        ),
+    ];
+
+    assert_eq!(
+        legend_cost_types(&entries),
+        vec![
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageAndCostType::Payg,
+        ],
+        "used buckets should render in canonical order, not input order"
+    );
+}
+
+#[test]
+fn legend_cost_types_excludes_legacy_only_buckets() {
+    // Voice / SuggestedCodeDiffs usage is written as BaseLimit credits but is
+    // dropped from the bars; the legend must match and not show "Base".
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Voice,
+            AiCreditsUsageSource::Local,
+            12,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::SuggestedCodeDiffs,
+            AiCreditsUsageSource::Local,
+            4,
+            0,
+        ),
+    ];
+
+    assert!(
+        legend_cost_types(&entries).is_empty(),
+        "legacy-only base-limit usage must not surface any legend bucket"
+    );
 }

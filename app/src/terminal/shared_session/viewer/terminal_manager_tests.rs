@@ -15,12 +15,14 @@ use warpui::App;
 
 use super::*;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
+use crate::ai::blocklist::QueuedQueryModel;
 // Bring the `TerminalManager` trait into scope (named under a different alias
 // since the local `TerminalManager` struct shadows it) so the trait method
 // `on_view_detached` is callable on the struct.
 use crate::terminal::TerminalManager as _;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::workspace::ToastStack;
 
 /// Stub UUID used for the orchestrator's `AmbientAgentTaskId`; opaque to
 /// the manager.
@@ -57,8 +59,7 @@ fn build_manager_with_registered_ovm(app: &mut App) -> (TerminalManager, Ambient
         history.set_active_conversation_id(id, terminal_view_id, ctx);
     });
 
-    // The OVM registers with the streamer on construction (streamer flag
-    // is expected to be ON in the calling test).
+    // The OVM registers with the streamer on construction.
     let ovm_handle = app.add_model(|ctx| {
         OrchestrationViewerModel::new(parent, terminal_view_id, terminal_view.downgrade(), ctx)
     });
@@ -100,14 +101,41 @@ fn build_manager_with_registered_ovm(app: &mut App) -> (TerminalManager, Ambient
 }
 
 #[test]
+fn command_execution_request_failed_clears_queued_command_in_flight() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|_| ToastStack);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.id();
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, _ctx| {
+            model.arm_command_in_flight(conversation_id);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            TerminalManager::handle_command_execution_request_failed(
+                view,
+                &CommandExecutionFailureReason::StaleBuffer,
+                ctx,
+            );
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _ctx| {
+            assert!(!model.has_command_in_flight(conversation_id));
+        });
+    });
+}
+#[test]
 fn on_view_detached_closed_clears_orchestration_viewer_model_slot() {
     // Regression: closing a viewer pane must drop the OVM and release its
     // streamer registration so the ancestor SSE can be torn down.
     App::test((), |mut app| async move {
-        let _v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-        let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
 
         let (manager, parent) = build_manager_with_registered_ovm(&mut app);
@@ -149,10 +177,6 @@ fn on_view_detached_hidden_for_close_keeps_orchestration_viewer_model_alive() {
     // window. OVM (and the ancestor SSE registration) must stay alive so
     // the pill bar restores seamlessly if the user undoes the close.
     App::test((), |mut app| async move {
-        let _v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-        let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
 
         let (manager, parent) = build_manager_with_registered_ovm(&mut app);
@@ -181,10 +205,6 @@ fn on_view_detached_moved_keeps_orchestration_viewer_model_alive() {
     // to a new pane group. Tearing down the OVM would orphan the pill
     // bar on the moved pane.
     App::test((), |mut app| async move {
-        let _v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-        let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
 
         let (manager, parent) = build_manager_with_registered_ovm(&mut app);
@@ -204,5 +224,63 @@ fn on_view_detached_moved_keeps_orchestration_viewer_model_alive() {
                 "Moved must NOT unregister from the streamer"
             );
         });
+    });
+}
+
+#[test]
+fn handle_viewer_session_end_ignores_stale_ambient_end() {
+    // A stale ambient end (the ended network is no longer the current one) must
+    // be ignored: `handle_viewer_session_end` routes ambient panes through
+    // `end_current_ambient_session`, whose current-network guard bails, so the
+    // helper returns `false` and performs no teardown.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+
+        let (wakeups_tx, _wakeups_rx) = async_channel::unbounded();
+        let (events_tx, _events_rx) = async_channel::unbounded();
+        let (pty_reads_tx, pty_reads_rx) = broadcast(8);
+        let _inactive_pty_reads_rx = pty_reads_rx.deactivate();
+        let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
+        let (_write_to_pty_tx, write_to_pty_rx) = async_channel::unbounded();
+
+        let ended_network = app.add_model(|ctx| {
+            Network::new_for_test(
+                channel_event_proxy,
+                terminal_view.downgrade(),
+                model.clone(),
+                write_to_pty_rx,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+
+        // Empty `current_network` => the ended network is stale.
+        let current_network = Arc::new(FairMutex::new(None));
+        let orchestration_viewer_model = Arc::new(FairMutex::new(None));
+
+        let mut handled = true;
+        app.update(|ctx| {
+            handled = TerminalManager::handle_viewer_session_end(
+                &terminal_view,
+                model.clone(),
+                &current_network,
+                &ended_network,
+                &orchestration_viewer_model,
+                /* is_ambient_agent */ true,
+                ctx,
+            );
+        });
+
+        assert!(
+            !handled,
+            "a stale ambient end (ended network != current) must be ignored"
+        );
+        assert!(
+            !model.lock().shared_session_status().is_finished_viewer(),
+            "an ignored stale ambient end must not finish the viewer"
+        );
     });
 }

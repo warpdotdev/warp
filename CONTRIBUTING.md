@@ -9,6 +9,7 @@ Thanks for helping improve Warp! This guide explains how to open issues, propose
 
 - Bug fixes are welcome once the report is actionable from the provided details or maintainer triage.
 - Feature requests must be marked `ready-to-spec` or `ready-to-implement` before PRs are accepted.
+- Issues marked `warp:reserved-internal` are being handled by the Warp team and are not open for contributor PRs.
 - Specs are the place where technical and design discussion on larger issues happen.
 - Oz automatically triages incoming issues and reviews open PRs.
 - Implementation PRs must include proof of manual testing.
@@ -31,6 +32,7 @@ The Warp team applies one of the following labels when an issue is ready for con
 - **`ready-to-spec`** — The problem is understood but the design is open. Open a spec PR with a *product spec* (`product.md`) and a *tech spec* (`tech.md`) under [`specs/`](specs/) — see [Opening a Spec PR](#opening-a-spec-pr) for what goes in each. This label is **reserved for feature requests**.
 - **`ready-to-implement`** — The issue is ready for a code PR. For bugs, this means the report is sufficiently reproducible or actionable and the likely fix does not need a spec, mocks, or deeper investigation.
 - **`needs-mocks`** — Design mocks are required before implementation can begin. Wait for the Warp team to land them.
+- **`warp:reserved-internal`** — The Warp team is reserving this work for internal implementation or alignment. Do not open a spec or code PR for issues with this label; Oz will reject contributor PRs linked to them with an explanatory comment.
 
 Anyone can pick up a ready issue — readiness labels are not assignments, and the best implementation wins through normal review. If an issue has been sitting un-triaged or you'd like readiness re-evaluated, mention **@oss-maintainers** in a comment to flag it for the team.
 
@@ -136,7 +138,7 @@ Then, **ensure your PR passes code review and includes relevant tests** per our 
 
 ## Using a Coding Agent
 
-You can use **any coding agent** to implement a contribution — for example, Warp's built-in agent, Claude Code, Codex, Gemini CLI, or others — or no agent at all. This repository ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`WARP.md`](WARP.md)) that any harness supporting these formats can pick up.
+You can use **any coding agent** to implement a contribution — for example, Warp's built-in agent, Claude Code, Codex, Gemini CLI, or others — or no agent at all. This repository ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`AGENTS.md`](AGENTS.md)) that any harness supporting these formats can pick up.
 
 If you'd rather have an **Oz cloud agent** implement a ready issue for you, mention **@oss-maintainers** on the issue to request it. Approved requests run **for free** on complimentary Oz credits — you don't need to set up your own Oz account or pay for compute.
 
@@ -151,9 +153,19 @@ All pull requests go through a two-stage review process:
 
 You do not need to manually request reviewers at any stage. After pushing changes that address Oz's feedback, comment `/oz-review` on the PR to request a re-review — you can do this up to **three times** per PR. If something looks stuck or you need additional reviews, mention **@oss-maintainers** on the PR to escalate to the team.
 
+### Stale PRs with requested changes
+
+If a review (from Oz or a maintainer) leaves your PR with **changes requested** and it then goes quiet, automation follows up and eventually closes it so the review queue stays current. This applies only to external-contributor PRs with an active requested-changes review.
+
+- **Reminders** are posted at **7** and **10** days of inactivity, with the **day-10 reminder serving as the final warning**.
+- The PR is **automatically closed at ~14 days** of inactivity — but only after that final warning, so you always get a heads-up first.
+- Only **your** activity resets the timer: pushing to your branch (including a force-push) or commenting on the PR. Maintainer comments don't reset it, since the PR is waiting on you.
+- To keep a PR open, just push updates or reply. A closed PR can be reopened when you're ready to continue (reopen it and push, or ask a maintainer to reopen).
+- Maintainers can apply the **`no-autoclose`** label to exempt a PR that should stay open (for example, when it's blocked on us).
+
 ## Development Setup
 
-See [README.md](README.md) and [WARP.md](WARP.md) for the full engineering guide. Quick start:
+See [README.md](README.md) and [AGENTS.md](AGENTS.md) for the full engineering guide. Quick start:
 
 ```bash
 ./script/bootstrap   # platform-specific setup
@@ -168,7 +180,7 @@ Tests are required for most code changes:
 ### Manual Testing
 Manual testing is required for changes that can be manually tested, and almost all changes can be manually tested. For small, isolated, and visual changes, you should include **before and after screenshots**. For larger, broad, or interactive changes, you should also include a **narrated screen recording**.
 
-You can run the app locally using `./script/run` - see [WARP.md](WARP.md) for more details on how to get set up.
+You can run the app locally using `./script/run` - see [AGENTS.md](AGENTS.md) for more details on how to get set up.
 
 ### Automated Tests
 - **Bug fixes** should include a regression test that would have caught the bug.
@@ -181,7 +193,7 @@ Run unit tests with `cargo nextest run`.
 
 - `./script/format --check` and `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` must pass.
 - Prefer imports over path qualifiers, inline format args (`println!("{x}")`), and exhaustive `match` over `_` wildcards.
-- See [WARP.md](WARP.md) for the full style guide, including WarpUI patterns and terminal model locking rules.
+- See [AGENTS.md](AGENTS.md) for the full style guide, including WarpUI patterns and terminal model locking rules.
 
 ## Commit and Branch Conventions
 

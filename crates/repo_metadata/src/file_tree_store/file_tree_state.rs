@@ -183,7 +183,7 @@ impl FileTreeMapStore {
         Some(child_path)
     }
 
-    pub fn load_at_path(
+    pub async fn load_at_path(
         &mut self,
         path: &StandardizedPath,
         gitignores: &mut Vec<Gitignore>,
@@ -196,16 +196,21 @@ impl FileTreeMapStore {
             loaded: true,
         });
 
-        entry.load(gitignores)?;
+        entry.load(gitignores).await?;
         self.insert_entry_at_path(child_path, entry);
         Ok(())
     }
 
     pub fn insert_entry_at_path(&mut self, path: Arc<StandardizedPath>, entry: Entry) {
         let child_entry_map = FileTreeEntry::from(entry);
-        self.state_map.extend(child_entry_map.state_map.state_map);
+        // The child was just constructed, so its `Arc` is unique and
+        // `try_unwrap` avoids a clone; fall back to cloning only if it is
+        // somehow shared.
+        let child_store =
+            Arc::try_unwrap(child_entry_map.state_map).unwrap_or_else(|arc| (*arc).clone());
+        self.state_map.extend(child_store.state_map);
         self.parent_to_child_map
-            .extend(child_entry_map.state_map.parent_to_child_map);
+            .extend(child_store.parent_to_child_map);
 
         // ATODO test this
         if let Some(parent) = self.parent_directory(&path) {

@@ -1,4 +1,5 @@
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, CrossAxisAlignment, Dismiss,
     Element, Flex, MouseStateHandle, ParentElement, ScrollbarWidth,
@@ -113,7 +114,7 @@ impl HandoffEnvironmentCreationModal {
                 };
 
                 let Some(owner) = owner else {
-                    log::error!("Unable to create environment: not logged in");
+                    report_error!("Unable to create environment: not logged in");
                     ctx.emit(HandoffEnvironmentCreationModalEvent::CreationFailed {
                         error_message: "Not logged in".to_string(),
                     });
@@ -137,7 +138,7 @@ impl HandoffEnvironmentCreationModal {
                         ctx.emit(HandoffEnvironmentCreationModalEvent::Created { env_id });
                     }
                     Err(err) => {
-                        log::error!("Failed to create environment for handoff: {err:#}");
+                        report_error!(&err);
                         ctx.emit(HandoffEnvironmentCreationModalEvent::CreationFailed {
                             error_message: err.to_string(),
                         });

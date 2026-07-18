@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use shell_words::split as split_shell_words;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warp_errors::report_error;
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -13,7 +14,6 @@ use crate::ai::agent::{
     StartAgentExecutionMode, StartAgentResult,
 };
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
-use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 
@@ -33,6 +33,57 @@ fn invalid_local_child_harness_error(harness_type: &str) -> String {
         "Local child harness type is missing.".to_string()
     } else {
         format!("Unsupported local child harness '{harness_name}'.")
+    }
+}
+
+/// Handles local child launch requests produced by older agents, where the
+/// prompt encoded the target CLI command and `execution_mode.harness_type` was
+/// still unset. Normalizing here keeps those requests routed through the Codex
+/// local harness path instead of launching them as Oz child prompts.
+fn parse_legacy_local_child_harness_command(command: &str) -> Option<(String, String)> {
+    let args = split_shell_words(command.trim()).ok()?;
+    match args.as_slice() {
+        [binary, flag, child_prompt]
+            if binary == "codex"
+                && flag == "--dangerously-bypass-approvals-and-sandbox"
+                && !child_prompt.trim().is_empty() =>
+        {
+            Some(("codex".to_string(), child_prompt.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn normalize_legacy_local_child_harness_command(
+    prompt: String,
+    execution_mode: StartAgentExecutionMode,
+) -> (String, StartAgentExecutionMode) {
+    match execution_mode {
+        StartAgentExecutionMode::Local {
+            harness_type: None,
+            model_id,
+        } => {
+            if let Some((harness_type, child_prompt)) =
+                parse_legacy_local_child_harness_command(&prompt)
+            {
+                (
+                    child_prompt,
+                    StartAgentExecutionMode::Local {
+                        harness_type: Some(harness_type),
+                        model_id,
+                    },
+                )
+            } else {
+                (
+                    prompt,
+                    StartAgentExecutionMode::Local {
+                        harness_type: None,
+                        model_id,
+                    },
+                )
+            }
+        }
+        execution_mode => (prompt, execution_mode),
     }
 }
 
@@ -129,37 +180,18 @@ impl StartAgentExecutor {
                 let _ = pending.sender.try_send(StartAgentOutcome::Started {
                     agent_id: id.clone(),
                 });
-                if FeatureFlag::OrchestrationV2.is_enabled() {
-                    OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
-                        streamer.register_watched_run_id(pending.parent_conversation_id, id, ctx);
-                    });
-                } else {
-                    // TODO(QUALITY-733): Remove the legacy v1 orchestration event-service path
-                    // once all orchestration startup events use v2 event streaming.
-                    OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
-                        svc.emit_child_startup_started(child_conversation_id, ctx);
-                    });
-                }
+                OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
+                    streamer.register_watched_run_id(pending.parent_conversation_id, id, ctx);
+                });
             }
             None => {
-                log::error!(
-                    "No agent identifier found for child conversation {child_conversation_id:?}"
+                report_error!(
+                    "No agent identifier found for child conversation",
+                    extra: { "child_conversation_id" => ?child_conversation_id }
                 );
                 let _ = pending.sender.try_send(StartAgentOutcome::Error(
                     "Server did not assign an agent identifier".to_string(),
                 ));
-                if !FeatureFlag::OrchestrationV2.is_enabled() {
-                    // TODO(QUALITY-733): Remove the legacy v1 orchestration event-service path
-                    // once all orchestration startup errors use v2 event streaming.
-                    OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
-                        svc.emit_child_startup_errored(
-                            child_conversation_id,
-                            "missing_agent_id".to_string(),
-                            "Server did not assign an agent identifier".to_string(),
-                            ctx,
-                        );
-                    });
-                }
             }
         }
     }
@@ -174,19 +206,18 @@ impl StartAgentExecutor {
         let Some(pending) = self.pending.remove(&request_id) else {
             return;
         };
-        let _ = pending
-            .sender
-            .try_send(StartAgentOutcome::Error(error_msg.clone()));
-        if !FeatureFlag::OrchestrationV2.is_enabled() {
-            // TODO(QUALITY-733): Remove the legacy v1 orchestration event-service path once all
-            // orchestration lifecycle errors use v2 event streaming.
-            OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
-                svc.emit_child_startup_errored(
-                    child_conversation_id,
-                    "conversation_status".to_string(),
-                    error_msg,
-                    ctx,
-                );
+        let _ = pending.sender.try_send(StartAgentOutcome::Error(error_msg));
+        // A child that reaches `complete_pending_as_error` never obtained an
+        // agent id, so it failed at the launch stage. Clean up its hidden
+        // pane + conversation so the orchestration pill bar does not retain a
+        // dead chip — but only for terminal failures, leaving recoverable
+        // `Blocked` startup states (e.g. awaiting GitHub auth) intact.
+        let should_cleanup = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&child_conversation_id)
+            .is_some_and(|conversation| should_cleanup_failed_child_launch(conversation.status()));
+        if should_cleanup {
+            ctx.emit(StartAgentExecutorEvent::CleanupFailedChildLaunch {
+                conversation_id: child_conversation_id,
             });
         }
     }
@@ -204,7 +235,7 @@ impl StartAgentExecutor {
         };
         if let Some(error_msg) = start_agent_error_message_for_status(
             conversation.status(),
-            conversation.status_error_message(),
+            conversation.status_error_message().as_deref(),
         ) {
             self.complete_pending_as_error(request_id, child_conversation_id, error_msg, ctx);
             return;
@@ -216,6 +247,7 @@ impl StartAgentExecutor {
 
     fn handle_history_event(
         &mut self,
+        _: ModelHandle<BlocklistAIHistoryModel>,
         event: &BlocklistAIHistoryEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -240,7 +272,7 @@ impl StartAgentExecutor {
                 };
                 let error_msg = start_agent_error_message_for_status(
                     conversation.status(),
-                    conversation.status_error_message(),
+                    conversation.status_error_message().as_deref(),
                 );
                 if let Some(error_msg) = error_msg {
                     self.complete_pending_as_error(request_id, *conversation_id, error_msg, ctx);
@@ -260,16 +292,17 @@ impl StartAgentExecutor {
             | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
             | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-            | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+            | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
             | BlocklistAIHistoryEvent::SplitConversation { .. }
             | BlocklistAIHistoryEvent::RemoveConversation { .. }
             | BlocklistAIHistoryEvent::DeletedConversation { .. }
             | BlocklistAIHistoryEvent::RestoredConversations { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
-            | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. } => {}
+            | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces { .. } => {}
             BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
             | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
@@ -308,7 +341,9 @@ impl StartAgentExecutor {
         let prompt = prompt.clone();
         let version = *version;
         let parent_conversation_id = input.conversation_id;
-        let (execution_mode, parent_run_id) = match execution_mode.clone() {
+        let (prompt, execution_mode) =
+            normalize_legacy_local_child_harness_command(prompt, execution_mode.clone());
+        let (execution_mode, parent_run_id) = match execution_mode {
             StartAgentExecutionMode::Local {
                 harness_type: None,
                 model_id,
@@ -366,16 +401,6 @@ impl StartAgentExecutor {
                     ));
                 }
 
-                if !FeatureFlag::OrchestrationV2.is_enabled() {
-                    return ActionExecution::Sync(AIAgentActionResultType::StartAgent(
-                        StartAgentResult::Error {
-                            error: "Local harness child agents require orchestration v2."
-                                .to_string(),
-                            version,
-                        },
-                    ));
-                }
-
                 let parent_run_id = BlocklistAIHistoryModel::as_ref(ctx)
                     .conversation(&parent_conversation_id)
                     .and_then(|conversation| conversation.run_id());
@@ -407,16 +432,8 @@ impl StartAgentExecutor {
                 harness_type,
                 title,
                 auth_secret_name,
+                agent_identity_uid,
             } => {
-                if !FeatureFlag::OrchestrationV2.is_enabled() {
-                    return ActionExecution::Sync(AIAgentActionResultType::StartAgent(
-                        StartAgentResult::Error {
-                            error: "Remote child agents require orchestration v2.".to_string(),
-                            version,
-                        },
-                    ));
-                }
-
                 let harness_type = Harness::parse_orchestration_harness(&harness_type)
                     .map(|harness| harness.to_string())
                     .unwrap_or(harness_type);
@@ -440,7 +457,6 @@ impl StartAgentExecutor {
                          with an empty environment."
                     );
                 }
-
                 let parent_run_id = BlocklistAIHistoryModel::as_ref(ctx)
                     .conversation(&parent_conversation_id)
                     .and_then(|conversation| conversation.run_id());
@@ -464,6 +480,7 @@ impl StartAgentExecutor {
                         harness_type,
                         title,
                         auth_secret_name,
+                        agent_identity_uid,
                     },
                     Some(parent_run_id),
                 )
@@ -481,15 +498,17 @@ impl StartAgentExecutor {
             },
         );
 
-        ctx.emit(StartAgentExecutorEvent::CreateAgent(StartAgentRequest {
-            id: request_id,
-            name: name.clone(),
-            prompt,
-            execution_mode,
-            lifecycle_subscription: lifecycle_subscription.clone(),
-            parent_conversation_id,
-            parent_run_id,
-        }));
+        ctx.emit(StartAgentExecutorEvent::CreateAgent(Box::new(
+            StartAgentRequest {
+                id: request_id,
+                name: name.clone(),
+                prompt,
+                execution_mode,
+                lifecycle_subscription: lifecycle_subscription.clone(),
+                parent_conversation_id,
+                parent_run_id,
+            },
+        )));
 
         ActionExecution::new_async(async move { receiver.recv().await }, move |result, _ctx| {
             match result {
@@ -522,6 +541,8 @@ impl StartAgentExecutor {
         parent_run_id: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> async_channel::Receiver<StartAgentOutcome> {
+        let (prompt, execution_mode) =
+            normalize_legacy_local_child_harness_command(prompt, execution_mode);
         let (sender, receiver) = async_channel::bounded(1);
         let request_id = self.next_request_id();
         self.pending.insert(
@@ -532,15 +553,17 @@ impl StartAgentExecutor {
                 sender,
             },
         );
-        ctx.emit(StartAgentExecutorEvent::CreateAgent(StartAgentRequest {
-            id: request_id,
-            name,
-            prompt,
-            execution_mode,
-            lifecycle_subscription,
-            parent_conversation_id,
-            parent_run_id,
-        }));
+        ctx.emit(StartAgentExecutorEvent::CreateAgent(Box::new(
+            StartAgentRequest {
+                id: request_id,
+                name,
+                prompt,
+                execution_mode,
+                lifecycle_subscription,
+                parent_conversation_id,
+                parent_run_id,
+            },
+        )));
         receiver
     }
 
@@ -550,6 +573,22 @@ impl StartAgentExecutor {
         _ctx: &mut ModelContext<Self>,
     ) -> BoxFuture<'static, ()> {
         futures::future::ready(()).boxed()
+    }
+}
+
+/// Whether a child that failed before launch should have its hidden pane and
+/// conversation cleaned up. Only terminal launch failures qualify; recoverable
+/// `Blocked` startup states (e.g. awaiting GitHub auth) and non-terminal
+/// `TransientError` (a recovery is in flight) keep their chip so the user can
+/// resolve them or let the retry complete.
+fn should_cleanup_failed_child_launch(status: &ConversationStatus) -> bool {
+    match status {
+        ConversationStatus::Error | ConversationStatus::Cancelled => true,
+        ConversationStatus::Blocked { .. }
+        | ConversationStatus::InProgress
+        | ConversationStatus::TransientError
+        | ConversationStatus::Success
+        | ConversationStatus::WaitingForEvents => false,
     }
 }
 
@@ -575,7 +614,16 @@ fn start_agent_error_message_for_status(
                 blocked_action.to_string()
             })
         }
-        ConversationStatus::InProgress | ConversationStatus::Success => None,
+        // `WaitingForEvents` is treated like `InProgress`/`Success` here:
+        // a child that's actively waiting for events has, by definition,
+        // already initialized successfully and is not an error case.
+        // TransientError is likewise non-terminal: a recovery is in flight,
+        // so keep waiting. The agent run is still in flight in all of these
+        // cases, so we don't surface an error message for the start path.
+        ConversationStatus::InProgress
+        | ConversationStatus::TransientError
+        | ConversationStatus::Success
+        | ConversationStatus::WaitingForEvents => None,
     }
 }
 
@@ -584,7 +632,13 @@ impl Entity for StartAgentExecutor {
 }
 
 pub enum StartAgentExecutorEvent {
-    CreateAgent(StartAgentRequest),
+    CreateAgent(Box<StartAgentRequest>),
+    /// A child agent failed at the launch stage (never started a server-side
+    /// run). The owning terminal view removes its hidden pane and conversation
+    /// so the orchestration pill bar does not retain a dead chip.
+    CleanupFailedChildLaunch {
+        conversation_id: AIConversationId,
+    },
 }
 
 #[cfg(test)]

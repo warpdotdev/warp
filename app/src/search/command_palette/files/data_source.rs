@@ -109,11 +109,11 @@ impl FileDataSource {
         }
     }
 
-    fn contents(&self, app: &AppContext) -> Arc<Vec<FileSearchResult>> {
+    fn contents(&self, query: &str, app: &AppContext) -> Arc<Vec<FileSearchResult>> {
         match &self.mode {
             FileDataSourceMode::Repo => {
                 let file_search_model = FileSearchModel::as_ref(app);
-                file_search_model.get_repo_contents(app)
+                file_search_model.get_repo_file_contents(query, app)
             }
             FileDataSourceMode::CurrentFolder { cached_contents } => {
                 Arc::new(cached_contents.clone())
@@ -145,6 +145,10 @@ impl FileDataSource {
 
             for chunk in contents.chunks(50) {
                 for item in chunk {
+                    if item.is_directory {
+                        continue;
+                    }
+
                     let mut file_ranking = if git_changed_files.contains(&item.path) {
                         FileRanking::ChangedInGit
                     } else {
@@ -195,8 +199,6 @@ impl FileDataSource {
     > {
         let file_search_model = FileSearchModel::as_ref(app);
 
-        let contents = self.contents(app);
-
         // Strip any trailing : in case user is in the middle of typing a line / column arg.
         let query_text = query_text.strip_suffix(':').unwrap_or(query_text);
 
@@ -243,6 +245,11 @@ impl FileDataSource {
             .and_then(|repo_root| opened_files.opened_files_for_repo(&repo_root))
             .cloned();
 
+        // Fetch contents using the finalized query so it is pushed down into
+        // the repo-metadata traversal as a filter (matching files are not
+        // truncated away before fuzzy matching).
+        let contents = self.contents(&query_file_content, app);
+
         const CHUNK_SIZE: usize = 50;
 
         Box::pin(async move {
@@ -252,16 +259,15 @@ impl FileDataSource {
             // allow the main thread to abort the search if needed.
             for chunk in contents.chunks(CHUNK_SIZE) {
                 for item in chunk {
+                    if item.is_directory {
+                        continue;
+                    }
+
                     let Some(mut match_result) =
                         FileSearchModel::fuzzy_match_path(&item.path, &query_file_content)
                     else {
                         continue;
                     };
-
-                    // Never show directories -- there's no way to open them currently.
-                    if item.is_directory {
-                        continue;
-                    }
 
                     if opened_files
                         .as_ref()
@@ -310,3 +316,7 @@ impl FileDataSource {
 impl Entity for FileDataSource {
     type Event = ();
 }
+
+#[cfg(test)]
+#[path = "data_source_tests.rs"]
+mod tests;

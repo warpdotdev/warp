@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ai::index::build_outline;
+use anyhow::Context as _;
 use async_channel::Sender;
 use futures::stream::AbortHandle;
 use instant::Instant;
@@ -12,6 +13,7 @@ use repo_metadata::repository::{
 };
 use repo_metadata::{CanonicalizedPath, DirectoryWatcher, Repository, RepositoryUpdate};
 use settings::Setting as _;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::OutlineStatus;
@@ -60,13 +62,13 @@ impl RepoOutlines {
     }
 
     pub fn new_with_indexing_enabled(indexing_enabled: bool, ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
             if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = event {
                 Self::handle_setting_change_event(me, ctx);
             }
         });
 
-        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |me, _, event, ctx| {
             if let CodeSettingsChangedEvent::CodebaseContextEnabled { .. } = event {
                 Self::handle_setting_change_event(me, ctx);
             }
@@ -79,7 +81,7 @@ impl RepoOutlines {
                 feature = "integration_tests"
             ))
         {
-            ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, event, ctx| {
+            ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, _, event, ctx| {
                 let DetectedRepositoriesEvent::DetectedGitRepo {
                     repository,
                     source: _,
@@ -88,7 +90,7 @@ impl RepoOutlines {
             });
         }
 
-        ctx.subscribe_to_model(&InputSettings::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&InputSettings::handle(ctx), |me, _, event, ctx| {
             if let InputSettingsChangedEvent::OutlineCodebaseSymbolsForAtContextMenu { .. } = event
             {
                 Self::handle_setting_change_event(me, ctx);
@@ -245,16 +247,16 @@ impl RepoOutlines {
                                     )
                                 );
                                 // Ensure the repository is registered with DirectoryWatcher.
-                                let repository_handle = match DirectoryWatcher::handle(ctx).update(
-                                    ctx,
-                                    |repo_watcher, ctx| {
+                                let repository_handle = match DirectoryWatcher::handle(ctx)
+                                    .update(ctx, |repo_watcher, ctx| {
                                         repo_watcher
                                             .add_directory(canonicalized_path.clone().into(), ctx)
-                                    },
-                                ) {
+                                    })
+                                    .context("Failed to start tracking repository")
+                                {
                                     Ok(handle) => handle,
                                     Err(e) => {
-                                        log::error!("Failed to start tracking repository: {e:?}");
+                                        report_error!(e);
                                         return;
                                     }
                                 };

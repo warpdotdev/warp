@@ -17,6 +17,7 @@ use warp_completer::completer::{CommandExitStatus, CommandOutput};
 #[cfg(windows)]
 use warp_core::paths::base_config_dir;
 use warp_core::platform::SessionPlatform;
+use warp_errors::report_error;
 use warp_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
 };
@@ -740,6 +741,31 @@ impl ShellType {
         }
     }
 
+    pub fn shell_command_to_get_all_functions(&self) -> Option<&'static str> {
+        match self {
+            ShellType::PowerShell => Some(
+                "$names = Get-Command -CommandType Function | Where-Object { \
+                -not $_.Name.StartsWith('Warp') } | Select-Object -ExpandProperty Name; \
+                $text = [string]::Join([Environment]::NewLine, $names); \
+                $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text); \
+                [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
+            ),
+            _ => None,
+        }
+    }
+
+    pub fn shell_command_to_get_all_builtins(&self) -> Option<&'static str> {
+        match self {
+            ShellType::PowerShell => Some(
+                "$names = Get-Command -CommandType Cmdlet | Select-Object -ExpandProperty Name; \
+                $text = [string]::Join([Environment]::NewLine, $names); \
+                $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text); \
+                [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
+            ),
+            _ => None,
+        }
+    }
+
     pub fn force_in_band_command_executor(&self) -> bool {
         // TODO: Remove this function once we have confidence in using a local executor in
         // powershell.
@@ -909,15 +935,13 @@ impl From<ShellLaunchData> for SessionPlatform {
 /// Unescape the key and value for an alias, returning None if either fails
 fn unescape_alias_key_value(key: &str, value: &str) -> Option<(SmolStr, String)> {
     let key = unescape_quotes(key)
-        .map_err(|e| {
-            log::error!("Unable to unescape key for alias: {e}");
-            e
+        .inspect_err(|e| {
+            report_error!(e);
         })
         .ok()?;
     let value = unescape_quotes(value)
-        .map_err(|e| {
-            log::error!("Unable to unescape value for alias: {e}");
-            e
+        .inspect_err(|e| {
+            report_error!(e);
         })
         .ok()?;
     Some((key.into(), value))

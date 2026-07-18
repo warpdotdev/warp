@@ -75,8 +75,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentModeWorkflows,
         #[cfg(feature = "ai_rules")]
         FeatureFlag::AIRules,
-        #[cfg(feature = "ssh_tmux_wrapper")]
-        FeatureFlag::SSHTmuxWrapper,
         #[cfg(feature = "shell_selector")]
         FeatureFlag::ShellSelector,
         #[cfg(feature = "integration_command")]
@@ -85,6 +83,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ArtifactCommand,
         #[cfg(feature = "cloud_environments")]
         FeatureFlag::CloudEnvironments,
+        #[cfg(feature = "cloud_runners")]
+        FeatureFlag::CloudRunners,
         #[cfg(all(feature = "simulate_github_unauthed", debug_assertions))]
         FeatureFlag::SimulateGithubUnauthed,
         #[cfg(feature = "session_sharing_acls")]
@@ -159,6 +159,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::McpDebuggingIds,
         #[cfg(feature = "markdown_tables")]
         FeatureFlag::MarkdownTables,
+        #[cfg(feature = "jupyter_notebook_rendering")]
+        FeatureFlag::JupyterNotebookRendering,
         #[cfg(feature = "blocklist_markdown_table_rendering")]
         FeatureFlag::BlocklistMarkdownTableRendering,
         #[cfg(feature = "blocklist_markdown_images")]
@@ -221,8 +223,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ProfilesDesignRevamp,
         #[cfg(feature = "search_codebase_ui")]
         FeatureFlag::SearchCodebaseUI,
-        #[cfg(feature = "changed_lines_only_apply_diff_result")]
-        FeatureFlag::ChangedLinesOnlyApplyDiffResult,
         #[cfg(feature = "linked_code_blocks")]
         FeatureFlag::LinkedCodeBlocks,
         #[cfg(feature = "tabbed_editor_view")]
@@ -239,14 +239,10 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SyncAmbientPlans,
         #[cfg(feature = "get_started_tab")]
         FeatureFlag::GetStartedTab,
-        #[cfg(feature = "welcome_tab")]
-        FeatureFlag::WelcomeTab,
         #[cfg(feature = "projects")]
         FeatureFlag::Projects,
         #[cfg(feature = "drive_objects_as_context")]
         FeatureFlag::DriveObjectsAsContext,
-        #[cfg(feature = "pr_comments_slash_command")]
-        FeatureFlag::PRCommentsSlashCommand,
         #[cfg(feature = "pr_comments_v2")]
         FeatureFlag::PRCommentsV2,
         #[cfg(feature = "pr_comments_skill")]
@@ -317,6 +313,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ForkFromCommand,
         #[cfg(feature = "context_window_usage_v2")]
         FeatureFlag::ContextWindowUsageV2,
+        #[cfg(feature = "context_window_usage_breakdown")]
+        FeatureFlag::ContextWindowUsageBreakdown,
         #[cfg(feature = "global_search")]
         FeatureFlag::GlobalSearch,
         #[cfg(feature = "embedded_code_review_comments")]
@@ -347,6 +345,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentModeComputerUse,
         #[cfg(feature = "local_computer_use")]
         FeatureFlag::LocalComputerUse,
+        #[cfg(feature = "background_computer_use")]
+        FeatureFlag::BackgroundComputerUse,
         #[cfg(feature = "local_claude_codex_child_harnesses")]
         FeatureFlag::LocalClaudeCodexChildHarnesses,
         #[cfg(feature = "team_api_keys")]
@@ -417,14 +417,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationsAsContext,
         #[cfg(feature = "incremental_auto_reload")]
         FeatureFlag::IncrementalAutoReload,
-        #[cfg(feature = "orchestration_v2")]
-        FeatureFlag::OrchestrationV2,
-        #[cfg(feature = "orchestration_pill_bar")]
-        FeatureFlag::OrchestrationPillBar,
-        #[cfg(feature = "orchestration_viewer_pill_bar")]
-        FeatureFlag::OrchestrationViewerPillBar,
-        #[cfg(feature = "run_agents_tool")]
-        FeatureFlag::RunAgentsTool,
+        #[cfg(feature = "wait_for_events_parent_registration")]
+        FeatureFlag::WaitForEventsParentRegistration,
         #[cfg(feature = "pending_user_query_indicator")]
         FeatureFlag::PendingUserQueryIndicator,
         #[cfg(feature = "queue_slash_command")]
@@ -435,6 +429,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::KittyKeyboardProtocol,
         #[cfg(feature = "inline_menu_headers")]
         FeatureFlag::InlineMenuHeaders,
+        #[cfg(feature = "restore_prompt_on_inline_model_selector_search")]
+        FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
         #[cfg(feature = "directory_tab_colors")]
         FeatureFlag::DirectoryTabColors,
         #[cfg(feature = "open_warp_new_settings_modes")]
@@ -449,6 +445,10 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::TabConfigs,
         #[cfg(feature = "grouped_tabs")]
         FeatureFlag::GroupedTabs,
+        #[cfg(feature = "pinned_tabs")]
+        FeatureFlag::PinnedTabs,
+        #[cfg(feature = "warp_control_cli")]
+        FeatureFlag::WarpControlCli,
         #[cfg(feature = "agent_harness")]
         FeatureFlag::AgentHarness,
         #[cfg(feature = "oz_handoff")]
@@ -469,6 +469,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SoloUserByok,
         #[cfg(feature = "billing_and_usage_page_v2")]
         FeatureFlag::BillingAndUsagePageV2,
+        #[cfg(feature = "gpt_configurable_context_window")]
+        FeatureFlag::GPTConfigurableContextWindow,
         #[cfg(feature = "skip_firebase_anonymous_user")]
         FeatureFlag::SkipFirebaseAnonymousUser,
         #[cfg(feature = "hoa_onboarding_flow")]
@@ -479,22 +481,34 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::HOARemoteControl,
         #[cfg(feature = "codex_notifications")]
         FeatureFlag::CodexNotifications,
+        #[cfg(feature = "codex_plugin")]
+        FeatureFlag::CodexPlugin,
         #[cfg(feature = "trim_trailing_blank_lines")]
         FeatureFlag::TrimTrailingBlankLines,
         #[cfg(feature = "cloud_mode_setup_v2")]
         FeatureFlag::CloudModeSetupV2,
         #[cfg(feature = "cloud_mode_input_v2")]
         FeatureFlag::CloudModeInputV2,
-        #[cfg(feature = "configurable_context_window")]
-        FeatureFlag::ConfigurableContextWindow,
         #[cfg(feature = "handoff_cloud_cloud")]
         FeatureFlag::HandoffCloudCloud,
         #[cfg(feature = "git_credential_refresh")]
         FeatureFlag::GitCredentialRefresh,
         #[cfg(feature = "remote_code_review")]
         FeatureFlag::RemoteCodeReview,
-        #[cfg(feature = "custom_inference_endpoints")]
-        FeatureFlag::CustomInferenceEndpoints,
+        #[cfg(feature = "custom_model_routers")]
+        FeatureFlag::CustomModelRouters,
+        #[cfg(feature = "supergrok")]
+        FeatureFlag::SuperGrok,
+        #[cfg(feature = "gemini_enterprise")]
+        FeatureFlag::GeminiEnterprise,
+        #[cfg(feature = "nld_prompt_history_match")]
+        FeatureFlag::NldPromptHistoryMatch,
+        #[cfg(feature = "prompt_cache_expiry_warning")]
+        FeatureFlag::PromptCacheExpiryWarning,
+        #[cfg(feature = "osc_hyperlinks")]
+        FeatureFlag::OscHyperlinks,
+        #[cfg(feature = "terminal_lifecycle_recovery")]
+        FeatureFlag::TerminalLifecycleRecovery,
     ]);
 
     flags

@@ -2,6 +2,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use base64::Engine;
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Sample, StreamConfig};
@@ -11,6 +12,7 @@ use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use thiserror::Error;
+use warp_errors::report_error;
 use warpui_core::event::KeyState;
 use warpui_core::platform::MicrophoneAccessState;
 use warpui_core::{Entity, ModelContext, SingletonEntity};
@@ -154,10 +156,13 @@ impl VoiceInput {
             return Err(anyhow::anyhow!("No default input device found").into());
         };
 
-        let config = input_device.default_input_config().map_err(|e| {
-            log::error!("Failed to get default input config: {e}");
-            StartListeningError::Other(anyhow::anyhow!("Failed to get default input config: {}", e))
-        })?;
+        let config = input_device
+            .default_input_config()
+            .context("Failed to get default input config")
+            .map_err(|e| {
+                report_error!(&e);
+                StartListeningError::Other(e)
+            })?;
 
         // Kind of annoying that we need to check this here, but cpal will actually still create an audio
         // stream of empty frames even if the user denies access on MacOS.
@@ -203,6 +208,13 @@ impl VoiceInput {
             StartListeningError::Other(anyhow::anyhow!("Resampler construction failed: {e}"))
         })?;
 
+        // Some audio backends (notably ALSA on Linux) fire this error callback
+        // repeatedly in a tight loop when the input device wedges - e.g.
+        // `alsa::poll()` returning POLLERR after a device disconnect. Logging at
+        // error level on every invocation floods Sentry with millions of
+        // identical events, so only report the first error per session at error
+        // level and downgrade the rest to debug.
+        let mut has_logged_stream_error = false;
         let stream = input_device
             .build_input_stream(
                 &stream_config,
@@ -219,8 +231,15 @@ impl VoiceInput {
                     // This is blocking, but we aren't on the main thread.
                     let _ = warpui_core::r#async::block_on(audio_frame_tx.send(mono_samples));
                 },
-                |err| {
-                    log::error!("Error in voice input stream: {err}");
+                move |err| {
+                    if has_logged_stream_error {
+                        log::debug!("Error in voice input stream (suppressed repeat): {err}");
+                    } else {
+                        has_logged_stream_error = true;
+                        report_error!(
+                            anyhow::Error::new(err).context("Error in voice input stream")
+                        );
+                    }
                 },
                 Some(STREAM_TIMEOUT),
             )
@@ -299,7 +318,7 @@ impl VoiceInput {
                                 session_duration_ms,
                             },
                             Err(e) => {
-                                log::error!("Failed to convert to WAV: {e}");
+                                report_error!(e.context("Failed to convert to WAV"));
                                 VoiceSessionResult::Aborted {
                                     session_duration_ms: Some(session_duration_ms),
                                 }
@@ -369,7 +388,7 @@ impl VoiceInput {
             async move {
                 if let Err(e) = Self::resample_audio_frame(resampler, resampled, input_buffer).await
                 {
-                    log::error!("Failed to resample audio frame: {e}");
+                    report_error!(e.context("Failed to resample audio frame"));
                 }
             },
             |_, _, _| {},

@@ -983,6 +983,7 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
             RequestComputerUseResult::Approved {
                 screenshot,
                 platform,
+                windows,
             } => Ok(
                 api::request::input::tool_call_result::Result::RequestComputerUse(
                     api::RequestComputerUseResult {
@@ -999,7 +1000,7 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height: screenshot.height as i32,
                                 }),
                                 platform: convert_platform(platform).into(),
-                                windows: Vec::new(),
+                                windows: windows.into_iter().map(convert_window_info).collect(),
                             },
                         )),
                     },
@@ -1033,6 +1034,9 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
     fn try_from(result: UseComputerResult) -> Result<Self, Self::Error> {
         match result {
             UseComputerResult::Success(result) => {
+                // Copy out the captured-window metadata (if any) before the owned fields of
+                // `result` are moved into the message below.
+                let captured = result.captured_window;
                 Ok(api::request::input::tool_call_result::Result::UseComputer(
                     api::UseComputerResult {
                         result: Some(api::use_computer_result::Result::Success(
@@ -1044,8 +1048,20 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                     height: s.height as i32,
                                 }),
                                 cursor_position: result.cursor_position.map(vec_to_coordinates),
-                                captured_window: None,
-                                windows: Vec::new(),
+                                windows: result
+                                    .windows
+                                    .into_iter()
+                                    .map(convert_window_info)
+                                    .collect(),
+                                // The window id is an opaque string on the wire; on macOS it is a
+                                // CGWindowID, so format the u32 back to a string at the boundary.
+                                captured_window: captured.map(|c| {
+                                    api::use_computer_result::success::CapturedWindow {
+                                        window_id: c.window_id.to_string(),
+                                        width_px: c.width_px,
+                                        height_px: c.height_px,
+                                    }
+                                }),
                             },
                         )),
                     },
@@ -1069,6 +1085,18 @@ fn vec_to_coordinates(vec: computer_use::Vector2I) -> api::Coordinates {
     api::Coordinates {
         x: vec.x(),
         y: vec.y(),
+    }
+}
+
+/// Converts a computer_use window record into the API `WindowInfo` message.
+fn convert_window_info(window: computer_use::WindowInfo) -> api::WindowInfo {
+    api::WindowInfo {
+        // The window id travels as an opaque string; on macOS it is a CGWindowID (u32).
+        window_id: window.window_id.to_string(),
+        pid: window.pid,
+        app_name: window.app_name,
+        title: window.title,
+        layer: window.layer,
     }
 }
 
@@ -1339,6 +1367,7 @@ impl From<RunAgentsLaunchedExecutionMode>
                     environment_id,
                     worker_host,
                     computer_use_enabled,
+                    runner_id: Default::default(),
                 },
             ),
         }
@@ -1461,6 +1490,122 @@ impl TryFrom<InsertReviewCommentsResult> for api::request::input::tool_call_resu
                 ),
             ),
             InsertReviewCommentsResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
+        }
+    }
+}
+
+impl TryFrom<WaitForEventsResult> for api::request::input::tool_call_result::Result {
+    type Error = ConvertToAPITypeError;
+
+    /// Completed → wire form; Cancelled → drop (mirrors RunAgents).
+    fn try_from(result: WaitForEventsResult) -> Result<Self, Self::Error> {
+        match result {
+            WaitForEventsResult::Completed => Ok(
+                api::request::input::tool_call_result::Result::WaitForEvents(
+                    api::WaitForEventsResult {},
+                ),
+            ),
+            WaitForEventsResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
+        }
+    }
+}
+
+fn system_time_to_timestamp(time: std::time::SystemTime) -> prost_types::Timestamp {
+    match time.duration_since(std::time::SystemTime::UNIX_EPOCH) {
+        Ok(elapsed) => prost_types::Timestamp {
+            seconds: elapsed.as_secs() as i64,
+            nanos: elapsed.subsec_nanos() as i32,
+        },
+        Err(_) => prost_types::Timestamp::default(),
+    }
+}
+
+fn duration_to_proto(duration: std::time::Duration) -> prost_types::Duration {
+    prost_types::Duration {
+        seconds: duration.as_secs() as i64,
+        nanos: duration.subsec_nanos() as i32,
+    }
+}
+
+fn convert_completion_status(
+    status: computer_use::RecordingCompletionStatus,
+) -> api::stop_recording_result::CompletionStatus {
+    use api::stop_recording_result::CompletionStatus;
+    match status {
+        computer_use::RecordingCompletionStatus::Completed => CompletionStatus::Complete,
+        computer_use::RecordingCompletionStatus::StoppedEarly => CompletionStatus::Incomplete,
+    }
+}
+
+impl TryFrom<StartRecordingResult> for api::request::input::tool_call_result::Result {
+    type Error = ConvertToAPITypeError;
+
+    fn try_from(result: StartRecordingResult) -> Result<Self, Self::Error> {
+        match result {
+            StartRecordingResult::Success(started) => Ok(
+                api::request::input::tool_call_result::Result::StartRecording(
+                    api::StartRecordingResult {
+                        result: Some(api::start_recording_result::Result::Success(
+                            api::start_recording_result::Success {
+                                recording_id: started.recording_id,
+                                started_at: Some(system_time_to_timestamp(started.started_at)),
+                                settings: Some(api::start_recording_result::CaptureSettings {
+                                    width_px: started.width_px,
+                                    height_px: started.height_px,
+                                }),
+                            },
+                        )),
+                    },
+                ),
+            ),
+            StartRecordingResult::Error(message) => Ok(
+                api::request::input::tool_call_result::Result::StartRecording(
+                    api::StartRecordingResult {
+                        result: Some(api::start_recording_result::Result::Error(
+                            api::start_recording_result::Error { message },
+                        )),
+                    },
+                ),
+            ),
+            StartRecordingResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
+        }
+    }
+}
+
+impl TryFrom<StopRecordingResult> for api::request::input::tool_call_result::Result {
+    type Error = ConvertToAPITypeError;
+
+    fn try_from(result: StopRecordingResult) -> Result<Self, Self::Error> {
+        match result {
+            StopRecordingResult::Success(stopped) => Ok(
+                api::request::input::tool_call_result::Result::StopRecording(
+                    api::StopRecordingResult {
+                        result: Some(api::stop_recording_result::Result::Success(
+                            api::stop_recording_result::Success {
+                                artifact_uid: stopped.artifact_uid,
+                                duration: Some(duration_to_proto(stopped.duration)),
+                                width_px: stopped.width_px,
+                                height_px: stopped.height_px,
+                                size_bytes: stopped.size_bytes,
+                                completion_status: convert_completion_status(
+                                    stopped.completion_status,
+                                ) as i32,
+                                termination_reason: stopped.termination_reason,
+                            },
+                        )),
+                    },
+                ),
+            ),
+            StopRecordingResult::Error(message) => Ok(
+                api::request::input::tool_call_result::Result::StopRecording(
+                    api::StopRecordingResult {
+                        result: Some(api::stop_recording_result::Result::Error(
+                            api::stop_recording_result::Error { message },
+                        )),
+                    },
+                ),
+            ),
+            StopRecordingResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
         }
     }
 }

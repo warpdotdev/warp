@@ -35,7 +35,6 @@ use crate::editor::{
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::search_bar::SearchBar;
 use crate::server::ids::ApiKeyUid;
-use crate::server::server_api::auth::AuthClient;
 use crate::ui_components::icons::Icon;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
@@ -126,10 +125,11 @@ impl PlatformPageView {
         }
 
         // Build and send the GraphQL query
-        let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
+        let auth_client =
+            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
 
         ctx.spawn(
-            async move { server_api.list_api_keys().await },
+            async move { auth_client.list_api_keys().await },
             |me, res, ctx| {
                 me.is_loading = false;
                 match res {

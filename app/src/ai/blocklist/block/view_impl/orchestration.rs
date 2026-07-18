@@ -2,6 +2,7 @@
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, FormattedTextElement,
     Hoverable, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
@@ -36,6 +37,10 @@ use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::{
     render_requested_action_row, render_requested_action_row_for_text,
 };
+use crate::ai::blocklist::orchestration_topology::{
+    orchestrator_agent_id_for_conversation, resolve_orchestration_participant,
+    OrchestrationParticipantKind,
+};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
 use crate::terminal::view::TerminalAction;
@@ -62,14 +67,6 @@ impl OrchestrationParticipant {
         }
     }
 
-    fn unknown_child() -> Self {
-        Self {
-            display_name: "Unknown agent".to_string(),
-            avatar: OrchestrationAvatar::agent("Unknown agent".to_string()),
-            conversation_id: None,
-        }
-    }
-
     fn is_orchestrator(&self) -> bool {
         matches!(&self.avatar, OrchestrationAvatar::Orchestrator)
     }
@@ -89,21 +86,28 @@ fn participant_for_agent_id(
     orchestrator_agent_id: Option<&str>,
     app: &AppContext,
 ) -> OrchestrationParticipant {
-    if let Some(conversation_id) = conversation_id_for_agent_id(agent_id, app) {
-        if let Some(conversation) =
-            BlocklistAIHistoryModel::as_ref(app).conversation(&conversation_id)
-        {
-            return participant_for_conversation(
-                conversation,
-                orchestrator_agent_id,
-                Some(agent_id),
-            );
+    let participant = resolve_orchestration_participant(
+        BlocklistAIHistoryModel::as_ref(app),
+        agent_id,
+        orchestrator_agent_id,
+    );
+    let display_name = participant.kind.display_name().to_string();
+    let avatar = match &participant.kind {
+        OrchestrationParticipantKind::Orchestrator => OrchestrationAvatar::Orchestrator,
+        OrchestrationParticipantKind::Agent { .. } | OrchestrationParticipantKind::Unknown => {
+            OrchestrationAvatar::agent(display_name.clone())
         }
+    };
+    OrchestrationParticipant {
+        display_name,
+        avatar,
+        conversation_id: match &participant.kind {
+            OrchestrationParticipantKind::Orchestrator | OrchestrationParticipantKind::Unknown => {
+                None
+            }
+            OrchestrationParticipantKind::Agent { .. } => participant.conversation_id,
+        },
     }
-    if orchestrator_agent_id.is_some_and(|id| id == agent_id) {
-        return OrchestrationParticipant::orchestrator();
-    }
-    OrchestrationParticipant::unknown_child()
 }
 
 fn participant_for_conversation(
@@ -127,18 +131,6 @@ fn participant_for_conversation(
         display_name: display_name.clone(),
         avatar: OrchestrationAvatar::agent(display_name),
         conversation_id: Some(conversation.id()),
-    }
-}
-
-fn orchestrator_agent_id_for_conversation(
-    conversation: &AIConversation,
-    app: &AppContext,
-) -> Option<String> {
-    match conversation.parent_conversation_id() {
-        Some(parent_id) => BlocklistAIHistoryModel::as_ref(app)
-            .conversation(&parent_id)
-            .and_then(|parent| parent.orchestration_agent_id()),
-        None => conversation.orchestration_agent_id(),
     }
 }
 
@@ -342,10 +334,9 @@ pub(super) fn render_messages_received_from_agents(
     if messages.is_empty() {
         return Empty::new().finish();
     }
-    let orchestrator_agent_id = props
-        .model
-        .conversation(app)
-        .and_then(|conversation| orchestrator_agent_id_for_conversation(conversation, app));
+    let orchestrator_agent_id = props.model.conversation(app).and_then(|conversation| {
+        orchestrator_agent_id_for_conversation(BlocklistAIHistoryModel::as_ref(app), conversation)
+    });
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
     for (index, msg) in messages.iter().enumerate() {
         let sender =
@@ -421,19 +412,18 @@ pub(super) fn render_send_message(
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let status = props.action_model.as_ref(app).get_action_status(action_id);
-    let orchestrator_agent_id = props
-        .model
-        .conversation(app)
-        .and_then(|conversation| orchestrator_agent_id_for_conversation(conversation, app));
+    let orchestrator_agent_id = props.model.conversation(app).and_then(|conversation| {
+        orchestrator_agent_id_for_conversation(BlocklistAIHistoryModel::as_ref(app), conversation)
+    });
     let recipient_participants =
         participant_for_agent_ids(address, orchestrator_agent_id.as_deref(), app);
     let recipients = participant_display_names(&recipient_participants);
 
     if let Some(AIActionStatus::Finished(result)) = &status {
         let AIAgentActionResultType::SendMessageToAgent(result) = &result.result else {
-            log::error!(
-                "Unexpected action result type for send message action: {:?}",
-                result.result
+            report_error!(
+                "Unexpected action result type for send message action",
+                extra: { "result_type" => ?result.result }
             );
             return Empty::new().finish();
         };
@@ -568,9 +558,9 @@ pub(super) fn render_start_agent(
 
     if let Some(AIActionStatus::Finished(result)) = &status {
         let AIAgentActionResultType::StartAgent(result) = &result.result else {
-            log::error!(
-                "Unexpected action result type for start agent action: {:?}",
-                result.result
+            report_error!(
+                "Unexpected action result type for start agent action",
+                extra: { "result_type" => ?result.result }
             );
             return Empty::new().finish();
         };
@@ -638,9 +628,9 @@ pub(super) fn render_start_agent(
                 .get(action_id)
                 .cloned()
                 .unwrap_or_else(|| {
-                    log::error!(
-                        "Missing orchestration navigation card handle for StartAgent action {:?}",
-                        action_id
+                    report_error!(
+                        "Missing orchestration navigation card handle for StartAgent action",
+                        extra: { "action_id" => ?action_id }
                     );
                     MouseStateHandle::default()
                 });
@@ -880,9 +870,9 @@ fn render_collapsible_body(
     props: Props,
 ) -> Option<Box<dyn Element>> {
     let Some(state) = props.collapsible_block_states.get(message_id) else {
-        log::error!(
-            "Missing collapsible state for orchestration message {:?}",
-            message_id
+        report_error!(
+            "Missing collapsible state for orchestration message",
+            extra: { "message_id" => ?message_id }
         );
         return None;
     };

@@ -44,11 +44,20 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
             );
         }
     }
-}
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub(crate) fn warp_home_config_dir() -> Option<PathBuf> {
-    warp_core::paths::warp_home_config_dir()
+    // The TUI surface stores its settings in a separate config directory
+    // (see `warp_core::paths::tui_config_local_dir`). Create it up front — only
+    // for that surface — so the watcher can register it at startup and pick up
+    // the first settings write.
+    if settings::settings_mode() == settings::SettingsMode::Tui {
+        let tui_config_local_dir = warp_core::paths::tui_config_local_dir();
+        if let Err(err) = fs::create_dir_all(&tui_config_local_dir) {
+            log::warn!(
+                "Failed to create Warp TUI config directory {}: {err}",
+                tui_config_local_dir.display()
+            );
+        }
+    }
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -59,6 +68,13 @@ pub(crate) fn warp_home_skills_dir() -> Option<PathBuf> {
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_home_mcp_config_file_path() -> Option<PathBuf> {
     warp_core::paths::warp_home_mcp_config_file_path()
+}
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(crate) fn active_mcp_config_file_path() -> Option<PathBuf> {
+    match settings::settings_mode() {
+        settings::SettingsMode::Gui => warp_home_mcp_config_file_path(),
+        settings::SettingsMode::Tui => Some(warp_core::paths::tui_mcp_config_file_path()),
+    }
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -77,7 +93,7 @@ pub(crate) fn warp_managed_skill_dirs() -> Vec<PathBuf> {
 pub(crate) fn warp_managed_mcp_config_path() -> Option<WarpMcpConfigPath> {
     Some(WarpMcpConfigPath {
         root_path: home_dir()?,
-        config_path: warp_home_mcp_config_file_path()?,
+        config_path: active_mcp_config_file_path()?,
     })
 }
 
@@ -225,7 +241,7 @@ impl WarpManagedPathsWatcher {
         Self::new_internal(ctx, true)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub(crate) fn new_for_testing(ctx: &mut ModelContext<Self>) -> Self {
         Self::new_internal(ctx, false)
     }
@@ -270,6 +286,28 @@ impl WarpManagedPathsWatcher {
                     "Warp config directory",
                 );
             }
+            // Watch the TUI settings directory for that surface. On macOS it's
+            // a sibling `.warp_cli*` directory outside `config_local_dir`; on
+            // other platforms it nests under `config_local_dir` and is already
+            // covered by the recursive watch above (the `starts_with` guard
+            // skips the redundant registration).
+            if settings::settings_mode() == settings::SettingsMode::Tui {
+                let tui_config_local_dir = warp_core::paths::tui_config_local_dir();
+                if tui_config_local_dir.exists()
+                    && !tui_config_local_dir.starts_with(&data_dir)
+                    && (!should_register_config_local_dir
+                        || !tui_config_local_dir.starts_with(&config_local_dir))
+                {
+                    Self::register_path(
+                        ctx,
+                        &watcher,
+                        tui_config_local_dir,
+                        WatchFilter::accept_all(),
+                        RecursiveMode::Recursive,
+                        "Warp TUI config directory",
+                    );
+                }
+            }
             if let Some(warp_home_skills_dir) = warp_home_skills_dir() {
                 if warp_home_skills_dir.exists()
                     && !warp_home_skills_dir.starts_with(&data_dir)
@@ -286,25 +324,27 @@ impl WarpManagedPathsWatcher {
                     );
                 }
             }
-            if let (Some(warp_home_config_dir), Some(warp_home_mcp_config_path)) =
-                (warp_home_config_dir(), warp_home_mcp_config_file_path())
-            {
-                if warp_home_config_dir.exists()
-                    && !warp_home_config_dir.starts_with(&data_dir)
-                    && (!should_register_config_local_dir
-                        || !warp_home_config_dir.starts_with(&config_local_dir))
+            if let Some(active_mcp_config_path) = active_mcp_config_file_path() {
+                if let Some(active_mcp_config_dir) =
+                    active_mcp_config_path.parent().map(Path::to_path_buf)
                 {
-                    // Watch the config directory non-recursively,
-                    // and ignore events for files other than the MCP config file.
-                    let emit = Arc::new(move |path: &Path| path == warp_home_mcp_config_path);
-                    Self::register_path(
-                        ctx,
-                        &watcher,
-                        warp_home_config_dir,
-                        WatchFilter::with_filter(Arc::new(|_: &Path| true), emit),
-                        RecursiveMode::NonRecursive,
-                        "Warp home MCP config directory",
-                    );
+                    if active_mcp_config_dir.exists()
+                        && !active_mcp_config_dir.starts_with(&data_dir)
+                        && (!should_register_config_local_dir
+                            || !active_mcp_config_dir.starts_with(&config_local_dir))
+                    {
+                        // Watch the config directory non-recursively,
+                        // and ignore events for files other than the MCP config file.
+                        let emit = Arc::new(move |path: &Path| path == active_mcp_config_path);
+                        Self::register_path(
+                            ctx,
+                            &watcher,
+                            active_mcp_config_dir,
+                            WatchFilter::with_filter(Arc::new(|_: &Path| true), emit),
+                            RecursiveMode::NonRecursive,
+                            "Warp MCP config directory",
+                        );
+                    }
                 }
             }
         }
@@ -337,6 +377,7 @@ impl WarpManagedPathsWatcher {
 
     fn handle_fs_event(
         &mut self,
+        _: ModelHandle<BulkFilesystemWatcher>,
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {

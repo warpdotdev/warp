@@ -9,20 +9,22 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::FromRawHandle as _;
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use child::ChildExitWatcher;
 pub use conpty_api::ConptyApi;
 use conpty_api::ConptyApiError;
 use environment::get_shell_environment_variables;
 pub use environment::get_user_and_system_env_variable;
 use thiserror::Error;
+use warp_errors::{report_error, report_if_error};
 use warpui::{AppContext, SingletonEntity};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Console::{COORD, HPCON};
 use windows::Win32::System::Threading::{
-    CreateProcessW, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, CREATE_UNICODE_ENVIRONMENT,
-    EXTENDED_STARTUPINFO_PRESENT, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+    CreateProcessW, TerminateProcess, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB,
+    CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, PROCESS_CREATION_FLAGS,
+    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
 };
 
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
@@ -75,6 +77,9 @@ unsafe impl Send for PseudoConsoleChild {}
 unsafe impl Sync for PseudoConsoleChild {}
 
 impl PseudoConsoleChild {
+    /// How long to wait for the root shell process to exit after asking for its termination.
+    const TERMINATE_WAIT_MS: u32 = 1_000;
+
     pub fn id(&self) -> u32 {
         self.process_info.dwProcessId
     }
@@ -82,6 +87,47 @@ impl PseudoConsoleChild {
     pub fn is_terminated(&self) -> bool {
         let wait_event = unsafe { WaitForSingleObject(self.process_info.hProcess, 0) };
         wait_event == WAIT_OBJECT_0
+    }
+
+    /// Forcefully terminates the root shell process.
+    ///
+    /// Descendant processes are intentionally not terminated here: closing the pseudoconsole (see
+    /// [`EventedPty::kill`] for [`Pty`]) ends the console session, and the console host terminates
+    /// every client process still attached to it. This mirrors Windows Terminal's
+    /// `ConptyConnection::Close()`.
+    pub fn kill(&mut self) -> anyhow::Result<()> {
+        if self.is_terminated() {
+            return Ok(());
+        }
+
+        unsafe {
+            TerminateProcess(self.process_info.hProcess, 1)
+                .map_err(anyhow::Error::from)
+                .with_context(|| format!("Failed to terminate PTY root process {}", self.id()))?;
+        }
+
+        match unsafe { WaitForSingleObject(self.process_info.hProcess, Self::TERMINATE_WAIT_MS) } {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_TIMEOUT => {
+                anyhow::bail!(
+                    "Timed out waiting for PTY root process {} to exit",
+                    self.id()
+                )
+            }
+            wait_result => anyhow::bail!(
+                "Unexpected wait result {wait_result:?} while terminating PTY root process {}",
+                self.id()
+            ),
+        }
+    }
+}
+
+impl Drop for PseudoConsoleChild {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.process_info.hThread);
+            let _ = CloseHandle(self.process_info.hProcess);
+        }
     }
 }
 
@@ -166,7 +212,7 @@ pub(super) fn spawn(
             // never reach the Windows PTY spawn path. Surface as an error
             // rather than panicking so a rogue persisted/round-tripped
             // sandbox starter degrades gracefully on Windows.
-            log::error!("Docker sandbox shell starter reached the Windows PTY spawn path");
+            report_error!("Docker sandbox shell starter reached the Windows PTY spawn path");
             return Err(PtySpawnError::UnsupportedShellStarter(
                 "Docker sandbox shells are not supported on Windows".to_owned(),
             ));
@@ -326,13 +372,14 @@ fn append_quoted(arg: &OsStr, cmdline: &mut Vec<u16>) {
 }
 
 pub struct Pty {
+    child_exit_watcher: ChildExitWatcher,
     handle: Box<dyn PtyHandle>,
     /// An arbitrary type on Windows used to interact with the psuedoconsole.
     pty_handle: HPCON,
     pipe: mio::windows::NamedPipe,
     token: mio::Token,
     conpty_api: ConptyApi,
-    child_exit_watcher: ChildExitWatcher,
+    pty_closed: bool,
 }
 
 impl Pty {
@@ -358,12 +405,13 @@ impl Pty {
                     handle,
                 )| {
                     let mut pty = Self {
+                        child_exit_watcher,
                         handle,
                         pty_handle,
                         pipe,
                         token: PTY_TOKEN,
                         conpty_api,
-                        child_exit_watcher,
+                        pty_closed: false,
                     };
                     pty.on_resize(&size);
                     pty
@@ -373,6 +421,35 @@ impl Pty {
 
     pub fn get_pid(&self) -> u32 {
         self.handle.pid()
+    }
+
+    /// Closes the pseudoconsole and disconnects from the console host.
+    ///
+    /// Closing the pseudoconsole ends the console session: the console host terminates every client
+    /// process still attached to it. Idempotent so that it can run in both [`EventedPty::kill`] and
+    /// `Drop`.
+    fn close_pseudoconsole(&mut self) {
+        use std::io::Read as _;
+
+        if self.pty_closed {
+            return;
+        }
+        self.pty_closed = true;
+
+        unsafe {
+            self.conpty_api.close(self.pty_handle);
+        }
+
+        // Drain all data in the pipe.
+        let mut buffer = [0; 1000];
+        while let Ok(num_byes_read) = self.pipe.read(&mut buffer) {
+            if num_byes_read == 0 {
+                break;
+            }
+        }
+
+        // Finally, disconnect from the console host, which will ultimately get it to terminate.
+        let _ = self.pipe.disconnect();
     }
 }
 
@@ -432,35 +509,21 @@ impl EventedPty for Pty {
     }
 
     fn on_resize(&mut self, size: &crate::terminal::SizeInfo) {
-        if let Err(err) = unsafe { self.conpty_api.resize(self.pty_handle, size.to_coord()) } {
-            log::error!("Failed to resize pseudoconsole: {err:?}");
-        }
+        report_if_error!(unsafe {
+            self.conpty_api
+                .resize(self.pty_handle, size.to_coord())
+                .context("Failed to resize pseudoconsole")
+        });
     }
 
-    fn kill(self) -> anyhow::Result<()> {
-        Ok(())
+    fn kill(mut self) -> anyhow::Result<()> {
+        self.close_pseudoconsole();
+        self.handle.kill()
     }
 }
 
 impl Drop for Pty {
     fn drop(&mut self) {
-        use std::io::Read as _;
-
-        // Ask the pseudoconsole to close.
-        unsafe {
-            self.conpty_api.close(self.pty_handle);
-        }
-
-        // Drain all data in the pipe.
-        let mut buffer = [0; 1000];
-        while let Ok(num_byes_read) = self.pipe.read(&mut buffer) {
-            if num_byes_read == 0 {
-                break;
-            }
-        }
-
-        // Finally, disconnect from the console host, which will ultimately
-        // get it to terminate.  We don't care if there is an error here.
-        let _ = self.pipe.disconnect();
+        self.close_pseudoconsole();
     }
 }

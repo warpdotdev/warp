@@ -1,9 +1,116 @@
+use uuid::Uuid;
 use warpui::{App, EntityId, ModelHandle};
 
 use super::*;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
+
+#[test]
+fn participant_resolution_uses_the_direct_parent_as_orchestrator() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let surface_id = EntityId::new();
+        let root_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let grandchild_run_id = Uuid::new_v4().to_string();
+
+        let (root_id, child_id, grandchild_id) = history_model.update(&mut app, |history, ctx| {
+            let root_id = history.start_new_conversation(surface_id, false, false, false, ctx);
+            history.assign_run_id_for_conversation(
+                root_id,
+                root_run_id.clone(),
+                None,
+                surface_id,
+                ctx,
+            );
+            let child_id = history.start_new_child_conversation(
+                surface_id,
+                "child".to_string(),
+                root_id,
+                None,
+                ctx,
+            );
+            history.assign_run_id_for_conversation(
+                child_id,
+                child_run_id.clone(),
+                None,
+                surface_id,
+                ctx,
+            );
+            let grandchild_id = history.start_new_child_conversation(
+                surface_id,
+                "grandchild".to_string(),
+                child_id,
+                None,
+                ctx,
+            );
+            history.assign_run_id_for_conversation(
+                grandchild_id,
+                grandchild_run_id,
+                None,
+                surface_id,
+                ctx,
+            );
+            (root_id, child_id, grandchild_id)
+        });
+
+        history_model.read(&app, |history, _| {
+            let grandchild = history
+                .conversation(&grandchild_id)
+                .expect("grandchild conversation exists");
+            assert_eq!(
+                orchestrator_agent_id_for_conversation(history, grandchild),
+                Some(child_run_id.clone())
+            );
+            assert_eq!(
+                resolve_orchestration_participant(history, &child_run_id, Some(&child_run_id)),
+                ResolvedOrchestrationParticipant {
+                    kind: OrchestrationParticipantKind::Orchestrator,
+                    conversation_id: Some(child_id),
+                }
+            );
+            assert_eq!(
+                resolve_orchestration_participant(history, &root_run_id, Some(&child_run_id)),
+                ResolvedOrchestrationParticipant {
+                    kind: OrchestrationParticipantKind::Agent {
+                        name: "Agent".to_string(),
+                    },
+                    conversation_id: Some(root_id),
+                }
+            );
+        });
+    });
+}
+
+#[test]
+fn pill_order_keys_prioritize_attention_then_in_progress_then_done() {
+    let blocked = ConversationStatus::Blocked {
+        blocked_action: String::new(),
+    };
+    let blocked_key = pill_status_sort_key(Some(&blocked));
+    let error_key = pill_status_sort_key(Some(&ConversationStatus::Error));
+    let in_progress_key = pill_status_sort_key(Some(&ConversationStatus::InProgress));
+    let cancelled_key = pill_status_sort_key(Some(&ConversationStatus::Cancelled));
+    let success_key = pill_status_sort_key(Some(&ConversationStatus::Success));
+
+    assert!(blocked_key < error_key);
+    assert!(error_key < in_progress_key);
+    assert!(in_progress_key < cancelled_key);
+    assert_eq!(cancelled_key, success_key);
+    assert_eq!(pill_status_sort_key(None), in_progress_key);
+}
+
+#[test]
+fn pill_order_keys_sort_done_conversations_by_most_recent_first() {
+    let older = pill_secondary_sort_key(DONE_STATUS_KEY, Some(1_000));
+    let newer = pill_secondary_sort_key(DONE_STATUS_KEY, Some(2_000));
+    let unknown = pill_secondary_sort_key(DONE_STATUS_KEY, None);
+
+    assert!(newer < older);
+    assert!(older < unknown);
+}
 
 #[test]
 fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder() {
@@ -71,6 +178,85 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                     child_b,
                     grandchild_b1
                 ],
+            );
+        });
+    });
+}
+
+#[test]
+fn adjacent_orchestration_child_navigation_uses_pinned_first_order() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_a = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "child-a".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        let child_b = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "child-b".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        let child_c = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "child-c".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.set_conversation_pinned(child_b, true, ctx);
+            history_model.set_conversation_pinned(child_c, true, ctx);
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    orchestrator_id,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(child_b),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_b,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(child_c),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_c,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(child_a),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_a,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(orchestrator_id),
             );
         });
     });
@@ -146,6 +332,108 @@ fn orchestration_aware_status_uses_direct_status_for_non_parent() {
         });
     });
 }
+#[test]
+fn has_local_orchestrated_children_detects_active_local_children() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        // No children yet.
+        history_model.read(&app, |history_model, _| {
+            assert!(!has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+
+        let child = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "local-child".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        // An active local child counts.
+        history_model.read(&app, |history_model, _| {
+            assert!(has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+
+        // A finished local child no longer counts.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+        history_model.read(&app, |history_model, _| {
+            assert!(!has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+    });
+}
+
+#[test]
+fn has_local_orchestrated_children_ignores_remote_children() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let remote_child = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "remote-child".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                remote_child,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            history_model.mark_conversation_as_remote_child(remote_child, ctx);
+        });
+
+        // A remote child runs on its own worker and is not orphaned by a
+        // parent-only cloud handoff, so it must not count.
+        history_model.read(&app, |history_model, _| {
+            assert!(!has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+    });
+}
 
 #[test]
 fn descendant_conversation_ids_in_spawn_order_returns_empty_without_children() {
@@ -167,7 +455,115 @@ fn descendant_conversation_ids_in_spawn_order_returns_empty_without_children() {
     });
 }
 
-/// Builds an orchestrator with two children for the status-aggregation tests.
+#[test]
+fn adjacent_orchestration_child_navigation_enters_child_list_from_orchestrator() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (_, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    orchestrator_id,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(child_a),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    orchestrator_id,
+                    OrchestrationNavigationDirection::Previous,
+                ),
+                Some(child_b),
+            );
+        });
+    });
+}
+
+#[test]
+fn adjacent_orchestration_child_navigation_wraps_within_child_list() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (_, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_a,
+                    OrchestrationNavigationDirection::Previous,
+                ),
+                Some(orchestrator_id),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_b,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(orchestrator_id),
+            );
+        });
+    });
+}
+
+#[test]
+fn adjacent_orchestration_child_navigation_noops_for_single_child() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "child".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    orchestrator_id,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(child_id),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_id,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(orchestrator_id),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    child_id,
+                    OrchestrationNavigationDirection::Previous,
+                ),
+                Some(orchestrator_id),
+            );
+        });
+    });
+}
+
+/// Convenience: build an orchestrator with two children for status-aggregation
+/// tests so individual cases stay focused on the precedence logic.
 fn build_orchestrator_with_two_children(
     app: &mut App,
     history_model: &ModelHandle<BlocklistAIHistoryModel>,
@@ -439,6 +835,302 @@ fn aggregated_status_respects_orchestrator_own_in_progress_state() {
             assert_eq!(
                 aggregated_orchestrator_status(history_model, orchestrator_id),
                 ConversationStatus::InProgress,
+            );
+        });
+    });
+}
+
+// Aggregation precedence: `InProgress > Blocked > WaitingForEvents > Error >
+// Cancelled > Success`. Two carve-outs are pinned below: orchestrator
+// `WaitingForEvents` outranks descendant `InProgress`, and a terminal
+// orchestrator (`Cancelled`/`Error`) outranks a descendant `WaitingForEvents`.
+
+#[test]
+fn aggregated_status_is_waiting_when_orchestrator_yields_and_children_succeeded() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        // Orchestrator yielded via `wait_for_events`; all children finished
+        // cleanly. The tree is quiescent but not terminal — the aggregator
+        // must report WaitingForEvents so the pill bar reflects that the
+        // run is listening for inbound input.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::WaitingForEvents,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::Success,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_b,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                aggregated_orchestrator_status(history_model, orchestrator_id),
+                ConversationStatus::WaitingForEvents,
+            );
+        });
+    });
+}
+
+#[test]
+fn aggregated_status_prefers_parent_waiting_over_descendant_in_progress() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        // Parent waiting outranks descendant in-progress.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::WaitingForEvents,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_b,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                aggregated_orchestrator_status(history_model, orchestrator_id),
+                ConversationStatus::WaitingForEvents,
+            );
+        });
+    });
+}
+
+#[test]
+fn aggregated_status_prefers_cancelled_parent_over_descendant_waiting_for_events() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        // Terminal parent beats descendant waiting: a Cancelled orchestrator
+        // with a child still listening for events must surface as Cancelled
+        // — the run can't resume on its own once the parent is finalized.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::Cancelled,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::WaitingForEvents,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_b,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                aggregated_orchestrator_status(history_model, orchestrator_id),
+                ConversationStatus::Cancelled,
+            );
+        });
+    });
+}
+
+#[test]
+fn aggregated_status_prefers_errored_parent_over_descendant_waiting_for_events() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        // Symmetric to the Cancelled case: an Errored parent still wins over
+        // a descendant WaitingForEvents.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::Error,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::WaitingForEvents,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_b,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                aggregated_orchestrator_status(history_model, orchestrator_id),
+                ConversationStatus::Error,
+            );
+        });
+    });
+}
+
+#[test]
+fn aggregated_status_returns_in_progress_when_parent_is_in_progress_too() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        // The parent-waits carve-out only kicks in when the orchestrator
+        // itself is `WaitingForEvents`. If the orchestrator is actively
+        // in progress alongside its children, `InProgress` wins (this
+        // is the original aggregation precedence).
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_b,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                aggregated_orchestrator_status(history_model, orchestrator_id),
+                ConversationStatus::InProgress,
+            );
+        });
+    });
+}
+
+#[test]
+fn aggregated_status_prefers_blocked_over_waiting_for_events() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        // Orchestrator is waiting for events, but a child is blocked on user
+        // input. Blocked outranks WaitingForEvents because the user needs to
+        // unblock the tree before it can make progress.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::WaitingForEvents,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::Blocked {
+                    blocked_action: "approve_command".to_string(),
+                },
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_b,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                aggregated_orchestrator_status(history_model, orchestrator_id),
+                ConversationStatus::Blocked {
+                    blocked_action: "approve_command".to_string(),
+                },
+            );
+        });
+    });
+}
+
+#[test]
+fn aggregated_status_prefers_waiting_for_events_over_error() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        // Orchestrator is waiting; one child errored. `WaitingForEvents`
+        // outranks `Error` because the run is not terminal — it may still
+        // resume on its own and the user shouldn't see a terminal
+        // "Error" pill while the driver is still alive.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::WaitingForEvents,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::Error,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_b,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                aggregated_orchestrator_status(history_model, orchestrator_id),
+                ConversationStatus::WaitingForEvents,
             );
         });
     });

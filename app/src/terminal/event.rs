@@ -9,10 +9,11 @@ use instant::Instant;
 pub use remote_server::setup::RemoteServerSetupState;
 
 use super::history::HistoryEntry;
-use super::model::ansi::{FinishUpdateValue, WarpificationUnavailableReason};
+use super::model::ansi::FinishUpdateValue;
 use super::model::block::BlockId;
+use super::model::lifecycle::LifecycleRecoveryRecord;
 use super::model::session::{SessionId, SessionInfo};
-use super::model::terminal_model::{BlockIndex, ExitReason, TmuxInstallationState};
+use super::model::terminal_model::{BlockIndex, ExitReason};
 use crate::server::ids::SyncId;
 use crate::server::telemetry::ImageProtocol;
 use crate::terminal::model::block::{BlockMetadata, SerializedBlock};
@@ -81,18 +82,8 @@ pub enum Event {
     SSHControlMasterError,
     TerminalModeSwapped(TerminalMode),
     ExecutedInBandCommand(ExecutedExecutorCommandEvent),
-    TmuxControlModeReady {
-        primary_pane: u32,
-    },
     /// See comment above [crate::terminal::ModelEvent::DetectedEndOfSshLogin].
     DetectedEndOfSshLogin(SshLoginStatus),
-    RemoteWarpificationIsUnavailable(WarpificationUnavailableReason),
-    SshTmuxInstaller(TmuxInstallationState),
-    TmuxInstallFailed {
-        line: String,
-        command: String,
-    },
-    InitSsh(InitSshEvent),
     InitSubshell(InitSubshellEvent),
     /// Emitted when the user's RC file has been executed in a subshell.
     SourcedRcFileInSubshell(SourcedRcFileInSubshellEvent),
@@ -113,9 +104,12 @@ pub enum Event {
     /// Users "Tag an agent in" when they ask the agent to take over a long running command
     /// that was started outside of a conversation (and they tag the agent out when they take control back).
     AgentTaggedInChanged {
+        block_id: BlockId,
         is_tagged_in: bool,
     },
     Handler(HandlerEvent),
+    /// Carries non-UGC lifecycle diagnostics to the model dispatcher for telemetry.
+    LifecycleRecovery(LifecycleRecoveryRecord),
     /// Emitted when the remote server binary has been successfully checked or
     /// installed and is ready. The session is initialized independently on
     /// `Bootstrapped`; when the remote server later connects, the client is
@@ -165,13 +159,6 @@ pub struct InitSubshellEvent {
 pub struct SourcedRcFileInSubshellEvent {
     pub shell_type: ShellType,
     pub uname: Option<String>,
-    pub tmux: Option<bool>,
-}
-
-#[derive(Debug, Clone)]
-pub struct InitSshEvent {
-    pub shell_type: ShellType,
-    pub uname: Option<String>,
 }
 
 #[derive(Clone)]
@@ -208,9 +195,6 @@ pub struct BootstrappedEvent {
 
 #[derive(Clone)]
 pub struct BlockCompletedEvent {
-    /// This will be None when we don't want to collect telemetry
-    /// for this block's latency.
-    pub block_latency_data: Option<BlockLatencyData>,
     pub block_type: BlockType,
     pub num_secrets_obfuscated: usize,
     pub block_index: BlockIndex,
@@ -234,13 +218,6 @@ pub struct AfterBlockCompletedEvent {
 
     /// If the completed block had an env var object associated.
     pub cloud_env_var_collection_id: Option<SyncId>,
-}
-
-#[derive(Clone)]
-pub struct BlockLatencyData {
-    pub command: &'static str,
-    /// When the block's command grid was started (i.e. when the user hit enter).
-    pub started_at: Instant,
 }
 
 #[derive(Clone, Debug)]
@@ -345,7 +322,7 @@ pub struct UserBlockCompleted {
 }
 
 /// Emitted upon completion of an executor command that goes through the pty, such as the
-/// InBandCommandExecutor or the TmuxCommandExecutor.
+/// InBandCommandExecutor.
 #[derive(Clone)]
 pub struct ExecutedExecutorCommandEvent {
     pub command_id: String,
@@ -455,20 +432,8 @@ impl Debug for Event {
             Event::SSH(remote_shell) => write!(f, "SSH(remote shell: {remote_shell}"),
             Event::SSHControlMasterError => write!(f, "SSH ControlMaster error"),
             Event::TerminalModeSwapped(_) => write!(f, "Terminal mode swapped"),
-            Event::TmuxControlModeReady { primary_pane } => {
-                write!(f, "TmuxControlModeReady(primary_pane: {primary_pane})")
-            }
             Event::DetectedEndOfSshLogin(check_type) => {
                 write!(f, "DetectedEndOfSshLogin: {check_type:?}")
-            }
-            Event::RemoteWarpificationIsUnavailable(_) => {
-                write!(f, "RemoteWarpificationIsUnavailable")
-            }
-            Event::SshTmuxInstaller(installer) => {
-                write!(f, "SshTmuxInstaller({installer:?})")
-            }
-            Event::TmuxInstallFailed { line, command } => {
-                write!(f, "TmuxInstallFailed(line: {line}, command: {command})")
             }
             Event::ExecutedInBandCommand(event) => write!(
                 f,
@@ -481,16 +446,20 @@ impl Debug for Event {
             Event::SourcedRcFileInSubshell(event) => {
                 write!(f, "SourcedRcFileInSubshell({event:?})")
             }
-            Event::InitSsh(event) => {
-                write!(f, "InitSsh({event:?})")
-            }
             Event::PromptUpdated => write!(f, "PromptUpdated"),
             Event::HonorPS1OutOfSync => write!(f, "HonorPS1OutOfSync"),
             Event::Typeahead => write!(f, "Typeahead"),
-            Event::AgentTaggedInChanged { is_tagged_in } => {
-                write!(f, "AgentTaggedInChanged(is_tagged_in: {is_tagged_in})")
+            Event::AgentTaggedInChanged {
+                block_id,
+                is_tagged_in,
+            } => {
+                write!(
+                    f,
+                    "AgentTaggedInChanged(block_id: {block_id:?}, is_tagged_in: {is_tagged_in})"
+                )
             }
             Event::Handler(handler_event) => write!(f, "Handler({handler_event:?}))"),
+            Event::LifecycleRecovery(record) => write!(f, "LifecycleRecovery({record:?})"),
             Event::RemoteServerReady { session_id } => {
                 write!(f, "RemoteServerReady(session: {session_id:?})")
             }

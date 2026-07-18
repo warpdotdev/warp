@@ -1,6 +1,6 @@
 use warp_core::ui::appearance::Appearance;
 use warpui_core::elements::{
-    Align, Container, CrossAxisAlignment, Empty, Flex, MainAxisSize, ParentElement, Shrinkable,
+    Align, CrossAxisAlignment, Empty, Flex, MainAxisSize, ParentElement, Shrinkable,
 };
 use warpui_core::Element;
 
@@ -18,19 +18,16 @@ pub fn onboarding_bottom_nav(
     let back_button = back_button.unwrap_or_else(|| Empty::new().finish());
     let next_button = next_button.unwrap_or_else(|| Empty::new().finish());
 
-    // Use equal-size flex slots on the left and right so the dots remain centered regardless of the
-    // button widths.
+    // Equal-weight side slots push Back to the far left and Next to the far
+    // right, leaving the natural-width dots centered between them on one row.
     let left = Shrinkable::new(1., Align::new(back_button).left().finish()).finish();
     let right = Shrinkable::new(1., Align::new(next_button).right().finish()).finish();
 
-    Container::new(
-        Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(left)
-            .with_child(dots)
-            .with_child(right)
-            .finish(),
-    )
-    .finish()
+    Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(left)
+        .with_child(dots)
+        .with_child(right)
+        .finish()
 }

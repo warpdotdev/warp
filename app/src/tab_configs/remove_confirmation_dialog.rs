@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ChildAnchor, ChildView, Container, OffsetPositioning, ParentAnchor, ParentOffsetBounds,
     Stack,
@@ -153,7 +154,7 @@ impl TypedActionView for RemoveTabConfigConfirmationDialog {
         match action {
             RemoveTabConfigConfirmationAction::Confirm => {
                 let Some(path) = self.config_path.clone() else {
-                    log::error!("Remove confirm button pressed with no config path");
+                    report_error!("Remove confirm button pressed with no config path");
                     return;
                 };
                 ctx.emit(RemoveTabConfigConfirmationEvent::Confirm { path });

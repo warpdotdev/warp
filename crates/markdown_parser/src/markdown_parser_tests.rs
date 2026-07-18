@@ -1028,6 +1028,29 @@ fn test_parse_unclosed_strikethrough() {
 }
 
 #[test]
+fn test_long_delimiter_run_does_not_overflow() {
+    // Regression test: a run of 256+ identical delimiters used to overflow the
+    // `u8` run counter, panicking in debug builds and silently wrapping the
+    // count to 0 (dropping the characters) in release builds. The count is now
+    // a `usize`, so a long unmatched run must round-trip to literal text.
+    for delimiter in ["*", "_", "~"] {
+        // 255 was already fine; 256 is the first value that overflowed `u8`.
+        for len in [255, 256, 512] {
+            let source = delimiter.repeat(len);
+            let parsed = parse_markdown(&source)
+                .unwrap_or_else(|_| panic!("{len} '{delimiter}' delimiters should parse"));
+            // An unmatched run carries no content to emphasize, so every
+            // character survives as literal text.
+            assert_eq!(
+                parsed.raw_text(),
+                format!("{source}\n"),
+                "{len} '{delimiter}' delimiters must round-trip without loss"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_parse_escapes() {
     let source = "This is \\*not\\* italic. *This* is marked by \\* though";
     assert_eq!(
@@ -1778,6 +1801,70 @@ fn test_parse_autolinks_with_emphasis() {
                 ..Default::default()
             }
         }]
+    );
+}
+
+#[test]
+fn test_parse_emphasized_autolink_with_trailing_punctuation() {
+    assert_eq!(
+        parse_all("**https://example.com**.", parse_inline),
+        vec![
+            FormattedTextFragment {
+                text: "https://example.com".to_string(),
+                styles: FormattedTextStyles {
+                    weight: Some(CustomWeight::Bold),
+                    hyperlink: Some(Hyperlink::Url("https://example.com".to_string())),
+                    ..Default::default()
+                },
+            },
+            FormattedTextFragment::plain_text("."),
+        ]
+    );
+
+    assert_eq!(
+        parse_all("*https://example.com*!", parse_inline),
+        vec![
+            FormattedTextFragment {
+                text: "https://example.com".to_string(),
+                styles: FormattedTextStyles {
+                    italic: true,
+                    hyperlink: Some(Hyperlink::Url("https://example.com".to_string())),
+                    ..Default::default()
+                },
+            },
+            FormattedTextFragment::plain_text("!"),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_autolink_strips_trailing_sentence_punctuation() {
+    assert_eq!(
+        parse_all("See https://example.com.", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("See "),
+            FormattedTextFragment::hyperlink("https://example.com", "https://example.com"),
+            FormattedTextFragment::plain_text("."),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_autolink_preserves_escaped_trailing_punctuation() {
+    assert_eq!(
+        parse_all("https://example.com\\.", parse_inline),
+        vec![FormattedTextFragment::hyperlink(
+            "https://example.com.",
+            "https://example.com."
+        )]
+    );
+
+    assert_eq!(
+        parse_all("https://example.com\\\\.", parse_inline),
+        vec![
+            FormattedTextFragment::hyperlink("https://example.com\\", "https://example.com\\"),
+            FormattedTextFragment::plain_text("."),
+        ]
     );
 }
 

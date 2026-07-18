@@ -11,9 +11,10 @@ use futures::stream::AbortHandle;
 use ignore::gitignore::Gitignore;
 use instant::Instant;
 #[cfg(feature = "local_fs")]
-use repo_metadata::entry::IgnoredPathStrategy;
+use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy};
 use repo_metadata::Repository;
 use warp_core::safe_error;
+use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext, ModelHandle};
 
 use super::fragment_metadata::{
@@ -827,7 +828,7 @@ impl CodebaseIndex {
                             ctx,
                         ),
                         Err(e) => {
-                            log::error!("Failed to build tree {e}");
+                            report_error!(anyhow::anyhow!("{e}").context("Failed to build tree"));
                             send_telemetry_from_ctx!(
                                 AITelemetryEvent::BuildTreeFailed {
                                     error: e.to_string(),
@@ -936,6 +937,9 @@ impl CodebaseIndex {
         // First traverse the repo path to retrieve all files we want to parse.
         let mut files = Vec::new();
         let mut remaining_file_quotas = max_num_files_limit;
+        // Codebase embedding must not operate on a partial tree: the file limit
+        // is an intentional cost cap, so exceeding it fails the build rather
+        // than silently indexing a breadth-first subset of the repository.
         let entry = Entry::build_tree(
             &repo_path,
             &mut files,
@@ -944,7 +948,9 @@ impl CodebaseIndex {
             MAX_DEPTH,
             0,
             &IgnoredPathStrategy::Exclude, // override_ignore_for_files
-        )?;
+            BudgetExceededBehavior::FailFast,
+        )
+        .await?;
 
         Ok(BuildFileTreeResult {
             file_tree: entry,
@@ -1504,9 +1510,9 @@ impl CodebaseIndex {
     ) {
         match relevant_fragments_result {
             Err(err) => {
-                log::error!(
-                    "Failed to retrieve relevant fragment on root {:?}",
-                    self.last_server_synced_root_node()
+                report_error!(
+                    "Failed to retrieve relevant fragment",
+                    extra: { "root" => ?self.last_server_synced_root_node() }
                 );
                 ctx.emit(CodebaseIndexEvent::RetrievalRequestFailed {
                     retrieval_id,
@@ -1887,16 +1893,15 @@ impl CodebaseIndex {
                             },
                             ctx
                         );
-                        log::error!(
-                            "Failed to diff filesystem with tree from snapshot: {err:?}"
-                        );
+                        report_error!(anyhow::anyhow!("{err:?}")
+                            .context("Failed to diff filesystem with tree from snapshot"));
                         me.update_tree_sync_state(
                             TreeSourceSyncState::InitializeTreeFailure(err),
                             ctx,
                         );
                     }
                     Err(SnapshotLoadError::ParseFailed(e)) => {
-                        log::error!("Failed to parse snapshot: {e:?}");
+                        report_error!(e.context("Failed to parse snapshot"));
                         me.update_tree_sync_state(
                             TreeSourceSyncState::InitializeTreeFailure(
                                 Error::SnapshotParsingFailed,

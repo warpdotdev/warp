@@ -177,7 +177,7 @@ impl ActiveAgentViewsModel {
             register_agent_event_consumer(conversation_id, terminal_view_id, ctx);
         }
 
-        ctx.subscribe_to_model(controller, move |model, event, ctx| match event {
+        ctx.subscribe_to_model(controller, move |model, _, event, ctx| match event {
             AgentViewControllerEvent::EnteredAgentView {
                 conversation_id, ..
             } => {
@@ -302,12 +302,6 @@ impl ActiveAgentViewsModel {
         self.focused_terminal_states
             .get(&window_id)
             .and_then(|state| state.active_conversation_id)
-    }
-
-    pub fn get_focused_terminal_view_id(&self, window_id: WindowId) -> Option<EntityId> {
-        self.focused_terminal_states
-            .get(&window_id)
-            .map(|state| state.focused_terminal_id)
     }
 
     /// Get the last focused terminal view id (persisted across non-terminal focus changes).

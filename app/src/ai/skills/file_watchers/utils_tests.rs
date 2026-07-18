@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
 use repo_metadata::file_tree_store::FileTreeState;
 use repo_metadata::file_tree_update::{
@@ -8,6 +6,7 @@ use repo_metadata::file_tree_update::{
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{
     DirectoryWatcher, RepoMetadataModel, RepoMetadataUpdate, RepositoryIdentifier,
+    StandingQueryContent, StandingQueryResults, StandingQueryResultsDelta,
 };
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::host_id::HostId;
@@ -19,8 +18,16 @@ use warpui::App;
 use super::{
     extract_skill_parent_directory, find_project_skill_files_in_tree, is_home_provider_path,
     is_home_skill_directory, is_skill_file, read_skills_from_files,
-    update_might_affect_project_skills,
 };
+fn project_standing_results(
+    skill_paths: impl IntoIterator<Item = StandardizedPath>,
+) -> StandingQueryResults {
+    let mut results = StandingQueryResults::default();
+    for skill_path in skill_paths {
+        results.insert_project_skill(StandingQueryContent::file(skill_path));
+    }
+    results
+}
 
 // ============================================================================
 // Tests for is_skill_file
@@ -541,7 +548,21 @@ fn find_skill_files_in_tree_finds_root_skills() {
                 let key =
                     warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
                         .unwrap();
-                model.insert_test_state(key, state, ctx);
+                model.insert_test_state(key.clone(), state, ctx);
+                model.insert_test_standing_results(
+                    key,
+                    project_standing_results([
+                        StandardizedPath::try_from_local(
+                            &repo.join(".agents/skills/root-skill-1/SKILL.md"),
+                        )
+                        .unwrap(),
+                        StandardizedPath::try_from_local(
+                            &repo.join(".claude/skills/root-skill-2/SKILL.md"),
+                        )
+                        .unwrap(),
+                    ]),
+                    ctx,
+                );
             });
 
             model_handle.read(&app, |model, ctx| {
@@ -567,134 +588,6 @@ fn find_skill_files_in_tree_finds_root_skills() {
             });
         });
     });
-}
-
-#[test]
-fn update_relevance_ignores_unrelated_local_file_updates() {
-    let repo_path = StandardizedPath::try_new("/repo").unwrap();
-    let repo_id = RepositoryIdentifier::local(repo_path.clone());
-    let update = RepoMetadataUpdate {
-        repo_path: repo_path.clone(),
-        remove_entries: Vec::new(),
-        update_entries: vec![FileTreeEntryUpdate {
-            parent_path_to_replace: StandardizedPath::try_new("/repo/src").unwrap(),
-            subtree_metadata: vec![RepoNodeMetadata::File(FileNodeMetadata {
-                path: StandardizedPath::try_new("/repo/src/main.rs").unwrap(),
-                extension: Some("rs".to_string()),
-                ignored: false,
-            })],
-        }],
-    };
-
-    assert!(!update_might_affect_project_skills(&repo_id, &update, None));
-}
-
-#[test]
-fn update_relevance_detects_local_skill_and_provider_directory_updates() {
-    let repo_path = StandardizedPath::try_new("/repo").unwrap();
-    let repo_id = RepositoryIdentifier::local(repo_path.clone());
-    let skill_update = RepoMetadataUpdate {
-        repo_path: repo_path.clone(),
-        remove_entries: Vec::new(),
-        update_entries: vec![FileTreeEntryUpdate {
-            parent_path_to_replace: StandardizedPath::try_new("/repo/.agents/skills/review")
-                .unwrap(),
-            subtree_metadata: vec![RepoNodeMetadata::File(FileNodeMetadata {
-                path: StandardizedPath::try_new("/repo/.agents/skills/review/SKILL.md").unwrap(),
-                extension: Some("md".to_string()),
-                ignored: false,
-            })],
-        }],
-    };
-    let provider_update = RepoMetadataUpdate {
-        repo_path,
-        remove_entries: Vec::new(),
-        update_entries: vec![FileTreeEntryUpdate {
-            parent_path_to_replace: StandardizedPath::try_new("/repo").unwrap(),
-            subtree_metadata: vec![RepoNodeMetadata::Directory(DirectoryNodeMetadata {
-                path: StandardizedPath::try_new("/repo/.agents/skills").unwrap(),
-                ignored: false,
-                loaded: true,
-            })],
-        }],
-    };
-
-    assert!(update_might_affect_project_skills(
-        &repo_id,
-        &skill_update,
-        None
-    ));
-    assert!(update_might_affect_project_skills(
-        &repo_id,
-        &provider_update,
-        None
-    ));
-}
-
-#[test]
-fn update_relevance_detects_removal_of_known_skill_ancestor() {
-    let repo_path = StandardizedPath::try_new("/repo").unwrap();
-    let repo_id = RepositoryIdentifier::local(repo_path.clone());
-    let known_skill = LocalOrRemotePath::Local(
-        StandardizedPath::try_new("/repo/.agents/skills/review/SKILL.md")
-            .unwrap()
-            .to_local_path_lossy(),
-    );
-    let known_skill_files = HashSet::from([known_skill]);
-    let update = RepoMetadataUpdate {
-        repo_path,
-        remove_entries: vec![StandardizedPath::try_new("/repo/.agents/skills/review").unwrap()],
-        update_entries: Vec::new(),
-    };
-
-    assert!(update_might_affect_project_skills(
-        &repo_id,
-        &update,
-        Some(&known_skill_files)
-    ));
-}
-
-#[test]
-fn update_relevance_filters_remote_updates_by_skill_file_paths() {
-    let host_id = HostId::new("test-host".to_string());
-    let repo_path = StandardizedPath::try_new("/repo").unwrap();
-    let repo_id = RepositoryIdentifier::Remote(RemotePath::new(host_id, repo_path.clone()));
-    let unrelated_update = RepoMetadataUpdate {
-        repo_path: repo_path.clone(),
-        remove_entries: Vec::new(),
-        update_entries: vec![FileTreeEntryUpdate {
-            parent_path_to_replace: StandardizedPath::try_new("/repo/src").unwrap(),
-            subtree_metadata: vec![RepoNodeMetadata::File(FileNodeMetadata {
-                path: StandardizedPath::try_new("/repo/src/main.rs").unwrap(),
-                extension: Some("rs".to_string()),
-                ignored: false,
-            })],
-        }],
-    };
-    let skill_update = RepoMetadataUpdate {
-        repo_path,
-        remove_entries: Vec::new(),
-        update_entries: vec![FileTreeEntryUpdate {
-            parent_path_to_replace: StandardizedPath::try_new("/repo/.claude/skills/review")
-                .unwrap(),
-            subtree_metadata: vec![RepoNodeMetadata::File(FileNodeMetadata {
-                path: StandardizedPath::try_new("/repo/.claude/skills/review/SKILL.md").unwrap(),
-                extension: Some("md".to_string()),
-                ignored: false,
-            })],
-        }],
-    };
-
-    assert!(!update_might_affect_project_skills(
-        &repo_id,
-        &unrelated_update,
-        None
-    ));
-    assert!(update_might_affect_project_skills(
-        &repo_id,
-        &skill_update,
-        None
-    ));
 }
 
 #[test]
@@ -822,7 +715,21 @@ fn find_skill_files_in_tree_finds_subdirectory_skills() {
                 let key =
                     warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
                         .unwrap();
-                model.insert_test_state(key, state, ctx);
+                model.insert_test_state(key.clone(), state, ctx);
+                model.insert_test_standing_results(
+                    key,
+                    project_standing_results([
+                        StandardizedPath::try_from_local(
+                            &repo.join(".agents/skills/root-skill/SKILL.md"),
+                        )
+                        .unwrap(),
+                        StandardizedPath::try_from_local(
+                            &repo.join("packages/frontend/.agents/skills/frontend-skill/SKILL.md"),
+                        )
+                        .unwrap(),
+                    ]),
+                    ctx,
+                );
             });
 
             model_handle.read(&app, |model, ctx| {
@@ -891,6 +798,10 @@ fn find_skill_files_in_tree_returns_remote_skill_paths_for_remote_repos() {
                     }),
                 ],
             }],
+            standing_results_delta: StandingQueryResultsDelta {
+                upserted_project_skills: vec![StandingQueryContent::file(skill_path.clone())],
+                ..Default::default()
+            },
         };
 
         model_handle.update(&mut app, |model, ctx| {
@@ -909,6 +820,43 @@ fn find_skill_files_in_tree_returns_remote_skill_paths_for_remote_repos() {
     });
 }
 
+#[cfg(unix)]
+#[test]
+fn find_skill_files_in_tree_does_not_rescan_local_provider_directories() {
+    VirtualFS::test(
+        "find_local_symlinked_skills_from_standing_results_only",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.agents/skills")
+                .mkdir("target")
+                .with_files(vec![Stub::FileWithContent(
+                    "target/SKILL.md",
+                    "---\nname: linked\ndescription: test\n---\n# linked",
+                )]);
+            let repo = dirs.tests().join("repo");
+            let provider = repo.join(".agents/skills");
+            let linked_directory = provider.join("linked");
+            std::os::unix::fs::symlink(dirs.tests().join("target"), &linked_directory).unwrap();
+
+            App::test((), |mut app| async move {
+                app.add_singleton_model(|_| DetectedRepositories::default());
+                let model_handle = app.add_singleton_model(RepoMetadataModel::new);
+                model_handle.update(&mut app, |model, ctx| {
+                    let key = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+                    let mut results = StandingQueryResults::default();
+                    results.insert_project_skill(StandingQueryContent::directory(
+                        StandardizedPath::try_from_local(&provider).unwrap(),
+                    ));
+                    model.insert_test_standing_results(key, results, ctx);
+                });
+
+                model_handle.read(&app, |model, ctx| {
+                    let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
+                    assert!(find_project_skill_files_in_tree(&repo_id, model, ctx).is_empty());
+                });
+            });
+        },
+    );
+}
 #[test]
 fn find_skill_files_in_tree_includes_ignored_skill_files() {
     VirtualFS::test("find_skills_ignored", |dirs, mut vfs| {
@@ -964,7 +912,15 @@ fn find_skill_files_in_tree_includes_ignored_skill_files() {
             let model_handle = app.add_singleton_model(RepoMetadataModel::new);
             model_handle.update(&mut app, |model, ctx| {
                 let key = StandardizedPath::from_local_canonicalized(&repo).unwrap();
-                model.insert_test_state(key, state, ctx);
+                model.insert_test_state(key.clone(), state, ctx);
+                model.insert_test_standing_results(
+                    key,
+                    project_standing_results([StandardizedPath::try_from_local(
+                        &repo.join(".agents/skills/ignored-skill/SKILL.md"),
+                    )
+                    .unwrap()]),
+                    ctx,
+                );
             });
 
             model_handle.read(&app, |model, ctx| {

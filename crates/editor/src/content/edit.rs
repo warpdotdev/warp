@@ -15,6 +15,7 @@ use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_errors::report_error;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui_core::fonts::Weight;
 use warpui_core::image_cache::ImageType;
@@ -66,6 +67,7 @@ pub(crate) fn layout_mermaid_block_for_test(
 ///
 /// Supports the following markdown image formats per the CommonMark spec:
 /// https://spec.commonmark.org/0.31.2/#images
+/// - Inline data: base64 `data:` URIs (e.g. notebook image outputs)
 /// - URLs: `http://` or `https://` prefixed paths
 /// - Absolute paths: paths starting with `/`
 /// - Relative paths: all other paths, resolved relative to the document location
@@ -76,11 +78,14 @@ pub fn resolve_asset_source_relative_to_directory(
     source: &str,
     base_directory: Option<&Path>,
 ) -> AssetSource {
-    if source.starts_with("http://") || source.starts_with("https://") {
+    if let Some(data_uri_source) = asset_cache::data_uri_source(source) {
+        data_uri_source
+    } else if source.starts_with("http://") || source.starts_with("https://") {
         asset_cache::url_source(source)
     } else if source.starts_with("/") {
         AssetSource::LocalFile {
             path: source.to_string(),
+            content_version: None,
         }
     } else {
         let resolved_path = if let Some(base_directory) = base_directory {
@@ -94,13 +99,19 @@ pub fn resolve_asset_source_relative_to_directory(
                 Ok(canon) => canon.to_string_lossy().to_string(),
                 Err(_) => resolved_path.to_string_lossy().to_string(),
             },
+            content_version: None,
         }
     }
 }
 
+/// Resolve an image source when its Markdown block is laid out.
+///
+/// Local-file metadata is read here so refreshes get a new cache key, while
+/// ordinary frame rendering continues to reuse the resolved source without I/O.
 fn resolve_asset_source(source: &str, base_path: Option<&Path>) -> AssetSource {
     let base_directory = base_path.map(|base| base.parent().unwrap_or(base));
     resolve_asset_source_relative_to_directory(source, base_directory)
+        .with_local_file_content_version()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -108,11 +119,14 @@ pub fn resolve_asset_source_relative_to_directory(
     source: &str,
     _base_directory: Option<&Path>,
 ) -> AssetSource {
-    if source.starts_with("http://") || source.starts_with("https://") {
+    if let Some(data_uri_source) = asset_cache::data_uri_source(source) {
+        data_uri_source
+    } else if source.starts_with("http://") || source.starts_with("https://") {
         asset_cache::url_source(source)
     } else {
         AssetSource::LocalFile {
             path: source.to_string(),
+            content_version: None,
         }
     }
 }
@@ -400,10 +414,12 @@ impl LayOutArgs {
                 .checked_sub(self.frame_offset_from_block_start)
             else {
                 // Autodetected URLs cannot cross frame boundaries.
-                log::error!(
-                    "URL starts at {} but frame starts at {}",
-                    index_range.start,
-                    self.frame_offset_from_block_start
+                report_error!(
+                    "URL start offset precedes frame start offset",
+                    extra: {
+                        "url_start" => %index_range.start,
+                        "frame_start" => %self.frame_offset_from_block_start
+                    }
                 );
                 continue;
             };
@@ -551,10 +567,9 @@ impl EditDelta {
                 match task.run(layout, location, is_hidden) {
                     Ok(result) => Some(result),
                     Err(e) => {
-                        log::error!(
-                            "Failed to lay out BlockItem at offset {:?}: {:?}",
-                            self.old_offset,
-                            e
+                        report_error!(
+                            e.context("Failed to lay out BlockItem"),
+                            extra: { "offset" => ?self.old_offset }
                         );
                         None
                     }
@@ -570,7 +585,7 @@ impl EditDelta {
                 if let (BlockItem::Hidden(running_config), BlockItem::Hidden(config)) =
                     (last, &item)
                 {
-                    *running_config += *config;
+                    *running_config += config.clone();
                     return acc;
                 }
             }
@@ -637,7 +652,7 @@ pub fn layout_temporary_blocks(
             match task.run(layout, location, false) {
                 Ok(result) => Some((line_count, result.0)),
                 Err(e) => {
-                    log::error!("Failed to lay out temporary blocks: {e:?}");
+                    report_error!(e.context("Failed to lay out temporary blocks"));
                     None
                 }
             }

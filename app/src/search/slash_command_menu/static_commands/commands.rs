@@ -37,12 +37,21 @@ pub const ADD_MCP: StaticCommand = StaticCommand {
     argument: None,
 };
 
-pub const PR_COMMENTS: StaticCommand = StaticCommand {
-    name: "/pr-comments",
-    description: "Pull GitHub PR review comments",
-    icon_path: "bundled/svg/github.svg",
-    availability: Availability::REPOSITORY.union(Availability::AI_ENABLED),
-    auto_enter_ai_mode: true,
+pub const MCP: StaticCommand = StaticCommand {
+    name: "/mcp",
+    description: "View and manage MCP servers",
+    icon_path: "bundled/svg/dataflow.svg",
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const EXIT: StaticCommand = StaticCommand {
+    name: "/exit",
+    description: "Exit Warp",
+    icon_path: "bundled/svg/log-out-01.svg",
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
     argument: None,
 };
 
@@ -137,6 +146,17 @@ pub static RENAME_TAB: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand 
     argument: Some(Argument::required().with_hint_text("<tab name>")),
 });
 
+pub static RENAME_CONVERSATION: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/rename-conversation",
+    description: "Rename the current conversation",
+    icon_path: "bundled/svg/pencil-line.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::ACTIVE_CONVERSATION
+        | Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument::required().with_hint_text("<new title>")),
+});
+
 static SET_TAB_COLOR_HINT: LazyLock<String> = LazyLock::new(|| {
     let mut hint = String::from("<");
     for color in color_dot::TAB_COLOR_OPTIONS {
@@ -165,8 +185,7 @@ pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| {
         availability: Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
             | Availability::NO_LRC_CONTROL
-            | Availability::AI_ENABLED
-            | Availability::NOT_CLOUD_AGENT,
+            | Availability::AI_ENABLED,
         auto_enter_ai_mode: true,
         argument: Some(Argument::optional().with_hint_text(hint_text)),
     }
@@ -311,7 +330,7 @@ pub static HOST: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     icon_path: "bundled/svg/oz-cloud.svg",
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
-        | Availability::CLOUD_AGENT_V2,
+        | Availability::CLOUD_MODE_V2_COMPOSER,
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -322,7 +341,7 @@ pub static HARNESS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     icon_path: "bundled/svg/oz.svg",
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
-        | Availability::CLOUD_AGENT_V2,
+        | Availability::CLOUD_MODE_V2_COMPOSER,
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -333,7 +352,7 @@ pub static ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     icon_path: "bundled/svg/globe-04.svg",
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
-        | Availability::CLOUD_AGENT_V2,
+        | Availability::CLOUD_MODE_V2_COMPOSER,
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -414,7 +433,6 @@ pub static QUEUE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     icon_path: "bundled/svg/clock-plus.svg",
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
-        | Availability::NO_LRC_CONTROL
         | Availability::AI_ENABLED
         | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
@@ -450,14 +468,15 @@ pub const FORK_FROM: StaticCommand = StaticCommand {
 };
 
 pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| {
-    let hint_text = "<optional prompt to send in forked conversation>";
+    let hint_text = "<optional prompt to send in local conversation>";
     StaticCommand {
         name: "/continue-locally",
         description: "Continue this cloud conversation locally",
         icon_path: "bundled/svg/arrow-split.svg",
         availability: Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
-            | Availability::AI_ENABLED,
+            | Availability::AI_ENABLED
+            | Availability::CLOUD_AGENT,
         auto_enter_ai_mode: true,
         argument: Some(Argument::optional().with_hint_text(hint_text)),
     }
@@ -627,6 +646,7 @@ fn all_commands() -> Vec<StaticCommand> {
         AGENT.clone(),
         NEW.clone(),
         PLAN.clone(),
+        RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
         USAGE,
@@ -637,6 +657,10 @@ fn all_commands() -> Vec<StaticCommand> {
 
     if FeatureFlag::LocalDockerSandbox.is_enabled() {
         commands.push(CREATE_DOCKER_SANDBOX);
+    }
+    if settings::settings_mode() == settings::SettingsMode::Tui {
+        commands.push(MCP);
+        commands.push(EXIT);
     }
 
     if FeatureFlag::CreatingSharedSessions.is_enabled()
@@ -693,12 +717,6 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(INVOKE_SKILL.clone());
     }
 
-    if FeatureFlag::PRCommentsSlashCommand.is_enabled()
-        && !FeatureFlag::PRCommentsSkill.is_enabled()
-    {
-        commands.push(PR_COMMENTS);
-    }
-
     if FeatureFlag::CloudMode.is_enabled() && FeatureFlag::CloudModeFromLocalSession.is_enabled() {
         commands.push(CLOUD_AGENT.clone());
     }
@@ -723,9 +741,7 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(OPEN_REPO);
     }
 
-    if FeatureFlag::OrchestrationV2.is_enabled() {
-        commands.push(ORCHESTRATE.clone());
-    }
+    commands.push(ORCHESTRATE.clone());
 
     if FeatureFlag::SettingsFile.is_enabled() && cfg!(feature = "local_fs") {
         commands.push(OPEN_SETTINGS_FILE);

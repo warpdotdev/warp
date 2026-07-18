@@ -4,6 +4,7 @@ use std::{fmt, iter, mem};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, DispatchEventResult, Element, Empty, EventHandler,
     Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
@@ -268,7 +269,7 @@ impl PaneData {
 
         // Remove the pane from the tree
         if !self.remove(id) {
-            log::error!("Pane not found");
+            report_error!("Pane not found");
             return false;
         }
 
@@ -297,7 +298,7 @@ impl PaneData {
         {
             self.hidden_panes.remove(pos);
         } else {
-            log::error!("Attempted to show pane for the job but couldn't find it.")
+            report_error!("Attempted to show pane for the job but couldn't find it.")
         }
     }
 
@@ -315,7 +316,7 @@ impl PaneData {
         {
             self.hidden_panes.remove(pos);
         } else {
-            log::error!("Attempted to show child agent pane but couldn't find it.")
+            report_error!("Attempted to show child agent pane but couldn't find it.")
         }
     }
 
@@ -1004,7 +1005,7 @@ impl PaneBranch {
                     if *pane == pane_id_to_remove {
                         self.nodes.remove(idx);
                         if self.dividers.is_empty() {
-                            log::error!("Attempted to remove a pane when there are no dividers!");
+                            report_error!("Attempted to remove a pane when there are no dividers!");
                         } else {
                             self.dividers.remove(idx.min(self.dividers.len() - 1));
                         }

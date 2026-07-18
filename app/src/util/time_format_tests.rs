@@ -47,6 +47,27 @@ fn test_human_readable_precise_duration() {
 }
 
 #[test]
+fn format_elapsed_seconds_pluralizes_and_truncates() {
+    assert_eq!(
+        format_elapsed_seconds(StdDuration::from_secs(0)),
+        "0 seconds"
+    );
+    assert_eq!(
+        format_elapsed_seconds(StdDuration::from_secs(1)),
+        "1 second"
+    );
+    assert_eq!(
+        format_elapsed_seconds(StdDuration::from_secs(15)),
+        "15 seconds"
+    );
+    // Subsecond precision is truncated, not rounded.
+    assert_eq!(
+        format_elapsed_seconds(StdDuration::from_millis(1999)),
+        "1 second"
+    );
+}
+
+#[test]
 fn test_human_readable_approx_duration() {
     assert_eq!(
         human_readable_approx_duration(Duration::milliseconds(2), false),

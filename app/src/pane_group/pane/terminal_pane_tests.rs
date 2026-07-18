@@ -1,7 +1,5 @@
 //! Tests for [`inherit_share_for_local_child`]. These verify the pure
-//! branching independent of the PaneGroup dispatch code. The behavior
-//! is gated by `FeatureFlag::OrchestrationViewerPillBar` so each case
-//! must override it explicitly.
+//! branching independent of the PaneGroup dispatch code.
 
 use uuid::Uuid;
 
@@ -20,23 +18,13 @@ fn ambient_source(task_id: Option<&str>) -> SharedSessionSource {
 }
 
 #[test]
-fn inherit_share_returns_no_when_feature_flag_disabled() {
-    let _guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(false);
-    let host = user_source(Some("host-task"));
-    let result = inherit_share_for_local_child(Some(&host), new_task_id());
-    assert!(matches!(result, IsSharedSessionCreator::No));
-}
-
-#[test]
 fn inherit_share_returns_no_when_host_is_not_sharing() {
-    let _guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
     let result = inherit_share_for_local_child(None, new_task_id());
     assert!(matches!(result, IsSharedSessionCreator::No));
 }
 
 #[test]
 fn inherit_share_returns_no_when_host_user_share_has_no_task_id() {
-    let _guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
     let host = user_source(None);
     let result = inherit_share_for_local_child(Some(&host), new_task_id());
     assert!(
@@ -48,7 +36,6 @@ fn inherit_share_returns_no_when_host_user_share_has_no_task_id() {
 
 #[test]
 fn inherit_share_returns_no_when_host_ambient_share_has_no_task_id() {
-    let _guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
     let host = ambient_source(None);
     let result = inherit_share_for_local_child(Some(&host), new_task_id());
     assert!(matches!(result, IsSharedSessionCreator::No));
@@ -56,7 +43,6 @@ fn inherit_share_returns_no_when_host_ambient_share_has_no_task_id() {
 
 #[test]
 fn inherit_share_cascades_user_source_for_manually_shared_local_orchestrator() {
-    let _guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
     let host = user_source(Some("parent-task-id"));
     let child_task_id = new_task_id();
     let expected_child_str = child_task_id.to_string();
@@ -82,7 +68,6 @@ fn inherit_share_cascades_user_source_for_manually_shared_local_orchestrator() {
 
 #[test]
 fn inherit_share_cascades_ambient_source_for_cloud_orchestrator() {
-    let _guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
     let host = ambient_source(Some("parent-task-id"));
     let child_task_id = new_task_id();
     let expected_child_str = child_task_id.to_string();

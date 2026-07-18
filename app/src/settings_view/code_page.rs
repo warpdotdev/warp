@@ -15,9 +15,9 @@ use pathfinder_color::ColorU;
 #[cfg(not(target_family = "wasm"))]
 use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
 use warp_core::features::FeatureFlag;
-use warp_core::report_if_error;
 use warp_core::settings::ToggleableSetting as _;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as ThemeFill};
+use warp_errors::report_if_error;
 use warp_util::path::user_friendly_path;
 #[cfg(not(target_family = "wasm"))]
 use warp_util::remote_path::RemotePath;
@@ -371,6 +371,9 @@ impl CodeSettingsPageView {
                 Box::new(CodeReviewDiffStatsToggleWidget::default()),
                 Box::new(ProjectExplorerToggleWidget::default()),
                 Box::new(GlobalSearchToggleWidget::default()),
+                Box::new(ShowHiddenFilesToggleWidget::default()),
+                Box::new(FormatOnSaveToggleWidget::default()),
+                Box::new(AutoSaveToggleWidget::default()),
             ]);
             let categories = vec![
                 Category::new("Codebase Indexing", codebase_indexing_widgets),
@@ -454,6 +457,9 @@ impl CodeSettingsPageView {
                             Box::new(CodeReviewDiffStatsToggleWidget::default()),
                             Box::new(ProjectExplorerToggleWidget::default()),
                             Box::new(GlobalSearchToggleWidget::default()),
+                            Box::new(ShowHiddenFilesToggleWidget::default()),
+                            Box::new(FormatOnSaveToggleWidget::default()),
+                            Box::new(AutoSaveToggleWidget::default()),
                         ]);
                     }
                 }
@@ -503,6 +509,9 @@ impl CodeSettingsPageView {
                 Box::new(CodeReviewDiffStatsToggleWidget::default()),
                 Box::new(ProjectExplorerToggleWidget::default()),
                 Box::new(GlobalSearchToggleWidget::default()),
+                Box::new(ShowHiddenFilesToggleWidget::default()),
+                Box::new(FormatOnSaveToggleWidget::default()),
+                Box::new(AutoSaveToggleWidget::default()),
             ]);
             let categories = vec![
                 Category::new("Codebase Indexing", codebase_indexing_widgets),
@@ -622,6 +631,9 @@ pub enum CodeSettingsPageAction {
     ToggleAutoOpenCodeReviewPane,
     ToggleProjectExplorer,
     ToggleGlobalSearch,
+    ToggleShowHiddenFiles,
+    ToggleFormatOnSave,
+    ToggleAutoSave,
     /// Install (if needed) and enable a suggested LSP server.
     InstallAndEnableLspServer {
         workspace_path: PathBuf,
@@ -822,6 +834,24 @@ impl TypedActionView for CodeSettingsPageView {
                 });
                 ctx.notify();
             }
+            CodeSettingsPageAction::ToggleShowHiddenFiles => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.show_hidden_files.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            CodeSettingsPageAction::ToggleFormatOnSave => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.format_on_save.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            CodeSettingsPageAction::ToggleAutoSave => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.auto_save.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
             CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane => {
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
@@ -975,6 +1005,14 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                     )),
                     context,
                     flags::SHOW_GLOBAL_SEARCH,
+                ),
+                ToggleSettingActionPair::new(
+                    "show hidden files in project explorer",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleShowHiddenFiles,
+                    )),
+                    context,
+                    flags::SHOW_HIDDEN_FILES,
                 ),
             ],
             app,
@@ -2843,6 +2881,134 @@ impl SettingsWidget for GlobalSearchToggleWidget {
                 })
                 .finish(),
             Some("Adds global file search to the left side tools panel.".into()),
+        )
+    }
+}
+
+#[derive(Default)]
+struct ShowHiddenFilesToggleWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for ShowHiddenFilesToggleWidget {
+    type View = CodeSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "show hidden files dotfiles project explorer file tree"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let code_settings = CodeSettings::as_ref(app);
+
+        render_body_item::<CodeSettingsPageAction>(
+            "Show hidden files in project explorer".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*code_settings.show_hidden_files)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleShowHiddenFiles);
+                })
+                .finish(),
+            Some(
+                "Show dotfiles and hidden files (starting with .) in the project explorer.".into(),
+            ),
+        )
+    }
+}
+
+#[derive(Default)]
+struct FormatOnSaveToggleWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for FormatOnSaveToggleWidget {
+    type View = CodeSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "format on save lsp language server formatting reformat editor"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let code_settings = CodeSettings::as_ref(app);
+
+        render_body_item::<CodeSettingsPageAction>(
+            "Format on save (requires an active language server)".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*code_settings.format_on_save)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleFormatOnSave);
+                })
+                .finish(),
+            Some(
+                "Only applies when a language server is active for the file. Automatically formats the file with the language server on save; other LSP features (hover, go-to-definition, references, diagnostics) are unaffected."
+                    .into(),
+            ),
+        )
+    }
+}
+
+#[derive(Default)]
+struct AutoSaveToggleWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for AutoSaveToggleWidget {
+    type View = CodeSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "auto save autosave automatically save editor files on type focus"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let code_settings = CodeSettings::as_ref(app);
+
+        render_body_item::<CodeSettingsPageAction>(
+            "Auto save".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*code_settings.auto_save)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleAutoSave);
+                })
+                .finish(),
+            Some(
+                "Automatically saves changes in the Warp text editor as you type and when the editor loses focus."
+                    .into(),
+            ),
         )
     }
 }

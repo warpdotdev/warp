@@ -928,20 +928,23 @@ impl<V: EditorView> EditorWrapper<V> {
         line_range: Range<LineCount>,
         offset: Pixels,
     ) -> GutterElement {
-        // Use a slightly stronger overlay when hovered for better visual feedback
         let theme = appearance.theme();
+        // Shift the button background when its row (or half-row, for split
+        // up/down buttons) is hovered, so the expand affordance reads as
+        // interactive.
         let gutter_background_color = if range_hovered {
-            internal_colors::fg_overlay_2(theme)
+            internal_colors::fg_overlay_3(theme)
         } else {
             internal_colors::fg_overlay_1(theme)
         };
 
+        let icon_color = if range_hovered {
+            line_number_config.highlight_text_color
+        } else {
+            line_number_config.text_color
+        };
         let icon = ConstrainedBox::new(
-            warpui::elements::Icon::new(
-                expansion_type.icon().into(),
-                line_number_config.text_color,
-            )
-            .finish(),
+            warpui::elements::Icon::new(expansion_type.icon().into(), icon_color).finish(),
         )
         .with_width(16.)
         .with_height(16.)
@@ -1614,9 +1617,17 @@ impl<V: EditorView> Element for EditorWrapper<V> {
             Some(Event::MouseMoved { position, .. }) => {
                 let only_check_y_axis =
                     matches!(self.gutter_element_hover_target, GutterHoverTarget::Line);
-                let hovered_line = self
-                    .gutter_element_range_containing_position(*position, only_check_y_axis)
-                    .map(|gutter_range| gutter_range.line().clone());
+                let broad_hovered_range =
+                    self.gutter_element_range_containing_position(*position, only_check_y_axis);
+
+                let hovered_range = match broad_hovered_range {
+                    Some(GutterRange::HiddenSection { .. }) => {
+                        self.gutter_element_range_containing_position(*position, false)
+                    }
+                    other => other,
+                };
+
+                let hovered_line = hovered_range.map(|gutter_range| gutter_range.line().clone());
                 let mut hovered_diff_hunk = self.state_handle.hovered_diff_hunk.lock();
                 if hovered_diff_hunk.as_ref() != hovered_line.as_ref() {
                     // When hovering over a new range, clear the previously clicked range

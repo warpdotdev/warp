@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use ai::api_keys::ApiKeyManager;
+use anyhow::Context as _;
 use chrono::{DateTime, Local, Utc};
 use instant::Instant;
 use serde::{Deserialize, Serialize};
 use warp_core::user_preferences::GetUserPreferences as _;
+use warp_errors::report_error;
 pub use warp_graphql::billing::BonusGrantType;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -51,6 +53,7 @@ pub struct BonusGrant {
 
 /// The key for the corresponding entry in UserDefaults.
 const REQUEST_LIMIT_INFO_CACHE_KEY: &str = "AIRequestLimitInfo";
+const AMBIENT_CREDITS_BANNER_DISMISSED_KEY: &str = "AmbientCreditsBannerDismissed";
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum RequestLimitRefreshDuration {
@@ -165,6 +168,21 @@ fn get_cached_request_limit_info(app_mut: &mut AppContext) -> Option<RequestLimi
         .and_then(|serialized| serde_json::from_str(serialized.as_str()).ok())
 }
 
+fn cache_ambient_credits_banner_dismissed(dismissed: bool, app_mut: &mut AppContext) {
+    let _ = app_mut
+        .private_user_preferences()
+        .write_value(AMBIENT_CREDITS_BANNER_DISMISSED_KEY, dismissed.to_string());
+}
+
+fn get_cached_ambient_credits_banner_dismissed(app_mut: &mut AppContext) -> bool {
+    app_mut
+        .private_user_preferences()
+        .read_value(AMBIENT_CREDITS_BANNER_DISMISSED_KEY)
+        .unwrap_or_default()
+        .and_then(|value| value.parse::<bool>().ok())
+        .unwrap_or_default()
+}
+
 pub struct AIRequestUsageModel {
     ai_client: Arc<dyn AIClient>,
 
@@ -177,6 +195,9 @@ pub struct AIRequestUsageModel {
 
     /// Whether the buy credits banner has been dismissed by the user.
     buy_addon_credits_banner_dismissed: bool,
+
+    /// Whether the ambient trial credits banner has been dismissed by the user.
+    ambient_credits_banner_dismissed: bool,
 }
 
 impl Entity for AIRequestUsageModel {
@@ -185,6 +206,7 @@ impl Entity for AIRequestUsageModel {
 
 pub enum AIRequestUsageModelEvent {
     RequestUsageUpdated,
+    AmbientCreditsBannerDismissed,
     RequestBonusRefunded {
         requests_refunded: i32,
         server_conversation_id: String,
@@ -198,6 +220,7 @@ impl AIRequestUsageModel {
         // This is only used to show the latest known value before we finish refreshing from the server below.
         let cached_request_limit_info = get_cached_request_limit_info(ctx);
         let request_limit_info = cached_request_limit_info.unwrap_or_default();
+        let ambient_credits_banner_dismissed = get_cached_ambient_credits_banner_dismissed(ctx);
 
         Self {
             ai_client,
@@ -205,17 +228,19 @@ impl AIRequestUsageModel {
             last_update_time: None,
             bonus_grants: vec![],
             buy_addon_credits_banner_dismissed: false,
+            ambient_credits_banner_dismissed,
         }
     }
 
     #[cfg(test)]
-    pub fn new_for_test(ai_client: Arc<dyn AIClient>, _ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new_for_test(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
         Self {
             ai_client,
             last_update_time: None,
             request_limit_info: RequestLimitInfo::default(),
             bonus_grants: vec![],
             buy_addon_credits_banner_dismissed: false,
+            ambient_credits_banner_dismissed: get_cached_ambient_credits_banner_dismissed(ctx),
         }
     }
 
@@ -305,7 +330,7 @@ impl AIRequestUsageModel {
                         if exchange
                             .input
                             .iter()
-                            .any(|input| input.user_query().is_some())
+                            .any(|input| input.display_query().is_some())
                         {
                             break;
                         }
@@ -331,7 +356,9 @@ impl AIRequestUsageModel {
                     )
                     .await
             },
-            |_, result, ctx| match result {
+            |_, result, ctx| match result
+                .context("Failed to provide negative feedback response for ai conversation")
+            {
                 Ok(requests_refunded) => {
                     if requests_refunded > 0 {
                         ctx.emit(AIRequestUsageModelEvent::RequestBonusRefunded {
@@ -342,9 +369,7 @@ impl AIRequestUsageModel {
                     }
                 }
                 Err(e) => {
-                    log::error!(
-                        "Failed to provide negative feedback response for ai conversation: {e:?}"
-                    );
+                    report_error!(e);
                 }
             },
         );
@@ -378,7 +403,8 @@ impl AIRequestUsageModel {
     /// 4. user's team plan has pay-as-you-go enabled (enterprise only)
     /// 5. user's team has enterprise bonus grants auto-reload enabled (enterprise only)
     /// 6. user's team has self-serve auto-reload enabled within its monthly spend limit
-    /// 7. user has BYOK enabled and has provided at least one API key
+    /// 7. user has BYOK enabled and has either provided at least one API key or
+    ///    connected a Grok subscription
     /// Use this method as the starting point for AI availability checking.
     pub fn has_any_ai_remaining(&self, ctx: &AppContext) -> bool {
         let current_workspace = UserWorkspaces::as_ref(ctx).current_workspace();
@@ -411,10 +437,10 @@ impl AIRequestUsageModel {
                     .is_some_and(|price| !workspace.would_addon_purchase_reach_limit(price))
         });
 
-        // If you have provided your own API key,
-        // it doesn't matter if you are out of warp-provided requests.
-        let has_byo_api_key = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx)
-            && ApiKeyManager::as_ref(ctx).keys().has_any_key();
+        // If you have provided your own API key or connected a Grok
+        // subscription, it doesn't matter if you are out of warp-provided requests.
+        let has_byo_credentials = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx)
+            && ApiKeyManager::as_ref(ctx).has_any_key();
 
         has_base_plan_ai_requests
             || (user_bonus_credits || workspace_bonus_credits)
@@ -422,7 +448,7 @@ impl AIRequestUsageModel {
             || is_payg_enabled
             || is_enterprise_auto_reload_enabled
             || is_self_serve_auto_reload_enabled
-            || has_byo_api_key
+            || has_byo_credentials
     }
 
     pub fn requests_used(&self) -> usize {
@@ -455,15 +481,6 @@ impl AIRequestUsageModel {
                 .request_limit_info
                 .embedding_generation_batch_size,
         }
-    }
-
-    /// Returns whether the user has hit their maximum codebase allowance.
-    /// (If the user is allowed unlimited indices, this is vacuously false.)
-    pub fn hit_codebase_index_limit(&self, current_indices: usize) -> bool {
-        self.codebase_context_limits()
-            .max_indices_allowed
-            .map(|lim| current_indices >= lim)
-            .unwrap_or(false)
     }
 
     pub fn next_refresh_time(&self) -> DateTime<Utc> {
@@ -508,6 +525,19 @@ impl AIRequestUsageModel {
                     .sum(),
             )
         }
+    }
+
+    pub fn is_ambient_credits_banner_dismissed(&self) -> bool {
+        self.ambient_credits_banner_dismissed
+    }
+
+    pub fn dismiss_ambient_credits_banner(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.ambient_credits_banner_dismissed {
+            return;
+        }
+        self.ambient_credits_banner_dismissed = true;
+        cache_ambient_credits_banner_dismissed(true, ctx);
+        ctx.emit(AIRequestUsageModelEvent::AmbientCreditsBannerDismissed);
     }
 
     pub fn total_workspace_bonus_credits_remaining(&self, uid: WorkspaceUid) -> i32 {

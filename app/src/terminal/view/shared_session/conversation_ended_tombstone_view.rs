@@ -69,10 +69,10 @@ impl TombstoneDisplayData {
         let conversation_is_transcript = !has_task_id
             && history_model
                 .as_ref(ctx)
-                .is_terminal_view_conversation_transcript_viewer(terminal_view_id);
+                .is_terminal_surface_conversation_transcript_viewer(terminal_view_id);
         let conversation = history_model
             .as_ref(ctx)
-            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
             .find(|c| c.id() == conversation_id);
 
         let Some(conversation) = conversation else {
@@ -175,7 +175,7 @@ impl ConversationEndedTombstoneView {
     ) -> Self {
         let conversation_id = BlocklistAIHistoryModel::handle(ctx)
             .as_ref(ctx)
-            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
             .next()
             .map(|c| c.id());
 
@@ -665,13 +665,16 @@ impl TypedActionView for ConversationEndedTombstoneView {
                         if let Ok(url) = url::Url::parse(&url_string) {
                             ctx.dispatch_typed_action(&WorkspaceAction::OpenLinkOnDesktop(url));
                         } else {
-                            log::error!("Failed to parse conversation URL: {}", url_string);
+                            warp_errors::report_error!(
+                                "Failed to parse conversation URL",
+                                extra: { "url" => %url_string }
+                            );
                         }
                     } else {
                         log::warn!("No server conversation token available for conversation");
                     }
                 } else {
-                    log::error!("Conversation not found in history model");
+                    warp_errors::report_error!("Conversation not found in history model");
                 }
             }
         }

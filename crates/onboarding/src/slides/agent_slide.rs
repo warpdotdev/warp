@@ -1,10 +1,7 @@
 use ai::LLMId;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
-use ui_components::button::State as ButtonState;
 use ui_components::{button, Component as _, Options as _};
 use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
@@ -23,48 +20,14 @@ use warpui_core::scene::DropShadow;
 use warpui_core::text_layout::TextAlignment;
 use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
 use warpui_core::{
-    AppContext, Element, Entity, Gradient, SingletonEntity as _, TypedActionView, View, ViewContext,
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 
 use super::two_line_button::{render_two_line_button, TwoLineButtonSpec};
 use super::OnboardingSlide;
-use crate::model::{OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel};
+use crate::model::{OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
-use crate::telemetry::OnboardingEvent;
 use crate::visuals::agent_visual;
-
-/// high-contrast "inverted" fill (foreground color)
-struct UpgradeButtonTheme;
-
-impl button::Theme for UpgradeButtonTheme {
-    fn background(
-        &self,
-        button_state: ButtonState,
-        appearance: &Appearance,
-    ) -> Option<warp_core::ui::theme::Fill> {
-        use warp_core::ui::color::blend::Blend;
-        let theme = appearance.theme();
-        let base = theme.foreground();
-        match button_state {
-            ButtonState::Default => Some(base),
-            // Blend a little of the theme background back in to dim on hover /
-            // press. Opacities are relative to the foreground fill.
-            ButtonState::Hovered => Some(base.blend(&theme.background().with_opacity(15))),
-            ButtonState::Pressed => Some(base.blend(&theme.background().with_opacity(30))),
-        }
-    }
-
-    fn text_color(
-        &self,
-        background: Option<warp_core::ui::theme::Fill>,
-        appearance: &Appearance,
-    ) -> ColorU {
-        let bg = background
-            .unwrap_or_else(|| appearance.theme().background())
-            .into_solid();
-        appearance.theme().font_color(bg).into()
-    }
-}
 
 /// Information about a model displayed on the onboarding slide.
 #[derive(Clone, Debug)]
@@ -72,7 +35,6 @@ pub struct OnboardingModelInfo {
     pub id: LLMId,
     pub title: String,
     pub icon: Icon,
-    pub requires_upgrade: bool,
     pub is_default: bool,
 }
 
@@ -135,16 +97,6 @@ pub enum AgentSlideAction {
     ToggleDisableOz,
     BackClicked,
     NextClicked,
-    UpgradeClicked,
-    CopyUpgradeUrlClicked,
-    PasteAuthTokenFromClipboardClicked,
-    DismissPlanActivatedToast,
-}
-
-#[derive(Debug, Clone)]
-pub enum AgentSlideEvent {
-    CopyUpgradeUrlRequested,
-    PasteAuthTokenFromClipboardRequested,
 }
 
 pub struct AgentSlide {
@@ -160,39 +112,19 @@ pub struct AgentSlide {
     autonomy_partial_mouse_state: MouseStateHandle,
     autonomy_none_mouse_state: MouseStateHandle,
 
-    disable_oz_mouse: MouseStateHandle,
-
     back_button: button::Button,
     next_button: button::Button,
-    upgrade_button: button::Button,
     scroll_state: ClippedScrollStateHandle,
     dropdown_scroll_state: ClippedScrollStateHandle,
     is_model_list_expanded: bool,
     highlighted_model_id: Option<LLMId>,
-    show_auth_prompt_bar: bool,
-    copy_url_mouse_state: MouseStateHandle,
-    paste_token_mouse_state: MouseStateHandle,
-    show_plan_activated_toast: bool,
-    last_auth_state: OnboardingAuthState,
-    plan_activated_close_mouse_state: MouseStateHandle,
 }
-
-const PLAN_ACTIVATED_TOAST_DURATION: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Produces the `SavePosition` id for the model row at `index` in the
 /// dropdown list. Used by `scroll_to_position` to scroll a specific row into
 /// view as the keyboard highlight moves.
 fn model_row_position_id(index: usize) -> String {
     format!("agent_slide_model_row_{index}")
-}
-
-/// Returns the slide's view of the model list: free-tier before premium,
-/// with server order preserved within each tier. The slide owns this sort so
-/// state storage can stay in server order.
-fn sorted_models(models: &[OnboardingModelInfo]) -> Vec<OnboardingModelInfo> {
-    let (free, premium): (Vec<_>, Vec<_>) =
-        models.iter().cloned().partition(|m| !m.requires_upgrade);
-    free.into_iter().chain(premium).collect()
 }
 
 impl AgentSlide {
@@ -204,8 +136,6 @@ impl AgentSlide {
         let model_mouse_states = (0..model_count)
             .map(|_| MouseStateHandle::default())
             .collect();
-
-        let initial_auth_state = onboarding_state.as_ref(ctx).auth_state();
 
         ctx.subscribe_to_model(&onboarding_state, |me, model, event, ctx| {
             match event {
@@ -222,30 +152,12 @@ impl AgentSlide {
                     let model_count = state.models().len();
                     me.ensure_mouse_states_for_models(model_count, ctx);
                 }
-                OnboardingStateEvent::AuthStateChanged => {
-                    let new_state = model.as_ref(ctx).auth_state();
-                    if new_state == OnboardingAuthState::PayingUser
-                        && me.last_auth_state != OnboardingAuthState::PayingUser
-                    {
-                        me.show_plan_activated_toast = true;
-                        // Auto-dismiss after the configured duration.
-                        let _ = ctx.spawn(
-                            warpui_core::r#async::Timer::after(PLAN_ACTIVATED_TOAST_DURATION),
-                            |me: &mut Self, _, ctx| {
-                                if me.show_plan_activated_toast {
-                                    me.show_plan_activated_toast = false;
-                                    ctx.notify();
-                                }
-                            },
-                        );
-                    }
-                    me.last_auth_state = new_state;
-                    ctx.notify();
-                }
-                OnboardingStateEvent::SelectedSlideChanged
+                OnboardingStateEvent::AuthStateChanged
+                | OnboardingStateEvent::SelectedSlideChanged
                 | OnboardingStateEvent::IntentionChanged
                 | OnboardingStateEvent::Completed
-                | OnboardingStateEvent::UpgradeRequested => {}
+                | OnboardingStateEvent::UpgradeRequested
+                | OnboardingStateEvent::NoAiConfirmationChanged => {}
             }
         });
 
@@ -256,20 +168,12 @@ impl AgentSlide {
             autonomy_full_mouse_state: MouseStateHandle::default(),
             autonomy_partial_mouse_state: MouseStateHandle::default(),
             autonomy_none_mouse_state: MouseStateHandle::default(),
-            disable_oz_mouse: MouseStateHandle::default(),
             back_button: button::Button::default(),
             next_button: button::Button::default(),
-            upgrade_button: button::Button::default(),
             scroll_state: ClippedScrollStateHandle::new(),
             dropdown_scroll_state: ClippedScrollStateHandle::new(),
             is_model_list_expanded: false,
             highlighted_model_id: None,
-            show_auth_prompt_bar: false,
-            copy_url_mouse_state: MouseStateHandle::default(),
-            paste_token_mouse_state: MouseStateHandle::default(),
-            show_plan_activated_toast: false,
-            last_auth_state: initial_auth_state,
-            plan_activated_close_mouse_state: MouseStateHandle::default(),
         }
     }
 
@@ -304,7 +208,7 @@ impl AgentSlide {
         // state is a floating overlay (built in `View::render`) that sits *on top
         // of* this content, so the underlying layout never shifts between the two
         // states. That keeps the header + picker chip pinned in place.
-        let bottom_nav = self.render_bottom_nav(appearance);
+        let bottom_nav = self.render_bottom_nav(appearance, app);
         slide_content::onboarding_slide_content(
             vec![
                 self.render_header(appearance),
@@ -329,7 +233,7 @@ impl AgentSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Select your in-app agent's defaults.",
+            "Select your Warp Agent's defaults.",
             appearance.ui_font_family(),
             16.,
         )
@@ -385,18 +289,9 @@ impl AgentSlide {
             upper_col.finish()
         };
 
-        let mut col = Flex::column()
+        let col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(upper_sections);
-
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            let disable_oz_section = self.render_disable_oz_section(appearance, settings);
-            col = col.with_child(
-                Container::new(disable_oz_section)
-                    .with_margin_top(24.)
-                    .finish(),
-            );
-        }
 
         Container::new(col.finish()).with_margin_top(40.).finish()
     }
@@ -454,31 +349,15 @@ impl AgentSlide {
             );
         }
 
-        let has_disabled = self
-            .onboarding_state
-            .as_ref(app)
-            .models()
-            .iter()
-            .any(|m| m.requires_upgrade);
-
-        let mut col = Flex::column()
+        Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(header)
             .with_child(
                 Container::new(chip_stack.finish())
                     .with_margin_top(12.)
                     .finish(),
-            );
-
-        if has_disabled {
-            col = col.with_child(
-                Container::new(self.render_upgrade_banner(appearance))
-                    .with_margin_top(12.)
-                    .finish(),
-            );
-        }
-
-        col.finish()
+            )
+            .finish()
     }
 
     /// Renders the single-row collapsed picker button: provider icon, selected title,
@@ -591,9 +470,8 @@ impl AgentSlide {
     }
 
     /// Renders the vertical list of model rows shown inside the floating dropdown
-    /// overlay. Each row: provider icon + title on the left, pill on the right
-    /// (Premium for paywalled rows). Disabled rows are rendered dimmed and are
-    /// not clickable or hover-selectable.
+    /// overlay. Each row shows a provider icon + title on the left, with a
+    /// "Recommended" pill on the right for the default model.
     fn render_model_list_rows(
         &self,
         appearance: &Appearance,
@@ -605,7 +483,7 @@ impl AgentSlide {
         let state = self.onboarding_state.as_ref(app);
         let highlighted_id = self.highlighted_model_id.clone();
         let selected_id = state.agent_settings().selected_model_id.clone();
-        let models = sorted_models(state.models());
+        let models = state.models();
 
         let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
@@ -691,18 +569,11 @@ impl AgentSlide {
         let background_for_text = theme.background().into_solid();
         let ui_font_family = appearance.ui_font_family();
 
-        let is_disabled = model.requires_upgrade;
-
-        let title_color: ColorU = if is_disabled {
-            internal_colors::text_disabled(theme, background_for_text)
-        } else {
-            internal_colors::text_main(theme, background_for_text)
-        };
+        let title_color: ColorU = internal_colors::text_main(theme, background_for_text);
 
         let row_id = model.id.clone();
         let title = model.title.clone();
         let icon = model.icon;
-        let requires_upgrade = model.requires_upgrade;
         let is_default = model.is_default;
 
         let hoverable_body = Hoverable::new(mouse_state, move |_| {
@@ -726,10 +597,7 @@ impl AgentSlide {
                 .with_child(Container::new(title_el).with_margin_left(8.).finish())
                 .finish();
 
-            // Trailing pills: "Recommended" on the server-designated default
-            // model, "Premium" on paywalled rows. In practice a single row is
-            // at most one of these, but both can be shown side-by-side if the
-            // default is also premium for any reason.
+            // "Recommended" pill on the server-designated default model.
             let make_pill = |label: &'static str| -> Box<dyn Element> {
                 let badge = Text::new(label.to_string(), ui_font_family, 11.0)
                     .with_color(internal_colors::text_sub(theme, background_for_text))
@@ -751,8 +619,6 @@ impl AgentSlide {
 
             let trailing: Box<dyn Element> = if is_default {
                 make_pill("Recommended")
-            } else if requires_upgrade {
-                make_pill("Premium")
             } else {
                 Empty::new().finish()
             };
@@ -765,7 +631,7 @@ impl AgentSlide {
                 .with_child(trailing)
                 .finish();
 
-            let background = if is_highlighted && !is_disabled {
+            let background = if is_highlighted {
                 Some(Fill::Solid(internal_colors::neutral_2(theme)))
             } else {
                 None
@@ -783,26 +649,19 @@ impl AgentSlide {
                 .finish()
         });
 
-        if is_disabled {
-            // Disabled rows: no click, no hover-updates-highlight, muted.
-            hoverable_body.finish()
-        } else {
-            let click_id = row_id.clone();
-            let hover_id = row_id;
-            hoverable_body
-                .with_cursor(Cursor::PointingHand)
-                .on_hover(move |is_hovered, ctx, _, _| {
-                    if is_hovered {
-                        ctx.dispatch_typed_action(AgentSlideAction::HighlightModel(
-                            hover_id.clone(),
-                        ));
-                    }
-                })
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(AgentSlideAction::SelectModel(click_id.clone()));
-                })
-                .finish()
-        }
+        let click_id = row_id.clone();
+        let hover_id = row_id;
+        hoverable_body
+            .with_cursor(Cursor::PointingHand)
+            .on_hover(move |is_hovered, ctx, _, _| {
+                if is_hovered {
+                    ctx.dispatch_typed_action(AgentSlideAction::HighlightModel(hover_id.clone()));
+                }
+            })
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(AgentSlideAction::SelectModel(click_id.clone()));
+            })
+            .finish()
     }
 
     fn render_autonomy_workspace_enforced(&self, appearance: &Appearance) -> Box<dyn Element> {
@@ -877,19 +736,19 @@ impl AgentSlide {
             (
                 AgentAutonomy::Full,
                 "Full",
-                "Runs commands, writes code, and reads files without asking.",
+                "Warp Agent runs commands, writes code, and reads files without asking.",
                 self.autonomy_full_mouse_state.clone(),
             ),
             (
                 AgentAutonomy::Partial,
                 "Partial",
-                "Can plan, read files, and execute low-risk commands. Asks before making any changes or executing sensitive commands.",
+                "Warp Agent can plan, read files, and execute low-risk commands. Asks before making any changes or executing sensitive commands.",
                 self.autonomy_partial_mouse_state.clone(),
             ),
             (
                 AgentAutonomy::None,
                 "None",
-                "Takes no actions without your approval.",
+                "Warp Agent takes no actions without your approval.",
                 self.autonomy_none_mouse_state.clone(),
             ),
         ];
@@ -935,39 +794,7 @@ impl AgentSlide {
             .finish()
     }
 
-    fn render_disable_oz_section(
-        &self,
-        appearance: &Appearance,
-        settings: &AgentDevelopmentSettings,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let background_for_text = theme.background().into_solid();
-
-        let checkbox = appearance
-            .ui_builder()
-            .checkbox(self.disable_oz_mouse.clone(), Some(12.))
-            .check(settings.disable_oz)
-            .build()
-            .on_click(|ctx, _, _| ctx.dispatch_typed_action(AgentSlideAction::ToggleDisableOz))
-            .finish();
-
-        let label = Text::new("Disable Warp Agent", appearance.ui_font_family(), 14.0)
-            .with_color(internal_colors::text_sub(theme, background_for_text))
-            .with_style(Properties {
-                weight: Weight::Normal,
-                ..Default::default()
-            })
-            .with_line_height_ratio(1.0)
-            .finish();
-
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(checkbox)
-            .with_child(Container::new(label).with_margin_left(8.).finish())
-            .finish()
-    }
-
-    fn render_bottom_nav(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_bottom_nav(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
@@ -998,13 +825,7 @@ impl AgentSlide {
             },
         );
 
-        let step_index = 2;
-        let step_count = if warp_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-        {
-            5
-        } else {
-            4
-        };
+        let (step_index, step_count) = self.onboarding_state.as_ref(app).progress();
         bottom_nav::onboarding_bottom_nav(
             appearance,
             step_index,
@@ -1012,98 +833,6 @@ impl AgentSlide {
             Some(back_button),
             Some(next_button),
         )
-    }
-
-    fn render_upgrade_banner(&self, appearance: &Appearance) -> Box<dyn Element> {
-        // Diagonal magenta → yellow gradient (top-left to bottom-right). Chosen
-        // to match the "premium" glow styling in the Figma mocks.
-        const GRADIENT_START_MAGENTA: ColorU = ColorU {
-            r: 0xE2,
-            g: 0x48,
-            b: 0xBC,
-            a: 0xFF,
-        };
-        const GRADIENT_END_YELLOW: ColorU = ColorU {
-            r: 0xF5,
-            g: 0xB7,
-            b: 0x00,
-            a: 0xFF,
-        };
-
-        let theme = appearance.theme();
-        let background_for_text = theme.background().into_solid();
-        let ui_font_family = appearance.ui_font_family();
-
-        // Primary "heading" line: bolder, full-contrast.
-        let title = Text::new(
-            "Upgrade for access to premium models.",
-            ui_font_family,
-            13.0,
-        )
-        .with_color(internal_colors::text_main(theme, background_for_text))
-        .with_style(Properties {
-            weight: Weight::Medium,
-            ..Default::default()
-        })
-        .with_line_height_ratio(1.2)
-        .finish();
-
-        // Secondary subtext: muted, normal weight.
-        let subtitle = Text::new(
-            "State-of-the-art models require paid plans.",
-            ui_font_family,
-            12.0,
-        )
-        .with_color(internal_colors::text_sub(theme, background_for_text))
-        .with_style(Properties {
-            weight: Weight::Normal,
-            ..Default::default()
-        })
-        .with_line_height_ratio(1.2)
-        .finish();
-
-        let text_col = Flex::column()
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(title)
-            .with_child(Container::new(subtitle).with_margin_top(4.).finish())
-            .finish();
-
-        let upgrade_button = self.upgrade_button.render(
-            appearance,
-            button::Params {
-                content: button::Content::Label("Upgrade".into()),
-                theme: &UpgradeButtonTheme,
-                options: button::Options {
-                    size: button::Size::Small,
-                    on_click: Some(Box::new(|ctx, _app, _pos| {
-                        ctx.dispatch_typed_action(AgentSlideAction::UpgradeClicked);
-                    })),
-                    ..button::Options::default(appearance)
-                },
-            },
-        );
-
-        let row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(text_col)
-            .with_child(upgrade_button)
-            .finish();
-
-        Container::new(row)
-            .with_uniform_padding(12.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-            .with_border(Border::all(1.).with_border_gradient(
-                vec2f(0., 0.),
-                vec2f(1., 1.),
-                Gradient {
-                    start: GRADIENT_START_MAGENTA,
-                    end: GRADIENT_END_YELLOW,
-                },
-            ))
-            .finish()
     }
 
     fn render_visual(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
@@ -1134,187 +863,10 @@ impl AgentSlide {
                 .finish()
         }
     }
-
-    /// Full-width bar pinned below the slide's two-column layout. Shown after
-    /// the user clicks the Upgrade button, so they can fall back to copying
-    /// the upgrade URL (or pasting the returned auth token) if the browser
-    /// didn't launch automatically.
-    fn render_auth_prompt_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
-        const BAR_HEIGHT: f32 = 40.;
-        const ICON_SIZE: f32 = 14.;
-        const FONT_SIZE: f32 = 12.;
-
-        let theme = appearance.theme();
-        let bar_bg = theme.surface_1();
-        let bar_bg_solid = bar_bg.into_solid();
-        let text_color = internal_colors::text_sub(theme, bar_bg_solid);
-        let ui_builder = appearance.ui_builder();
-
-        let text_styles = UiComponentStyles {
-            font_color: Some(text_color),
-            font_size: Some(FONT_SIZE),
-            ..Default::default()
-        };
-        let link_styles = UiComponentStyles {
-            font_size: Some(FONT_SIZE),
-            ..Default::default()
-        };
-
-        let icon = ConstrainedBox::new(Box::new(
-            Icon::AlertCircle.to_warpui_icon(Fill::Solid(text_color)),
-        ))
-        .with_width(ICON_SIZE)
-        .with_height(ICON_SIZE)
-        .finish();
-
-        let copy_url_link = ui_builder
-            .link(
-                "copy the URL".into(),
-                None,
-                Some(Box::new(|ctx| {
-                    ctx.dispatch_typed_action(AgentSlideAction::CopyUpgradeUrlClicked);
-                })),
-                self.copy_url_mouse_state.clone(),
-            )
-            .soft_wrap(false)
-            .with_style(link_styles)
-            .build()
-            .finish();
-
-        let paste_token_link = ui_builder
-            .link(
-                "Click here".into(),
-                None,
-                Some(Box::new(|ctx| {
-                    ctx.dispatch_typed_action(AgentSlideAction::PasteAuthTokenFromClipboardClicked);
-                })),
-                self.paste_token_mouse_state.clone(),
-            )
-            .soft_wrap(false)
-            .with_style(link_styles)
-            .build()
-            .finish();
-
-        let text_row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(icon)
-            .with_child(
-                Container::new(
-                    ui_builder
-                        .span("If your browser hasn't launched, ")
-                        .with_style(text_styles)
-                        .build()
-                        .finish(),
-                )
-                .with_margin_left(8.)
-                .finish(),
-            )
-            .with_child(copy_url_link)
-            .with_child(
-                ui_builder
-                    .span(" and open the page manually. ")
-                    .with_style(text_styles)
-                    .build()
-                    .finish(),
-            )
-            .with_child(paste_token_link)
-            .with_child(
-                ui_builder
-                    .span(" to paste your token from the browser.")
-                    .with_style(text_styles)
-                    .build()
-                    .finish(),
-            )
-            .finish();
-
-        let row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(text_row)
-            .finish();
-
-        ConstrainedBox::new(
-            Container::new(row)
-                .with_background(bar_bg)
-                .with_border(Border::top(1.).with_border_color(internal_colors::neutral_4(theme)))
-                .with_horizontal_padding(16.)
-                .finish(),
-        )
-        .with_min_height(BAR_HEIGHT)
-        .finish()
-    }
-
-    /// Green success pill shown when the user's `OnboardingAuthState`
-    /// transitions into `PayingUser`. Auto-dismisses after
-    /// `PLAN_ACTIVATED_TOAST_DURATION`; also dismissable via the close X.
-    fn render_plan_activated_toast(&self, appearance: &Appearance) -> Box<dyn Element> {
-        const TOAST_MIN_HEIGHT: f32 = 40.;
-        const ICON_SIZE: f32 = 14.;
-        const CLOSE_SIZE: f32 = 16.;
-        const FONT_SIZE: f32 = 12.;
-
-        let theme = appearance.theme();
-        let toast_bg: Fill = theme.ansi_fg_green().into();
-        let text_color: ColorU = theme.font_color(toast_bg.into_solid()).into();
-        let ui_builder = appearance.ui_builder();
-
-        let check_icon = ConstrainedBox::new(Box::new(
-            Icon::CheckSkinny.to_warpui_icon(Fill::Solid(text_color)),
-        ))
-        .with_width(ICON_SIZE)
-        .with_height(ICON_SIZE)
-        .finish();
-
-        let text = ui_builder
-            .span("Plan successfully activated. All premium models are available.")
-            .with_style(UiComponentStyles {
-                font_color: Some(text_color),
-                font_size: Some(FONT_SIZE),
-                font_weight: Some(Weight::Medium),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-
-        let close_button = ui_builder
-            .close_button(CLOSE_SIZE, self.plan_activated_close_mouse_state.clone())
-            .with_style(UiComponentStyles {
-                font_color: Some(text_color),
-                ..Default::default()
-            })
-            .build()
-            .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(AgentSlideAction::DismissPlanActivatedToast);
-            })
-            .finish();
-
-        let left = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(check_icon)
-            .with_child(Container::new(text).with_margin_left(8.).finish())
-            .finish();
-
-        let row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(left)
-            .with_child(close_button)
-            .finish();
-
-        ConstrainedBox::new(
-            Container::new(row)
-                .with_background(toast_bg)
-                .with_horizontal_padding(16.)
-                .finish(),
-        )
-        .with_min_height(TOAST_MIN_HEIGHT)
-        .finish()
-    }
 }
 
 impl Entity for AgentSlide {
-    type Event = AgentSlideEvent;
+    type Event = ();
 }
 
 impl View for AgentSlide {
@@ -1330,39 +882,10 @@ impl View for AgentSlide {
         // The floating dropdown overlay is built inside `render_model_section`
         // so it inherits the column width naturally. Here we only need the
         // base two-column layout.
-        let slide = layout::static_left(
+        layout::static_left(
             || self.render_content(appearance, settings, workspace_enforces_autonomy, app),
             || self.render_visual(appearance, app),
-        );
-
-        // Upgrade-prompt bar: shown after the user clicks Upgrade, as long as
-        // they aren't yet on a paid plan. Overlays the bottom of the slide
-        // (doesn't bump slide content up) so the slide layout stays stable
-        // whether or not the bar is visible.
-        //
-        // The plan-activated success toast supersedes the bar (and any other
-        // bottom overlay) while it's visible.
-        let auth_state = self.onboarding_state.as_ref(app).auth_state();
-        let show_bar =
-            self.show_auth_prompt_bar && !matches!(auth_state, OnboardingAuthState::PayingUser);
-        if !show_bar && !self.show_plan_activated_toast {
-            return slide;
-        }
-
-        let bottom_overlay = if self.show_plan_activated_toast {
-            self.render_plan_activated_toast(appearance)
-        } else {
-            self.render_auth_prompt_bar(appearance)
-        };
-
-        let mut stack = Stack::new();
-        stack.add_child(slide);
-        stack.add_child(
-            warpui_core::elements::Align::new(bottom_overlay)
-                .bottom_center()
-                .finish(),
-        );
-        stack.finish()
+        )
     }
 }
 
@@ -1384,10 +907,7 @@ impl AgentSlide {
             // starts on the selected row.
             let state = self.onboarding_state.as_ref(ctx);
             let selected_id = state.agent_settings().selected_model_id.clone();
-            if let Some(index) = sorted_models(state.models())
-                .iter()
-                .position(|m| m.id == selected_id)
-            {
+            if let Some(index) = state.models().iter().position(|m| m.id == selected_id) {
                 self.dropdown_scroll_state.scroll_to_position(ScrollTarget {
                     position_id: model_row_position_id(index),
                     mode: ScrollToPositionMode::FullyIntoView,
@@ -1398,55 +918,33 @@ impl AgentSlide {
         ctx.notify();
     }
 
-    /// Finds the next enabled model index in the given direction, wrapping
-    /// around. Indices are into the slide's sorted view of the model list.
-    /// Returns `None` if all models are paywalled.
-    fn next_enabled_model_index(
-        &self,
-        start: usize,
-        forward: bool,
-        ctx: &AppContext,
-    ) -> Option<usize> {
-        let models = sorted_models(self.onboarding_state.as_ref(ctx).models());
-        let count = models.len();
-        if count == 0 {
-            return None;
-        }
-        for offset in 1..=count {
-            let idx = if forward {
-                (start + offset) % count
-            } else {
-                (start + count - offset) % count
-            };
-            if !models[idx].requires_upgrade {
-                return Some(idx);
-            }
-        }
-        None
-    }
-
-    /// Advances the highlight cursor to the next/previous enabled model, wrapping.
-    /// The origin of the walk is the currently-highlighted id (if any), else the
+    /// Advances the highlight cursor to the next/previous model, wrapping. The
+    /// origin of the walk is the currently-highlighted id (if any), else the
     /// currently-selected id. Also scrolls the dropdown so the newly-highlighted
     /// row stays visible — same `SavePosition` + `scroll_to_position` pattern
     /// used by `VerticalTabsPanelState::scroll_to_tab`.
     fn advance_highlighted_model(&mut self, forward: bool, ctx: &mut ViewContext<Self>) {
-        let state = self.onboarding_state.as_ref(ctx);
-        let sorted = sorted_models(state.models());
-        let selected_id = state.agent_settings().selected_model_id.clone();
+        let (model_ids, selected_id) = {
+            let state = self.onboarding_state.as_ref(ctx);
+            let ids: Vec<LLMId> = state.models().iter().map(|m| m.id.clone()).collect();
+            (ids, state.agent_settings().selected_model_id.clone())
+        };
+        let count = model_ids.len();
+        if count == 0 {
+            return;
+        }
         let start_index = self
             .highlighted_model_id
             .as_ref()
-            .and_then(|id| sorted.iter().position(|m| &m.id == id))
-            .or_else(|| sorted.iter().position(|m| m.id == selected_id))
+            .and_then(|id| model_ids.iter().position(|m| m == id))
+            .or_else(|| model_ids.iter().position(|m| *m == selected_id))
             .unwrap_or(0);
-        let Some(next_index) = self.next_enabled_model_index(start_index, forward, ctx) else {
-            return;
+        let next_index = if forward {
+            (start_index + 1) % count
+        } else {
+            (start_index + count - 1) % count
         };
-        let Some(next_id) = sorted.get(next_index).map(|m| m.id.clone()) else {
-            return;
-        };
-        self.highlighted_model_id = Some(next_id);
+        self.highlighted_model_id = Some(model_ids[next_index].clone());
         // Scroll the dropdown so the new highlight is visible. `FullyIntoView`
         // is a no-op when the row is already fully in view, otherwise it
         // scrolls the minimum amount to show it.
@@ -1528,16 +1026,7 @@ impl OnboardingSlide for AgentSlide {
         // and collapses the list. Does NOT advance to the next slide.
         if self.is_model_list_expanded {
             if let Some(id) = self.highlighted_model_id.clone() {
-                // Only select if the highlighted row is still enabled.
-                let enabled = self
-                    .onboarding_state
-                    .as_ref(ctx)
-                    .models()
-                    .iter()
-                    .any(|m| m.id == id && !m.requires_upgrade);
-                if enabled {
-                    self.select_model(id, ctx);
-                }
+                self.select_model(id, ctx);
             }
             self.set_model_list_expanded(false, ctx);
             return;
@@ -1574,16 +1063,7 @@ impl TypedActionView for AgentSlide {
                 self.set_model_list_expanded(!self.is_model_list_expanded, ctx);
             }
             AgentSlideAction::HighlightModel(model_id) => {
-                // Only update if the id corresponds to an enabled row. Callers
-                // (hover handlers) already filter this out, but we defend against
-                // stale actions fired while the list was re-rendering.
-                let enabled = self
-                    .onboarding_state
-                    .as_ref(ctx)
-                    .models()
-                    .iter()
-                    .any(|m| m.id == *model_id && !m.requires_upgrade);
-                if enabled && self.highlighted_model_id.as_ref() != Some(model_id) {
+                if self.highlighted_model_id.as_ref() != Some(model_id) {
                     self.highlighted_model_id = Some(model_id.clone());
                     ctx.notify();
                 }
@@ -1611,29 +1091,6 @@ impl TypedActionView for AgentSlide {
             }
             AgentSlideAction::NextClicked => {
                 self.next(ctx);
-            }
-            AgentSlideAction::UpgradeClicked => {
-                send_telemetry_from_ctx!(OnboardingEvent::AgentSlideUpgradeClicked, ctx);
-                if !matches!(
-                    self.onboarding_state.as_ref(ctx).auth_state(),
-                    OnboardingAuthState::PayingUser,
-                ) {
-                    self.show_auth_prompt_bar = true;
-                    ctx.notify();
-                }
-                self.onboarding_state.update(ctx, |state, ctx| {
-                    state.request_upgrade(ctx);
-                });
-            }
-            AgentSlideAction::CopyUpgradeUrlClicked => {
-                ctx.emit(AgentSlideEvent::CopyUpgradeUrlRequested);
-            }
-            AgentSlideAction::PasteAuthTokenFromClipboardClicked => {
-                ctx.emit(AgentSlideEvent::PasteAuthTokenFromClipboardRequested);
-            }
-            AgentSlideAction::DismissPlanActivatedToast => {
-                self.show_plan_activated_toast = false;
-                ctx.notify();
             }
         }
     }

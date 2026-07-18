@@ -12,6 +12,9 @@ use indexmap::IndexSet;
 use remote_server::manager::RemoteServerManager;
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::DetectedRepositories;
+use warp_core::SessionId;
+#[cfg(feature = "local_fs")]
+use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
 use warp_util::remote_path::RemotePath;
 #[cfg(feature = "local_fs")]
@@ -382,6 +385,7 @@ impl WorkingDirectoriesModel {
     pub fn get_or_create_diff_state_model(
         &mut self,
         key: LocalOrRemotePath,
+        preferred_session: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
     ) -> Option<ModelHandle<DiffStateModel>> {
         if let Some(model) = self.diff_state_models.get(&key) {
@@ -399,7 +403,7 @@ impl WorkingDirectoriesModel {
                     .as_ref(ctx)
                     .client_for_host(&remote_path.host_id)?;
                 let remote_path = remote_path.clone();
-                ctx.add_model(|ctx| DiffStateModel::new_remote(remote_path, ctx))
+                ctx.add_model(|ctx| DiffStateModel::new_remote(remote_path, preferred_session, ctx))
             }
         };
 
@@ -947,9 +951,9 @@ impl WorkingDirectoriesModel {
                 code_review_view.expand_comment_list(ctx);
             })
         } else {
-            log::error!(
-                "WorkingDirectoriesModel did not find CodeReviewView for repo path {:?}",
-                repo_path
+            report_error!(
+                "WorkingDirectoriesModel did not find CodeReviewView for repo path",
+                extra: { "repo_path" => ?repo_path }
             );
         }
 
@@ -1023,6 +1027,7 @@ impl WorkingDirectoriesModel {
     pub fn get_or_create_diff_state_model(
         &mut self,
         _key: LocalOrRemotePath,
+        _preferred_session: Option<SessionId>,
         _ctx: &mut ModelContext<Self>,
     ) -> Option<ModelHandle<DiffStateModel>> {
         None

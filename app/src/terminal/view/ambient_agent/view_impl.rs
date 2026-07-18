@@ -20,7 +20,7 @@ use super::loading_screen::{
 };
 use super::{AmbientAgentEntryBlock, AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::agent::display_user_query_with_mode;
+use crate::ai::agent::{display_user_query_with_mode, RenderableAIError};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::harness::auth_check_command_for;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
@@ -62,7 +62,7 @@ impl TerminalView {
     fn update_active_ambient_agent_conversation_status(
         &self,
         status: ConversationStatus,
-        error_message: Option<String>,
+        error: Option<RenderableAIError>,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(conversation_id) = self.active_ambient_agent_conversation_id(ctx) else {
@@ -70,11 +70,11 @@ impl TerminalView {
         };
 
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-            history_model.update_conversation_status_with_error_message(
+            history_model.update_conversation_status_with_error(
                 self.id(),
                 conversation_id,
                 status,
-                error_message,
+                error,
                 ctx,
             );
         });
@@ -152,13 +152,10 @@ impl TerminalView {
                     return;
                 }
                 if FeatureFlag::CloudModeSetupV2.is_enabled() {
-                    // Render the submitted cloud prompt while the real shared-session transcript
-                    // catches up. The pending block is removed later by
-                    // `HarnessCommandStarted` / failure / cancel / auth handlers.
-                    //
-                    // `request.prompt` is stored stripped of any `/plan` / `/orchestrate`
-                    // prefix; rebuild the display form from `request.mode` so the user sees
-                    // exactly what they typed.
+                    // Render the queued cloud prompt while the shared-session transcript catches
+                    // up. Empty-prompt handoffs may substitute a wire prompt or keep it absent;
+                    // the display follows that wire value and omits the block when none exists.
+                    // Reapply a stripped `/plan` or `/orchestrate` prefix from `request.mode`.
                     let prompt = ambient_agent_view_model
                         .as_ref(ctx)
                         .request()
@@ -262,7 +259,7 @@ impl TerminalView {
                 self.pending_cloud_followup_task_id = None;
                 self.update_active_ambient_agent_conversation_status(
                     ConversationStatus::Error,
-                    Some(error_message.clone()),
+                    Some(RenderableAIError::other(error_message.clone(), false)),
                     ctx,
                 );
 

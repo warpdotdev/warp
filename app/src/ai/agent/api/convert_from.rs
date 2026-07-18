@@ -164,6 +164,7 @@ fn convert_run_agents(
                 name: config.name,
                 prompt: config.prompt,
                 title: config.title,
+                agent_identity_uid: config.agent_identity_uid,
             })
             .collect(),
         plan_id,
@@ -198,6 +199,9 @@ fn convert_start_agent_v2_execution_mode(
                 // Auth secret is plumbed client-side via `RunAgentsRequest`;
                 // StartAgentV2 from the server never carries it.
                 auth_secret_name: None,
+                // Agent identity is plumbed client-side via `RunAgentsRequest`;
+                // StartAgentV2 from the server never carries it.
+                agent_identity_uid: None,
             }
         }
         Some(api::start_agent_v2::execution_mode::Mode::Local(local)) => {
@@ -771,6 +775,12 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
             api::message::tool_call::Tool::RequestComputerUse(request_computer_use) => {
                 create_standard_action(request_computer_use.into())
             }
+            api::message::tool_call::Tool::StartRecording(start_recording) => {
+                create_standard_action(start_recording.try_into()?)
+            }
+            api::message::tool_call::Tool::StopRecording(stop_recording) => {
+                create_standard_action(stop_recording.into())
+            }
             api::message::tool_call::Tool::Subagent(subagent) => {
                 use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 use api::message::tool_call::subagent::Metadata;
@@ -884,6 +894,12 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
             api::message::tool_call::Tool::Server(_) => {
                 Ok(MaybeAIAgentAction::NoClientRepresentation)
             }
+            api::message::tool_call::Tool::WaitForEvents(payload) => {
+                create_standard_action(AIAgentActionType::WaitForEvents {
+                    tool_call_id: self.tool_call_id.clone(),
+                    idle_timeout_seconds: payload.idle_timeout_seconds,
+                })
+            }
             _ => Err(ToolToAIAgentActionError::UnexpectedTool),
         }
     }
@@ -973,12 +989,6 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                         api::message::system_query::Type::AutoCodeDiff(p) => {
                             inputs.push(AIAgentInput::AutoCodeDiffQuery {
                                 query: p.query.clone(),
-                                context: ctx,
-                            });
-                        }
-                        api::message::system_query::Type::FetchReviewComments(fetch) => {
-                            inputs.push(AIAgentInput::FetchReviewComments {
-                                repo_path: fetch.repo_path.clone(),
                                 context: ctx,
                             });
                         }

@@ -4,7 +4,8 @@ use anyhow::{anyhow, Result};
 use chrono::{Local, TimeDelta};
 use history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use session_sharing_protocol::common::ParticipantId;
-use warpui::{AppContext, SingletonEntity, View, ViewContext};
+use warp_errors::report_error;
+use warpui::{AppContext, Entity, SingletonEntity, ViewContext};
 
 use super::{AIBlockModel, AIBlockOutputStatus, OutputStatusUpdateCallback};
 use crate::ai::agent::conversation::AIConversationId;
@@ -27,7 +28,7 @@ pub struct AIBlockModelImpl<V> {
 
 impl<V> AIBlockModelImpl<V>
 where
-    V: View,
+    V: Entity,
 {
     pub fn new(
         exchange_id: AIAgentExchangeId,
@@ -81,7 +82,7 @@ where
 
 impl<V> AIBlockModel for AIBlockModelImpl<V>
 where
-    V: View,
+    V: Entity,
 {
     type View = V;
 
@@ -140,7 +141,7 @@ where
         match exchange {
             Ok(exchange) => Some(Local::now().signed_duration_since(exchange.start_time)),
             Err(err) => {
-                log::error!("Failed to get time since request start. {err}");
+                report_error!(err.context("Failed to get time since request start"));
                 None
             }
         }
@@ -151,7 +152,7 @@ where
         match exchange {
             Ok(exchange) => Some(&exchange.model_id),
             Err(err) => {
-                log::error!("Failed to get base model. {err}");
+                report_error!(err.context("Failed to get base model"));
                 None
             }
         }

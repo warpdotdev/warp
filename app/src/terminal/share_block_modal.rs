@@ -8,6 +8,8 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use serde::Serialize;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_error;
+use warpui::browser::escape_html_attribute;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     try_rect_with_z, Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -316,7 +318,7 @@ impl ShareBlockModal {
             let model = match &self.model {
                 Some(model) => model.lock(),
                 None => {
-                    log::error!("Opened share modal without a model");
+                    report_error!("Opened share modal without a model");
                     self.request_state = ShareRequestState::Failed;
                     ctx.notify();
                     return;
@@ -441,7 +443,7 @@ impl ShareBlockModal {
                 .and_then(|block_index| model.block_list().block_at(block_index))
             {
                 None => {
-                    log::error!("Opened block share modal without block");
+                    report_error!("Opened block share modal without block");
                     return;
                 }
                 Some(block) => block,
@@ -524,6 +526,8 @@ impl ShareBlockModal {
         if title.is_empty() {
             title = DEFAULT_EMBED_TITLE.to_string();
         }
+        let embed_link = escape_html_attribute(&embed_link);
+        let title = escape_html_attribute(&title);
 
         Some(format!(
             "<iframe src=\"{embed_link}\" title=\"{title}\" style=\"width: {width}px; height: {height}px; border:0; overflow:hidden;\" allow=\"clipboard-read; clipboard-write\"></iframe>"
@@ -1557,3 +1561,7 @@ impl ScrollableElement for SingleBlock {
         self.scroll_by_pixels(delta, ctx);
     }
 }
+
+#[cfg(test)]
+#[path = "share_block_modal_tests.rs"]
+mod tests;

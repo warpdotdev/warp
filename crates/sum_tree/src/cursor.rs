@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrayvec::ArrayVec;
+use warp_errors::report_error;
 
 use super::*;
 
@@ -172,7 +173,7 @@ where
                     }
                 }
                 _ => {
-                    log::error!("item_summary: The last item in the cursor stack is not a leaf");
+                    report_error!("item_summary: The last item in the cursor stack is not a leaf");
                     None
                 }
             }
@@ -193,7 +194,7 @@ where
                 match *entry.tree.0 {
                     Node::Leaf { ref items, .. } => Some(&items[entry.index - 1]),
                     _ => {
-                        log::error!("The last item in the cursor stack is not a leaf");
+                        report_error!("The last item in the cursor stack is not a leaf");
                         None
                     }
                 }
@@ -213,7 +214,7 @@ where
                         ref child_trees, ..
                     } => return Some(child_trees[entry.index - 1].rightmost_leaf()),
                     Node::Leaf { .. } => {
-                        log::error!("A leaf is not the last item in the cursor stack");
+                        report_error!("A leaf is not the last item in the cursor stack");
                         return None;
                     }
                 };

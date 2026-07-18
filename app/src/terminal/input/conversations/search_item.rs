@@ -9,7 +9,6 @@ use warpui::prelude::{Align, CrossAxisAlignment, Flex, MainAxisAlignment, MainAx
 use warpui::text_layout::ClipConfig;
 use warpui::{AppContext, Element, SingletonEntity};
 
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent_conversations_model::AgentConversationEntry;
 use crate::ai::conversation_status_ui::render_status_element;
 use crate::appearance::Appearance;
@@ -24,14 +23,16 @@ pub(super) struct ConversationSearchItem {
     entry: AgentConversationEntry,
     name_match_result: Option<FuzzyMatchResult>,
     score: OrderedFloat<f64>,
+    is_open_elsewhere: bool,
 }
 
 impl ConversationSearchItem {
-    pub fn new(entry: AgentConversationEntry) -> Self {
+    pub fn new(entry: AgentConversationEntry, is_open_elsewhere: bool) -> Self {
         Self {
             entry,
             name_match_result: None,
             score: OrderedFloat(f64::MIN),
+            is_open_elsewhere,
         }
     }
 
@@ -76,19 +77,9 @@ impl SearchItem for ConversationSearchItem {
         let primary_text_color = inline_styles::primary_text_color(theme, background_color.into());
         let secondary_text_color = theme.disabled_text_color(background_color.into());
 
-        let active_agent_views = ActiveAgentViewsModel::as_ref(app);
-        let open_terminal_view_id =
-            active_agent_views.get_terminal_view_id_for_entry(&self.entry, app);
-        let focused_terminal_view_id = app
-            .windows()
-            .active_window()
-            .and_then(|window_id| active_agent_views.get_focused_terminal_view_id(window_id));
-
         let secondary_suffix = " open in different pane";
         let title = &self.entry.display.title;
-        let should_show_suffix = open_terminal_view_id
-            .is_some_and(|terminal_view_id| Some(terminal_view_id) != focused_terminal_view_id);
-        let full_text = if should_show_suffix {
+        let full_text = if self.is_open_elsewhere {
             format!("{title}{secondary_suffix}")
         } else {
             title.clone()
@@ -107,7 +98,7 @@ impl SearchItem for ConversationSearchItem {
             }
         }
 
-        if should_show_suffix {
+        if self.is_open_elsewhere {
             let secondary_range = title.len()..(title.len() + secondary_suffix.len());
             name_text = name_text.with_single_highlight(
                 Highlight::new()
@@ -164,6 +155,7 @@ impl SearchItem for ConversationSearchItem {
     fn accept_result(&self) -> Self::Action {
         AcceptConversation {
             item_id: self.entry.id,
+            is_open_elsewhere: self.is_open_elsewhere,
         }
     }
 

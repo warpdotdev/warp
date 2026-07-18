@@ -39,25 +39,27 @@ pub struct AppearanceManager {
 
 impl AppearanceManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&ThemeSettings::handle(ctx), move |me, _event, ctx| {
+        ctx.subscribe_to_model(&ThemeSettings::handle(ctx), move |me, _, _event, ctx| {
             me.refresh_theme_state(ctx);
         });
 
         #[cfg(target_os = "macos")]
         {
-            ctx.subscribe_to_model(
-                &AppIconSettings::handle(ctx),
-                move |me, event, ctx| match event {
+            ctx.subscribe_to_model(&AppIconSettings::handle(ctx), move |me, _, event, ctx| {
+                match event {
                     AppIconSettingsChangedEvent::AppIconState { .. } => {
                         me.set_app_icon(ctx);
                     }
-                },
-            );
+                    AppIconSettingsChangedEvent::ShowDockIconState { .. } => {
+                        me.apply_dock_icon_visibility(ctx);
+                    }
+                }
+            });
         }
 
         ctx.subscribe_to_model(
             &FontSettings::handle(ctx),
-            move |_, event, ctx| match event {
+            move |_, _, event, ctx| match event {
                 FontSettingsChangedEvent::MonospaceFontName { .. } => {
                     let (font_name, match_fonts) = {
                         let settings = FontSettings::as_ref(ctx);
@@ -153,6 +155,11 @@ impl AppearanceManager {
     #[cfg(target_os = "macos")]
     pub fn app_icon_at_startup(&self) -> AppIcon {
         self.app_icon_at_startup
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn apply_dock_icon_visibility(&self, app: &AppContext) {
+        app.set_dock_icon_visible(*AppIconSettings::as_ref(app).show_dock_icon.value());
     }
 
     pub fn clear_transient_theme(&mut self, ctx: &mut ModelContext<Self>) {

@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Context;
 use chrono::{LocalResult, TimeZone, Utc};
 use warp_core::execution_mode::AppExecutionMode;
-use warp_core::{report_error, report_if_error};
+use warp_errors::{report_error, report_if_error};
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, Entity, ModelContext, SingletonEntity};
 
@@ -70,7 +70,7 @@ impl TelemetryCollector {
         // previously opted-out of telemetry. In the case where the user turns the telemetry from
         // on to off, we should not send another request with any telemetry, even if the event was
         // initially recorded prior to the user turning telemetry off.`
-        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |_me, event, _ctx| {
+        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |_me, _, event, _ctx| {
             if let PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled { .. } = event {
                 clear_event_queue();
             }
@@ -88,7 +88,7 @@ impl TelemetryCollector {
                 log::info!("Successfully wrote telemetry events to disk")
             }
             Err(e) => {
-                log::error!("Failed to write telemetry events to disk {e:#}");
+                report_error!(e.context("Failed to write telemetry events to disk"));
             }
         }
     }
@@ -153,7 +153,7 @@ impl TelemetryCollector {
                     // case where we accidentally try to re-flush the events on the next app startup.
                     if let Err(e) = remove_file(&path) {
                         if e.kind() != std::io::ErrorKind::NotFound {
-                            warp_core::report_error!(
+                            report_error!(
                                 anyhow::anyhow!(e).context("Failed to remove persisted event file")
                             );
                         }

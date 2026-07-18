@@ -68,7 +68,7 @@ pub fn update_command_history(
             .spawn(async move {
                 // Sending over a sync sender can block the current thread, so we do this async.
                 if let Err(e) = sender_clone.send(insert_command_event) {
-                    log::error!("Error sending ModelEvent: {e:?}");
+                    log::warn!("Error sending ModelEvent: {e:#}");
                 }
             })
             .detach();

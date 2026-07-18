@@ -1,0 +1,105 @@
+[package]
+name = "warp_tui"
+edition = "2021"
+description = "Headless terminal-UI front-end for Warp"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+autobins = false
+default-run = "warp-tui-oss"
+
+# One binary per channel, mirroring the GUI app's `app/src/bin/*` layout. The
+# OSS bin is the `default-run` so bare `cargo run -p warp_tui` builds without
+# the internal `warp-channel-config` generator; `./script/run-tui` selects the
+# local bin when the generator is available.
+[[bin]]
+name = "warp-tui-oss"
+path = "src/bin/oss.rs"
+
+[[bin]]
+name = "warp-tui"
+path = "src/bin/local.rs"
+
+[[bin]]
+name = "warp-tui-dev"
+path = "src/bin/dev.rs"
+
+[[bin]]
+name = "warp-tui-preview"
+path = "src/bin/preview.rs"
+
+[[bin]]
+name = "warp-tui-stable"
+path = "src/bin/stable.rs"
+
+[dependencies]
+ai.workspace = true
+anyhow.workspace = true
+async-channel.workspace = true
+async-fs.workspace = true
+base64.workspace = true
+channel_versions.workspace = true
+clap.workspace = true
+command.workspace = true
+dirs.workspace = true
+futures.workspace = true
+futures-lite.workspace = true
+http_client.workspace = true
+instant.workspace = true
+itertools.workspace = true
+log.workspace = true
+markdown_parser.workspace = true
+num-traits.workspace = true
+parking_lot.workspace = true
+pathfinder_color.workspace = true
+pathfinder_geometry.workspace = true
+rangemap.workspace = true
+serde_json.workspace = true
+similar.workspace = true
+string-offset.workspace = true
+strum.workspace = true
+strum_macros.workspace = true
+sum_tree.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+vec1.workspace = true
+warp = { workspace = true, features = ["tui"] }
+warp_channel_config.workspace = true
+warp_core.workspace = true
+warp_errors.workspace = true
+warp_editor.workspace = true
+warp_files.workspace = true
+warp_search_core.workspace = true
+warp_terminal.workspace = true
+warp_util.workspace = true
+warpui.workspace = true
+warpui_core = { workspace = true, features = ["tui"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# `test-util` exposes `Appearance::mock()`, used to register the `Appearance`
+# singleton that the editor-backed TUI input view depends on in tests.
+warp_core = { workspace = true, features = ["test-util"] }
+# `test-util` exposes `RenderState::layout_complete()`, used to deterministically
+# await async layout (e.g. diff ghost blocks) in tests instead of busy-polling.
+warp_editor = { workspace = true, features = ["test-util"] }
+# Process-level worker-dispatch regression test.
+command.workspace = true
+pathfinder_color.workspace = true
+warp = { workspace = true, features = ["tui", "test-util"] }
+
+[features]
+# Declared so the `warp_channel_config::load_config!` macro's
+# `cfg(feature = "release_bundle")` branch is a known cfg in this crate. Today it
+# stays off and the local bin uses the runtime generator; wiring the embedded
+# config path (a `build.rs`) is phase 2 of the channel setup.
+release_bundle = ["warp/release_bundle"]
+# Enable Rust Sentry reporting without the GUI-only Cocoa SDK.
+crash_reporting = ["warp/crash_reporting"]
+# Self-contained TUI build (the binary is not inside a `.app` bundle). Enables
+# `warp/standalone`, which turns on `warp_core/standalone` so
+# `warp_core::paths::bundled_resources_dir()` resolves the sibling `resources/`
+# dir next to the executable (and `warp_assets/standalone` to drop GUI-only async
+# assets). Mirrors the `app` crate's `standalone` feature.
+standalone = ["warp/standalone"]

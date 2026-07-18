@@ -18,8 +18,8 @@ use warpui::{ModelHandle, ModelSpawner};
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::{
-    claude_config_dir, home_dir_for_claude_config, read_envelope, write_envelope,
-    write_session_index_entry, ClaudeResumeInfo, ClaudeTranscriptEnvelope,
+    claude_config_dir, home_dir_for_claude_config, read_envelope, rehydrate_claude_transcript,
+    ClaudeResumeInfo, ClaudeTranscriptEnvelope,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::{
@@ -27,7 +27,9 @@ use super::{
     JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
 };
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::{
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
+};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::mcp::JSONTransportType;
@@ -55,6 +57,7 @@ use parent_bridge::{MessageBridge, MessageBridgeCleanupDisposition};
 use shell_words::quote as shell_quote;
 #[cfg(test)]
 use wake_driver::{ClaudeWakeRemoteContext, CLAUDE_WAKE_PROMPT_FILE_NAME};
+use warp_errors::report_error;
 
 #[cfg(test)]
 use super::super::OZ_MESSAGE_LISTENER_STATE_ROOT_ENV;
@@ -178,6 +181,10 @@ impl ThirdPartyHarness for ClaudeHarness {
             resolved_mcp_servers,
         )?))
     }
+
+    fn requires_verified_platform_plugin(&self) -> bool {
+        true
+    }
 }
 
 /// Format slug sent to the server when creating a Claude Code conversation.
@@ -271,26 +278,8 @@ impl ClaudeHarnessRunner {
                 session_id,
                 mut envelope,
             }) => {
-                // Rehydrate the stored envelope under the current working directory so
-                // `claude --resume <uuid>` finds the jsonl under ~/.claude/projects/<encoded_cwd>/.
-                // The original envelope's cwd usually points at the cloud sandbox path, which
-                // doesn't exist locally.
-                envelope.cwd = working_dir.to_path_buf();
-                let config_root = claude_config_dir().map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to resolve Claude config dir"),
-                    )
-                })?;
-                write_envelope(&envelope, &config_root).map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to rehydrate Claude transcript"),
-                    )
-                })?;
-                // Index write is best-effort: upstream Claude versions vary in how they use
-                // `sessions-index.json`, so losing the index entry shouldn't abort the run.
-                if let Err(e) = write_session_index_entry(session_id, working_dir, &config_root) {
-                    log::warn!("Failed to update Claude sessions-index.json: {e:#}");
-                }
+                rehydrate_claude_transcript(&mut envelope, working_dir)
+                    .map_err(AgentDriverError::ConfigBuildFailed)?;
                 (session_id, Some(conversation_id))
             }
             None => (Uuid::new_v4(), None),
@@ -427,6 +416,7 @@ impl ClaudeHarnessRunner {
             cli_agent_session_status(&self.terminal_driver, foreground).await,
             Some(crate::terminal::cli_agent_sessions::CLIAgentSessionStatus::Blocked { .. })
                 | Some(crate::terminal::cli_agent_sessions::CLIAgentSessionStatus::InProgress)
+                | Some(crate::terminal::cli_agent_sessions::CLIAgentSessionStatus::Failed { .. })
         )
     }
 
@@ -471,7 +461,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
                             .create_external_conversation(CLAUDE_CODE_FORMAT)
                             .await
                             .map_err(|e| {
-                                log::error!("Failed to create external conversation: {e}");
+                                report_error!(&e);
                                 AgentDriverError::ConfigBuildFailed(e)
                             })
                     })
@@ -506,6 +496,10 @@ impl HarnessRunner for ClaudeHarnessRunner {
             conversation_id,
             block_id: command_handle.block_id().clone(),
         };
+
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
 
         Ok(command_handle)
     }

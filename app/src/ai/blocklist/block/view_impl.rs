@@ -43,9 +43,10 @@ use warp_core::ui::color::contrast::{
 use warp_core::ui::color::Rgb;
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::{
-    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded,
-    Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition, SelectableArea, Text,
+    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
+    SelectableArea, Text,
 };
 use warpui::fonts::Properties;
 use warpui::platform::Cursor;
@@ -64,7 +65,7 @@ use crate::ai::blocklist::block::view_impl::comments::address_comment_chips;
 use crate::ai::blocklist::block::view_impl::header::{
     render_overflow_menu_button, OVERFLOW_BUTTON_SIZE,
 };
-use crate::ai::blocklist::block::{DetectedLinksState, RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID};
+use crate::ai::blocklist::block::DetectedLinksState;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::ai::blocklist::model::AIBlockModelHelper;
@@ -257,7 +258,7 @@ fn add_highlights_to_text(
                 }
                 text_element = text_element.with_saved_char_position(
                     open_link_tooltip.link_range.start,
-                    RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+                    detected_links_state.resolved_tooltip_position_id(),
                 );
             }
         }
@@ -510,7 +511,7 @@ pub(crate) fn add_highlights_to_rich_text(
                     formatted_text_element = formatted_text_element.with_saved_glyph_position(
                         open_link_tooltip.link_range.start,
                         i,
-                        RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+                        detected_links_state.resolved_tooltip_position_id(),
                     );
                 }
             }
@@ -677,6 +678,15 @@ pub fn render_citation(
             let name = url.clone();
             (Some(icon), name)
         }
+        AIAgentCitation::AgentMemory { content, .. } => {
+            let icon = Icon::Cognition.to_warpui_icon(theme.foreground()).finish();
+            let name = if content.is_empty() {
+                String::from("Memory")
+            } else {
+                content.clone()
+            };
+            (Some(icon), name)
+        }
     };
 
     // Shorten the name to 30 chars.
@@ -735,52 +745,59 @@ where
 {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_child(
-            Container::new(
-                Text::new(
-                    description,
-                    appearance.ui_font_family(),
-                    appearance.monospace_font_size() - 1.,
+    Clipped::new(
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(
+                Container::new(
+                    Text::new(
+                        description,
+                        appearance.ui_font_family(),
+                        appearance.monospace_font_size() - 1.,
+                    )
+                    .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+                    .with_selectable(false)
+                    .finish(),
                 )
-                .with_color(blended_colors::text_sub(theme, theme.surface_1()))
-                .with_selectable(false)
+                .with_margin_right(8.)
                 .finish(),
             )
-            .with_margin_right(8.)
-            .finish(),
-        )
-        .with_child(warpui::elements::ChildView::new(dropdown).finish())
-        .with_child(
-            Expanded::new(
-                1.,
-                Align::new(
-                    appearance
-                        .ui_builder()
-                        .link(
-                            "Manage AI Autonomy permissions".into(),
-                            None,
-                            Some(Box::new(move |ctx| {
-                                ctx.dispatch_typed_action(
-                                    WorkspaceAction::ShowSettingsPageWithSearch {
-                                        search_query: "Autonomy".to_string(),
-                                        section: Some(SettingsSection::AI),
-                                    },
-                                );
-                            })),
-                            settings_link_handle,
-                        )
-                        .build()
-                        .finish(),
+            .with_child(
+                Container::new(warpui::elements::ChildView::new(dropdown).finish())
+                    .with_margin_right(8.)
+                    .finish(),
+            )
+            .with_child(
+                Expanded::new(
+                    1.,
+                    Align::new(
+                        appearance
+                            .ui_builder()
+                            .link(
+                                "Manage AI Autonomy permissions".into(),
+                                None,
+                                Some(Box::new(move |ctx| {
+                                    ctx.dispatch_typed_action(
+                                        WorkspaceAction::ShowSettingsPageWithSearch {
+                                            search_query: "Autonomy".to_string(),
+                                            section: Some(SettingsSection::AI),
+                                        },
+                                    );
+                                })),
+                                settings_link_handle,
+                            )
+                            .build()
+                            .finish(),
+                    )
+                    .right()
+                    .finish(),
                 )
-                .right()
                 .finish(),
             )
             .finish(),
-        )
-        .finish()
+    )
+    .finish()
 }
 
 /// TODO: All AIBlock footer-related rendering logic should probably be put into its own View.
@@ -1053,12 +1070,21 @@ impl View for AIBlock {
         );
         drop(terminal_model);
 
+        #[cfg(not(target_family = "wasm"))]
+        let is_cloud_agent_context = FeatureFlag::CloudMode.is_enabled()
+            && self
+                .ambient_agent_view_model
+                .as_ref()
+                .is_some_and(|model| model.as_ref(app).is_ambient_agent());
+
         contents.add_child(output::render(
             output::Props {
                 model: self.model.as_ref(),
                 state_handles: &self.state_handles,
                 action_buttons: &self.action_buttons,
                 view_screenshot_buttons: &self.view_screenshot_buttons,
+                open_recording_buttons: &self.open_recording_buttons,
+                has_recording_related_actions: self.has_recording_related_actions,
                 action_model: &self.action_model,
                 active_session: &self.active_session,
                 editor_views: &self.code_editor_views,
@@ -1106,6 +1132,8 @@ impl View for AIBlock {
                 shared_session_status: &shared_session_status,
                 terminal_view_id: self.terminal_view_id,
                 is_conversation_transcript_viewer,
+                #[cfg(not(target_family = "wasm"))]
+                is_cloud_agent_context,
                 aws_bedrock_credentials_error_view: self
                     .aws_bedrock_credentials_error_view
                     .as_ref(),
@@ -1213,8 +1241,11 @@ impl View for AIBlock {
 
         let mut selectable = SelectableArea::new(
             self.state_handles.selection_handle.clone(),
-            move |selection_args, _, _| {
-                *selected_text.write() = selection_args.selection;
+            move |selection_args, ctx, _| {
+                *selected_text.write() = selection_args
+                    .selection
+                    .filter(|selection| !selection.is_empty());
+                ctx.dispatch_typed_action(AIBlockAction::SelectText);
             },
             SavePosition::new(content.finish(), self.saved_position_id().as_str()).finish(),
         )
@@ -1352,7 +1383,6 @@ impl AIAgentInput {
             | AIAgentInput::TriggerPassiveSuggestion { .. }
             | AIAgentInput::CreateNewProject { .. }
             | AIAgentInput::CloneRepository { .. }
-            | AIAgentInput::FetchReviewComments { .. }
             | AIAgentInput::SummarizeConversation { .. }
             | AIAgentInput::InvokeSkill { .. }
             | AIAgentInput::StartFromAmbientRunPrompt { .. }

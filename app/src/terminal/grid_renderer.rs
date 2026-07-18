@@ -1,3 +1,4 @@
+mod box_drawing;
 mod cell_glyph_cache;
 mod cell_type;
 
@@ -10,6 +11,7 @@ use lazy_static::lazy_static;
 use num_traits::Float as _;
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui::color::ColorU;
 use warpui::elements::{Border, CornerRadius, Fill, Radius, DEFAULT_UI_LINE_HEIGHT_RATIO};
@@ -157,6 +159,10 @@ struct NativeGlyph {
 /// Describes a specific type of glyph that we are able to render natively.
 #[derive(Debug)]
 enum NativeGlyphType {
+    /// A solid box-drawing line glyph (a supported subset of U+2500..=U+257F),
+    /// rendered as cell-filling, non-overlapping rects so adjacent cells tile
+    /// with no seam.
+    BoxDrawing(char),
     UpperHalfBlock,
     PowerlineLeftHardDivider,
     PowerlineRightHardDivider,
@@ -615,7 +621,7 @@ fn render_grid_without_ligatures<'a>(
 
         let Some(row) = grid.row(row_idx) else {
             #[cfg(debug_assertions)]
-            log::error!("grid_renderer should not try to render an out-of-bounds row");
+            report_error!("grid_renderer should not try to render an out-of-bounds row");
             continue;
         };
 
@@ -1115,7 +1121,7 @@ fn render_grid_with_ligatures<'a>(
             AttributedStringBuilder::new(font_family, font_family, grid.columns());
 
         let Some(row) = grid.row(row_idx) else {
-            log::error!("grid_renderer should not try to render an out-of-bounds row");
+            report_error!("grid_renderer should not try to render an out-of-bounds row");
             continue;
         };
 
@@ -1883,6 +1889,14 @@ fn render_image(
 /// if it should be rendered with a font glyph.
 fn native_glyph_for_cell(cell: &Cell) -> Option<NativeGlyphType> {
     let glyph_type = match cell.c {
+        // Supported solid box-drawing lines render as cell-filling rects so
+        // adjacent cells tile seamlessly. Other box-drawing glyphs use the font.
+        c @ '\u{2500}'..='\u{257F}'
+            if FeatureFlag::BoxDrawingGlyphs.is_enabled() && box_drawing::is_supported(c) =>
+        {
+            NativeGlyphType::BoxDrawing(c)
+        }
+
         // Unicode upper half block (U+2580).
         '▀' => NativeGlyphType::UpperHalfBlock,
         // Unicode bottom-aligned fractional block characters (U+2581 - U+2588).
@@ -2012,6 +2026,36 @@ fn render_native_glyph(native_glyph: NativeGlyph, ctx: &mut PaintContext, app: &
         glyph_type,
     } = native_glyph;
     let svg_data = match glyph_type {
+        NativeGlyphType::BoxDrawing(c) => {
+            let scale_factor = ctx.scene.scale_factor();
+            let metrics = box_drawing::StrokeMetrics::new(
+                cell_bounds.width() * scale_factor,
+                cell_bounds.height() * scale_factor,
+            );
+            // Snap the cell box to the integer device-pixel grid so adjacent
+            // cells share exact edges and the strokes tile with no seam.
+            let left = (cell_bounds.origin().x() * scale_factor).round();
+            let right = ((cell_bounds.origin().x() + cell_bounds.width()) * scale_factor).round();
+            let top = (cell_bounds.origin().y() * scale_factor).round();
+            let bottom = ((cell_bounds.origin().y() + cell_bounds.height()) * scale_factor).round();
+            for cell_rect in box_drawing::rects(c, right - left, bottom - top, metrics) {
+                let origin = cell_rect.origin();
+                let rect = RectF::new(
+                    vec2f(
+                        (left + origin.x()) / scale_factor,
+                        (top + origin.y()) / scale_factor,
+                    ),
+                    vec2f(
+                        cell_rect.width() / scale_factor,
+                        cell_rect.height() / scale_factor,
+                    ),
+                );
+                ctx.scene
+                    .draw_rect_without_hit_recording(rect)
+                    .with_background(Fill::Solid(foreground_color));
+            }
+            None
+        }
         NativeGlyphType::UpperHalfBlock => {
             let rect = RectF::new(
                 cell_bounds.origin(),

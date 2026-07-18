@@ -1,3 +1,6 @@
+pub mod manager;
+pub mod templatable_manager;
+
 #[cfg(not(target_family = "wasm"))]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -6,6 +9,9 @@ use std::path::{Path, PathBuf};
 use diesel::{QueryDsl, RunQueryDsl, SqliteConnection};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
+#[cfg(not(target_family = "wasm"))]
+pub use templatable_manager::McpIntegration;
+pub use templatable_manager::TemplatableMCPServerManager;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
 
@@ -22,12 +28,6 @@ use crate::drive::CloudObjectTypeAndId;
 use crate::persistence::model::MCPEnvironmentVariables;
 use crate::server::ids::SyncId;
 use crate::server::sync_queue::QueueItem;
-
-pub mod manager;
-pub mod templatable_manager;
-#[cfg(not(target_family = "wasm"))]
-pub use templatable_manager::McpIntegration;
-pub use templatable_manager::TemplatableMCPServerManager;
 
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "local_fs"))] {
@@ -67,7 +67,7 @@ pub mod parsing;
 #[cfg(not(target_family = "wasm"))]
 pub use parsing::ParsedTemplatableMCPServerResult;
 #[cfg(not(target_family = "wasm"))]
-pub mod http_client;
+use warp_errors::report_error;
 #[cfg(not(target_family = "wasm"))]
 pub mod reconnecting_peer;
 
@@ -379,7 +379,9 @@ impl MCPServerExt for MCPServer {
         // serde_json::to_string_pretty should never fail on our JSONMCPServer type, but better to
         // not crash the app if it does.
         .unwrap_or_else(|err| {
-            log::error!("Could not serialize MCP server to user json: {err:?}");
+            report_error!(
+                anyhow::Error::new(err).context("Could not serialize MCP server to user json")
+            );
             Default::default()
         })
     }
@@ -419,7 +421,9 @@ impl MCPServerExt for MCPServer {
         // serde_json::to_string_pretty should never fail on our JSONMCPServer type, but better to
         // not crash the app if it does.
         .unwrap_or_else(|err| {
-            log::error!("Could not serialize MCP server to user json: {err:?}");
+            report_error!(
+                anyhow::Error::new(err).context("Could not serialize MCP server to user json")
+            );
             Default::default()
         });
 
@@ -435,12 +439,13 @@ impl MCPServerExt for MCPServer {
             Some(TemplatableMCPServerInstallation::new(
                 uuid::Uuid::new_v4(),
                 templatable_mcp_server.clone(),
-                variable_values,
+                variable_values.clone(),
             ));
 
         ParsedTemplatableMCPServerResult {
             templatable_mcp_server,
             templatable_mcp_server_installation,
+            variable_values,
         }
     }
 
@@ -457,7 +462,8 @@ impl MCPServerExt for MCPServer {
                     apply_values(&mut cli_server.static_env_vars, &env_vars);
                 }
                 Err(error) => {
-                    log::error!("Could not read MCP server environment variables from sqlite: {error:?}");
+                    report_error!(anyhow::Error::new(error)
+                        .context("Could not read MCP server environment variables from sqlite"));
                 }
             }
         }

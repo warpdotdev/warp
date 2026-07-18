@@ -8,13 +8,13 @@ use strum::IntoEnumIterator;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::AppearanceEvent;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
+use warp_errors::report_error;
 use warpui::elements::{
-    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
-    MainAxisSize, ParentElement, Radius, Text,
+    Align, Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Expanded, Fill, Flex,
+    FormattedTextElement, HighlightedHyperlink, MainAxisAlignment, MainAxisSize, ParentElement,
+    Text,
 };
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
@@ -160,26 +160,6 @@ impl MCPServersListPageView {
         });
 
         let appearance = Appearance::handle(ctx);
-        ctx.subscribe_to_model(&appearance, move |me, _, event, ctx| {
-            if let AppearanceEvent::ThemeChanged = event {
-                let appearance = Appearance::as_ref(ctx);
-                let search_bar_styles = UiComponentStyles {
-                    background: Some(internal_colors::neutral_2(appearance.theme()).into()),
-                    border_color: Some(internal_colors::neutral_4(appearance.theme()).into()),
-                    border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
-                    padding: Some(Coords {
-                        top: 8.,
-                        bottom: 8.,
-                        left: 12.,
-                        right: 12.,
-                    }),
-                    ..Default::default()
-                };
-                me.search_bar.update(ctx, |search_bar, _| {
-                    search_bar.with_style(search_bar_styles)
-                });
-            }
-        });
 
         let update_modal_body = ctx.add_typed_action_view(UpdateModalBody::new);
         ctx.subscribe_to_view(&update_modal_body, |me, _, event, ctx| {
@@ -205,7 +185,11 @@ impl MCPServersListPageView {
             });
         }
 
-        let search_editor_text = TextOptions::ui_text(None, appearance.as_ref(ctx));
+        // Match the standard settings search fields (e.g. the API keys search): use the UI font
+        // family at the UI font size. Without an explicit size override the editor falls back to the
+        // (larger) monospace size, which made this field render bigger than the others.
+        let ui_font_size = appearance.as_ref(ctx).ui_font_size();
+        let search_editor_text = TextOptions::ui_text(Some(ui_font_size), appearance.as_ref(ctx));
         let search_editor = {
             let options = SingleLineEditorOptions {
                 text: search_editor_text,
@@ -609,7 +593,7 @@ impl MCPServersListPageView {
             .views_of_type::<Workspace>(window_id)
             .and_then(|views| views.first().cloned())
         else {
-            log::error!("Could not find workspace when attempting to open MCP logs.");
+            report_error!("Could not find workspace when attempting to open MCP logs.");
             return;
         };
 
@@ -623,7 +607,9 @@ impl MCPServersListPageView {
             });
             let Some(terminal_view_handle) = active_pane_group.as_ref(ctx).active_session_view(ctx)
             else {
-                log::error!("Could not get terminal view handle when attempting to open MCP logs.");
+                report_error!(
+                    "Could not get terminal view handle when attempting to open MCP logs."
+                );
                 return;
             };
 
@@ -648,15 +634,15 @@ impl MCPServersListPageView {
                     self.share_templatable_mcp_server_installation(*installation_uuid, ctx);
                 }
                 ServerCardItemId::GalleryMCP(_) => {
-                    log::error!("Share is not implemented for gallery MCP items.")
+                    report_error!("Share is not implemented for gallery MCP items.")
                 }
                 ServerCardItemId::FileBasedMCP(_) => {
-                    log::error!("Share is not implemented for file-based MCP servers.")
+                    report_error!("Share is not implemented for file-based MCP servers.")
                 }
             },
             ServerCardEvent::ViewLogs(item_id) => match item_id {
                 ServerCardItemId::TemplatableMCP(_) => {
-                    log::error!("Viewing logs is not implemented for templatable MCP.");
+                    report_error!("Viewing logs is not implemented for templatable MCP.");
                 }
                 ServerCardItemId::TemplatableMCPInstallation(installation_uuid) => {
                     if let Some(template_uuid) = TemplatableMCPServerManager::as_ref(ctx)
@@ -665,8 +651,9 @@ impl MCPServersListPageView {
                         let log_path = logs::log_file_path_from_uuid(&template_uuid);
                         self.open_logs_for_server(&log_path, ctx);
                     } else {
-                        log::error!(
-                            "Could not find template_uuid for installation {installation_uuid}"
+                        report_error!(
+                            "Could not find template_uuid for installation",
+                            extra: { "installation_uuid" => %installation_uuid }
                         );
                     }
                 }
@@ -677,16 +664,19 @@ impl MCPServersListPageView {
                         let log_path = logs::log_file_path_from_uuid(&installation.template_uuid());
                         self.open_logs_for_server(&log_path, ctx);
                     } else {
-                        log::error!("Could not find installation for file-based server {uuid}");
+                        report_error!(
+                            "Could not find installation for file-based server",
+                            extra: { "uuid" => %uuid }
+                        );
                     }
                 }
                 ServerCardItemId::GalleryMCP(_) => {
-                    log::error!("Viewing logs is not implemented for gallery MCP items.")
+                    report_error!("Viewing logs is not implemented for gallery MCP items.")
                 }
             },
             ServerCardEvent::ToggleRunningSwitch(item_id, switch_state) => match item_id {
                 ServerCardItemId::TemplatableMCP(_) => {
-                    log::error!("Running a server is not implemented for templatable MCP.");
+                    report_error!("Running a server is not implemented for templatable MCP.");
                 }
                 ServerCardItemId::TemplatableMCPInstallation(uuid) => {
                     self.toggle_server_running_templatable(*uuid, *switch_state, ctx);
@@ -695,7 +685,7 @@ impl MCPServersListPageView {
                     self.toggle_server_running_file_based(*uuid, *switch_state, ctx);
                 }
                 ServerCardItemId::GalleryMCP(_) => {
-                    log::error!("Running a server is not implemented for gallery MCP items.")
+                    report_error!("Running a server is not implemented for gallery MCP items.")
                 }
             },
             ServerCardEvent::Install(item_id) => match item_id {
@@ -735,7 +725,7 @@ impl MCPServersListPageView {
             ServerCardEvent::InstallServerUpdate(item_id) => {
                 let ServerCardItemId::TemplatableMCPInstallation(installation_uuid) = item_id
                 else {
-                    log::error!(
+                    report_error!(
                         "Install server update is only supported for templatable MCP installations"
                     );
                     return;
@@ -1037,6 +1027,8 @@ impl MCPServersListPageView {
     ) {
         match event {
             TemplatableMCPServerManagerEvent::StateChanged { uuid: _, state: _ }
+            | TemplatableMCPServerManagerEvent::AuthenticationRequired { uuid: _ }
+            | TemplatableMCPServerManagerEvent::CredentialsChanged { uuid: _ }
             | TemplatableMCPServerManagerEvent::ServerInstallationAdded(_)
             | TemplatableMCPServerManagerEvent::ServerInstallationDeleted(_)
             | TemplatableMCPServerManagerEvent::TemplatableMCPServersUpdated

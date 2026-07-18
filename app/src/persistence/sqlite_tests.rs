@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -11,28 +12,63 @@ use warp_core::features::FeatureFlag;
 use warp_graphql::scalars::time::ServerTimestamp;
 
 use super::{
-    app_database_file_path, database_file_path_for_scope, decode_path, deduplicate_events,
-    encode_path, get_all_codebase_index_metadata, read_sqlite_data, save_app_state,
-    save_codebase_index_metadata, setup_database, start_writer,
+    app_database_file_path, database_file_path_for_current_scope, database_file_path_for_scope,
+    decode_path, deduplicate_events, encode_path, get_all_codebase_index_metadata,
+    read_sqlite_data, save_app_state, save_codebase_index_metadata, setup_database, start_writer,
 };
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
-    TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+    TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
 };
 use crate::cloud_object::{CloudObjectPermissions, Owner};
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
 use crate::persistence::model::ObjectPermissions;
-use crate::persistence::{BlockCompleted, ModelEvent, PersistenceScope};
+use crate::persistence::{BlockCompleted, ModelEvent, PersistedDataScope, PersistenceScope};
 use crate::server::ids::ClientId;
 use crate::tab::SelectedTabColor;
 use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::ShellLaunchData;
+use crate::themes::theme::AnsiColorIdentifier;
+use crate::workspace::tab_group::TabGroupId;
 
 #[test]
 fn app_scope_database_path_matches_app_database_path() {
     assert_eq!(
         database_file_path_for_scope(&PersistenceScope::App),
+        app_database_file_path()
+    );
+}
+
+#[test]
+fn tui_scope_database_path_is_tui_subdirectory_of_app_database_dir() {
+    let tui_path = database_file_path_for_scope(&PersistenceScope::Tui);
+    let app_path = database_file_path_for_scope(&PersistenceScope::App);
+
+    assert_ne!(tui_path, app_path);
+    assert_eq!(
+        tui_path,
+        warp_core::paths::tui_state_dir().join("warp.sqlite")
+    );
+
+    // The TUI database lives in a `tui` subdirectory of the same base
+    // directory that holds the GUI database, so the two front-ends never
+    // share (or migrate) each other's database.
+    let tui_dir = tui_path
+        .parent()
+        .expect("TUI database path should have a parent");
+    assert_eq!(tui_dir.file_name(), Some(OsStr::new("tui")));
+    assert_eq!(tui_dir.parent(), app_path.parent());
+}
+
+#[test]
+fn database_path_for_current_scope_defaults_to_app_scope() {
+    // Unit tests never call `persistence::initialize`, so the process-wide
+    // scope defaults to `App` and ad-hoc read-only connections resolve to
+    // the GUI database. (nextest runs each test in its own process, so no
+    // other test can have set the scope.)
+    assert_eq!(
+        database_file_path_for_current_scope(),
         app_database_file_path()
     );
 }
@@ -115,8 +151,41 @@ fn sqlite_read_restores_app_state_and_codebase_metadata() {
     let metadata = test_codebase_metadata("/tmp/remote-repo");
     save_codebase_index_metadata(&mut conn, metadata.clone())
         .expect("codebase index metadata should save");
-    let restored = read_sqlite_data(&mut conn, None).expect("persisted data should load");
-    assert_eq!(restored.app_state.windows.len(), 1);
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("persisted data should load");
+    let restored_app_state = restored
+        .app_state
+        .expect("app state should be present for the full scope");
+    assert_eq!(restored_app_state.windows.len(), 1);
+    assert_eq!(restored.codebase_indices.len(), 1);
+    assert_eq!(restored.codebase_indices[0].path, metadata.path);
+}
+
+/// Mirrors `init_db(&PersistenceScope::Tui)` in an isolated tempdir: the TUI
+/// database lives in a `tui/` subdirectory, runs the same migrations, and
+/// round-trips a write+read using the TUI's `PersistedDataScope`.
+#[test]
+fn tui_database_in_tui_subdirectory_round_trips_data() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("tui").join("warp.sqlite");
+    std::fs::create_dir_all(
+        database_path
+            .parent()
+            .expect("database path should have a parent"),
+    )
+    .expect("tui subdirectory should be created");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let metadata = test_codebase_metadata("/tmp/tui-repo");
+    save_codebase_index_metadata(&mut conn, metadata.clone())
+        .expect("codebase index metadata should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::TuiFrontend)
+        .expect("persisted data should load");
+    // The TUI data scope skips GUI session restoration and history...
+    assert!(restored.app_state.is_none());
+    assert!(restored.command_history.is_empty());
+    // ...but still round-trips shared data like codebase index metadata.
     assert_eq!(restored.codebase_indices.len(), 1);
     assert_eq!(restored.codebase_indices[0].path, metadata.path);
 }
@@ -280,6 +349,8 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
             selected_color: SelectedTabColor::default(),
             left_panel: None,
             right_panel: None,
+            group_id: None,
+            pinned: false,
         }],
         active_tab_index: 0,
         bounds: None,
@@ -294,6 +365,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
         left_panel_width: None,
         right_panel_width: None,
         agent_management_filters: None,
+        tab_groups: vec![],
     }
 }
 
@@ -315,9 +387,10 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.active_window_index, Some(1));
     assert_eq!(
@@ -363,6 +436,8 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                 selected_color: SelectedTabColor::default(),
                 left_panel: None,
                 right_panel: None,
+                group_id: None,
+                pinned: false,
             }],
             active_tab_index: 0,
             bounds: None,
@@ -377,6 +452,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
             left_panel_width: None,
             right_panel_width: None,
             agent_management_filters: None,
+            tab_groups: vec![],
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -385,9 +461,10 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     let PaneNodeSnapshot::Leaf(LeafSnapshot {
         custom_vertical_tabs_title,
@@ -437,6 +514,8 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
                 selected_color: SelectedTabColor::default(),
                 left_panel: None,
                 right_panel: None,
+                group_id: None,
+                pinned: false,
             }],
             active_tab_index: 0,
             bounds: None,
@@ -451,6 +530,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
             left_panel_width: None,
             right_panel_width: None,
             agent_management_filters: None,
+            tab_groups: vec![],
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -459,9 +539,10 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     let restored_tab = &restored.windows[0].tabs[0];
@@ -484,6 +565,293 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
     assert_eq!(tabs[1].path, Some(PathBuf::from("/tmp/lib.rs")));
     assert_eq!(tabs[2].path, None);
     assert!(matches!(source, Some(CodeSource::FileTree { .. })));
+}
+
+/// Verifies that a tab group and its membership round-trip through save/restore.
+#[test]
+fn test_sqlite_round_trips_tab_groups() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let group_id = TabGroupId::new();
+    let tab_in_group = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![1],
+                cwd: Some("/tmp/grouped".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: Some(group_id),
+        pinned: false,
+    };
+    let tab_outside_group = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![2],
+                cwd: Some("/tmp/ungrouped".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: None,
+        pinned: false,
+    };
+
+    let app_state = AppState {
+        windows: vec![WindowSnapshot {
+            tabs: vec![tab_in_group, tab_outside_group],
+            active_tab_index: 0,
+            bounds: None,
+            fullscreen_state: Default::default(),
+            quake_mode: false,
+            universal_search_width: None,
+            warp_ai_width: None,
+            voltron_width: None,
+            warp_drive_index_width: None,
+            left_panel_open: false,
+            vertical_tabs_panel_open: false,
+            left_panel_width: None,
+            right_panel_width: None,
+            agent_management_filters: None,
+            tab_groups: vec![TabGroupSnapshot {
+                id: group_id,
+                name: Some("Backend".to_string()),
+                color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                collapsed: true,
+                pinned: false,
+            }],
+        }],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.windows.len(), 1);
+    let restored_window = &restored.windows[0];
+    assert_eq!(restored_window.tab_groups.len(), 1);
+    let restored_group = &restored_window.tab_groups[0];
+    assert_eq!(restored_group.name.as_deref(), Some("Backend"));
+    assert_eq!(
+        restored_group.color,
+        SelectedTabColor::Color(AnsiColorIdentifier::Blue)
+    );
+    assert!(restored_group.collapsed);
+
+    // The in-memory `TabGroupId` is minted fresh on restore, so we check that
+    // the grouped tab points at the restored group, and the ungrouped tab
+    // remains ungrouped.
+    assert_eq!(restored_window.tabs.len(), 2);
+    assert_eq!(restored_window.tabs[0].group_id, Some(restored_group.id));
+    assert_eq!(restored_window.tabs[1].group_id, None);
+}
+
+/// Verifies that the `pinned` flag on tabs and tab groups round-trips through
+/// save/restore so the user's pinned layout survives an app restart.
+#[test]
+fn test_sqlite_round_trips_pinned_state() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let pinned_group_id = TabGroupId::new();
+    let unpinned_group_id = TabGroupId::new();
+
+    let pinned_tab = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![10],
+                cwd: Some("/tmp/pinned".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: None,
+        pinned: true,
+    };
+    let unpinned_tab = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![11],
+                cwd: Some("/tmp/unpinned".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: Some(unpinned_group_id),
+        pinned: false,
+    };
+    let tab_in_pinned_group = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![12],
+                cwd: Some("/tmp/pinned-group".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: Some(pinned_group_id),
+        pinned: false,
+    };
+
+    let app_state = AppState {
+        windows: vec![WindowSnapshot {
+            tabs: vec![pinned_tab, tab_in_pinned_group, unpinned_tab],
+            active_tab_index: 0,
+            bounds: None,
+            fullscreen_state: Default::default(),
+            quake_mode: false,
+            universal_search_width: None,
+            warp_ai_width: None,
+            voltron_width: None,
+            warp_drive_index_width: None,
+            left_panel_open: false,
+            vertical_tabs_panel_open: false,
+            left_panel_width: None,
+            right_panel_width: None,
+            agent_management_filters: None,
+            tab_groups: vec![
+                TabGroupSnapshot {
+                    id: pinned_group_id,
+                    name: Some("Pinned".to_string()),
+                    color: SelectedTabColor::default(),
+                    collapsed: false,
+                    pinned: true,
+                },
+                TabGroupSnapshot {
+                    id: unpinned_group_id,
+                    name: Some("Loose".to_string()),
+                    color: SelectedTabColor::default(),
+                    collapsed: false,
+                    pinned: false,
+                },
+            ],
+        }],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.windows.len(), 1);
+    let restored_window = &restored.windows[0];
+
+    // Tabs come back in insertion order; pinned flag should match what we saved.
+    assert_eq!(restored_window.tabs.len(), 3);
+    assert!(restored_window.tabs[0].pinned);
+    assert!(!restored_window.tabs[1].pinned);
+    assert!(!restored_window.tabs[2].pinned);
+
+    // Both groups round-trip with their pinned state preserved. Group ids are
+    // minted fresh on restore, so we look them up by name.
+    assert_eq!(restored_window.tab_groups.len(), 2);
+    let restored_pinned_group = restored_window
+        .tab_groups
+        .iter()
+        .find(|group| group.name.as_deref() == Some("Pinned"))
+        .expect("pinned group should restore");
+    let restored_loose_group = restored_window
+        .tab_groups
+        .iter()
+        .find(|group| group.name.as_deref() == Some("Loose"))
+        .expect("unpinned group should restore");
+    assert!(restored_pinned_group.pinned);
+    assert!(!restored_loose_group.pinned);
 }
 
 fn assert_encode_then_decode_preserves_original_path(original_path: PathBuf) {
@@ -633,9 +1001,10 @@ fn test_sqlite_drops_too_small_bounds_on_read() {
     )
     .expect("corrupting update should succeed");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     assert!(

@@ -9,6 +9,7 @@ use itertools::Itertools;
 use settings::manager::SettingsManager;
 use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
+use warp_errors::{report_error, report_if_error};
 use warp_util::path::user_friendly_path;
 use warpui::actions::StandardAction;
 use warpui::keymap::{Keystroke, Trigger};
@@ -19,6 +20,7 @@ use warpui::windowing::WindowManager;
 use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::persisted_workspace::PersistedWorkspace;
+use crate::auth;
 use crate::auth::AuthStateProvider;
 use crate::default_terminal::DefaultTerminal;
 use crate::features::{runtime_flags_menu_items, FeatureFlag};
@@ -35,7 +37,6 @@ use crate::user_config::WarpConfig;
 use crate::util::bindings::{self, trigger_to_keystroke, CustomAction};
 use crate::util::links;
 use crate::workspace::sync_inputs::SyncedInputState;
-use crate::{auth, report_if_error};
 
 type CheckmarkStatusGetter = dyn 'static + Fn(&mut AppContext) -> bool;
 
@@ -647,7 +648,9 @@ fn block_menu_debug_items() -> Vec<MenuItem> {
                     .should_show_in_band_command_blocks
                     .set_value(new_value, ctx)
                 {
-                    log::error!("Failed to persist 'Show in-band command blocks' setting: {e}");
+                    report_error!(
+                        e.context("Failed to persist 'Show in-band command blocks' setting")
+                    );
                 }
             });
         },
@@ -678,7 +681,7 @@ fn block_menu_debug_items() -> Vec<MenuItem> {
                     .should_show_ssh_block
                     .set_value(new_value, ctx)
                 {
-                    log::error!("Failed to persist 'Show ssh command blocks' setting: {e}");
+                    report_error!(e.context("Failed to persist 'Show ssh command blocks' setting"));
                 }
             });
         },
@@ -714,7 +717,7 @@ fn toggle_bootstrap_block_menu_item() -> MenuItem {
                     .should_show_bootstrap_block
                     .set_value(new_value, ctx)
                 {
-                    log::error!("Failed to persist 'Show bootstrap block' setting: {e}");
+                    report_error!(e.context("Failed to persist 'Show bootstrap block' setting"));
                 }
             });
         },
@@ -762,7 +765,7 @@ fn debug_menu_items() -> Vec<MenuItem> {
                         .is_shell_debug_mode_enabled
                         .set_value(new_value, ctx)
                     {
-                        log::error!("Failed to persist 'Debug mode' setting: {e}");
+                        report_error!(e.context("Failed to persist 'Debug mode' setting"));
                     }
                 });
             },
@@ -819,7 +822,9 @@ fn debug_menu_items() -> Vec<MenuItem> {
                         .are_in_band_generators_for_all_sessions_enabled
                         .set_value(new_value, ctx)
                     {
-                        log::error!("Failed to persist 'Enable in-band generators' setting: {e}");
+                        report_error!(
+                            e.context("Failed to persist 'Enable in-band generators' setting")
+                        );
                     }
                 });
             },
@@ -927,7 +932,7 @@ fn make_new_help_menu() -> Menu {
             feedback_menu_item(),
             link_menu_item("Warp Documentation...", links::USER_DOCS_URL.into()),
             link_menu_item("GitHub Issues...", links::GITHUB_ISSUES_URL.into()),
-            link_menu_item("Warp Slack Community...", links::SLACK_URL.into()),
+            link_menu_item("Join our Slack community...", links::SLACK_URL.into()),
         ],
     )
 }

@@ -117,6 +117,8 @@ struct CellExtra {
     /// base character and zerowidth characters).
     cell_with_zero_width: Option<String>,
     end_of_prompt: Option<EndOfPromptMarker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hyperlink_id: Option<super::HyperlinkId>,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -276,7 +278,26 @@ impl Cell {
         });
     }
 
-    /// Free all dynamically allocated cell storage. Preserves EndOfPromptMarker if present.
+    /// Returns this cell's OSC 8 hyperlink id, if any. Resolve through the
+    /// owning grid's `HyperlinkRegistry` to recover the URI.
+    #[inline]
+    pub fn hyperlink_id(&self) -> Option<super::HyperlinkId> {
+        self.extra.as_ref()?.hyperlink_id
+    }
+
+    #[inline]
+    pub fn set_hyperlink_id(&mut self, id: Option<super::HyperlinkId>) {
+        if id.is_some() {
+            self.extra.get_or_insert_with(Default::default).hyperlink_id = id;
+        } else if let Some(extra) = self.extra.as_deref_mut() {
+            extra.hyperlink_id = None;
+        }
+    }
+
+    /// Free all dynamically allocated cell storage. Preserves EndOfPromptMarker
+    /// if present. NOTE: this does NOT preserve `hyperlink_id` — that field is
+    /// content-bound and is cleared whenever the cell's content is reset
+    /// (erase/clear/reset_state).
     #[inline]
     pub fn drop_extra(&mut self) {
         if let Some(extra) = self.extra.take() {

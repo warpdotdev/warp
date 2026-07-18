@@ -11,7 +11,6 @@ use crate::ai::agent::ImageContext;
 use crate::ai::blocklist::agent_view::agent_input_footer::{
     AgentInputFooter, AgentInputFooterEvent,
 };
-use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentSessionsModel};
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
@@ -23,10 +22,10 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use anyhow::anyhow;
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
 use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
 use warp_core::settings::Setting;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::contrast::{
@@ -34,7 +33,7 @@ use warp_core::ui::color::contrast::{
 };
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill as ThemeFill;
-use warp_core::{report_error, send_telemetry_from_ctx};
+use warp_errors::report_error;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
 use warpify_footer::{WarpifyFooterView, WarpifyFooterViewEvent};
 use warpui::elements::{
@@ -48,7 +47,6 @@ use warpui::{
 };
 
 use super::{RichContentInsertionPosition, TerminalAction, TerminalView};
-use crate::ai::blocklist::agent_view::agent_view_bg_fill;
 use crate::ai::blocklist::block::cli_controller::CLISubagentEvent;
 use crate::cmd_or_ctrl_shift;
 use crate::code_review::diff_state::GitDeltaPreference;
@@ -59,7 +57,6 @@ use crate::settings::{
 };
 use crate::terminal::cli_agent_sessions::CLIAgentRichInputCloseReason;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::terminal::view::block_banner::WarpificationMode;
 pub use crate::terminal::CLIAgent;
 use crate::terminal::TerminalModel;
 use crate::ui_components::blended_colors;
@@ -138,6 +135,7 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         | CLIAgent::Goose
         | CLIAgent::Hermes
         | CLIAgent::Vibe
+        | CLIAgent::Antigravity
         | CLIAgent::Unknown => RichInputSubmitStrategy::Inline,
     }
 }
@@ -268,20 +266,11 @@ impl TerminalView {
             UseAgentToolbarEvent::HideRichInput => {
                 self.close_cli_agent_rich_input_and_disable_auto_toggle(ctx);
             }
-            UseAgentToolbarEvent::Warpify { mode } => {
+            UseAgentToolbarEvent::Warpify => {
                 self.hide_use_agent_footer_in_blocklist(ctx);
-                match mode {
-                    WarpificationMode::Ssh { .. } => {
-                        self.handle_action(&TerminalAction::WarpifySSHSession, ctx);
-                    }
-                    WarpificationMode::Subshell { .. } => {
-                        self.handle_action(&TerminalAction::TriggerSubshellBootstrap, ctx);
-                    }
-                }
+                self.handle_action(&TerminalAction::TriggerSubshellBootstrap, ctx);
                 send_telemetry_from_ctx!(
-                    TelemetryEvent::WarpifyFooterAcceptedWarpify {
-                        is_ssh: mode.is_ssh()
-                    },
+                    TelemetryEvent::WarpifyFooterAcceptedWarpify { is_ssh: false },
                     ctx
                 );
             }
@@ -305,13 +294,8 @@ impl TerminalView {
     ) -> bool {
         let ai_settings = AISettings::as_ref(app);
 
-        // If a warpify mode is set, that means ssh or subshell is detected and we should show the footer.
-        if self
-            .use_agent_footer
-            .as_ref(app)
-            .warpify_mode(app)
-            .is_some()
-        {
+        // If the warpify footer is active, a subshell was detected and we should show the footer.
+        if self.use_agent_footer.as_ref(app).is_warpify_active(app) {
             return true;
         }
 
@@ -403,6 +387,30 @@ impl TerminalView {
         })
     }
 
+    /// Returns whether the active long-running command in this terminal is
+    /// Warp's own headless TUI (`warp_tui`). Uses the same command-based
+    /// detection as [`Self::detect_cli_agent_from_model`] (which decides when to
+    /// show the CLI agent footer), but callers use it to *hide* the "Use agent"
+    /// footer and the outer agent input bar, since the Warp TUI is itself an
+    /// agent surface. This is the single source of truth for "is the Warp TUI
+    /// running here".
+    pub(super) fn is_running_warp_tui(&self, model: &TerminalModel, ctx: &AppContext) -> bool {
+        let active_block = model.block_list().active_block();
+        if !active_block.is_active_and_long_running() {
+            return false;
+        }
+
+        let command = active_block.command_with_secrets_obfuscated(false);
+        let escape_char = self.active_block_session_id().and_then(|session_id| {
+            self.sessions.read(ctx, |sessions, _| {
+                sessions
+                    .get(session_id)
+                    .map(|session| session.shell_family().escape_char())
+            })
+        });
+        CLIAgent::command_is_warp_tui(&command, escape_char)
+    }
+
     /// Updates the UI during a long running command to agent "tagged-in state".
     ///
     /// An agent may be "tagged in" during a _user-executed_ long running command, where being
@@ -436,7 +444,7 @@ impl TerminalView {
 
         if !self.model.lock().is_alt_screen_active() {
             self.use_agent_footer.update(ctx, |footer, ctx| {
-                footer.clear_warpify_mode(ctx);
+                footer.clear_warpify(ctx);
             });
             self.hide_use_agent_footer_in_blocklist(ctx);
         }
@@ -613,11 +621,9 @@ impl TerminalView {
     /// instead). Otherwise, respects the auto-dismiss-after-submit setting.
     fn maybe_close_rich_input_after_submit(&mut self, ctx: &mut ViewContext<Self>) {
         let session = CLIAgentSessionsModel::as_ref(ctx).session(self.view_id);
-        let has_plugin = session.as_ref().is_some_and(|s| {
-            s.listener.is_some()
-                && s.should_auto_toggle_input
-                && agent_supports_rich_status(&s.agent)
-        });
+        let has_plugin = session
+            .as_ref()
+            .is_some_and(|s| s.supports_rich_status() && s.should_auto_toggle_input);
         let ai_settings = AISettings::as_ref(ctx);
 
         let should_close = if has_plugin && *ai_settings.auto_toggle_rich_input {
@@ -783,9 +789,9 @@ impl TerminalView {
                         match base64::engine::general_purpose::STANDARD.decode(&image.data) {
                             Ok(bytes) => bytes,
                             Err(_) => {
-                                log::error!(
-                                    "Failed to decode base64 image data for {}",
-                                    image.file_name
+                                report_error!(
+                                    "Failed to decode base64 image data",
+                                    extra: { "file_name" => %image.file_name }
                                 );
                                 continue;
                             }
@@ -871,7 +877,10 @@ impl TerminalView {
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            log::error!("Failed to stat dropped image {path_str}: {e}");
+                            report_error!(
+                                anyhow::Error::new(e).context("Failed to stat dropped image"),
+                                extra: { "path" => %path_str }
+                            );
                             continue;
                         }
                     }
@@ -879,7 +888,10 @@ impl TerminalView {
                     let bytes = match async_fs::read(&path_str).await {
                         Ok(b) => b,
                         Err(e) => {
-                            log::error!("Failed to read dropped image {path_str}: {e}");
+                            report_error!(
+                                anyhow::Error::new(e).context("Failed to read dropped image"),
+                                extra: { "path" => %path_str }
+                            );
                             continue;
                         }
                     };
@@ -1220,8 +1232,8 @@ impl UseAgentToolbar {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            WarpifyFooterViewEvent::Warpify { mode } => {
-                ctx.emit(UseAgentToolbarEvent::Warpify { mode: mode.clone() });
+            WarpifyFooterViewEvent::Warpify => {
+                ctx.emit(UseAgentToolbarEvent::Warpify);
             }
             WarpifyFooterViewEvent::UseAgent => {
                 ctx.emit(UseAgentToolbarEvent::UseAgent);
@@ -1255,30 +1267,26 @@ impl UseAgentToolbar {
             .map(|session| session.agent)
     }
 
-    /// Sets the current warpification mode. When set, the footer shows the
+    /// Activates the warpify footer. When active, the footer shows the
     /// warpify view instead of the CLI agent or regular "Use agent" views.
-    pub(in crate::terminal) fn set_warpify_mode(
-        &mut self,
-        mode: WarpificationMode,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    pub(in crate::terminal) fn show_warpify(&mut self, ctx: &mut ViewContext<Self>) {
         self.warpify_footer_view.update(ctx, |view, ctx| {
-            view.set_mode(mode, ctx);
+            view.show(ctx);
         });
         ctx.notify();
     }
 
-    /// Clears the warpification mode so the footer reverts to its default behavior.
-    pub(in crate::terminal) fn clear_warpify_mode(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Deactivates the warpify footer so it reverts to its default behavior.
+    pub(in crate::terminal) fn clear_warpify(&mut self, ctx: &mut ViewContext<Self>) {
         self.warpify_footer_view.update(ctx, |view, ctx| {
-            view.clear_mode(ctx);
+            view.clear(ctx);
         });
         ctx.notify();
     }
 
-    /// Returns the current warpification mode, if set.
-    pub(in crate::terminal) fn warpify_mode(&self, app: &AppContext) -> Option<WarpificationMode> {
-        self.warpify_footer_view.as_ref(app).mode().cloned()
+    /// Returns whether the warpify footer is currently active.
+    pub(in crate::terminal) fn is_warpify_active(&self, app: &AppContext) -> bool {
+        self.warpify_footer_view.as_ref(app).is_active()
     }
 
     /// Returns whether there's a current CLI agent (like Claude Code).
@@ -1310,8 +1318,8 @@ pub enum UseAgentToolbarEvent {
     OpenRichInput,
     /// Hide the rich input editor (same as Escape).
     HideRichInput,
-    /// User chose to warpify the subshell/SSH session.
-    Warpify { mode: WarpificationMode },
+    /// User chose to warpify the subshell.
+    Warpify,
     /// User chose to use the agent.
     UseAgent,
 }
@@ -1326,8 +1334,8 @@ impl View for UseAgentToolbar {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        // If a warpify mode is set, delegate rendering to the warpify footer view.
-        if self.warpify_footer_view.as_ref(app).mode().is_some() {
+        // If the warpify footer is active, delegate rendering to the warpify footer view.
+        if self.warpify_footer_view.as_ref(app).is_active() {
             return ChildView::new(&self.warpify_footer_view).finish();
         }
 
@@ -1395,8 +1403,6 @@ impl View for UseAgentToolbar {
             if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
                 container = container.with_background(bg_color);
             }
-        } else if terminal_model.block_list().agent_view_state().is_inline() {
-            container = container.with_background(agent_view_bg_fill(app));
         }
 
         container.finish()
@@ -1422,8 +1428,9 @@ impl TypedActionView for UseAgentToolbar {
                     .should_render_use_agent_footer_for_user_commands
                     .set_value(false, ctx)
                 {
-                    report_error!(anyhow!("{e:?}")
-                        .context("Failed to set `ShouldRenderUseAgentToolbarForUserCommands`"));
+                    report_error!(
+                        e.context("Failed to set `ShouldRenderUseAgentToolbarForUserCommands`")
+                    );
                 }
             });
         }

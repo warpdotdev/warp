@@ -140,6 +140,9 @@ integration_tests! {
     test_open_input_context_menu,
     test_copy_all_from_input_context_menu,
     test_cut_paste_from_input_context_menu,
+    test_inline_model_selector_restores_prompt_on_dismissal,
+    test_inline_model_selector_restores_prompt_on_model_selection,
+    test_inline_model_selector_restores_prompt_on_chip_toggle_close,
     test_paste_and_type_characters_before_bootstrap,
     #[ignore = "Flaking on CI - KC looking into 3/31/26"]
     test_code_review_scroll_anchor_preserved_when_inserting_above,
@@ -153,6 +156,7 @@ integration_tests! {
     test_code_review_scroll_preserved_header_range,
     #[ignore = "Flaking on CI - KC looking into 3/31/26"]
     test_code_review_scroll_preserved_footer_range,
+    test_code_review_double_click_fully_expands_hidden_section,
     test_pane_group_state_single_pane,
     test_pane_group_state_multi_pane,
     test_pane_group_state_close_pane,
@@ -208,6 +212,13 @@ integration_tests! {
     test_secret_case_sensitivity,
     test_secrets_are_always_redacted_in_ai_inputs,
 
+    // OSC 8 hyperlink tests (GH6393)
+    test_osc8_open_close_renders_visible_text,
+    test_osc8_copy_block_yields_visible_text_only,
+    test_osc8_open_link_action_opens_url,
+    test_osc8_file_scheme_opens_url,
+    test_osc8_no_regression_on_url_autodetect,
+
     test_active_session_follows_focus,
     test_tab_context_menu_copies_metadata,
     test_vertical_tab_context_menu_copies_metadata,
@@ -220,6 +231,7 @@ integration_tests! {
     test_detach_tab_to_new_window_with_drag,
     test_attach_tab_to_other_window_and_continue_drag,
     test_single_tab_handoff_continues_drag,
+    test_multi_tab_drag_back_to_source_and_out_again,
 
     test_restore_single_closed_pane,
     test_restore_multiple_closed_panes,
@@ -262,6 +274,7 @@ integration_tests! {
     test_settings_error_banner_on_reload_with_invalid_toml,
     test_settings_error_banner_on_reload_with_invalid_value,
 
+    test_copy_selection_within_ai_block,
     #[ignore = "Affected by agent_view feature flag UI changes"]
     test_selection_first_to_last_through_ai_simple,
     #[ignore = "Affected by agent_view feature flag UI changes"]
@@ -319,6 +332,9 @@ integration_tests! {
     test_file_tree_non_openable_files,
     test_file_tree_nested_file_opening,
 
+    // Copy current path command-palette action
+    test_copy_current_path_copies_terminal_pwd,
+
     // Go to Line tests
     test_goto_line_dialog_open_close,
     test_goto_line_jumps_to_line,
@@ -326,6 +342,9 @@ integration_tests! {
     test_goto_line_clamps_out_of_range,
     test_code_editor_line_numbers_default_to_absolute,
     test_code_editor_relative_line_numbers_follow_cursor,
+
+    // AI document tests
+    test_copy_ai_document_as_markdown_from_overflow_menu,
 
     // Keyboard protocol tests
     test_keyboard_protocol_disabled_shift_enter,
@@ -341,4 +360,9 @@ integration_tests! {
     // Video recording test — requires real display, run manually
     #[ignore = "Manual test: requires real display for frame capture"]
     test_video_recording,
+
+    // Rich Input Ctrl+Enter submit toggle (issue #11588)
+    test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits,
+    // Regression: Enter must accept inline menus (not insert newline) when toggle=true
+    test_rich_input_enter_accepts_menu_item_when_toggle_is_true,
 }

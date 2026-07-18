@@ -8,6 +8,9 @@ use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
+use warp_errors::{report_error, report_if_error};
+#[cfg(not(target_family = "wasm"))]
+use warp_server_client::iap::{IapCredentialsState, IapManager, IapManagerEvent};
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Align, Border, CacheOption, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -37,15 +40,13 @@ use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
-#[cfg(not(target_family = "wasm"))]
-use crate::server::iap::{IapCredentialsState, IapManager, IapManagerEvent};
 use crate::server::ids::ServerId;
 use crate::settings::cloud_preferences::CloudPreferencesSettings;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
-use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 const PHOTO_SIZE: f32 = 40.;
 const REFERRAL_CTA: &str = "Earn rewards by sharing Warp with friends & colleagues";
@@ -285,9 +286,9 @@ impl MainSettingsPageView {
             widgets.push(Box::new(IapCredentialsWidget::default()));
             let iap_manager_handle = IapManager::handle(ctx);
             ctx.subscribe_to_model(&iap_manager_handle, |_, _, e, ctx| {
-                match e {
-                    IapManagerEvent::StateChanged => ctx.notify(),
-                };
+                if matches!(e, IapManagerEvent::StateChanged) {
+                    ctx.notify();
+                }
             })
         }
 
@@ -1042,7 +1043,7 @@ impl SettingsWidget for VersionInfoWidget {
                 .with_margin_top(VERTICAL_MARGIN)
                 .finish()
         } else {
-            log::error!("Shouldn't render VersionInfoWidget without GIT_RELEASE_TAG");
+            report_error!("Shouldn't render VersionInfoWidget without GIT_RELEASE_TAG");
             Empty::new().finish()
         }
     }
@@ -1113,9 +1114,6 @@ impl SettingsWidget for IapCredentialsWidget {
                 (format!("Loaded (refreshes in ~{mins}m)"), active)
             }
             IapCredentialsState::Failed { message, .. } => (format!("Failed: {message}"), ansi_red),
-            IapCredentialsState::EnvInjected { .. } => {
-                ("Using injected token (WARP_IAP_TOKEN)".to_string(), active)
-            }
         };
 
         let is_refreshing = matches!(state, IapCredentialsState::Refreshing { .. });

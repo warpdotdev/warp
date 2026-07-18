@@ -1,11 +1,14 @@
 use chrono::Utc;
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
+use warp_server_client::auth::AgentIdentity;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Empty, Expanded, Fill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, Padding, ParentElement, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, SavePosition, Stack, Text,
+    Empty, Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, Padding, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Stack, Text,
 };
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -22,13 +25,14 @@ use crate::editor::{
     TextOptions,
 };
 use crate::modal::{Modal, ModalViewState};
-use crate::server::server_api::auth::{AgentIdentity, AuthClient};
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::dropdown::{DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT};
-use crate::view_components::{Dropdown as DropdownView, DropdownItem};
+use crate::view_components::{Dropdown as DropdownView, DropdownItem, FilterableDropdown};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const OZ_AGENTS_URL: &str = "https://oz.warp.dev/agents?new=true";
+const API_KEY_DOCS_URL: &str =
+    "https://docs.warp.dev/reference/cli/api-keys/#personal-vs-agent-keys";
 
 const LABEL_FONT_SIZE: f32 = 14.;
 const INPUT_WIDTH: f32 = 428.; // 460px - (2 * 16px) padding
@@ -60,7 +64,7 @@ impl ApiKeyType {
 pub struct CreateApiKeyModal {
     name_editor: ViewHandle<EditorView>,
     expiration_dropdown: ViewHandle<DropdownView<CreateApiKeyModalAction>>,
-    agent_dropdown: ViewHandle<DropdownView<CreateApiKeyModalAction>>,
+    agent_dropdown: ViewHandle<FilterableDropdown<CreateApiKeyModalAction>>,
     api_key_type_control: ViewHandle<SegmentedControl<ApiKeyType>>,
     expiration: ExpirationOption,
     cancel_button_mouse_state: MouseStateHandle,
@@ -167,9 +171,11 @@ impl CreateApiKeyModal {
             ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
 
         let agent_dropdown =
-            ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
+            ctx.add_typed_action_view(FilterableDropdown::<CreateApiKeyModalAction>::new);
         agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_top_bar_max_width(INPUT_WIDTH);
+            // Match the open menu width to the rendered top-bar (input) width so
+            // the dropdown doesn't overhang the search field.
             dropdown.set_match_menu_width_to_top_bar(true, ctx);
         });
 
@@ -277,9 +283,10 @@ impl CreateApiKeyModal {
         self.is_loading_agents = true;
         ctx.notify();
 
-        let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
+        let auth_client =
+            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
         ctx.spawn(
-            async move { server_api.list_agent_identities().await },
+            async move { auth_client.list_agent_identities().await },
             |me, res, ctx| {
                 me.is_loading_agents = false;
                 match res {
@@ -288,7 +295,7 @@ impl CreateApiKeyModal {
                         me.populate_agent_dropdown(ctx);
                     }
                     Err(err) => {
-                        log::error!("Failed to load agent identities: {err}");
+                        report_error!(err.context("Failed to load agent identities"));
                         ctx.emit(CreateApiKeyModalEvent::Error {
                             message: "Failed to load agents. Please close and try again."
                                 .to_string(),
@@ -315,6 +322,16 @@ impl CreateApiKeyModal {
         self.agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_items(items, ctx);
         });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_agents_for_test(
+        &mut self,
+        agents: Vec<AgentIdentity>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.agents = agents;
+        self.populate_agent_dropdown(ctx);
     }
 
     fn create(&mut self, ctx: &mut ViewContext<Self>) {
@@ -377,9 +394,10 @@ impl CreateApiKeyModal {
             None
         };
 
-        let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
+        let auth_client =
+            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
         ctx.spawn(
-            async move { server_api.create_api_key(final_name, team_id, agent_uid, expires_at).await },
+            async move { auth_client.create_api_key(final_name, team_id, agent_uid, expires_at).await },
             |me, res, ctx| {
                 match res {
                     Ok(warp_graphql::mutations::generate_api_key::GenerateApiKeyResult::GenerateApiKeyOutput(output)) => {
@@ -601,14 +619,33 @@ impl View for CreateApiKeyModal {
             RequestState::Succeeded => self.render_success_content(app),
             _ => {
                 let selected_key_type = self.api_key_type_control.as_ref(app).selected_option();
-
-                let description_text = Text::new(
-                    selected_key_type.description(),
-                    appearance.ui_font_family(),
-                    LABEL_FONT_SIZE,
-                )
-                .with_color(theme.nonactive_ui_text_color().into())
-                .finish();
+                let description_text = if selected_key_type == ApiKeyType::Agent {
+                    FormattedTextElement::new(
+                        FormattedText::new([FormattedTextLine::Line(vec![
+                            FormattedTextFragment::plain_text(selected_key_type.description()),
+                            FormattedTextFragment::plain_text(" "),
+                            FormattedTextFragment::hyperlink("Learn more", API_KEY_DOCS_URL),
+                        ])]),
+                        LABEL_FONT_SIZE,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_family(),
+                        theme.nonactive_ui_text_color().into(),
+                        HighlightedHyperlink::default(),
+                    )
+                    .with_hyperlink_font_color(theme.accent().into_solid())
+                    .register_default_click_handlers(|url, _, ctx| {
+                        ctx.open_url(&url.url);
+                    })
+                    .finish()
+                } else {
+                    Text::new(
+                        selected_key_type.description(),
+                        appearance.ui_font_family(),
+                        LABEL_FONT_SIZE,
+                    )
+                    .with_color(theme.nonactive_ui_text_color().into())
+                    .finish()
+                };
 
                 let name_label = Text::new("Name", appearance.ui_font_family(), LABEL_FONT_SIZE)
                     .with_color(theme.active_ui_text_color().into())
@@ -743,6 +780,13 @@ impl View for CreateApiKeyModal {
                             .finish(),
                         );
                     } else {
+                        // The agent list can grow long, so use a FilterableDropdown
+                        // (search input + substring filtering). Its open menu must
+                        // paint above the fields below it (Name/Expiration), so the
+                        // dropdown is hoisted into the modal's outermost Stack as a
+                        // positioned overlay child anchored to this placeholder,
+                        // rather than rendered inline in the column (which would let
+                        // later siblings paint over the open menu).
                         render_agent_dropdown = true;
                         col.add_child(
                             Container::new(
@@ -919,3 +963,7 @@ fn api_key_type_control_styles(app: &AppContext) -> UiComponentStyles {
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+#[path = "create_api_key_modal_tests.rs"]
+mod tests;

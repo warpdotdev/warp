@@ -9,6 +9,7 @@ use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::{report_error, report_if_error};
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
@@ -20,6 +21,7 @@ use super::auth_state::{AuthState, PersistAction};
 use super::auth_view_modal::{AuthRedirectPayload, AuthViewVariant};
 use super::credentials::{Credentials, FirebaseToken, LoginToken};
 use super::user::User;
+use super::user_properties::UserProperties;
 use super::{AuthStateProvider, UserUid};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
@@ -43,8 +45,8 @@ use crate::terminal::shared_session::manager::Manager as SharedSessionManager;
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::{
-    persistence, report_error, report_if_error, send_telemetry_from_ctx,
-    send_telemetry_sync_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent,
+    persistence, send_telemetry_from_ctx, send_telemetry_sync_from_ctx,
+    GlobalResourceHandlesProvider, TelemetryEvent,
 };
 
 #[derive(Debug)]
@@ -113,17 +115,19 @@ impl AuthManager {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
         use crate::server::server_api::ServerApiProvider;
 
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let server_api_provider = ServerApiProvider::as_ref(ctx);
+        let server_api = server_api_provider.get();
+        let auth_client = server_api_provider.get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
 
         Self {
             auth_state,
-            server_api: server_api.clone(),
-            auth_client: server_api,
+            server_api,
+            auth_client,
             pending_auth_state: None,
         }
     }
@@ -324,12 +328,15 @@ impl AuthManager {
         match fetch_user_result {
             Ok(fetch_user_result) => {
                 let FetchUserResult {
-                    user,
+                    user_output,
                     credentials,
-                    server_experiments,
                     from_refresh,
-                    llms,
                 } = fetch_user_result;
+                let UserProperties {
+                    user,
+                    server_experiments,
+                    llms,
+                } = user_output.into();
 
                 self.set_and_persist(Some(user.clone()), Some(credentials), ctx);
 
@@ -416,7 +423,8 @@ impl AuthManager {
                             },
                         })
                     {
-                        log::error!("Error persisting user information to database: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error persisting user information to database"));
                     };
                 }
 
@@ -723,9 +731,9 @@ impl AuthManager {
                         ctx.open_url(&url);
                     }
                     Err(e) => {
-                        report_error!(anyhow!(
-                        "Failed to fetch custom token for authenticating anonymous user in browser: {e:?}"
-                    ))
+                        report_error!(anyhow::Error::new(e).context(
+                            "Failed to fetch custom token for authenticating anonymous user in browser"
+                        ))
                 }
                 };
             },

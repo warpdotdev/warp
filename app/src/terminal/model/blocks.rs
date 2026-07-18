@@ -12,6 +12,7 @@ use instant::SystemTime;
 use selection::BlockListSelection;
 pub use selection::SelectionRange;
 use sum_tree::{Dimension, Item, SeekBias, SumTree};
+use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::color::ColorU;
@@ -26,13 +27,13 @@ use super::grid::grid_handler::{FragmentBoundary, GridHandler, Link, PossiblePat
 use super::grid::RespectDisplayedOutput;
 use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
+use super::lifecycle::NextBlockIdDisposition;
 use super::rich_content::RichContentType;
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
 use super::terminal_model::RangeInModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentActionId;
-use crate::ai::blocklist::agent_view::{AgentViewDisplayMode, AgentViewState};
 use crate::ai::blocklist::{AIBlock, SerializedBlockListItem};
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
@@ -41,11 +42,11 @@ use crate::terminal::event::{AfterBlockCompletedEvent, BlockType, Event as Termi
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
-    Attr, BootstrappedValue, CharsetIndex, ClearMode, CommandFinishedValue, CursorShape,
-    CursorStyle, LineClearMode, Mode, PrecmdValue, PreexecValue, Processor, StandardCharset,
-    TabulationClearMode,
+    Attr, BootstrappedValue, CharsetIndex, ClearMode, CommandFinishedValue, CompletionMetadata,
+    CursorShape, CursorStyle, LineClearMode, Mode, PrecmdValue, PreexecValue, Processor,
+    PromptMetadata, StandardCharset, TabulationClearMode,
 };
-use crate::terminal::model::block::{AgentViewVisibility, Block, SerializedBlock};
+use crate::terminal::model::block::{AgentViewVisibility, Block, SerializedBlock, TranscriptScope};
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::Dimensions;
@@ -59,6 +60,17 @@ use crate::terminal::{BlockPadding, ShellHost, SizeInfo, SizeUpdate};
 #[cfg(feature = "local_fs")]
 const RESTORED_BLOCK_SEPARATOR_HEIGHT: f64 = 1.5;
 pub(in crate::terminal) const INLINE_BANNER_HEIGHT: f64 = 2.5;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ActiveBlockCompletion {
+    AlreadyFinished,
+    NewlyFinished,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveConversationContext {
+    conversation_id: AIConversationId,
+    is_cloud: bool,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RichContentItem {
@@ -97,22 +109,17 @@ impl RichContentItem {
         Self::new(content_type, view_id, agent_view_conversation_id, false)
     }
 
-    pub fn should_hide_for_agent_view_state(&self, agent_view_state: &AgentViewState) -> bool {
+    pub fn should_hide_for_transcript_scope(&self, transcript_scope: &TranscriptScope) -> bool {
         if !FeatureFlag::AgentView.is_enabled() {
             return false;
         }
 
-        match agent_view_state {
-            AgentViewState::Active {
-                conversation_id,
-                display_mode: AgentViewDisplayMode::FullScreen,
-                ..
-            } => Some(*conversation_id) != self.agent_view_conversation_id,
-            AgentViewState::Active {
-                display_mode: AgentViewDisplayMode::Inline,
-                ..
+        match transcript_scope {
+            TranscriptScope::Unfiltered => false,
+            TranscriptScope::Terminal => self.agent_view_conversation_id.is_some(),
+            TranscriptScope::Conversation(conversation_id) => {
+                Some(*conversation_id) != self.agent_view_conversation_id
             }
-            | AgentViewState::Inactive => self.agent_view_conversation_id.is_some(),
         }
     }
 }
@@ -253,6 +260,16 @@ pub struct BlockList {
     /// The current block list selection.
     /// Do not set this value directly - use [`Self::set_selection`] and [`Self::clear_selection`] instead.
     selection: Option<BlockListSelection>,
+    /// View IDs of rich content (AI) blocks that currently have an active text
+    /// selection managed by the block itself, rather than by the point-based
+    /// [`selection`](Self::selection) above. Rich content blocks render their own
+    /// selections, so the block list can't derive this from `selection`; the
+    /// terminal view keeps this in sync (see
+    /// [`set_rich_content_selection`](Self::set_rich_content_selection) /
+    /// [`clear_rich_content_selection`](Self::clear_rich_content_selection)) so
+    /// copy/insert paths can find the selected text via
+    /// [`rich_content_blocks_in_selection`](Self::rich_content_blocks_in_selection).
+    rich_content_selections: Vec<EntityId>,
     /// If this is Some, and if smart-select is enabled, double-clicking within this range will
     /// select this range instead of the normal smart-select logic. The purpose of this is to
     /// allow double-click selection to work on the TerminalView::highlighted_link even when it
@@ -282,6 +299,9 @@ pub struct BlockList {
     restored_session_ts: Option<DateTime<Local>>,
 
     latest_block_finished_time: Option<SystemTime>,
+    /// Whether the next prompt must avoid repeating deferred completion work for an already-finished
+    /// active block that recovery advanced past.
+    skip_next_after_block_completed_event: bool,
 
     /// The number of in-band commands that are "in-flight", where "in-flight" is defined as
     /// written to the PTY without yet a completed block.
@@ -301,7 +321,7 @@ pub struct BlockList {
     /// necessary to recompute the precmd payload after an in-band command runs. Thus we send an
     /// unpopulated precmd payload for in-band commands to make their execution as fast as
     /// possible.
-    last_populated_precmd_payload: Option<PrecmdValue>,
+    last_populated_precmd_payload: Option<PromptMetadata>,
 
     /// Cached data about the prompt that was visible in the input the last time
     /// the user submitted a command.  Some prompt tools update the prompt just
@@ -330,7 +350,8 @@ pub struct BlockList {
     /// relevant wherever we're traversing the blocklist's sumtree (i.e. in clamp_to_grid_points)
     is_inverted: bool,
 
-    agent_view_state: AgentViewState,
+    transcript_scope: TranscriptScope,
+    active_conversation_context: Option<ActiveConversationContext>,
 
     /// The view ID of a rich content item that should always remain at the bottom
     /// of the blocklist. After any other insertion, this item is automatically
@@ -361,9 +382,9 @@ pub struct BlockFilter {
 
 impl BlockFilter {
     /// Tests if a block matches this filter.
-    pub fn matches(self, block: &Block, agent_view_state: &AgentViewState) -> bool {
+    pub fn matches(self, block: &Block, transcript_scope: &TranscriptScope) -> bool {
         (self.include_background || !block.is_background())
-            && (self.include_hidden || !block.is_empty(agent_view_state))
+            && (self.include_hidden || !block.is_empty(transcript_scope))
     }
 
     /// Block filter for visible command blocks. This excludes background output
@@ -589,16 +610,16 @@ impl BlockList {
     ///
     /// 1. Create the block list.
     /// 2. Add any restored blocks via `restore_block`. Note that this works
-    /// in a different way from the `finalize_block_and_advance_list` function. `restore_block` will take
+    /// in a different way from the `complete_active_block_and_advance` function. `restore_block` will take
     /// the block as the input and consider that one whole block to create,
-    /// feed input into, and finish whereas `finalize_block_and_advance_list` will create the _subsequent_
+    /// feed input into, and finish whereas `complete_active_block_and_advance` will create the _subsequent_
     /// block.
     /// 3. Create the `BootstrapStage::WarpInput` block through
     /// `create_warp_input_block`. From here on, there is always a default
     /// block which is hidden while it is empty.
-    /// 4. We progress through the bootstrap stages with the `finalize_block_and_advance_list` function.
+    /// 4. We progress through the bootstrap stages with the `complete_active_block_and_advance` function.
     /// 5. After we hit `BootstrapStage::PostBootstrapPrecmd`, it's normal
-    /// execution. `finalize_block_and_advance_list` is still the main function to advance the block list.
+    /// execution. `complete_active_block_and_advance` is still the main function to advance the block list.
     /// 6. If `reinit_shell` is called, we are bootstrapping another shell
     /// session. We would revert back to step 3. The invariant of the default
     /// block always being there is unchanged.
@@ -629,6 +650,7 @@ impl BlockList {
             max_grid_size_limit: sizes.max_block_scroll_limit,
             event_proxy: event_proxy.clone(),
             selection: None,
+            rich_content_selections: Vec::new(),
             smart_select_override: None,
             bootstrap_stage,
             padding: sizes.block_padding,
@@ -641,6 +663,7 @@ impl BlockList {
             is_restored_session: false,
             restored_session_ts: None,
             latest_block_finished_time: None,
+            skip_next_after_block_completed_event: false,
             early_output: EarlyOutput::new(event_proxy),
             in_flight_in_band_command_count: 0,
             last_populated_precmd_payload: None,
@@ -649,7 +672,8 @@ impl BlockList {
             is_ai_ugc_telemetry_enabled,
             scroll_position_before_filter: None,
             is_inverted,
-            agent_view_state: AgentViewState::Inactive,
+            transcript_scope: TranscriptScope::Terminal,
+            active_conversation_context: None,
             pinned_to_bottom: None,
             is_executing_oz_environment_startup_commands: false,
         }
@@ -848,6 +872,25 @@ impl BlockList {
     pub fn active_block_id(&self) -> &BlockId {
         self.active_block().id()
     }
+    pub(super) fn classify_next_block_id(&self, next_block_id: &BlockId) -> NextBlockIdDisposition {
+        if self.active_block_id() == next_block_id {
+            NextBlockIdDisposition::ActiveDuplicate
+        } else if self.block_index_for_id(next_block_id).is_some() {
+            NextBlockIdDisposition::ExistingCollision
+        } else {
+            NextBlockIdDisposition::Novel
+        }
+    }
+
+    /// Returns the exit code of the completed command immediately preceding the active block.
+    pub(super) fn previous_command_exit_code(&self) -> Option<ExitCode> {
+        [2usize, 3usize]
+            .into_iter()
+            .flat_map(|offset| self.blocks.len().checked_sub(offset))
+            .map(|idx| &self.blocks[idx])
+            .find(|block| !block.is_background() && block.finished())
+            .map(Block::exit_code)
+    }
 
     fn next_gap_height(&self) -> Option<Lines> {
         self.next_gap_height_in_lines
@@ -881,7 +924,7 @@ impl BlockList {
         let gap_height = if let Some(height) = self.next_gap_height() {
             height
         } else {
-            log::error!("Expected gap height to be set before clear");
+            report_error!("Expected gap height to be set before clear");
             // Since the gap was removed from the block_heights tree, clear active_gap.
             // We do not expect to be in this state, but if we are, we shouldn't
             // leave the model inconsistent.
@@ -890,8 +933,8 @@ impl BlockList {
         };
 
         let gap = BlockHeightItem::Gap(gap_height.into());
-        let agent_view_state = self.agent_view_state.clone();
-        let active_block_height = self.active_block_mut().height(&agent_view_state).into();
+        let transcript_scope = self.transcript_scope;
+        let active_block_height = self.active_block_mut().height(&transcript_scope).into();
 
         if active_block_height > BlockHeight::zero() {
             self.block_heights
@@ -1131,7 +1174,7 @@ impl BlockList {
             return;
         };
 
-        let agent_view_state = &self.agent_view_state;
+        let transcript_scope = &self.transcript_scope;
         self.block_heights = {
             let mut cursor = self.block_heights.cursor::<TotalIndex, ()>();
             let mut new_tree = cursor.slice(&index, SeekBias::Right);
@@ -1141,7 +1184,7 @@ impl BlockList {
                     agent_view_conversation_id,
                     ..*item
                 }
-                .should_hide_for_agent_view_state(agent_view_state);
+                .should_hide_for_transcript_scope(transcript_scope);
                 new_tree.push(BlockHeightItem::RichContent(RichContentItem {
                     agent_view_conversation_id,
                     should_hide,
@@ -1164,7 +1207,7 @@ impl BlockList {
     }
 
     /// Takes and clears the set of dirty rich content view IDs.
-    pub(in crate::terminal) fn take_dirty_rich_content_items(&mut self) -> HashSet<EntityId> {
+    pub fn take_dirty_rich_content_items(&mut self) -> HashSet<EntityId> {
         std::mem::take(&mut self.dirty_rich_content_items)
     }
 
@@ -1486,13 +1529,18 @@ impl BlockList {
             }
 
             // Only clear blocks that are currently visible in the agent view.
-            if block.is_empty(&self.agent_view_state) {
+            if block.is_empty(&self.transcript_scope) {
                 continue;
             }
 
             indices_to_remove.push(index);
         }
 
+        self.remove_command_blocks_at_indices(indices_to_remove);
+    }
+
+    /// Removes command blocks at stable pre-removal indices.
+    fn remove_command_blocks_at_indices(&mut self, indices_to_remove: Vec<BlockIndex>) {
         if indices_to_remove.is_empty() {
             return;
         }
@@ -1530,22 +1578,7 @@ impl BlockList {
                 indices_to_remove.push(index);
             }
         }
-
-        if indices_to_remove.is_empty() {
-            return;
-        }
-
-        self.clear_selection();
-        self.clear_smart_select_override();
-        self.clear_scroll_position_before_filter();
-
-        // Remove in reverse order so indices remain valid.
-        for index in indices_to_remove.into_iter().rev() {
-            self.remove_block_at_index(index);
-        }
-
-        // Force a re-draw since the blocklist has changed.
-        self.event_proxy.send_wakeup_event();
+        self.remove_command_blocks_at_indices(indices_to_remove);
     }
 
     /// Gets the active background block, if one exists.
@@ -1608,46 +1641,86 @@ impl BlockList {
         }
     }
 
-    pub fn agent_view_state(&self) -> &AgentViewState {
-        &self.agent_view_state
+    pub fn transcript_scope(&self) -> &TranscriptScope {
+        &self.transcript_scope
     }
 
-    /// Sets the agent view state for this blocklist.
-    ///
-    /// With `FeatureFlag::AgentView` enabled, if the state is active, only blocks corresponding to
-    /// the active state's conversation ID are rendered. If inactive, only blocks with no conversation
-    /// ID (i.e. those executed in the top-level terminal context) are rendered.
-    ///
-    /// Do not call this method directly. Instead, use the `AgentViewController` to enter/exit the
-    /// agent view.
-    pub fn set_agent_view_state(&mut self, state: AgentViewState) {
-        self.agent_view_state = state;
+    /// Returns the conversation associated with newly created command blocks.
+    pub fn active_conversation_id(&self) -> Option<AIConversationId> {
+        self.active_conversation_context
+            .map(|context| context.conversation_id)
+    }
+
+    /// Returns whether the active conversation executes in a cloud context.
+    pub fn is_cloud_conversation_context(&self) -> bool {
+        self.active_conversation_context
+            .is_some_and(|context| context.is_cloud)
+    }
+
+    /// Updates the transcript membership used by the cached block-height layout.
+    pub fn set_transcript_scope(&mut self, scope: TranscriptScope) {
+        if self.transcript_scope == scope {
+            return;
+        }
+        self.transcript_scope = scope;
+        self.mark_agent_view_rich_content_dirty();
+        self.update_blocks_and_sumtree(None, None, |_| {}, |_| {});
+    }
+
+    /// Associates subsequent command blocks with an active conversation.
+    pub fn set_active_conversation_context(
+        &mut self,
+        conversation_id: AIConversationId,
+        is_cloud: bool,
+        attach_to_terminal: bool,
+    ) {
+        self.active_conversation_context = Some(ActiveConversationContext {
+            conversation_id,
+            is_cloud,
+        });
         if !self.active_block().finished() {
-            if let Some(id) = self.agent_view_state.active_conversation_id() {
-                // For inline agent views, add the conversation ID to Terminal variant
-                // instead of replacing with Agent variant
-                if self.agent_view_state.is_inline() {
-                    self.active_block_mut().add_attached_conversation_id(id);
-                } else {
-                    self.active_block_mut().set_conversation_id(id);
-                }
+            if attach_to_terminal {
+                self.active_block_mut()
+                    .add_attached_conversation_id(conversation_id);
             } else {
-                // Only clear conversation ID for blocks that were created inside agent view.
-                // Terminal blocks with conversation associations should keep them.
-                if matches!(
-                    self.active_block().agent_view_visibility(),
-                    &AgentViewVisibility::Agent { .. }
-                ) {
-                    self.active_block_mut().clear_conversation_id();
-                }
+                self.active_block_mut().set_conversation_id(conversation_id);
             }
         }
+    }
 
-        // AI blocks render with height 0 when hidden for the current agent view state, so mark
-        // them dirty to force a re-measure.
-        self.mark_agent_view_rich_content_dirty();
+    /// Clears the active conversation association without changing transcript scope.
+    pub fn clear_active_conversation_context(&mut self) {
+        self.active_conversation_context = None;
+        if !self.active_block().finished()
+            && matches!(
+                self.active_block().agent_view_visibility(),
+                AgentViewVisibility::Agent { .. }
+            )
+        {
+            self.active_block_mut().clear_conversation_id();
+        }
+    }
 
-        self.update_blocks_and_sumtree(None, None, |_| {}, |_| {});
+    /// Associates command blocks with a GUI conversation and updates its transcript scope.
+    pub fn enter_conversation_context(
+        &mut self,
+        conversation_id: AIConversationId,
+        is_inline: bool,
+        is_cloud: bool,
+    ) {
+        self.set_active_conversation_context(conversation_id, is_cloud, is_inline);
+        let scope = if is_inline {
+            TranscriptScope::Terminal
+        } else {
+            TranscriptScope::Conversation(conversation_id)
+        };
+        self.set_transcript_scope(scope);
+    }
+
+    /// Clears the active conversation association and returns to terminal scope.
+    pub fn exit_conversation_context(&mut self) {
+        self.clear_active_conversation_context();
+        self.set_transcript_scope(TranscriptScope::Terminal);
     }
 
     /// Marks AI / agent-view rich content as dirty so heights get re-laid out. Call this after
@@ -1802,10 +1875,11 @@ impl BlockList {
         };
         let mut previous_block_height = BlockHeight::zero();
         let block_height = if let Some(block) = self.block_at(block_index) {
-            block.height(&self.agent_view_state).into()
+            block.height(&self.transcript_scope).into()
         } else {
-            log::error!(
-                "Tried to update height of block at {block_index:?}, but no such block exists"
+            report_error!(
+                "Tried to update height of block, but no such block exists",
+                extra: { "block_index" => ?block_index }
             );
             return;
         };
@@ -1863,7 +1937,7 @@ impl BlockList {
 
                 Some(tree_before_gap)
             } else {
-                log::error!("a gap is not contained at the active gap index");
+                report_error!("a gap is not contained at the active gap index");
                 None
             }
         });
@@ -1979,7 +2053,7 @@ impl BlockList {
     {
         block_indices.into_iter().find(|index| {
             self.block_at(*index)
-                .is_some_and(|block| filter.matches(block, &self.agent_view_state))
+                .is_some_and(|block| filter.matches(block, &self.transcript_scope))
         })
     }
 
@@ -2136,14 +2210,14 @@ impl BlockList {
     fn update_blocks_and_sumtree<F, G>(
         &mut self,
         subshell_separator_height: Option<f32>,
-        rich_content_heights: Option<&HashMap<EntityId, f64>>,
+        rich_content_heights: Option<&HashMap<EntityId, BlockHeight>>,
         block_update_fn: F,
         gap_update_fn: G,
     ) where
         F: Fn(&mut Block),
         G: Fn(&mut Gap),
     {
-        let agent_view_state = &self.agent_view_state;
+        let transcript_scope = &self.transcript_scope;
         self.block_heights = {
             let mut new_sum_tree = SumTree::new();
 
@@ -2161,10 +2235,10 @@ impl BlockList {
                         if let Some(block) = self.blocks.get_mut(block_index) {
                             block_update_fn(block);
                             new_sum_tree.push(BlockHeightItem::Block(
-                                block.height(agent_view_state).into(),
+                                block.height(transcript_scope).into(),
                             ));
                         } else {
-                            log::error!("invalid block index in block heights");
+                            report_error!("invalid block index in block heights");
                         }
                     }
                     BlockHeightItem::Gap(_) => {
@@ -2188,7 +2262,7 @@ impl BlockList {
                         new_sum_tree.push(BlockHeightItem::SubshellSeparator {
                             separator_id: *separator_id,
                             height_when_visible,
-                            is_hidden: agent_view_state.is_fullscreen(),
+                            is_hidden: transcript_scope.is_conversation(),
                         });
                     }
                     BlockHeightItem::RichContent(RichContentItem {
@@ -2205,17 +2279,11 @@ impl BlockList {
                             agent_view_conversation_id: *agent_view_conversation_id,
                             should_hide: false,
                         }
-                        .should_hide_for_agent_view_state(agent_view_state);
-                        let updated_height = if let Some(updated_height) =
-                            rich_content_heights.and_then(|heights| heights.get(view_id))
-                        {
-                            updated_height
-                                .into_pixels()
-                                .to_lines(self.size().cell_height_px())
-                                .into()
-                        } else {
-                            *last_laid_out_height
-                        };
+                        .should_hide_for_transcript_scope(transcript_scope);
+                        let updated_height = rich_content_heights
+                            .and_then(|heights| heights.get(view_id))
+                            .copied()
+                            .unwrap_or(*last_laid_out_height);
 
                         new_sum_tree.push(BlockHeightItem::RichContent(RichContentItem {
                             content_type: *content_type,
@@ -2235,7 +2303,7 @@ impl BlockList {
                             is_historical_conversation_restoration:
                                 *is_historical_conversation_restoration,
                             // Don't show restored block separators in the agent view.
-                            is_hidden: agent_view_state.is_fullscreen(),
+                            is_hidden: transcript_scope.is_conversation(),
                         });
                     }
                     BlockHeightItem::InlineBanner {
@@ -2243,7 +2311,7 @@ impl BlockList {
                         height_when_visible: height,
                         ..
                     } => {
-                        let is_hidden = agent_view_state.is_fullscreen()
+                        let is_hidden = transcript_scope.is_conversation()
                             && !banner.banner_type.is_visible_in_agent_view();
                         new_sum_tree.push(BlockHeightItem::InlineBanner {
                             banner: *banner,
@@ -2330,7 +2398,28 @@ impl BlockList {
         );
     }
 
+    /// Updates rich-content heights from GUI pixel measurements, converting to
+    /// the canonical line unit at the boundary.
     pub fn update_rich_content_heights(&mut self, updated_heights: &HashMap<EntityId, f64>) {
+        let cell_height_px = self.size().cell_height_px();
+        let updated_heights = updated_heights
+            .iter()
+            .map(|(view_id, height)| {
+                (
+                    *view_id,
+                    height.into_pixels().to_lines(cell_height_px).into(),
+                )
+            })
+            .collect::<HashMap<EntityId, BlockHeight>>();
+        self.update_rich_content_heights_in_lines(&updated_heights);
+    }
+
+    /// Updates rich-content heights already measured in the canonical line unit
+    /// (used by the TUI, whose layout is row-based).
+    pub fn update_rich_content_heights_in_lines(
+        &mut self,
+        updated_heights: &HashMap<EntityId, BlockHeight>,
+    ) {
         self.update_blocks_and_sumtree(None, Some(updated_heights), |_| {}, |_| {});
     }
 
@@ -2577,6 +2666,38 @@ impl BlockList {
             })
     }
 
+    /// Like [`Self::url_at_point`] but for OSC 8 hyperlinks. Returns the
+    /// contiguous span of cells around `point` that share a `HyperlinkId`,
+    /// along with the URI those cells link to. The URI is owned by the
+    /// block's `HyperlinkRegistry` — the caller gets a clone.
+    pub fn hyperlink_at_point(
+        &self,
+        point: &WithinBlock<Point>,
+    ) -> Option<(WithinBlock<Link>, String)> {
+        let block_grid = match point.grid {
+            GridType::Output => self.blocks.get(point.block_index.0)?.output_grid(),
+            GridType::PromptAndCommand => self
+                .blocks
+                .get(point.block_index.0)?
+                .prompt_and_command_grid(),
+            GridType::Prompt | GridType::Rprompt => return None,
+        };
+
+        let link = block_grid.grid_handler.hyperlink_at_point(point.inner)?;
+        let uri = block_grid
+            .grid_handler
+            .hyperlink_uri_at_point(point.inner)?
+            .to_owned();
+        Some((
+            WithinBlock {
+                inner: link,
+                block_index: point.block_index,
+                grid: point.grid,
+            },
+            uri,
+        ))
+    }
+
     pub fn is_bootstrapped(&self) -> bool {
         self.bootstrap_stage.is_bootstrapped()
     }
@@ -2594,18 +2715,18 @@ impl BlockList {
         &mut self,
         block_id: BlockId,
         bootstrap_stage: BootstrapStage,
-        precmd_value: Option<PrecmdValue>,
+        prompt_metadata: Option<PromptMetadata>,
         restored_block_was_local: bool,
     ) {
         self.create_new_block(
             block_id,
             bootstrap_stage,
-            precmd_value,
+            prompt_metadata,
             Some(restored_block_was_local),
         );
     }
 
-    /// If a precmd_value is provided, then we delegate the precmd
+    /// If prompt metadata is provided, then we delegate the precmd
     /// message to the block. In normal execution, we don't have
     /// this data here because it comes from a different hook dedicated
     /// to precmd itself. One place we provide the value is session
@@ -2615,7 +2736,7 @@ impl BlockList {
         &mut self,
         block_id: BlockId,
         bootstrap_stage: BootstrapStage,
-        precmd_value: Option<PrecmdValue>,
+        prompt_metadata: Option<PromptMetadata>,
         restored_block_was_local: Option<bool>,
     ) {
         let honor_ps1 = self.honor_ps1;
@@ -2632,7 +2753,7 @@ impl BlockList {
             honor_ps1,
             self.obfuscate_secrets,
             self.is_ai_ugc_telemetry_enabled,
-            self.agent_view_state.active_conversation_id(),
+            self.active_conversation_id(),
         );
         if let Some(is_local) = restored_block_was_local {
             block.set_restored_block_was_local(is_local);
@@ -2657,14 +2778,14 @@ impl BlockList {
         }
 
         self.block_heights.push(BlockHeightItem::Block(
-            block.height(&self.agent_view_state).into(),
+            block.height(&self.transcript_scope).into(),
         ));
         self.block_id_to_block_index
             .insert(block.id().clone(), block.index());
         self.blocks.push(block);
 
-        if let Some(precmd_value) = precmd_value {
-            delegate_to_block!(self.precmd(precmd_value));
+        if let Some(prompt_metadata) = prompt_metadata {
+            delegate_to_block!(self.prompt_only_precmd(prompt_metadata));
         }
     }
 
@@ -2740,6 +2861,8 @@ impl BlockList {
                 .flatten(),
             None,
         );
+
+        self.active_block_mut().disable_reset_grid_checks();
     }
 
     /// Splice a background block into the blocklist. This is called once the
@@ -2799,25 +2922,39 @@ impl BlockList {
     ///
     /// This should usually not be called directly. Call start_command_execution in [`super::TerminalModel`] instead so relevant terminal events are emitted.
     pub(super) fn start_active_block(&mut self) {
-        // Cache the prompt in preexec. By the time preexec is called, the shell should have
-        // emitted the prompt (either via precmd or in between precmd and preexec).
-        let active_block = self.active_block();
-        let previous_prompt_grid = active_block.prompt_grid().clone();
-        let previous_rprompt_grid = active_block.rprompt_grid().clone();
-        self.cached_prompt_data = Some(CachedPromptData {
-            prompt_grid: previous_prompt_grid,
-            rprompt_grid: previous_rprompt_grid,
-            block_creation_time: *active_block.creation_ts(),
-        });
+        self.cache_active_prompt_data();
 
         self.active_block_mut().start();
         self.early_output.reset_user_input();
     }
+    /// Prepares an active block whose command start was not observed.
+    pub(super) fn ensure_active_block_started(&mut self) {
+        self.active_block_mut().ensure_started_for_preexec();
+    }
+
+    /// Moves an unfinished active block through a minimal preexec-equivalent transition so its
+    /// completion records that execution occurred.
+    pub(super) fn ensure_active_block_executing_for_completion(&mut self) {
+        if self.active_block().finished() || self.active_block().state() == BlockState::Executing {
+            return;
+        }
+        if self.is_bootstrapping_precmd_done() {
+            EarlyOutput::preexec(self);
+        }
+        self.ensure_active_block_started();
+        self.active_block_mut().ensure_executing_for_completion();
+    }
 
     /// Increments `self.in_flight_in_band_command_count` and starts the active block as usual.
     pub fn start_active_block_for_in_band_command(&mut self) {
-        // Cache the prompt in preexec. By the time preexec is called, the shell should have
-        // emitted the prompt (either via precmd or in between precmd and preexec).
+        self.cache_active_prompt_data();
+
+        self.in_flight_in_band_command_count += 1;
+        self.active_block_mut().start_for_in_band_command();
+    }
+    fn cache_active_prompt_data(&mut self) {
+        // Cache the prompt before command execution. By the time preexec is called, the shell
+        // should have emitted the prompt either via precmd or between precmd and preexec.
         let active_block = self.active_block();
         let previous_prompt_grid = active_block.prompt_grid().clone();
         let previous_rprompt_grid = active_block.rprompt_grid().clone();
@@ -2826,9 +2963,6 @@ impl BlockList {
             rprompt_grid: previous_rprompt_grid,
             block_creation_time: *active_block.creation_ts(),
         });
-
-        self.in_flight_in_band_command_count += 1;
-        self.active_block_mut().start_for_in_band_command();
     }
 
     /// Sets the shell host for the active block.
@@ -2903,7 +3037,7 @@ impl BlockList {
         bootstrap_stage: BootstrapStage,
         processor: &mut Processor,
     ) {
-        let precmd_value = PrecmdValue {
+        let prompt_metadata = PromptMetadata {
             pwd: block.pwd.clone(),
             git_head: block.git_head.clone(),
             git_branch: block.git_branch_name.clone(),
@@ -2922,7 +3056,7 @@ impl BlockList {
         self.create_new_block(
             block.id.clone(),
             bootstrap_stage,
-            Some(precmd_value),
+            Some(prompt_metadata),
             block.is_local,
         );
         if let Some(shell_host) = &block.shell_host {
@@ -2975,7 +3109,10 @@ impl BlockList {
 
         if block.did_execute {
             let command = self.active_block_mut().command_to_string();
-            self.preexec(PreexecValue { command });
+            self.preexec(PreexecValue {
+                command,
+                session_id: None,
+            });
         }
 
         if block.did_execute || block.is_background {
@@ -3015,14 +3152,26 @@ impl BlockList {
         }
     }
 
-    /// This is the main function that marks the end of a block, and the beginning of a new block.
+    /// Marks the end of the active block and creates the next block.
     /// 1. Increment stage if we should.
     /// 2. Finish the active block.
     /// 3. Update block heights.
     /// 4. Adjust selection based on changed heights.
     /// 5. Create a new block.
-    fn finalize_block_and_advance_list(&mut self, data: CommandFinishedValue) {
-        record_trace_event!("command_execution:blocks:finalize_block_and_advance_list");
+    pub(super) fn complete_active_block_and_advance(
+        &mut self,
+        data: CompletionMetadata,
+    ) -> ActiveBlockCompletion {
+        record_trace_event!("command_execution:blocks:complete_active_block_and_advance");
+        let next_block_id_disposition = self.classify_next_block_id(&data.next_block_id);
+        log::trace!(
+            "Completing active block with next ID disposition {next_block_id_disposition:?}"
+        );
+        let active_block_was_finished = self.active_block().finished();
+        if self.active_block().is_for_in_band_command {
+            self.in_flight_in_band_command_count =
+                self.in_flight_in_band_command_count.saturating_sub(1);
+        }
         let next_bootstrap_stage = if !self.bootstrap_stage.is_done() {
             self.bootstrap_stage.next_stage()
         } else {
@@ -3033,14 +3182,21 @@ impl BlockList {
             self.finish_background_block();
         }
 
-        self.active_block_mut().finish(data.exit_code);
+        if active_block_was_finished {
+            self.skip_next_after_block_completed_event = true;
+            self.latest_block_finished_time = None;
+        } else {
+            self.skip_next_after_block_completed_event = false;
+            self.active_block_mut().finish(data.exit_code);
+            self.latest_block_finished_time = Some(instant::SystemTime::now());
+        }
         self.update_active_block_height();
 
         self.update_selection_after_height_change();
         self.create_new_block(
             data.next_block_id,
             next_bootstrap_stage,
-            None, /*precmd_value*/
+            None, /* prompt_metadata */
             None, /* restored_block_was_local */
         );
         if next_bootstrap_stage == BootstrapStage::ScriptExecution {
@@ -3055,6 +3211,75 @@ impl BlockList {
             );
             self.bootstrap_stage = next_bootstrap_stage;
         }
+        if active_block_was_finished {
+            ActiveBlockCompletion::AlreadyFinished
+        } else {
+            ActiveBlockCompletion::NewlyFinished
+        }
+    }
+
+    /// Applies normal prompt metadata to the active block and finalizes the previous block's
+    /// deferred completion work.
+    pub(super) fn apply_precmd_to_active(&mut self, data: PromptMetadata) {
+        let latest_block_finished_time = self.latest_block_finished_time.take();
+        // We don't need to log this delay during the bootstrapping process, since these
+        // are not blocks that the user has created. The delay here also can be very high
+        // and skews the metrics.
+        let block_finished_to_precmd_delay = if self.bootstrap_stage.is_done() {
+            latest_block_finished_time.and_then(|instant| instant.elapsed().ok())
+        } else {
+            None
+        };
+
+        // Since typeahead is only generated by user input, we don't start collecting
+        // it (or separating it from background output) until the session is fully bootstrapped.
+        if self.is_bootstrapping_precmd_done() {
+            self.early_output.precmd();
+        }
+
+        // If this is the Precmd following an in-band command, the payload is not populated. If the payload
+        // is not populated, use the last populated Precmd payload to initialize the new active block.
+        //
+        // In-band commands are guaranteed not to modify the context for which information is sent
+        // in the Precmd payload, so it's not necessary to recompute the precmd payload after an
+        // in-band command runs. Thus we send an unpopulated precmd payload for in-band commands to
+        // make their execution as fast as possible.
+        if data.was_sent_after_in_band_command() {
+            let mut prompt_metadata = self.last_populated_precmd_payload.clone().unwrap_or(data);
+            prompt_metadata.is_after_in_band_command = true;
+            self.active_block_mut().apply_precmd(prompt_metadata);
+        } else {
+            self.active_block_mut().apply_precmd(data.clone());
+            self.last_populated_precmd_payload = Some(data);
+        }
+
+        // Depending on whether or not there's a background block active, the previous
+        // completed block is at blocks.len - 2 or blocks.len - 3.
+        let previous_block = [2usize, 3usize]
+            .into_iter()
+            .flat_map(|offset| self.blocks.len().checked_sub(offset))
+            .map(|idx| &self.blocks[idx])
+            .find(|block| !block.is_background());
+        if self.skip_next_after_block_completed_event {
+            self.skip_next_after_block_completed_event = false;
+        } else if let Some(previous_block) = previous_block {
+            self.send_after_block_completed_event(previous_block, block_finished_to_precmd_delay);
+        } else {
+            self.event_proxy
+                .send_terminal_event(TerminalEvent::BootstrapPrecmdDone);
+        }
+    }
+
+    pub(super) fn apply_preexec_to_active(&mut self, data: PreexecValue) {
+        // We don't start handling early output until the session is fully bootstrapped,
+        // because the distinction between typeahead and background output only
+        // matters for user input.
+        if self.is_bootstrapping_precmd_done() {
+            EarlyOutput::preexec(self);
+        }
+        self.ensure_active_block_started();
+
+        self.active_block_mut().apply_preexec(data);
     }
 
     /// Sends the `AfterBlockCompleted` event to the view.
@@ -3083,14 +3308,14 @@ impl BlockList {
         let num_secrets_obfuscated = self
             .background_block_mut()
             .map(|block| block.num_secrets_obfuscated());
-        let agent_view_state = self.agent_view_state.clone();
+        let transcript_scope = self.transcript_scope;
         if let Some(background_block) = self.background_block_mut() {
             background_block.finish(0);
             let block_index = background_block.index();
 
             // It's common to have empty background blocks (because they only contained
             // typeahead), so we skip serializing them.
-            if !background_block.is_empty(&agent_view_state) {
+            if !background_block.is_empty(&transcript_scope) {
                 // This is similar to send_after_block_completed_event, but we can't
                 // call it because background_block mutably borrows self.
                 let block_type = background_block.into();
@@ -3143,7 +3368,7 @@ impl BlockList {
     /// Updates the sumtree with the block's new height.
     fn update_block_height_at_idx(&mut self, block_index: BlockIndex) {
         if let Some(block) = self.block_at(block_index) {
-            let new_block_height = block.height(&self.agent_view_state).into();
+            let new_block_height = block.height(&self.transcript_scope).into();
 
             self.block_heights = {
                 let mut cursor = self.block_heights.cursor::<BlockIndex, ()>();
@@ -3179,7 +3404,7 @@ impl BlockList {
         let block_to_filter = self
             .blocks
             .get_mut(block_index.0)
-            .filter(|block| !block.is_empty(&self.agent_view_state));
+            .filter(|block| !block.is_empty(&self.transcript_scope));
         if let Some(block) = block_to_filter {
             block.filter_output(filter_query);
             self.update_block_height_at_idx(block_index);
@@ -3198,7 +3423,7 @@ impl BlockList {
         let block_to_clear = self
             .blocks
             .get_mut(block_index.0)
-            .filter(|block| !block.is_empty(&self.agent_view_state));
+            .filter(|block| !block.is_empty(&self.transcript_scope));
         if let Some(block) = block_to_clear {
             block.clear_filter();
             self.update_block_height_at_idx(block_index);
@@ -3227,14 +3452,14 @@ impl BlockList {
     pub fn filter_for_block(&self, block_index: BlockIndex) -> Option<&BlockFilterQuery> {
         self.blocks
             .get(block_index.0)
-            .filter(|block| !block.is_empty(&self.agent_view_state))
+            .filter(|block| !block.is_empty(&self.transcript_scope))
             .and_then(|block| block.current_filter())
     }
 
     pub fn num_matched_lines_in_filter_for_block(&self, block_index: BlockIndex) -> Option<usize> {
         self.blocks
             .get(block_index.0)
-            .filter(|block| !block.is_empty(&self.agent_view_state))
+            .filter(|block| !block.is_empty(&self.transcript_scope))
             .and_then(|block| {
                 block
                     .output_grid()
@@ -3250,7 +3475,7 @@ impl BlockList {
         }
     }
 
-    pub(in crate::terminal) fn insert_rich_content_before_block_index(
+    pub fn insert_rich_content_before_block_index(
         &mut self,
         item: RichContentItem,
         block_index: BlockIndex,
@@ -3372,6 +3597,23 @@ impl BlockList {
         self.removable_blocklist_item_positions.get(item)
     }
 
+    /// Returns the current absolute row range for one rich-content view.
+    pub fn rich_content_row_range(&self, view_id: EntityId) -> Option<Range<usize>> {
+        let index = self
+            .removable_blocklist_item_positions
+            .get(&RemovableBlocklistItem::RichContent(view_id))?;
+        let mut cursor = self
+            .block_heights
+            .cursor::<TotalIndex, BlockHeightSummary>();
+        cursor.seek(index, SeekBias::Right);
+        let BlockHeightItem::RichContent(item) = cursor.item()? else {
+            return None;
+        };
+        let start = cursor.start().height.as_f64().floor().max(0.0) as usize;
+        let height = item.last_laid_out_height.as_f64().ceil().max(0.0) as usize;
+        Some(start..start.saturating_add(height))
+    }
+
     pub fn get_previous_block_height_item(
         &self,
         item: RemovableBlocklistItem,
@@ -3386,7 +3628,7 @@ impl BlockList {
 
 impl ansi::Handler for BlockList {
     fn set_title(&mut self, _: Option<String>) {
-        log::error!("Handler method BlockList::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method BlockList::set_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn set_cursor_style(&mut self, style: Option<CursorStyle>) {
@@ -3399,6 +3641,10 @@ impl ansi::Handler for BlockList {
 
     fn input(&mut self, c: char) {
         delegate!(self.input(c));
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        delegate!(self.set_hyperlink(hyperlink));
     }
 
     fn goto(&mut self, row: VisibleRow, col: usize) {
@@ -3566,7 +3812,7 @@ impl ansi::Handler for BlockList {
 
                 if let Some(block) = self.blocks.last() {
                     self.block_heights = SumTree::from_item(BlockHeightItem::Block(
-                        block.height(&self.agent_view_state).into(),
+                        block.height(&self.transcript_scope).into(),
                     ));
                 } else {
                     self.block_heights = SumTree::new();
@@ -3664,11 +3910,11 @@ impl ansi::Handler for BlockList {
     }
 
     fn push_title(&mut self) {
-        log::error!("Handler method BlockList::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method BlockList::push_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn pop_title(&mut self) {
-        log::error!("Handler method BlockList::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method BlockList::pop_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn text_area_size_pixels<W: io::Write>(&mut self, writer: &mut W) {
@@ -3714,12 +3960,7 @@ impl ansi::Handler for BlockList {
     /// possible. Anything that could be costly should be handled in
     /// precmd / `AfterBlockCompleted` instead.
     fn command_finished(&mut self, data: CommandFinishedValue) {
-        if self.active_block().is_for_in_band_command {
-            self.in_flight_in_band_command_count =
-                self.in_flight_in_band_command_count.saturating_sub(1);
-        }
-        self.finalize_block_and_advance_list(data);
-        self.latest_block_finished_time = Some(instant::SystemTime::now());
+        self.complete_active_block_and_advance(data.completion_metadata);
     }
 
     fn set_current_working_directory(&mut self, path: String) {
@@ -3730,63 +3971,16 @@ impl ansi::Handler for BlockList {
     /// responsible for sending the `AfterBlockCompleted` event to
     /// the view. This is where we want to perform any costly
     /// operations relevant to the _previous_ block.
-    fn precmd(&mut self, data: PrecmdValue) {
-        let latest_block_finished_time = self.latest_block_finished_time.take();
-        // We don't need to log this delay during the bootstrapping process, since these
-        // are not blocks that the user has created. The delay here also can be very high
-        // and skews the metrics.
-        let block_finished_to_precmd_delay = if self.bootstrap_stage.is_done() {
-            latest_block_finished_time.and_then(|instant| instant.elapsed().ok())
-        } else {
-            None
-        };
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
+        self.apply_precmd_to_active(data.prompt_metadata);
+    }
 
-        // Since typeahead is only generated by user input, we don't start collecting
-        // it (or separating it from background output) until the session is fully bootstrapped.
-        if self.is_bootstrapping_precmd_done() {
-            self.early_output.precmd();
-        }
-
-        // If this is the Precmd following an in-band command, the payload is not populated. If the payload
-        // is not populated, use the last populated Precmd payload to initialize the new active block.
-        //
-        // In-band commands are guaranteed not to modify the context for which information is sent
-        // in the Precmd payload, so it's not necessary to recompute the precmd payload after an
-        // in-band command runs. Thus we send an unpopulated precmd payload for in-band commands to
-        // make their execution as fast as possible.
-        if data.was_sent_after_in_band_command() {
-            let mut precmd_value = self.last_populated_precmd_payload.clone().unwrap_or(data);
-            precmd_value.is_after_in_band_command = true;
-            delegate_to_block!(self.precmd(precmd_value));
-        } else {
-            delegate_to_block!(self.precmd(data.clone()));
-            self.last_populated_precmd_payload = Some(data);
-        }
-
-        // Depending on whether or not there's a background block active, the previous
-        // completed block is at blocks.len - 2 or blocks.len - 3.
-        let previous_block = [2usize, 3usize]
-            .into_iter()
-            .flat_map(|offset| self.blocks.len().checked_sub(offset))
-            .map(|idx| &self.blocks[idx])
-            .find(|block| !block.is_background());
-        if let Some(previous_block) = previous_block {
-            self.send_after_block_completed_event(previous_block, block_finished_to_precmd_delay);
-        } else {
-            self.event_proxy
-                .send_terminal_event(TerminalEvent::BootstrapPrecmdDone);
-        }
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
+        self.apply_precmd_to_active(data);
     }
 
     fn preexec(&mut self, data: PreexecValue) {
-        // We don't start handling early output until the session is fully bootstrapped,
-        // because the distinction between typeahead and background output only
-        // matters for user input.
-        if self.is_bootstrapping_precmd_done() {
-            EarlyOutput::preexec(self);
-        }
-
-        delegate_to_block!(self.preexec(data));
+        self.apply_preexec_to_active(data);
     }
 
     fn bootstrapped(&mut self, _data: BootstrappedValue) {
@@ -3814,7 +4008,7 @@ impl ansi::Handler for BlockList {
     }
 
     fn handle_completed_iterm_image(&mut self, image: ITermImage) {
-        delegate_to_block!(self.handle_completed_iterm_image(image))
+        delegate!(self.handle_completed_iterm_image(image))
     }
 
     fn handle_completed_kitty_action(
@@ -3822,7 +4016,7 @@ impl ansi::Handler for BlockList {
         action: KittyAction,
         metadata: &mut HashMap<u32, StoredImageMetadata>,
     ) -> Option<KittyResponse> {
-        delegate_to_block!(self.handle_completed_kitty_action(action, metadata))
+        delegate!(self.handle_completed_kitty_action(action, metadata))
     }
 
     fn set_keyboard_enhancement_flags(
@@ -3944,5 +4138,7 @@ impl ToTotalIndex for BlockIndex {
 #[cfg(test)]
 #[path = "blocks_tests.rs"]
 mod tests;
+use warp_errors::report_error;
+
 #[cfg(test)]
 pub use self::tests::insert_block;

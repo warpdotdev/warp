@@ -30,7 +30,8 @@ use urlocator::{UrlLocation, UrlLocator};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::{SemanticSelection, SMART_SELECT_MATCH_WINDOW_LIMIT};
 use warp_core::{safe_assert, safe_assert_eq};
-use warp_terminal::model::grid::{CellType, FlatStorage};
+use warp_errors::report_error;
+use warp_terminal::model::grid::{CellType, FlatStorage, HyperlinkId, HyperlinkRegistry};
 pub use warp_terminal::model::TermMode;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warp_util::path::CleanPathResult;
@@ -57,8 +58,32 @@ use crate::util::extensions::TrimStringExt;
 /// Used to match equal brackets, when performing a bracket-pair selection.
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
 
-/// Number of characters to scan on a different line for a link.
-const LINK_NUM_CHARACTER_SCAN: usize = 50;
+/// Maximum number of characters the file-link scan walks across soft-wrapped
+/// rows when following a path that spans multiple visual lines. A soft-wrapped
+/// path is one logical line split over several rows, so this must be large
+/// enough to span a whole path; it is sized to filesystem `PATH_MAX` (typically
+/// 4096). With too small a budget a long wrapped path is only detected up to the
+/// first wrap boundary (see issue #9193).
+///
+/// This budget alone does NOT bound the per-hover cost: the candidate search
+/// below is O(prefix_fragments * suffix_fragments), so a separator-dense region
+/// could still be quadratic in the scanned length. That cost is bounded
+/// independently by [`MAX_LINK_PATH_FRAGMENTS`].
+const LINK_NUM_CHARACTER_SCAN: usize = 4096;
+
+/// Upper bound on how many separator-delimited fragments are kept on each side
+/// of the hover point when assembling candidate file paths.
+///
+/// The candidate search is O(prefix_fragments * suffix_fragments), and every
+/// candidate is string-built here and then checked against the filesystem by the
+/// caller (`compute_valid_paths`). Without a cap, hovering over separator-dense
+/// wrapped text (e.g. a wide table or log line that happens to wrap) could
+/// generate O(scanned_chars^2) candidates and filesystem probes on every hover.
+/// A real path needs only a handful of fragments around the hover point, so we
+/// keep the fragments nearest the point and drop the rest, bounding the search
+/// to O(MAX_LINK_PATH_FRAGMENTS^2) regardless of the surrounding content while
+/// leaving realistic paths (including paths with a few spaces) unaffected.
+const MAX_LINK_PATH_FRAGMENTS: usize = 32;
 
 /// Max number of characters to scan for a URL.
 const URL_SCAN_CHARACTER_MAX_COUNT: usize = 1000;
@@ -91,6 +116,31 @@ lazy_static! {
     /// result in invalid URLs, but we don't halt detection if we find them.
     /// See https://datatracker.ietf.org/doc/html/rfc3986 for more details.
     static ref URL_SEPARATORS: HashSet<char> = HashSet::from([' ', '<', '>', '"', '{', '}', '|', '\\', '^', '`']);
+}
+
+/// Returns true when `c` should terminate a clickable URL.
+///
+/// URL detection allows non-ASCII letters so internationalized paths remain
+/// clickable, but non-ASCII whitespace and punctuation usually indicate prose
+/// around the URL (for example, CJK punctuation like `，` or `。`).
+pub fn is_url_link_separator(c: char) -> bool {
+    if URL_SEPARATORS.contains(&c) {
+        return true;
+    }
+    if c.is_ascii() {
+        return false;
+    }
+    if c.is_whitespace() {
+        return true;
+    }
+    matches!(
+        get_general_category(c),
+        GeneralCategory::OpenPunctuation
+            | GeneralCategory::ClosePunctuation
+            | GeneralCategory::InitialPunctuation
+            | GeneralCategory::FinalPunctuation
+            | GeneralCategory::OtherPunctuation
+    )
 }
 
 /// Returns true when `c` should terminate a clickable file path.
@@ -134,6 +184,28 @@ impl Fragment {
     fn has_separator(&self) -> bool {
         self.content.chars().any(is_file_link_separator)
     }
+}
+
+fn append_fragments_across_soft_wrap(
+    fragments: &mut Vec<Fragment>,
+    mut next_fragments: Vec<Fragment>,
+) {
+    match (fragments.last(), next_fragments.first()) {
+        (Some(last_fragment), Some(next_fragment))
+            if !last_fragment.has_separator() && !next_fragment.has_separator() =>
+        {
+            let mut fragment = fragments.pop().expect("Fragment should exist");
+
+            fragment.content.push_str(&next_fragment.content);
+            fragment.total_cell_width += next_fragment.total_cell_width;
+            fragments.push(fragment);
+
+            next_fragments.remove(0);
+        }
+        _ => (),
+    }
+
+    fragments.append(&mut next_fragments);
 }
 
 #[derive(Debug)]
@@ -350,6 +422,18 @@ pub struct GridHandler {
 
     ansi_handler_state: ansi_handler::State,
 
+    /// Per-grid OSC 8 hyperlink registry. Owns the URI strings; cells store
+    /// `HyperlinkId` handles into this registry. No reclamation: entries
+    /// are appended on intern and live until this `GridHandler` is dropped.
+    hyperlink_registry: HyperlinkRegistry,
+
+    /// Active OSC 8 hyperlink, set by `set_hyperlink` and consumed by
+    /// `write_at_cursor` when stamping new cells. `None` means subsequent
+    /// `input(c)` writes plain (non-clickable) cells. This `GridHandler` is
+    /// the single owner — `BlockGrid` and `Block` delegate `set_hyperlink`
+    /// here rather than carrying their own copies.
+    active_hyperlink_id: Option<HyperlinkId>,
+
     /// Info about the subset of rows we want to show to the user. If None, we
     /// show the entire blockgrid to the user.
     displayed_output: Option<DisplayedOutput>,
@@ -425,6 +509,8 @@ impl GridHandler {
             flat_storage: FlatStorage::new(size_info.columns(), Some(max_scroll_limit), None),
             finished: false,
             ansi_handler_state,
+            hyperlink_registry: Default::default(),
+            active_hyperlink_id: None,
             displayed_output: None,
             filter_state: None,
             secrets: Default::default(),
@@ -555,6 +641,12 @@ impl GridHandler {
             flat_storage: FlatStorage::new(self.columns(), self.flat_storage.max_rows(), None),
             finished: self.finished,
             ansi_handler_state,
+            // Cloning the source registry preserves any URIs already
+            // referenced by the cells we're about to copy over (the cells'
+            // `HyperlinkId`s remain valid handles into the cloned registry).
+            // Active state resets — splitting is not a continuation of input.
+            hyperlink_registry: self.hyperlink_registry.clone(),
+            active_hyperlink_id: None,
             displayed_output: None,
             filter_state: None,
             secrets: Default::default(),
@@ -665,7 +757,7 @@ impl GridHandler {
             !cell
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-                && URL_SEPARATORS.contains(&cell.c)
+                && is_url_link_separator(cell.c)
         };
         // If the point is on a separator, return directly because this can't be
         // part of a url.
@@ -734,6 +826,10 @@ impl GridHandler {
                 passed_point = true;
             }
 
+            if is_at_boundary(item.cell()) {
+                break;
+            }
+
             let last_state = mem::replace(&mut state, locator.advance(item.cell().c));
             let link_changed = match (state, last_state) {
                 (UrlLocation::Url(_length, _num_illegal_end_chars), UrlLocation::Scheme) => {
@@ -800,8 +896,9 @@ impl GridHandler {
                 let displayed_end =
                     self.maybe_translate_point_from_original_to_displayed(*url.range.end());
                 if displayed_start > displayed_end {
-                    log::error!(
-                        "URL translation to displayed points failed. Displayed range start {displayed_start:?} is greater than displayed range end {displayed_end:?}"
+                    report_error!(
+                        "URL translation to displayed points failed: range start is greater than range end",
+                        extra: { "start" => ?displayed_start, "end" => ?displayed_end }
                     );
                 } else {
                     url.range = displayed_start..=displayed_end;
@@ -809,6 +906,76 @@ impl GridHandler {
             }
             Some(url)
         }
+    }
+
+    /// Returns the contiguous OSC 8 hyperlink span at `displayed_point`, if
+    /// the cell there is part of one. The returned range is contiguous;
+    /// cross-run grouping by `id` is intentionally out of scope.
+    ///
+    /// Mirrors the shape of [`Self::url_at_point`] but skips
+    /// `urlocator`: the URI doesn't live in the visible cell text, so
+    /// detection reduces to "walk left/right while the next adjacent cell
+    /// carries the same `HyperlinkId`."
+    pub fn hyperlink_at_point(&self, displayed_point: Point) -> Option<Link> {
+        if !FeatureFlag::OscHyperlinks.is_enabled() {
+            return None;
+        }
+        let original_point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
+        let row_idx = original_point.row;
+
+        let grid_line = self.row(row_idx)?;
+        if original_point.col >= grid_line.line_length() {
+            return None;
+        }
+        let target_id = grid_line.get(original_point.col)?.hyperlink_id()?;
+
+        // Walk backward across cells while the same hyperlink_id is present.
+        let mut start_point = original_point;
+        let mut back_cursor =
+            self.grapheme_cursor_from(original_point, grapheme_cursor::Wrap::Soft);
+        back_cursor.move_backward();
+        while let Some(item) = back_cursor.current_item() {
+            if item.cell().hyperlink_id() != Some(target_id) {
+                break;
+            }
+            start_point = item.point();
+            back_cursor.move_backward();
+        }
+
+        // Walk forward across cells while the same hyperlink_id is present.
+        let mut end_point = original_point;
+        let mut fwd_cursor = self.grapheme_cursor_from(original_point, grapheme_cursor::Wrap::Soft);
+        fwd_cursor.move_forward();
+        while let Some(item) = fwd_cursor.current_item() {
+            if item.cell().hyperlink_id() != Some(target_id) {
+                break;
+            }
+            end_point = item.point();
+            fwd_cursor.move_forward();
+        }
+
+        let displayed_start = self.maybe_translate_point_from_original_to_displayed(start_point);
+        let displayed_end = self.maybe_translate_point_from_original_to_displayed(end_point);
+        Some(Link {
+            range: displayed_start..=displayed_end,
+            is_empty: false,
+        })
+    }
+
+    /// Returns the URI of the OSC 8 hyperlink covering `displayed_point`, if
+    /// any. Cheaper than `hyperlink_at_point` when the caller only needs the
+    /// destination (e.g. tooltip text or click-open).
+    pub fn hyperlink_uri_at_point(&self, displayed_point: Point) -> Option<&str> {
+        if !FeatureFlag::OscHyperlinks.is_enabled() {
+            return None;
+        }
+        let original_point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
+        let grid_line = self.row(original_point.row)?;
+        if original_point.col >= grid_line.line_length() {
+            return None;
+        }
+        let id = grid_line.get(original_point.col)?.hyperlink_id()?;
+        Some(self.hyperlink_registry.get(id)?.uri.as_str())
     }
 
     /// Converts a cell to a string, with ansi escape sequences
@@ -928,6 +1095,7 @@ impl GridHandler {
         let should_show_secrets = force_secrets_obfuscated
             || (respect_obfuscated_secrets == RespectObfuscatedSecrets::Yes
                 && self.get_secret_obfuscation().is_visually_obfuscated());
+
         for col in IndexRange::from(cols.start..row_length) {
             let cell = grid_row.get(col);
             let Some(cell) = cell else {
@@ -1148,115 +1316,79 @@ impl GridHandler {
     /// Return all possible file paths containing the grid point ordered from longest to shortest.
     pub fn possible_file_paths_at_point(&self, displayed_point: Point) -> Vec<PossiblePath> {
         let point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
-        let last_row_end_with_line_wrap = point.row > 0 && self.row_wraps(point.row - 1);
-        let current_row_end_with_line_wrap =
-            point.row + 1 < self.total_rows() && self.row_wraps(point.row);
 
         // All fragments in the row before the point (not including the point)
-        // + Part of the fragments in the previous row if previous line ends with a line wrap.
-        let mut prefix_chunks = match (point.col > 0, last_row_end_with_line_wrap) {
-            // If the hovered point is not at column 0 and the last row ends with a linewrap,
-            // we should take the fragments from the beginning of the line to current row
-            // and the last couple of cells in the previous row. Note that we need to
-            // concatenate the last fragment in the previous row with the first fragment
-            // in the current row since they technically is one conherent fragment.
-            (true, true) => {
-                let mut prev_line_fragments = self.line_to_fragments(
-                    point.row - 1,
-                    self.columns().saturating_sub(LINK_NUM_CHARACTER_SCAN + 1)..self.columns() - 1,
-                    IncludeFirstWideChar::Yes, /*should_scan_forward*/
-                );
+        // + fragments in earlier soft-wrapped rows.
+        let mut prefix_chunks = Vec::new();
+        let mut first_prefix_row = point.row;
+        let mut scanned_prefix_width = point.col;
+        while first_prefix_row > 0
+            && self.row_wraps(first_prefix_row - 1)
+            && scanned_prefix_width < LINK_NUM_CHARACTER_SCAN
+        {
+            first_prefix_row -= 1;
+            scanned_prefix_width += self.columns();
+        }
 
-                let mut current_line_fragments =
-                    self.line_to_fragments(point.row, 0..point.col - 1, IncludeFirstWideChar::Yes);
+        for row in first_prefix_row..=point.row {
+            let range = if row == point.row {
+                if point.col == 0 {
+                    continue;
+                }
 
-                match (prev_line_fragments.last(), current_line_fragments.first()) {
-                    // Note that if any one of the two fragments has separator, we shouldn't
-                    // concatenate them.
-                    (Some(prev_line_fragment), Some(current_line_fragment))
-                        if prev_line_fragment.has_separator()
-                            || current_line_fragment.has_separator() =>
-                    {
-                        let mut fragment =
-                            prev_line_fragments.pop().expect("Fragment should exist");
+                0..point.col - 1
+            } else if row == first_prefix_row {
+                let extra_width = scanned_prefix_width.saturating_sub(LINK_NUM_CHARACTER_SCAN);
+                extra_width.min(self.columns().saturating_sub(1))..self.columns() - 1
+            } else {
+                0..self.columns() - 1
+            };
 
-                        fragment.content.push_str(&current_line_fragment.content);
-                        prev_line_fragments.push(Fragment {
-                            content: fragment.content,
-                            total_cell_width: fragment.total_cell_width
-                                + current_line_fragment.total_cell_width,
-                        });
-
-                        current_line_fragments.remove(0);
-                    }
-                    _ => (),
-                };
-
-                prev_line_fragments.append(&mut current_line_fragments);
-                prev_line_fragments
-            }
-            // If the previous line does not end with a linewrap, only parse for fragments in the current line.
-            (true, false) => {
-                self.line_to_fragments(point.row, 0..point.col - 1, IncludeFirstWideChar::Yes)
-            }
-            // If the point is at the start of the line and the previous line does end with a linewrap,
-            // parse for fragments in the previous line.
-            (false, true) => self.line_to_fragments(
-                point.row - 1,
-                self.columns().saturating_sub(LINK_NUM_CHARACTER_SCAN + 1)..self.columns() - 1,
-                IncludeFirstWideChar::Yes, /*should_scan_forward*/
-            ),
-            (false, false) => Vec::new(),
-        };
+            let fragments = self.line_to_fragments(row, range, IncludeFirstWideChar::Yes);
+            append_fragments_across_soft_wrap(&mut prefix_chunks, fragments);
+        }
 
         // All fragments in the row after the point (including the point)
-        // + Part of the fragments in the next row if the line ends with a line wrap.
+        // + fragments in later soft-wrapped rows.
         // Note that we set should_scan_forward here to false to prevent overlapping
         // width char characters between prefix and suffix.
-        let suffix_chunks = match current_row_end_with_line_wrap {
-            // If current line ends a line wrap, we parse for fragments in both the current and next line.
-            true => {
-                let mut current_line_fragments = self.line_to_fragments(
-                    point.row,
-                    point.col..self.columns() - 1,
-                    IncludeFirstWideChar::No, /*should_scan_forward*/
-                );
+        let mut suffix_chunks = Vec::new();
+        let mut last_suffix_row = point.row;
+        let mut scanned_suffix_width = self.columns().saturating_sub(point.col);
+        while last_suffix_row + 1 < self.total_rows()
+            && self.row_wraps(last_suffix_row)
+            && scanned_suffix_width < LINK_NUM_CHARACTER_SCAN
+        {
+            last_suffix_row += 1;
+            scanned_suffix_width += self.columns();
+        }
 
-                let mut next_line_fragments = self.line_to_fragments(
-                    point.row + 1,
-                    0..(self.columns() - 1).min(LINK_NUM_CHARACTER_SCAN),
-                    IncludeFirstWideChar::No,
-                );
+        for row in point.row..=last_suffix_row {
+            let range = if row == point.row {
+                point.col..self.columns() - 1
+            } else if row == last_suffix_row {
+                let extra_width = scanned_suffix_width.saturating_sub(LINK_NUM_CHARACTER_SCAN);
+                0..(self.columns() - 1).saturating_sub(extra_width)
+            } else {
+                0..self.columns() - 1
+            };
 
-                match (current_line_fragments.last(), next_line_fragments.first()) {
-                    (Some(current_line_fragment), Some(next_line_fragment))
-                        if current_line_fragment.has_separator()
-                            || next_line_fragment.has_separator() =>
-                    {
-                        let mut fragment =
-                            current_line_fragments.pop().expect("Fragment should exist");
+            let fragments = self.line_to_fragments(row, range, IncludeFirstWideChar::No);
+            append_fragments_across_soft_wrap(&mut suffix_chunks, fragments);
+        }
 
-                        fragment.content.push_str(&next_line_fragment.content);
-                        current_line_fragments.push(Fragment {
-                            content: fragment.content,
-                            total_cell_width: fragment.total_cell_width
-                                + next_line_fragment.total_cell_width,
-                        });
-
-                        next_line_fragments.remove(0);
-                    }
-                    _ => (),
-                };
-
-                current_line_fragments.append(&mut next_line_fragments);
-                current_line_fragments
-            }
-            false => self.line_to_fragments(
-                point.row,
-                point.col..self.columns() - 1,
-                IncludeFirstWideChar::No, /*should_scan_forward*/
-            ),
-        };
+        // Bound the number of fragment combinations the candidate search below
+        // considers. That search is O(prefix_chunks * suffix_chunks) and each
+        // combination is filesystem-checked by the caller, so a hover over
+        // separator-dense wrapped text would otherwise be quadratic in the
+        // scanned length. Only the fragments nearest the hover point can form a
+        // path through it, so drop the farthest ones on each side (prefix_chunks
+        // is ordered farthest-to-nearest, suffix_chunks nearest-to-farthest).
+        if prefix_chunks.len() > MAX_LINK_PATH_FRAGMENTS {
+            let excess = prefix_chunks.len() - MAX_LINK_PATH_FRAGMENTS;
+            prefix_chunks.drain(0..excess);
+        }
+        suffix_chunks.truncate(MAX_LINK_PATH_FRAGMENTS);
 
         // This addresses the case when the file path starts from the point -- in this case
         // the valid path is entirely constructed from suffix chunks. Note that this is only possible
@@ -1335,8 +1467,9 @@ impl GridHandler {
                         let displayed_ending_point = self
                             .maybe_translate_point_from_original_to_displayed(ending_point);
                         if displayed_starting_point > displayed_ending_point {
-                            log::error!(
-                                "File path range translation to displayed points failed. Displayed range start {displayed_starting_point:?} is greater than displayed range end {displayed_ending_point:?}"
+                            report_error!(
+                                "File path range translation to displayed points failed: range start is greater than range end",
+                                extra: { "start" => ?displayed_starting_point, "end" => ?displayed_ending_point }
                             );
                             starting_point..=ending_point
                         } else {

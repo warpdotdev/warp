@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration, Local};
 use instant::Instant;
 use parking_lot::RwLock;
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
 use warp_cli::skill::SkillSpec;
 use warp_core::channel::ChannelState;
@@ -15,10 +16,11 @@ use warp_core::ui::color::coloru_with_opacity;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
 use warpui::elements::{
-    resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable, ResizableStateHandle,
-    SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
+    resizable_state_handle, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Resizable, ResizableStateHandle,
+    SelectableArea, SelectionHandle, Shrinkable, Stack, Text, Wrap,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
@@ -29,6 +31,8 @@ use warpui::{
 };
 
 use crate::ai::agent::api::ServerConversationToken;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent::conversation::AIAgentHarness;
 use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
@@ -70,7 +74,7 @@ use crate::view_components::copyable_text_field::{
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
-use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 
 const FIELD_SPACING: f32 = 16.0;
 const HEADER_SPACING: f32 = 12.0;
@@ -138,6 +142,7 @@ struct PanelMouseStates {
     skill_link: MouseStateHandle,
     skill_source_link: MouseStateHandle,
     executor_agent_link: MouseStateHandle,
+    status_chip: MouseStateHandle,
 }
 
 /// Tracks which copy button action was last triggered (for checkmark feedback).
@@ -181,6 +186,24 @@ impl PrincipalInfo {
     fn from_uid_fallback(uid: &str) -> Self {
         let first_char = uid.chars().next().unwrap_or('?').to_uppercase().to_string();
         Self::new(first_char, None)
+    }
+
+    fn from_user_profile(profile: &UserProfileWithUID) -> Self {
+        let display_name = profile
+            .display_name
+            .as_ref()
+            .filter(|name| !name.is_empty())
+            .or_else(|| (!profile.email.is_empty()).then_some(&profile.email))
+            .cloned()
+            .unwrap_or_else(|| profile.firebase_uid.to_string());
+        let photo_url = Some(profile.photo_url.clone()).filter(|url| !url.is_empty());
+
+        Self {
+            display_name,
+            photo_url,
+            uid: Some(profile.firebase_uid.to_string()),
+            is_service_account: false,
+        }
     }
 }
 
@@ -261,7 +284,9 @@ impl ConversationDetailsData {
         // Server metadata (creator, timestamps)
         let mut creator = None;
         if let Some(server_metadata) = conversation.server_metadata() {
-            if let Some(creator_uid_str) = &server_metadata.metadata.creator_uid {
+            if let Some(creator_profile) = &server_metadata.creator {
+                creator = Some(PrincipalInfo::from_user_profile(creator_profile));
+            } else if let Some(creator_uid_str) = &server_metadata.metadata.creator_uid {
                 let creator_uid = UserUid::new(creator_uid_str);
                 let user_profiles = UserProfiles::handle(app).as_ref(app);
 
@@ -602,6 +627,16 @@ pub enum ConversationDetailsPanelAction {
     OpenInOz,
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug)]
+enum DetailsPanelLocalContinuationInfo {
+    Conversation(AIConversationId),
+    ThirdPartyTask {
+        task_id: AmbientAgentTaskId,
+        harness: AIAgentHarness,
+    },
+}
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -710,7 +745,10 @@ impl ConversationDetailsPanel {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn continue_locally_conversation_id(&self, app: &AppContext) -> Option<AIConversationId> {
+    fn local_continuation_info(
+        &self,
+        app: &AppContext,
+    ) -> Option<DetailsPanelLocalContinuationInfo> {
         if !AISettings::as_ref(app).is_any_ai_enabled(app) {
             return None;
         }
@@ -725,9 +763,12 @@ impl ConversationDetailsPanel {
                 if status.is_in_progress() {
                     return None;
                 }
-                Some(*ai_conversation_id.as_ref()?)
+                Some(DetailsPanelLocalContinuationInfo::Conversation(
+                    *ai_conversation_id.as_ref()?,
+                ))
             }
             PanelMode::Task {
+                task_id,
                 display_status,
                 conversation_id,
                 ..
@@ -736,15 +777,29 @@ impl ConversationDetailsPanel {
                 if status.is_working() {
                     return None;
                 }
-                // Hide for non-Oz harnesses (e.g. Claude, Gemini): they can't be
-                // forked into a local Warp conversation.
-                if matches!(self.data.harness, Some(h) if h != Harness::Oz) {
-                    return None;
-                }
 
-                let server_token = ServerConversationToken::new(conversation_id.as_ref()?.clone());
-                BlocklistAIHistoryModel::as_ref(app)
-                    .find_conversation_id_by_server_token(&server_token)
+                match self.data.harness {
+                    Some(Harness::Claude) => {
+                        Some(DetailsPanelLocalContinuationInfo::ThirdPartyTask {
+                            task_id: *task_id.as_ref()?,
+                            harness: AIAgentHarness::ClaudeCode,
+                        })
+                    }
+                    Some(Harness::Codex) => {
+                        Some(DetailsPanelLocalContinuationInfo::ThirdPartyTask {
+                            task_id: *task_id.as_ref()?,
+                            harness: AIAgentHarness::Codex,
+                        })
+                    }
+                    Some(Harness::Oz) | None => {
+                        let server_token =
+                            ServerConversationToken::new(conversation_id.as_ref()?.clone());
+                        BlocklistAIHistoryModel::as_ref(app)
+                            .find_conversation_id_by_server_token(&server_token)
+                            .map(DetailsPanelLocalContinuationInfo::Conversation)
+                    }
+                    Some(Harness::Gemini | Harness::OpenCode | Harness::Unknown) => None,
+                }
             }
         }
     }
@@ -911,6 +966,7 @@ impl ConversationDetailsPanel {
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: None,
+                    initial_attachments: vec![],
                     destination: ForkedConversationDestination::NewTab,
                 });
             }
@@ -1249,9 +1305,15 @@ impl ConversationDetailsPanel {
             .with_height(STATUS_ICON_SIZE)
             .finish();
 
+        // When we have an Oz run URL, the whole chip becomes a clickable
+        // target that opens the run in the Oz web app. In that case the label
+        // is not selectable so a click navigates rather than starting a text
+        // selection.
+        let is_clickable = Self::oz_run_url(&self.data).is_some();
+
         let status_text = Text::new(display_text, appearance.ui_font_family(), ui_font_size)
             .with_color(color)
-            .with_selectable(true)
+            .with_selectable(!is_clickable)
             .finish();
 
         let status_badge = Container::new(
@@ -1266,6 +1328,38 @@ impl ConversationDetailsPanel {
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
         .finish();
 
+        // Make the chip clickable (with a tooltip and pointer cursor) only when
+        // a run view exists to navigate to.
+        let status_element: Box<dyn Element> = if is_clickable {
+            let ui_builder = appearance.ui_builder();
+            Hoverable::new(self.mouse_states.status_chip.clone(), move |state| {
+                let mut stack = Stack::new().with_child(status_badge);
+                if state.is_hovered() {
+                    let tooltip = ui_builder
+                        .tool_tip("View run in Oz web".to_string())
+                        .build()
+                        .finish();
+                    stack.add_positioned_overlay_child(
+                        tooltip,
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(0., -4.),
+                            ParentOffsetBounds::WindowByPosition,
+                            ParentAnchor::TopMiddle,
+                            ChildAnchor::BottomMiddle,
+                        ),
+                    );
+                }
+                stack.finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);
+            })
+            .finish()
+        } else {
+            status_badge
+        };
+
         Some(
             Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -1274,7 +1368,7 @@ impl ConversationDetailsPanel {
                         .with_margin_bottom(SECTION_HEADER_GAP)
                         .finish(),
                 )
-                .with_child(status_badge)
+                .with_child(status_element)
                 .finish(),
         )
     }
@@ -1541,7 +1635,7 @@ impl ConversationDetailsPanel {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let environment_name = &env_model.name;
-        let docker_image = env_model.base_image.to_string();
+        let docker_image = env_model.base_image_display();
 
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
@@ -1761,16 +1855,16 @@ impl View for ConversationDetailsPanel {
         let has_action_buttons = !self.action_buttons.as_ref(app).is_empty();
 
         #[cfg(not(target_family = "wasm"))]
-        let has_continue_locally = self.continue_locally_conversation_id(app).is_some();
+        let has_local_continuation_info = self.local_continuation_info(app).is_some();
         #[cfg(target_family = "wasm")]
-        let has_continue_locally = false;
+        let has_local_continuation_info = false;
         let has_oz_url = Self::oz_run_url(&self.data).is_some();
 
-        if has_continue_locally || has_oz_url {
+        if has_local_continuation_info || has_oz_url {
             let mut buttons_wrap = Wrap::row().with_spacing(8.).with_run_spacing(8.);
 
             #[cfg(not(target_family = "wasm"))]
-            if has_continue_locally {
+            if has_local_continuation_info {
                 buttons_wrap.add_child(ChildView::new(&self.continue_locally_button).finish());
             }
             if has_oz_url {
@@ -2169,7 +2263,7 @@ impl TypedActionView for ConversationDetailsPanel {
                     if let Ok(server_id) = ServerId::try_from(env_id.as_str()) {
                         let sync_id = SyncId::ServerId(server_id);
                         if let Some(env) = CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx) {
-                            let docker_image = env.model().string_model.base_image.to_string();
+                            let docker_image = env.model().string_model.base_image_display();
                             ctx.clipboard()
                                 .write(ClipboardContent::plain_text(docker_image));
                             self.record_copy(CopyButtonKind::DockerImage, ctx);
@@ -2212,14 +2306,26 @@ impl TypedActionView for ConversationDetailsPanel {
             }
             #[cfg(not(target_family = "wasm"))]
             ConversationDetailsPanelAction::ContinueLocally => {
-                if let Some(conversation_id) = self.continue_locally_conversation_id(ctx) {
+                if let Some(continuation_info) = self.local_continuation_info(ctx) {
                     send_telemetry_from_ctx!(
                         AgentManagementTelemetryEvent::DetailsPanelContinueLocally,
                         ctx
                     );
-                    ctx.dispatch_typed_action(&WorkspaceAction::ContinueConversationLocally {
-                        conversation_id,
-                    });
+                    match continuation_info {
+                        DetailsPanelLocalContinuationInfo::Conversation(conversation_id) => {
+                            ctx.dispatch_typed_action(
+                                &WorkspaceAction::ContinueConversationLocally { conversation_id },
+                            );
+                        }
+                        DetailsPanelLocalContinuationInfo::ThirdPartyTask { task_id, harness } => {
+                            ctx.dispatch_typed_action(
+                                &WorkspaceAction::ContinueThirdPartyConversationLocally {
+                                    task_id,
+                                    harness,
+                                },
+                            );
+                        }
+                    }
                 }
             }
             ConversationDetailsPanelAction::OpenInOz => {

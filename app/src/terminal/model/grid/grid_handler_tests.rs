@@ -685,6 +685,23 @@ fn test_find_url_with_delimiter() {
         })
     );
 
+    let blockgrid = mock_blockgrid("https://google.com，");
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 0, col: 0 }),
+        Some(Link {
+            range: Point { row: 0, col: 0 }..=Point { row: 0, col: 17 },
+            is_empty: false
+        })
+    );
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 0, col: 18 }),
+        None
+    );
+
     let blockgrid = mock_blockgrid("https://google.com/search?q=warp");
     assert_eq!(
         blockgrid
@@ -1067,6 +1084,190 @@ fn test_possible_file_paths() {
                 range: Point { row: 0, col: 6 }..=Point { row: 0, col: 8 }
             },
         ]
+    );
+}
+
+#[test]
+fn test_possible_file_paths_across_wrapped_lines() {
+    let first_line = "src/modules/core/internal/utils/wrappers/adapters/";
+    let second_line = "interfaces/implementations/factories/README.md";
+    let full_path = format!("{first_line}{second_line}");
+    let expected_range = Point { row: 0, col: 0 }..=Point {
+        row: 1,
+        col: second_line.len() - 1,
+    };
+    let blockgrid = mock_blockgrid(&format!("{first_line}\n{second_line}"));
+
+    for hover_point in [
+        Point {
+            row: 0,
+            col: first_line.len() - 2,
+        },
+        Point { row: 1, col: 0 },
+    ] {
+        let possible_paths = blockgrid
+            .grid_handler
+            .possible_file_paths_at_point(hover_point);
+
+        assert!(
+            possible_paths.iter().any(|possible_path| {
+                possible_path.path.path.as_str() == full_path.as_str()
+                    && possible_path.path.line_and_column_num.is_none()
+                    && possible_path.range == expected_range
+            }),
+            "expected wrapped file path candidate at {hover_point:?} in {possible_paths:?}"
+        );
+    }
+}
+
+#[test]
+fn test_possible_file_paths_across_multiple_wrapped_lines() {
+    let first_line = "src/core/";
+    let second_line = "wrappers/";
+    let third_line = "adapters/";
+    let fourth_line = "README.md";
+    let full_path = format!("{first_line}{second_line}{third_line}{fourth_line}");
+    let blockgrid = mock_blockgrid(&format!(
+        "{first_line}\n{second_line}\n{third_line}\n{fourth_line}"
+    ));
+
+    for hover_point in [
+        Point { row: 0, col: 5 },
+        Point { row: 1, col: 8 },
+        Point { row: 2, col: 5 },
+        Point { row: 3, col: 5 },
+    ] {
+        let possible_paths = blockgrid
+            .grid_handler
+            .possible_file_paths_at_point(hover_point);
+
+        assert!(
+            possible_paths.iter().any(|possible_path| {
+                possible_path.path.path.as_str() == full_path.as_str()
+                    && possible_path.path.line_and_column_num.is_none()
+                    && possible_path.range.contains(&hover_point)
+            }),
+            "expected multi-line wrapped file path candidate at {hover_point:?} in {possible_paths:?}"
+        );
+    }
+}
+
+/// Regression test for issue #9193: a long file path that soft-wraps in a
+/// *wide* terminal must be detected end to end, even when the hover point is
+/// more than a single visual row away from the wrap boundary. The cross-wrap
+/// scan budget used to be smaller than one visual row, so detection stopped at
+/// the first wrap and the wrapped continuation (here `README.md`) was missed in
+/// realistic wide terminals (the earlier wrapped-line tests above only used a
+/// narrow grid, so they didn't catch this).
+#[test]
+fn test_possible_file_paths_across_wide_wrapped_line() {
+    // `first_line` is the widest row (so it sets the grid width) and is wider
+    // than the previous cross-wrap scan budget, mirroring a real wide terminal
+    // where a single visual row already exceeds that budget.
+    let first_line = "/home/user/workspace/projects/application/src/modules/core/";
+    let second_line = "internal/utils/wrappers/adapters/factories/README.md";
+    let full_path = format!("{first_line}{second_line}");
+    let expected_range = Point { row: 0, col: 0 }..=Point {
+        row: 1,
+        col: second_line.len() - 1,
+    };
+    let blockgrid = mock_blockgrid(&format!("{first_line}\n{second_line}"));
+
+    // Hover points deliberately far from the wrap boundary in both directions.
+    for hover_point in [
+        Point { row: 0, col: 5 },
+        Point {
+            row: 1,
+            col: second_line.len() - 1,
+        },
+    ] {
+        let possible_paths = blockgrid
+            .grid_handler
+            .possible_file_paths_at_point(hover_point);
+
+        assert!(
+            possible_paths.iter().any(|possible_path| {
+                possible_path.path.path.as_str() == full_path.as_str()
+                    && possible_path.path.line_and_column_num.is_none()
+                    && possible_path.range == expected_range
+            }),
+            "expected wide wrapped file path candidate at {hover_point:?} in {possible_paths:?}"
+        );
+    }
+}
+
+/// Regression test for issue #9193 covering the core purpose of the change: a
+/// path that soft-wraps across *more than two* visual rows in a *wide* terminal
+/// must be detected end to end. This combines both conditions that the other
+/// tests only exercise separately — `test_possible_file_paths_across_wide_wrapped_line`
+/// is wide but only 2 rows, and `test_possible_file_paths_across_multiple_wrapped_lines`
+/// is multi-row but narrow — so neither alone proves a wide, >2-row wrap works.
+#[test]
+fn test_possible_file_paths_across_wide_multiple_wrapped_lines() {
+    // The first two rows must be exactly the grid width (the widest row) so they
+    // are fully filled and soft-wrap into one another with no trailing empty
+    // cells; the last row is shorter. Each row is wider than the previous
+    // cross-wrap scan budget, so a single visual row already exceeds it.
+    let first_line = "/home/user/workspace/projects/applications/services/backend/";
+    let second_line = "components/internal/utilities/wrappers/adapters/factory/lib/";
+    let third_line = "implementations/interfaces/definitions/README.md";
+    // The two non-final rows must be equal length so both equal the grid width
+    // (otherwise the shorter one would leave separator-like empty cells and the
+    // path would not reconstruct across the wrap).
+    assert_eq!(
+        first_line.len(),
+        second_line.len(),
+        "non-final wrapped rows must be the same (max) width"
+    );
+    let full_path = format!("{first_line}{second_line}{third_line}");
+    let expected_range = Point { row: 0, col: 0 }..=Point {
+        row: 2,
+        col: third_line.len() - 1,
+    };
+    let blockgrid = mock_blockgrid(&format!("{first_line}\n{second_line}\n{third_line}"));
+
+    // Hover points on every row, deliberately far from the wrap boundaries.
+    for hover_point in [
+        Point { row: 0, col: 5 },
+        Point { row: 1, col: 30 },
+        Point { row: 2, col: 45 },
+    ] {
+        let possible_paths = blockgrid
+            .grid_handler
+            .possible_file_paths_at_point(hover_point);
+
+        assert!(
+            possible_paths.iter().any(|possible_path| {
+                possible_path.path.path.as_str() == full_path.as_str()
+                    && possible_path.path.line_and_column_num.is_none()
+                    && possible_path.range == expected_range
+            }),
+            "expected wide multi-line wrapped file path candidate at {hover_point:?} in {possible_paths:?}"
+        );
+    }
+}
+
+/// Perf guard for issue #9193: hovering over separator-dense content must not
+/// produce a candidate list that grows quadratically with the line length. The
+/// candidate search is O(prefix_fragments * suffix_fragments), so it is capped
+/// at `MAX_LINK_PATH_FRAGMENTS` fragments per side regardless of how many
+/// fragments the surrounding text has.
+#[test]
+fn test_possible_file_paths_candidate_count_is_bounded() {
+    // 300 single-character, space-separated fragments on each side of the point.
+    let line = "a ".repeat(300);
+    let blockgrid = mock_blockgrid(&line);
+    let possible_paths = blockgrid
+        .grid_handler
+        .possible_file_paths_at_point(Point { row: 0, col: 300 });
+
+    // Candidates = at most (kept prefix fragments + 1 dummy) * kept suffix
+    // fragments. Without the cap this would be on the order of 150 * 150.
+    let max_candidates = (MAX_LINK_PATH_FRAGMENTS + 1) * MAX_LINK_PATH_FRAGMENTS;
+    assert!(
+        possible_paths.len() <= max_candidates,
+        "expected at most {max_candidates} candidates, got {}",
+        possible_paths.len()
     );
 }
 
@@ -2279,6 +2480,46 @@ fn test_full_grid_clear_resize_narrower_then_scroll_does_not_panic() {
 }
 
 #[test]
+fn test_full_grid_clear_shrink_cols_does_not_orphan_wide_char_at_boundary() {
+    let old_cols = 6;
+    let new_cols = 5;
+    let num_rows = 1;
+
+    let mut grid =
+        GridHandler::new_for_test_with_scroll_limit(num_rows, old_cols, MAX_SCROLL_LIMIT);
+    for c in ['a', 'b', 'c', 'd', 'Ｗ'] {
+        grid.input(c);
+    }
+    grid.grid_storage_mut()[VisibleRow(0)][new_cols - 1].bg = Color::Named(NamedColor::Red);
+
+    assert!(grid.grid_storage()[VisibleRow(0)][new_cols - 1]
+        .flags
+        .contains(Flags::WIDE_CHAR));
+    assert!(grid.grid_storage()[VisibleRow(0)][new_cols]
+        .flags
+        .contains(Flags::WIDE_CHAR_SPACER));
+
+    grid.enable_full_grid_clear_behavior();
+    grid.resize(SizeInfo::new_without_font_metrics(num_rows, new_cols));
+
+    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+
+    let retained_row = grid.grid_storage()[VisibleRow(0)].clone();
+    grid.flat_storage.push_rows([&retained_row]);
+    let materialized_rows = grid.flat_storage.pop_rows(1);
+
+    assert_eq!(materialized_rows.len(), 1);
+    assert_eq!(
+        grid.grid_storage()[VisibleRow(0)][new_cols - 1],
+        Cell::from(Color::Named(NamedColor::Red))
+    );
+    assert_eq!(
+        materialized_rows[0][new_cols - 1],
+        Cell::from(Color::Named(NamedColor::Red))
+    );
+}
+
+#[test]
 fn test_full_grid_clear_resize_then_bounds_to_string_does_not_panic() {
     // End-to-end repro via the same code path as block_snapshot:
     // bounds_to_string → line_to_string → row() → RowIterator::next.
@@ -2309,5 +2550,131 @@ fn test_full_grid_clear_resize_then_bounds_to_string_does_not_panic() {
             false,
             RespectDisplayedOutput::No,
         );
+    }
+}
+
+/// Write `text` into the grid with `uri` as the active OSC 8 hyperlink, then
+/// close the hyperlink. Cells written for `text` carry the interned id.
+fn input_hyperlinked(grid: &mut GridHandler, uri: &str, text: &str) {
+    grid.set_hyperlink(Some(warp_terminal::model::ansi::Hyperlink {
+        id: None,
+        uri: uri.to_owned(),
+    }));
+    for c in text.chars() {
+        grid.input(c);
+    }
+    grid.set_hyperlink(None);
+}
+
+#[test]
+fn test_hyperlink_at_point_spans_contiguous_cells() {
+    let _flag = crate::features::FeatureFlag::OscHyperlinks.override_enabled(true);
+    let mut grid = GridHandler::new_for_test(5, 20);
+
+    // Plain "ab", then a hyperlink over "link", then plain "cd".
+    for c in "ab".chars() {
+        grid.input(c);
+    }
+    input_hyperlinked(&mut grid, "https://example.com", "link");
+    for c in "cd".chars() {
+        grid.input(c);
+    }
+
+    // Cols 2..=5 carry the hyperlink; a lookup anywhere inside resolves to the
+    // full contiguous span.
+    let expected = Link {
+        range: Point::new(0, 2)..=Point::new(0, 5),
+        is_empty: false,
+    };
+    assert_eq!(
+        grid.hyperlink_at_point(Point::new(0, 2)),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        grid.hyperlink_at_point(Point::new(0, 3)),
+        Some(expected.clone())
+    );
+    assert_eq!(grid.hyperlink_at_point(Point::new(0, 5)), Some(expected));
+
+    // Plain cells before and after the span are not part of any hyperlink.
+    assert_eq!(grid.hyperlink_at_point(Point::new(0, 1)), None);
+    assert_eq!(grid.hyperlink_at_point(Point::new(0, 6)), None);
+
+    // The URI lookup returns the interned destination.
+    assert_eq!(
+        grid.hyperlink_uri_at_point(Point::new(0, 3)),
+        Some("https://example.com")
+    );
+    assert_eq!(grid.hyperlink_uri_at_point(Point::new(0, 0)), None);
+}
+
+#[test]
+fn test_adjacent_hyperlinks_with_different_uris_do_not_merge() {
+    let _flag = crate::features::FeatureFlag::OscHyperlinks.override_enabled(true);
+    let mut grid = GridHandler::new_for_test(5, 20);
+
+    input_hyperlinked(&mut grid, "https://a.com", "aa");
+    input_hyperlinked(&mut grid, "https://b.com", "bb");
+
+    // Distinct ids mean the two spans stay separate rather than merging into
+    // one range across cols 0..=3.
+    assert_eq!(
+        grid.hyperlink_at_point(Point::new(0, 0)),
+        Some(Link {
+            range: Point::new(0, 0)..=Point::new(0, 1),
+            is_empty: false,
+        })
+    );
+    assert_eq!(
+        grid.hyperlink_at_point(Point::new(0, 2)),
+        Some(Link {
+            range: Point::new(0, 2)..=Point::new(0, 3),
+            is_empty: false,
+        })
+    );
+    assert_eq!(
+        grid.hyperlink_uri_at_point(Point::new(0, 1)),
+        Some("https://a.com")
+    );
+    assert_eq!(
+        grid.hyperlink_uri_at_point(Point::new(0, 2)),
+        Some("https://b.com")
+    );
+}
+
+#[test]
+fn test_hyperlink_at_point_short_circuits_when_flag_disabled() {
+    let _flag = crate::features::FeatureFlag::OscHyperlinks.override_enabled(false);
+    let mut grid = GridHandler::new_for_test(5, 20);
+
+    // Even though cells are stamped, both lookups short-circuit to None while
+    // the feature flag is off.
+    input_hyperlinked(&mut grid, "https://example.com", "link");
+    assert_eq!(grid.hyperlink_at_point(Point::new(0, 0)), None);
+    assert_eq!(grid.hyperlink_uri_at_point(Point::new(0, 0)), None);
+}
+
+#[test]
+fn test_full_grid_clear_drops_active_hyperlink() {
+    let _flag = crate::features::FeatureFlag::OscHyperlinks.override_enabled(true);
+    let mut grid = GridHandler::new_for_test_with_scroll_limit(3, 20, MAX_SCROLL_LIMIT);
+    grid.enable_full_grid_clear_behavior();
+
+    // Open a hyperlink and write a linked char, but never close it.
+    grid.set_hyperlink(Some(warp_terminal::model::ansi::Hyperlink {
+        id: None,
+        uri: "https://example.com".to_owned(),
+    }));
+    grid.input('a');
+
+    // A full-screen clear of the primary screen must drop the active link so
+    // output written afterwards does not inherit the stale URI.
+    grid.clear_screen(ansi::ClearMode::All);
+    grid.input('b');
+
+    for row in 0..3 {
+        for col in 0..20 {
+            assert_eq!(grid.hyperlink_uri_at_point(Point::new(row, col)), None);
+        }
     }
 }

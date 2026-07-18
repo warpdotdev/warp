@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 
 use crate::ai::agent::task::helper::TaskExt as _;
@@ -29,7 +30,10 @@ pub fn compute_active_task_ids<'a>(
     while let Some(task_id) = queue.pop() {
         // Cycle protection: skip tasks we've already processed.
         if !visited.insert(task_id) {
-            log::error!("Cycle detected in active task computation at task {task_id}");
+            report_error!(
+                "Cycle detected in active task computation",
+                extra: { "task_id" => %task_id }
+            );
             continue;
         }
 
@@ -87,7 +91,10 @@ pub fn compute_task_depths(tasks: &HashMap<String, api::Task>) -> HashMap<&str, 
         while let Some(task) = tasks.get(current_id) {
             if !visited.insert(current_id) {
                 // Cycle detected; treat as depth 0.
-                log::error!("Cycle detected in task parent chain starting from task {task_id}");
+                report_error!(
+                    "Cycle detected in task parent chain",
+                    extra: { "task_id" => %task_id }
+                );
                 depth = 0;
                 break;
             }

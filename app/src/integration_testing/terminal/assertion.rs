@@ -8,7 +8,6 @@ use warpui::windowing::WindowManager;
 use warpui::{async_assert, async_assert_eq, App, SingletonEntity, ViewHandle, WindowId};
 
 use super::util::ExpectedOutput;
-use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view, single_terminal_view_for_tab, terminal_view,
 };
@@ -406,7 +405,8 @@ pub fn assert_selected_block_index_is_first_renderable() -> AssertionCallback {
                 .block_at(selected_block_index)
                 .expect("Block should exist");
             assert!(
-                block.height(&AgentViewState::Inactive) != Lines::zero(),
+                block.height(&crate::terminal::model::block::TranscriptScope::Terminal)
+                    != Lines::zero(),
                 "The selected block should be rendered"
             );
             // Previous index either doesn't exist or isn't renderable
@@ -414,7 +414,8 @@ pub fn assert_selected_block_index_is_first_renderable() -> AssertionCallback {
                 let prev_block = model.block_list().block_at(selected_block_index - 1.into());
                 if let Some(prev_block) = prev_block {
                     assert!(
-                        prev_block.is_empty(&AgentViewState::Inactive),
+                        prev_block
+                            .is_empty(&crate::terminal::model::block::TranscriptScope::Terminal),
                         "Prev index should be hidden"
                     );
                 }
@@ -437,7 +438,8 @@ pub fn assert_selected_block_index_is_last_renderable() -> AssertionCallback {
                 .block_at(selected_block_index)
                 .expect("Block should exist");
             assert!(
-                block.height(&AgentViewState::Inactive) != Lines::zero(),
+                block.height(&crate::terminal::model::block::TranscriptScope::Terminal)
+                    != Lines::zero(),
                 "The selected block should be rendered"
             );
 
@@ -645,7 +647,9 @@ pub fn assert_no_visible_background_blocks(
                 .blocks()
                 .iter()
                 .filter(|block| {
-                    block.is_background() && block.is_visible(&AgentViewState::Inactive)
+                    block.is_background()
+                        && block
+                            .is_visible(&crate::terminal::model::block::TranscriptScope::Terminal)
                 })
                 .count();
             async_assert_eq!(

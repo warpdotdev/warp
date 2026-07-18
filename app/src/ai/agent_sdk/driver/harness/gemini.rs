@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
@@ -21,7 +22,9 @@ use super::{
     SavePoint, ThirdPartyHarness,
 };
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::{
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
+};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::harness_support::HarnessSupportClient;
@@ -164,7 +167,7 @@ impl HarnessRunner for GeminiHarnessRunner {
                     .create_external_conversation(GEMINI_CLI_FORMAT)
                     .await
                     .map_err(|e| {
-                        log::error!("Failed to create external conversation: {e}");
+                        report_error!(&e);
                         AgentDriverError::ConfigBuildFailed(e)
                     })
             })
@@ -185,6 +188,10 @@ impl HarnessRunner for GeminiHarnessRunner {
             conversation_id,
             block_id: command_handle.block_id().clone(),
         };
+
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
 
         Ok(command_handle)
     }

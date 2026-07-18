@@ -231,7 +231,8 @@ impl ControlItemRenderer {
             } else {
                 appearance.theme().surface_1()
             };
-            let color = appearance.theme().sub_text_color(background).into_solid();
+            let color =
+                crate::context_chips::readable_chip_label_color(appearance.theme(), background);
 
             let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
@@ -418,6 +419,15 @@ impl ChipConfigurator {
         self.right_chips.clear();
         self.unused_chips.clear();
         self.current_dragging_state = None;
+    }
+
+    /// Whether any zone currently holds chips (i.e. the configurator is open /
+    /// populated).
+    pub fn has_items(&self) -> bool {
+        !self.used_chips.is_empty()
+            || !self.left_chips.is_empty()
+            || !self.right_chips.is_empty()
+            || !self.unused_chips.is_empty()
     }
 
     pub fn left_item_kinds(&self) -> Vec<AgentToolbarItemKind> {

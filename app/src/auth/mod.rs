@@ -9,6 +9,7 @@ mod login_failure_notification;
 pub mod login_slide;
 pub mod needs_sso_link_view;
 pub mod paste_auth_token_modal;
+mod user_properties;
 pub use warp_server_auth::{auth_state, credentials, user, user_uid};
 #[cfg(target_family = "wasm")]
 pub mod web_handoff;
@@ -21,6 +22,7 @@ use itertools::Itertools;
 pub use login_failure_notification::LoginFailureReason;
 pub use user_uid::UserUid;
 use warp_core::user_preferences::GetUserPreferences as _;
+use warp_errors::{report_error, report_if_error};
 use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
 use warpui::{AppContext, SingletonEntity};
 
@@ -48,8 +50,8 @@ use crate::workflows::manager::WorkflowManager;
 use crate::workspace::{Workspace, WorkspaceAction};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::{
-    focus_running_window_and_show_native_modal, persistence, report_if_error,
-    send_telemetry_sync_from_app_ctx, GlobalResourceHandlesProvider,
+    focus_running_window_and_show_native_modal, persistence, send_telemetry_sync_from_app_ctx,
+    GlobalResourceHandlesProvider,
 };
 
 pub fn init(app: &mut AppContext) {
@@ -286,7 +288,7 @@ fn remove_cloud_persisted_settings(app: &mut AppContext) {
         SettingsManager::handle(app).update(app, |settings_manager, ctx| {
             let errors = settings_manager.clear_cloud_settings_local_state(ctx);
             for e in errors {
-                log::error!("Failed to remove cloud synced setting from user defaults: {e:?}");
+                report_error!(e.context("Failed to remove cloud synced setting from user defaults"));
             }
         });
     }
@@ -295,23 +297,24 @@ fn remove_cloud_persisted_settings(app: &mut AppContext) {
         .private_user_preferences()
         .remove_value(TELEMETRY_ENABLED_DEFAULTS_KEY)
     {
-        log::error!("Failed to remove Telemetry Enabled Defaults Key from user defaults: {e:?}");
+        report_error!(anyhow::Error::new(e)
+            .context("Failed to remove Telemetry Enabled Defaults Key from user defaults"));
     }
 
     if let Err(e) = app
         .private_user_preferences()
         .remove_value(CRASH_REPORTING_ENABLED_DEFAULTS_KEY)
     {
-        log::error!(
-            "Failed to remove Crash Reporting Enabled Defaults Key from user defaults: {e:?}"
-        );
+        report_error!(anyhow::Error::new(e)
+            .context("Failed to remove Crash Reporting Enabled Defaults Key from user defaults"));
     }
 
     if let Err(e) = app
         .private_user_preferences()
         .remove_value(REQUEST_LIMIT_INFO_CACHE_KEY)
     {
-        log::error!("Failed to remove Request Limit Defaults Key from user defaults: {e:?}");
+        report_error!(anyhow::Error::new(e)
+            .context("Failed to remove Request Limit Defaults Key from user defaults"));
     }
 
     // Reset the Privacy Settings in the login screen to default values.

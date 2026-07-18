@@ -77,21 +77,10 @@ pub struct MemberUsageRow {
     pub display_name: String,
     pub total_credits: i64,
     pub total_cost_cents: i64,
-    /// Per-user base credit limit, rendered as `used / limit`. None for service
-    /// accounts, team-aggregate rows, and unlimited members.
-    pub base_limit: Option<i64>,
     /// Sorted by cost-type then bucket order; zero-credit entries dropped.
     pub segments: Vec<BarSegment>,
     /// Denominator the row's stacked bar fills against.
     pub bar_max_credits: i64,
-}
-
-fn member_base_limit(member: &WorkspaceMember) -> Option<i64> {
-    if member.usage_info.is_unlimited {
-        None
-    } else {
-        Some(member.usage_info.request_limit as i64)
-    }
 }
 
 fn viewer_identity(app: &AppContext) -> (Option<String>, String) {
@@ -105,16 +94,6 @@ fn viewer_identity(app: &AppContext) -> (Option<String>, String) {
     (viewer_uid, display_name)
 }
 
-fn viewer_base_limit(workspace: &Workspace, viewer_uid: Option<&str>) -> Option<i64> {
-    viewer_uid.and_then(|u| {
-        workspace
-            .members
-            .iter()
-            .find(|m| m.uid.as_str() == u)
-            .and_then(member_base_limit)
-    })
-}
-
 struct GroupedSubjectUsage {
     subject_type: AiCreditsUsageAndCostSubjectType,
     display_name: String,
@@ -126,7 +105,6 @@ impl MemberUsageRow {
         entries: &[BillingCycleUsageEntry],
         viewer_uid: Option<&str>,
         viewer_display_name: String,
-        viewer_base_limit: Option<i64>,
         source_filter: SourceFilter,
     ) -> Self {
         let viewer_entries = entries
@@ -148,7 +126,6 @@ impl MemberUsageRow {
             display_name: viewer_display_name,
             total_credits,
             total_cost_cents,
-            base_limit: viewer_base_limit,
             segments,
             bar_max_credits: total_credits.max(1),
         }
@@ -160,7 +137,6 @@ impl MemberUsageRow {
     fn for_viewer_from_total(
         viewer_uid: Option<String>,
         viewer_display_name: String,
-        base_limit: Option<i64>,
         used: i64,
     ) -> Self {
         let segments = if used > 0 {
@@ -180,7 +156,6 @@ impl MemberUsageRow {
             display_name: viewer_display_name,
             total_credits: used,
             total_cost_cents: 0,
-            base_limit,
             segments,
             bar_max_credits: used.max(1),
         }
@@ -201,7 +176,6 @@ impl MemberUsageRow {
             display_name: "Other members".to_string(),
             total_credits,
             total_cost_cents,
-            base_limit: None,
             segments,
             bar_max_credits: total_credits.max(1),
         }
@@ -270,7 +244,6 @@ impl MemberUsageRow {
                 display_name: member.email.clone(),
                 total_credits,
                 total_cost_cents,
-                base_limit: member_base_limit(member),
                 segments,
                 bar_max_credits: 0,
             });
@@ -293,7 +266,6 @@ impl MemberUsageRow {
                 display_name: group.display_name,
                 total_credits,
                 total_cost_cents,
-                base_limit: None,
                 segments,
                 bar_max_credits: 0,
             });
@@ -320,24 +292,20 @@ fn build_rows(
     let mut rows: Vec<MemberUsageRow> = match visibility.granularity {
         UsageVisibilityGranularity::OwnOnly => {
             let (viewer_uid, display_name) = viewer_identity(app);
-            let base_limit = viewer_base_limit(workspace, viewer_uid.as_deref());
             vec![MemberUsageRow::for_viewer(
                 entries,
                 viewer_uid.as_deref(),
                 display_name,
-                base_limit,
                 source_filter,
             )]
         }
         UsageVisibilityGranularity::TeamAggregate => {
             // Force SourceFilter::All — TeamAggregate has no toggle.
             let (viewer_uid, display_name) = viewer_identity(app);
-            let base_limit = viewer_base_limit(workspace, viewer_uid.as_deref());
             let mut rows = vec![MemberUsageRow::for_viewer(
                 entries,
                 viewer_uid.as_deref(),
                 display_name,
-                base_limit,
                 SourceFilter::All,
             )];
             rows.push(MemberUsageRow::for_other_members(entries));
@@ -570,18 +538,8 @@ fn render_row_card(
         name_row.add_child(Container::new(info_icon).with_margin_left(6.).finish());
     }
 
-    // Credit + cost cluster: `[coin] X[/limit]   [card] $cost`.
-    let credits_str = match row.base_limit {
-        Some(limit) if limit > 0 => format!(
-            "{}/{}",
-            format_credits(row.total_credits),
-            format_credits(limit)
-        ),
-        None => format_credits(row.total_credits),
-        Some(_) => format_credits(row.total_credits),
-    };
     let credits_text = Text::new_inline(
-        credits_str,
+        format_credits(row.total_credits),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -762,19 +720,16 @@ fn render_source_filter_toggle(
 }
 
 pub fn render_own_usage_with_workspace_row(
-    workspace: &Workspace,
     entries: &[BillingCycleUsageEntry],
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let (viewer_uid, display_name) = viewer_identity(app);
-    let base_limit = viewer_base_limit(workspace, viewer_uid.as_deref());
     let row = MemberUsageRow::for_viewer(
         entries,
         viewer_uid.as_deref(),
         display_name,
-        base_limit,
         SourceFilter::All,
     );
     render_member_row_list(std::slice::from_ref(&row), mouse_states, appearance)
@@ -787,11 +742,9 @@ pub fn render_own_usage_solo_row(
 ) -> Box<dyn Element> {
     let (viewer_uid, display_name) = viewer_identity(app);
     let model = AIRequestUsageModel::as_ref(app);
-    let base_limit = (!model.is_unlimited()).then(|| model.request_limit() as i64);
     let row = MemberUsageRow::for_viewer_from_total(
         viewer_uid,
         display_name,
-        base_limit,
         model.requests_used() as i64,
     );
     render_member_row_list(std::slice::from_ref(&row), mouse_states, appearance)

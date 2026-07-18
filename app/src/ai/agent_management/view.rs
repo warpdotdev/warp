@@ -390,7 +390,7 @@ impl AgentManagementView {
 
     fn get_view_state(&self, app: &AppContext) -> ViewState {
         let model = AgentConversationsModel::as_ref(app);
-        let has_items = model.has_items();
+        let has_items = model.has_items(app);
 
         // If loading with zero items, show skeleton cards
         // If loading with items, show list of interactive conversations (with loading indicator in header)
@@ -1131,6 +1131,7 @@ impl AgentManagementView {
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: None,
+                    initial_attachments: vec![],
                     destination: ForkedConversationDestination::NewTab,
                 });
             }
@@ -1280,6 +1281,8 @@ impl AgentManagementView {
     /// active status filter:
     /// * `Restored`: the underlying status didn't change, so the visible cards don't change
     ///   either. Just refresh the details panel.
+    /// * `MetadataChanged`: rebuild the cards so metadata-derived actions update.
+    /// * `TitleChanged`: rebuild the cards so filtering and titles update.
     /// * `StatusSet` that crosses the active status filter: rebuild the
     ///   card list via `get_tasks_from_model`.
     /// * `StatusSet` that doesn't cross the active filter (or `All` is active):
@@ -1292,6 +1295,7 @@ impl AgentManagementView {
         match kind {
             ConversationUpdateKind::Restored => {}
             ConversationUpdateKind::MetadataChanged => self.get_tasks_from_model(ctx),
+            ConversationUpdateKind::TitleChanged => self.get_tasks_from_model(ctx),
             ConversationUpdateKind::StatusSet {
                 prev_filter,
                 new_filter,

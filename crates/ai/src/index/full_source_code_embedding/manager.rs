@@ -17,7 +17,8 @@ cfg_if::cfg_if! {
         use warp_core::features::FeatureFlag;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use warpui_core::r#async::Timer;
-        use warp_core::{send_telemetry_from_ctx, report_if_error};
+        use warp_core::send_telemetry_from_ctx;
+        use warp_errors::report_if_error;
         use crate::telemetry::AITelemetryEvent;
         use instant::Instant;
         use warp_core::channel::ChannelState;
@@ -25,6 +26,7 @@ cfg_if::cfg_if! {
     }
 }
 use warp_core::safe_anyhow;
+use warp_errors::report_error;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress};
@@ -253,6 +255,7 @@ pub struct CodebaseIndexManagerConfig {
     embedding_generation_batch_size: usize,
     store_client: Arc<dyn StoreClient>,
     indexing_enabled: bool,
+    restore_persisted_indices_on_startup: bool,
 }
 
 impl CodebaseIndexManagerConfig {
@@ -271,7 +274,13 @@ impl CodebaseIndexManagerConfig {
             embedding_generation_batch_size,
             store_client,
             indexing_enabled,
+            restore_persisted_indices_on_startup: true,
         }
+    }
+
+    pub fn defer_persisted_index_restore(mut self) -> Self {
+        self.restore_persisted_indices_on_startup = false;
+        self
     }
 }
 
@@ -361,6 +370,7 @@ impl CodebaseIndexManager {
             embedding_generation_batch_size,
             store_client,
             indexing_enabled,
+            restore_persisted_indices_on_startup,
         } = config;
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
@@ -416,7 +426,8 @@ impl CodebaseIndexManager {
         }
 
         // For the moment, we've decided to load all snapshots regardless of the index count.
-        let build_queue = BuildQueue::new_with_persisted(valid_metadata);
+        let build_queue =
+            BuildQueue::new_with_persisted(valid_metadata, restore_persisted_indices_on_startup);
 
         let mut me = Self {
             codebase_indices: HashMap::new(),
@@ -433,10 +444,7 @@ impl CodebaseIndexManager {
             snapshot_storage,
         };
 
-        // Start building the first index in the queue.
-        if let Some(next_repo) = me.build_queue.pick_next_sync() {
-            me.build_and_sync_codebase_index(BuildSource::FromPersistedMetadata(next_repo), ctx);
-        }
+        me.start_next_queued_index(ctx);
 
         me
     }
@@ -669,6 +677,7 @@ impl CodebaseIndexManager {
     #[cfg(feature = "local_fs")]
     fn handle_watcher_event(
         &mut self,
+        _: ModelHandle<BulkFilesystemWatcher>,
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -808,6 +817,15 @@ impl CodebaseIndexManager {
         self.indexing_enabled
     }
 
+    pub fn start_persisted_index_restore(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.is_indexing_enabled() {
+            return;
+        }
+        if self.build_queue.start() {
+            self.start_next_queued_index(ctx);
+        }
+    }
+
     pub fn index_directory(&mut self, directory: PathBuf, ctx: &mut ModelContext<Self>) -> bool {
         if !self.is_indexing_enabled() {
             return false;
@@ -896,7 +914,9 @@ impl CodebaseIndexManager {
             ) {
                 Ok(path) => path,
                 Err(e) => {
-                    log::error!("Failed to canonicalize repository path: {e:?}");
+                    report_error!(
+                        anyhow::Error::new(e).context("Failed to canonicalize repository path")
+                    );
                     return false;
                 }
             };
@@ -907,7 +927,7 @@ impl CodebaseIndexManager {
         }) {
             Ok(handle) => handle,
             Err(e) => {
-                log::error!("Failed to start tracking repository: {e:?}");
+                report_error!(anyhow::Error::new(e).context("Failed to start tracking repository"));
                 return false;
             }
         };
@@ -1016,6 +1036,7 @@ impl CodebaseIndexManager {
 
     fn handle_codebase_index_event(
         &mut self,
+        _: ModelHandle<CodebaseIndex>,
         event: &CodebaseIndexEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1100,7 +1121,10 @@ impl CodebaseIndexManager {
         let Ok(_) = self.get_codebase_index_internal(finished_repo) else {
             return;
         };
+        self.start_next_queued_index(ctx);
+    }
 
+    fn start_next_queued_index(&mut self, ctx: &mut ModelContext<Self>) {
         if let Some(next_repo) = self.build_queue.pick_next_sync() {
             self.build_and_sync_codebase_index(BuildSource::FromPersistedMetadata(next_repo), ctx);
         }
@@ -1120,6 +1144,7 @@ impl CodebaseIndexManager {
             .map(|(_, path)| path)
             .ok()
     }
+
     pub fn with_indexed_codebase<T>(
         &mut self,
         path: &Path,
@@ -1263,7 +1288,10 @@ impl CodebaseIndexManager {
             |_me, (repo_path, result), ctx| {
                 if let Err(err) = result {
                     if ChannelState::enable_debug_features() {
-                        log::error!("Unable to write snapshot for {repo_path:?}: {err:?}");
+                        report_error!(
+                            err.context("Unable to write snapshot"),
+                            extra: { "repo_path" => ?repo_path }
+                        );
                     } else {
                         log::warn!("Unable to write snapshot: {err:?}");
                     }
