@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+temp_dir="$(mktemp -d)"
+trap 'rm -rf "$temp_dir"' EXIT
+
+mkdir -p "$temp_dir/bin"
+cat > "$temp_dir/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+{
+  printf '%s\n' "$@"
+  printf 'WITH_LOCAL_SERVER=%s\n' "${WITH_LOCAL_SERVER-}"
+  printf 'WITH_LOCAL_SESSION_SHARING_SERVER=%s\n' "${WITH_LOCAL_SESSION_SHARING_SERVER-}"
+  printf 'WITH_SANDBOX_TELEMETRY=%s\n' "${WITH_SANDBOX_TELEMETRY-}"
+} > "$CARGO_CAPTURE"
+EOF
+chmod +x "$temp_dir/bin/cargo"
+
+run_case() {
+  local feature="$1"
+  local env_var="$2"
+  local output
+  local capture="$temp_dir/${feature}.capture"
+
+  output="$(
+    cd "$temp_dir"
+    PATH="$temp_dir/bin:$PATH" \
+      CARGO_CAPTURE="$capture" \
+      "$workspace_root/script/wasm/bundle" \
+      --check-only \
+      --channel local \
+      --features "base_feature,$feature,other_feature" \
+      2>&1
+  )"
+
+  grep -Fqx "Note: '$feature' is no longer a cargo feature; setting $env_var=1 instead." <<<"$output"
+  grep -Fqx "$env_var=1" "$capture"
+  grep -Fqx 'base_feature,other_feature' "$capture"
+  if grep -Fqx "$feature" "$capture"; then
+    echo "legacy feature was forwarded to cargo: $feature" >&2
+    exit 1
+  fi
+}
+
+run_case with_local_server WITH_LOCAL_SERVER
+run_case with_local_session_sharing_server WITH_LOCAL_SESSION_SHARING_SERVER
+run_case with_sandbox_telemetry WITH_SANDBOX_TELEMETRY
+
+no_feature_capture="$temp_dir/no_feature.capture"
+no_feature_output="$(
+  cd "$temp_dir"
+  PATH="$temp_dir/bin:$PATH" \
+    CARGO_CAPTURE="$no_feature_capture" \
+    "$workspace_root/script/wasm/bundle" \
+    --check-only \
+    --channel local \
+    --features base_feature \
+    2>&1
+)"
+
+if grep -Fq 'Note:' <<<"$no_feature_output"; then
+  echo "legacy feature note emitted without a legacy feature" >&2
+  exit 1
+fi
+grep -Fqx 'base_feature' "$no_feature_capture"
+grep -Fqx 'WITH_LOCAL_SERVER=' "$no_feature_capture"
+grep -Fqx 'WITH_LOCAL_SESSION_SHARING_SERVER=' "$no_feature_capture"
+grep -Fqx 'WITH_SANDBOX_TELEMETRY=' "$no_feature_capture"
