@@ -139,10 +139,41 @@ Add a `<table>` reader that produces a `FormattedTable`. Two placement options:
   HTML, and calls the table reader — emitting `FormattedTextLine::Table(FormattedTable)`.
   This mirrors how the `<img>` and `<details>` specs add own-line raw-HTML block detectors.
 
-Header determination (product invariant 2): a `<thead>` row, or a `<tr>` whose cells are
-`<th>`, becomes `headers`; remaining `<tr>` become `rows`. If there is no header row,
-promote the first `<tr>` to the header (the model always has a header) — documented
-behavior.
+Header determination (product invariant 2) — `FormattedTable` has exactly one `headers`
+slot, so the reader must pick exactly one source row for it, by precedence:
+
+1. `<thead>`'s first `<tr>` → `headers`. Any further rows inside `<thead>` are appended to
+   `rows` in document order (as plain data rows — no header styling carried over), not
+   dropped.
+2. Else, if the table's first `<tr>` is `<th>`-majority → that row becomes `headers`. Any
+   *other* `<tr>` in the table (outside `<thead>`) that is also `<th>`-majority is appended
+   to `rows` as a plain data row, same as case 1 — never dropped, never merged into
+   `headers`.
+3. Else, the table's first `<tr>`, of whatever cell tag composition, becomes `headers`
+   (the model always has a header row).
+
+Implementation-wise: the reader walks rows in document order, classifies each as
+`<thead>`-first / `<th>`-majority / other using the rules above to find the *one* row that
+wins `headers`, and every other row — regardless of its own `<th>`/`<td>` tag mix — is
+pushed onto `rows` using the ordinary cell reader (tag is not consulted again once a row is
+routed to `rows`; a demoted `<th>` row's cells parse the same as `<td>` cells). No cell
+data is discarded by this step; only header *styling* is not preserved for demoted rows,
+since `FormattedTable` has no per-row header flag beyond the single `headers` slot.
+
+Alignment resolution (product invariant 5) — `alignments: Vec<TableAlignment>` is one slot
+per column, so per-cell `align`/`text-align` must collapse to a single value per column
+before construction:
+
+- For each column index, scan `align`/`text-align` in this order: the resolved header
+  cell's value (if any) wins outright. If the header specifies none, take the first body
+  cell in that column (in row order) that specifies one.
+- If no cell in the column specifies an alignment, default to `TableAlignment::Left`
+  (matching the type's `#[default]`, `lib.rs:347`).
+- This resolution happens once, after the header/rows split above, so "the header cell" is
+  well-defined even when case 2/3 promotes a non-`<thead>` row to header.
+- Disagreeing cells are not tracked or surfaced anywhere post-resolution — the model has no
+  per-cell alignment override, matching how GFM tables already work (the separator row sets
+  one alignment per column with no per-cell escape hatch either).
 
 `colspan`/`rowspan` (product invariant 7): read the attributes only to **ignore** them —
 each `<td>`/`<th>` occupies exactly one grid slot regardless of span. Ragged rows are fixed
@@ -176,11 +207,21 @@ boundary. Inline images inside cells resolve through the same asset-source resol
 - Simple `<table>` with `<thead>`/`<tbody>` → `FormattedTable` with expected headers/rows
   (invariants 1, 2).
 - `<th>`-first-row table with no `<thead>` → first row is header (invariant 2).
+- `<thead>` with **two** rows → first row is `headers`, second row appended to `rows` as a
+  plain data row, not dropped, not merged (invariant 2).
+- No `<thead>`, first `<tr>` is `<th>`-majority, and a **later** `<tr>` elsewhere in the
+  table is also `<th>`-majority → first row is `headers`, the later `<th>`-majority row is
+  demoted to a plain data row (invariant 2).
 - Inline formatting inside cells (bold/link/`code`/inline image) → parsed fragments
   (invariant 3).
 - `<br>` in a cell → multi-line cell (invariant 4); assert the cell holds ≥2 lines under
   the chosen cell model.
 - `align`/`text-align` on cells → `TableAlignment` (invariant 5).
+- Header cell and a body cell in the same column disagree on alignment → header wins
+  (invariant 5).
+- Header cell specifies no alignment, two body cells in the same column disagree → first
+  body cell (in row order) that specifies one wins (invariant 5).
+- No cell in a column specifies alignment → defaults to left (invariant 5).
 - Ragged rows → normalized to uniform columns (invariant 6).
 - `<td colspan="2">` / `rowspan` → single ordinary cell, span ignored, grid rectangular
   (invariant 7).
@@ -229,6 +270,12 @@ Markdown file containing an HTML table if exercisable there.
   explicit non-goal here (invariant 7 degrades it). It deserves its own spec/PR — likely
   the largest single piece of the whole #13652 effort — and should be scoped separately
   once simple + `<br>` tables land.
+- **Issue-linkage decision needed before merge.** #13726 cites `colspan`/`rowspan` as a
+  motivating requirement this PR does not deliver; per product.md's "Issue linkage" note,
+  the PR should not read "Closes #13726" without either downgrading it to
+  "Contributes to"/"Partially addresses," or splitting a dedicated follow-up issue for
+  spans and retargeting #13726's remaining scope to it. This is a maintainer call, not an
+  engineering one — flagging for explicit sign-off.
 - **Interaction with the other tier-zero specs:** inline images inside cells depend on the
   `<img>` spec's inline-image support; an HTML table inside a `<details>` body should work
   under that spec's Option-A model since the table is an ordinary top-level block. Verify
