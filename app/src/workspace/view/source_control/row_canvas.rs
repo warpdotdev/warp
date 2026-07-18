@@ -8,9 +8,10 @@ use warpui::{AppContext, EventContext, LayoutContext, PaintContext, SizeConstrai
 use super::layout::GraphRow;
 
 const LANE_WIDTH: f32 = 12.;
-const ROW_HEIGHT: f32 = 30.;
+const ROW_HEIGHT: f32 = 24.;
 const LINE_THICKNESS: f32 = 1.5;
 const DOT_DIAMETER: f32 = 7.;
+const MAX_LANES: usize = 8;
 
 pub struct GraphRowCanvas {
     row: GraphRow,
@@ -69,7 +70,8 @@ impl Element for GraphRowCanvas {
         _ctx: &mut LayoutContext,
         _app: &AppContext,
     ) -> Vector2F {
-        let size = vec2f(self.lane_count.max(1) as f32 * LANE_WIDTH, ROW_HEIGHT);
+        let lane_count = self.lane_count.clamp(1, MAX_LANES);
+        let size = vec2f(lane_count as f32 * LANE_WIDTH, ROW_HEIGHT);
         self.size = Some(size);
         size
     }
@@ -83,14 +85,14 @@ impl Element for GraphRowCanvas {
         let bottom = top + ROW_HEIGHT;
 
         for segment in &self.row.segments {
-            let from_x = Self::lane_x(origin, segment.from_lane);
-            let to_x = Self::lane_x(origin, segment.to_lane);
+            let from_x = Self::lane_x(origin, segment.from_lane.min(MAX_LANES - 1));
+            let to_x = Self::lane_x(origin, segment.to_lane.min(MAX_LANES - 1));
             Self::draw_vertical(ctx, from_x, top, middle, self.color);
             Self::draw_horizontal(ctx, from_x, to_x, middle, self.color);
             Self::draw_vertical(ctx, to_x, middle, bottom, self.color);
         }
 
-        let node_x = Self::lane_x(origin, self.row.node_lane);
+        let node_x = Self::lane_x(origin, self.row.node_lane.min(MAX_LANES - 1));
         let radius = DOT_DIAMETER / 2.;
         ctx.scene
             .draw_rect_with_hit_recording(RectF::new(

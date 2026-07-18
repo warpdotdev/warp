@@ -32,6 +32,7 @@ pub struct Resizable {
     resize_handler: Option<Handler>,
     start_resize_handler: Option<Handler>,
     end_resize_handler: Option<Handler>,
+    dragbar_double_click_handler: Option<Handler>,
     hovering_dragbar: bool,
     direction: ResizeDirection,
     origin_delta: Vector2F,
@@ -223,6 +224,7 @@ impl Resizable {
             resize_handler: None,
             start_resize_handler: None,
             end_resize_handler: None,
+            dragbar_double_click_handler: None,
             dragbar: Dragbar::new(),
             hovering_dragbar: false,
             direction: ResizeDirection::Horizontal,
@@ -254,6 +256,14 @@ impl Resizable {
         F: FnMut(&mut EventContext, &AppContext) + 'static,
     {
         self.end_resize_handler = Some(Box::new(callback));
+        self
+    }
+
+    pub fn on_dragbar_double_click(
+        mut self,
+        handler: impl FnMut(&mut EventContext, &AppContext) + 'static,
+    ) -> Self {
+        self.dragbar_double_click_handler = Some(Box::new(handler));
         self
     }
 
@@ -426,13 +436,22 @@ impl Element for Resizable {
         let child_handled = self.child.dispatch_event(event, ctx, app);
 
         match event.raw_event() {
-            crate::Event::LeftMouseDown { position, .. } => {
+            crate::Event::LeftMouseDown {
+                position,
+                click_count,
+                ..
+            } => {
                 // If a mouse-down on the dragbar element occurred, put the view into resizing mode
                 if self
                     .dragbar
                     .bounds
                     .is_some_and(|bounds| bounds.contains_point(*position))
                 {
+                    if *click_count == 2 && self.dragbar_double_click_handler.is_some() {
+                        self.state().end_resizing();
+                        dispatch_callback(self.dragbar_double_click_handler.as_mut(), ctx, app);
+                        return true;
+                    }
                     self.state().begin_resizing(*position);
                     dispatch_callback(self.resize_handler.as_mut(), ctx, app);
                     return true;

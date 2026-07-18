@@ -8,7 +8,9 @@ fn commit(hash: &str, parents: &[&str]) -> CommitNode {
         author: String::new(),
         timestamp: 0,
         subject: hash.to_string(),
+        body: String::new(),
         refs: Vec::new(),
+        stats: None,
     }
 }
 

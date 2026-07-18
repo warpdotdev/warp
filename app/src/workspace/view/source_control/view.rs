@@ -1,23 +1,30 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
+use chrono::{Local, TimeZone};
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::elements::{
-    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Text,
+    Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DragBarSide, Element, Expanded, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Point, Radius, Resizable, ResizableStateHandle,
+    ScrollbarWidth, Shrinkable, Stack, Text,
 };
+use warpui::event::DispatchedEvent;
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    AfterLayoutContext, AppContext, Entity, EventContext, LayoutContext, ModelHandle, PaintContext,
+    SingletonEntity, SizeConstraint, TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use super::data::{
-    apply_mutation, load_history, load_repository, FileChange, GitChangeKind, GitMutation,
-    RepositorySnapshot, HISTORY_PAGE_SIZE,
+    apply_mutation, load_history, load_repository, CommitNode, FileChange, GitChangeKind,
+    GitMutation, GitRefKind, GitRefLabel, RepositorySnapshot, HISTORY_PAGE_SIZE,
 };
 use super::layout::{layout_commits, GraphLayout};
 use super::row_canvas::GraphRowCanvas;
@@ -66,11 +73,98 @@ pub enum SourceControlEvent {
     OpenCodeReview { repo_path: LocalOrRemotePath },
 }
 
+fn relative_time_string(timestamp: i64) -> Option<String> {
+    let elapsed_seconds = Local::now().timestamp().saturating_sub(timestamp).max(0);
+    if elapsed_seconds < 60 {
+        Some("just now".to_string())
+    } else if elapsed_seconds < 60 * 60 {
+        let minutes = elapsed_seconds / 60;
+        Some(format!(
+            "{minutes} minute{} ago",
+            if minutes == 1 { "" } else { "s" }
+        ))
+    } else if elapsed_seconds < 24 * 60 * 60 {
+        let hours = elapsed_seconds / (60 * 60);
+        Some(format!(
+            "{hours} hour{} ago",
+            if hours == 1 { "" } else { "s" }
+        ))
+    } else if elapsed_seconds <= 30 * 24 * 60 * 60 {
+        let days = elapsed_seconds / (24 * 60 * 60);
+        Some(format!(
+            "{days} day{} ago",
+            if days == 1 { "" } else { "s" }
+        ))
+    } else {
+        None
+    }
+}
+
+fn absolute_time_string(timestamp: i64) -> String {
+    Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .map(|timestamp| timestamp.format("%B %-d, %Y at %-I:%M %p").to_string())
+        .unwrap_or_else(|| "Unknown date".to_string())
+}
+
 #[derive(Default)]
 struct StaticMouseStates {
     refresh: MouseStateHandle,
     history: MouseStateHandle,
     load_more: MouseStateHandle,
+}
+
+struct MeasuredHeight {
+    child: Box<dyn Element>,
+    handle: Arc<Mutex<f32>>,
+}
+
+impl MeasuredHeight {
+    fn new(handle: Arc<Mutex<f32>>, child: Box<dyn Element>) -> Self {
+        Self { child, handle }
+    }
+}
+
+impl Element for MeasuredHeight {
+    fn layout(
+        &mut self,
+        constraint: SizeConstraint,
+        ctx: &mut LayoutContext,
+        app: &AppContext,
+    ) -> Vector2F {
+        let size = self.child.layout(constraint, ctx, app);
+        *self
+            .handle
+            .lock()
+            .expect("split area height should be accessible") = size.y();
+        size
+    }
+
+    fn after_layout(&mut self, ctx: &mut AfterLayoutContext, app: &AppContext) {
+        self.child.after_layout(ctx, app);
+    }
+
+    fn paint(&mut self, origin: Vector2F, ctx: &mut PaintContext, app: &AppContext) {
+        self.child.paint(origin, ctx, app);
+    }
+
+    fn size(&self) -> Option<Vector2F> {
+        self.child.size()
+    }
+
+    fn origin(&self) -> Option<Point> {
+        self.child.origin()
+    }
+
+    fn dispatch_event(
+        &mut self,
+        event: &DispatchedEvent,
+        ctx: &mut EventContext,
+        app: &AppContext,
+    ) -> bool {
+        self.child.dispatch_event(event, ctx, app)
+    }
 }
 
 pub struct SourceControlView {
@@ -90,12 +184,16 @@ pub struct SourceControlView {
     generation: u64,
     collapsed_sections: HashMap<ChangeSection, bool>,
     history_collapsed: bool,
-    scroll_state: ClippedScrollStateHandle,
+    history_scroll_state: ClippedScrollStateHandle,
+    changes_scroll_state: ClippedScrollStateHandle,
+    split_state: ResizableStateHandle,
+    split_area_height: Arc<Mutex<f32>>,
     static_mouse_states: StaticMouseStates,
     section_mouse_states: HashMap<ChangeSection, MouseStateHandle>,
     section_action_mouse_states: HashMap<ChangeSection, MouseStateHandle>,
     row_mouse_states: HashMap<(ChangeSection, String), MouseStateHandle>,
     row_action_mouse_states: HashMap<(ChangeSection, String), MouseStateHandle>,
+    commit_mouse_states: HashMap<String, MouseStateHandle>,
 }
 
 impl SourceControlView {
@@ -137,7 +235,10 @@ impl SourceControlView {
                 .map(|section| (section, false))
                 .collect(),
             history_collapsed: false,
-            scroll_state: ClippedScrollStateHandle::default(),
+            history_scroll_state: ClippedScrollStateHandle::default(),
+            changes_scroll_state: ClippedScrollStateHandle::default(),
+            split_state: warpui::elements::resizable_state_handle(320.),
+            split_area_height: Arc::new(Mutex::new(0.)),
             static_mouse_states: StaticMouseStates::default(),
             section_mouse_states: sections
                 .into_iter()
@@ -149,6 +250,7 @@ impl SourceControlView {
                 .collect(),
             row_mouse_states: HashMap::new(),
             row_action_mouse_states: HashMap::new(),
+            commit_mouse_states: HashMap::new(),
         }
     }
 
@@ -220,6 +322,7 @@ impl SourceControlView {
         self.needs_refresh = repository.is_some();
         self.row_mouse_states.clear();
         self.row_action_mouse_states.clear();
+        self.commit_mouse_states.clear();
         self.update_repository_dropdown(ctx);
 
         let Some(repository) = repository else {
@@ -363,6 +466,11 @@ impl SourceControlView {
                 self.row_action_mouse_states.entry(key).or_default();
             }
         }
+        for commit in &snapshot.commits {
+            self.commit_mouse_states
+                .entry(commit.hash.clone())
+                .or_default();
+        }
         self.snapshot = Some(snapshot);
     }
 
@@ -445,8 +553,17 @@ impl SourceControlView {
                 me.history_page_in_progress = false;
                 match result {
                     Ok((commits, has_more)) => {
-                        if let Some(snapshot) = &mut me.snapshot {
-                            if snapshot.commits.len() == base_len {
+                        if me
+                            .snapshot
+                            .as_ref()
+                            .is_some_and(|snapshot| snapshot.commits.len() == base_len)
+                        {
+                            for commit in &commits {
+                                me.commit_mouse_states
+                                    .entry(commit.hash.clone())
+                                    .or_default();
+                            }
+                            if let Some(snapshot) = &mut me.snapshot {
                                 snapshot.commits.extend(commits);
                                 snapshot.has_more_history = has_more;
                                 me.graph_layout = layout_commits(&snapshot.commits);
@@ -635,6 +752,216 @@ impl SourceControlView {
         .finish()
     }
 
+    fn displayed_refs(commit: &CommitNode) -> Vec<&GitRefLabel> {
+        let mut refs = Vec::new();
+        for (index, label) in commit.refs.iter().enumerate() {
+            let redundant_head = matches!(&label.kind, GitRefKind::Head)
+                && commit
+                    .refs
+                    .get(index + 1)
+                    .is_some_and(|next| matches!(&next.kind, GitRefKind::LocalBranch));
+            if !redundant_head {
+                refs.push(label);
+            }
+        }
+        refs.sort_by_key(|label| match &label.kind {
+            GitRefKind::Head | GitRefKind::LocalBranch => 0,
+            GitRefKind::RemoteBranch => 1,
+            GitRefKind::Tag => 2,
+            GitRefKind::Other => 3,
+        });
+        refs
+    }
+
+    fn render_ref_badge(
+        label: impl Into<String>,
+        is_primary: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let background = if is_primary {
+            theme.accent().into_solid()
+        } else {
+            internal_colors::fg_overlay_3(theme).into_solid()
+        };
+        let text_color = if is_primary {
+            theme.background().into_solid()
+        } else {
+            theme.sub_text_color(theme.background()).into_solid()
+        };
+        let text = Text::new_inline(
+            label.into(),
+            appearance.ui_font_family(),
+            (appearance.ui_font_size() - 2.).max(1.),
+        )
+        .with_clip(ClipConfig::ellipsis())
+        .with_color(text_color)
+        .finish();
+        ConstrainedBox::new(
+            Container::new(text)
+                .with_background(background)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(9.)))
+                .with_horizontal_padding(7.)
+                .with_vertical_padding(1.5)
+                .finish(),
+        )
+        .with_max_width(120.)
+        .finish()
+    }
+
+    fn render_commit_details(
+        &self,
+        commit: &CommitNode,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let main_color = theme.main_text_color(theme.surface_1()).into_solid();
+        let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
+        let absolute_time = absolute_time_string(commit.timestamp);
+        let time_label = relative_time_string(commit.timestamp)
+            .map(|relative| format!("  {relative} ({absolute_time})"))
+            .unwrap_or_else(|| format!("  {absolute_time}"));
+        let header = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Shrinkable::new(
+                    1.,
+                    Text::new_inline(
+                        commit.author.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_clip(ClipConfig::ellipsis())
+                    .with_color(main_color)
+                    .finish(),
+                )
+                .finish(),
+            )
+            .with_child(
+                Text::new_inline(
+                    time_label,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(sub_color)
+                .finish(),
+            )
+            .finish();
+
+        let mut message = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(4.)
+            .with_child(
+                Text::new(
+                    commit.subject.clone(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(main_color)
+                .soft_wrap(true)
+                .finish(),
+            );
+        if !commit.body.is_empty() {
+            message.add_child(
+                Text::new(
+                    commit.body.clone(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(sub_color)
+                .soft_wrap(true)
+                .finish(),
+            );
+        }
+
+        let mut content = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(6.)
+            .with_child(header)
+            .with_child(message.finish());
+
+        if let Some(stats) = &commit.stats {
+            let file_label = format!(
+                "{} file{} changed",
+                stats.files_changed,
+                if stats.files_changed == 1 { "" } else { "s" }
+            );
+            let mut stats_row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(
+                    Text::new_inline(
+                        file_label,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(sub_color)
+                    .finish(),
+                );
+            if stats.insertions > 0 {
+                stats_row.add_child(
+                    Text::new_inline(
+                        format!("  {} insertions(+)", stats.insertions),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(add_color(appearance))
+                    .finish(),
+                );
+            }
+            if stats.deletions > 0 {
+                stats_row.add_child(
+                    Text::new_inline(
+                        format!("  {} deletions(-)", stats.deletions),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(remove_color(appearance))
+                    .finish(),
+                );
+            }
+            content.add_child(stats_row.finish());
+        }
+
+        let refs = Self::displayed_refs(commit);
+        if !refs.is_empty() {
+            let mut ref_row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(4.);
+            for label in refs.into_iter().take(6) {
+                let is_primary = matches!(&label.kind, GitRefKind::Head | GitRefKind::LocalBranch);
+                ref_row.add_child(Self::render_ref_badge(
+                    label.name.clone(),
+                    is_primary,
+                    appearance,
+                ));
+            }
+            content.add_child(ref_row.finish());
+        }
+
+        content.add_child(
+            Text::new_inline(
+                commit.short_hash().to_string(),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(sub_color)
+            .finish(),
+        );
+
+        ConstrainedBox::new(
+            Container::new(content.finish())
+                .with_background(theme.surface_1())
+                .with_border(Border::all(1.).with_border_fill(theme.surface_3()))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                .with_horizontal_padding(11.)
+                .with_vertical_padding(10.)
+                .finish(),
+        )
+        .with_max_width(420.)
+        .finish()
+    }
+
     fn render_section(
         &self,
         section: ChangeSection,
@@ -799,18 +1126,11 @@ impl SourceControlView {
                 .finish(),
             );
         }
-        let clickable = Hoverable::new(row_state, |_| {
-            Container::new(label.finish())
-                .with_padding_left(22.)
-                .with_padding_top(4.)
-                .with_padding_bottom(4.)
-                .finish()
-        })
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(SourceControlAction::OpenCodeReview);
-        })
-        .with_cursor(Cursor::PointingHand)
-        .finish();
+        let clickable = Container::new(label.finish())
+            .with_padding_left(22.)
+            .with_padding_top(4.)
+            .with_padding_bottom(4.)
+            .finish();
         let status_color = match change.kind {
             GitChangeKind::Added | GitChangeKind::Untracked => add_color(appearance),
             GitChangeKind::Deleted => remove_color(appearance),
@@ -854,7 +1174,7 @@ impl SourceControlView {
         }
         trailing.add_child(status);
 
-        Flex::row()
+        let row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -864,10 +1184,23 @@ impl SourceControlView {
                     .with_padding_right(8.)
                     .finish(),
             )
-            .finish()
+            .finish();
+        Hoverable::new(row_state, |state| {
+            let mut row = Container::new(row);
+            if state.is_hovered() {
+                row = row.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            row.finish()
+        })
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(SourceControlAction::OpenCodeReview);
+        })
+        .with_defer_events_to_children()
+        .with_cursor(Cursor::PointingHand)
+        .finish()
     }
 
-    fn render_history(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_history_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let main_color = theme.main_text_color(theme.background()).into_solid();
         let sub_color = theme.sub_text_color(theme.background()).into_solid();
@@ -907,19 +1240,20 @@ impl SourceControlView {
         .with_cursor(Cursor::PointingHand)
         .finish();
 
-        let mut column = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(
-                Container::new(history_header)
-                    .with_border(Border::top(1.).with_border_fill(theme.surface_3()))
-                    .finish(),
-            );
-        if self.history_collapsed {
-            return column.finish();
-        }
-        let Some(snapshot) = &self.snapshot else {
-            return column.finish();
-        };
+        Container::new(history_header)
+            .with_border(Border::top(1.).with_border_fill(theme.surface_3()))
+            .finish()
+    }
+
+    fn render_history_content(
+        &self,
+        snapshot: &RepositorySnapshot,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let main_color = theme.main_text_color(theme.background()).into_solid();
+        let sub_color = theme.sub_text_color(theme.background()).into_solid();
+        let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         if snapshot.commits.is_empty() {
             column.add_child(
                 Container::new(
@@ -942,61 +1276,93 @@ impl SourceControlView {
             let Some(graph_row) = self.graph_layout.rows.get(index) else {
                 continue;
             };
-            let refs = commit
-                .refs
-                .iter()
-                .map(|label| label.name.as_str())
-                .collect::<Vec<_>>()
-                .join("  ");
-            let detail = if refs.is_empty() {
-                format!("{}  {}", commit.short_hash(), commit.author)
-            } else {
-                format!("{refs}  {}  {}", commit.short_hash(), commit.author)
-            };
-            column.add_child(
-                Container::new(
-                    Flex::row()
-                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_child(Box::new(GraphRowCanvas::new(
-                            graph_row.clone(),
-                            self.graph_layout.max_lanes,
-                            theme.accent().into_solid(),
-                        )))
-                        .with_child(
-                            Shrinkable::new(
-                                1.,
-                                Flex::column()
-                                    .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                                    .with_child(
-                                        Text::new_inline(
-                                            commit.subject.clone(),
-                                            appearance.ui_font_family(),
-                                            appearance.ui_font_size(),
-                                        )
-                                        .with_clip(ClipConfig::ellipsis())
-                                        .with_color(main_color)
-                                        .finish(),
+            let refs = Self::displayed_refs(commit);
+            let mut badges = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(4.);
+            for label in refs.iter().take(3) {
+                let is_primary = matches!(&label.kind, GitRefKind::Head | GitRefKind::LocalBranch);
+                badges.add_child(Self::render_ref_badge(
+                    label.name.clone(),
+                    is_primary,
+                    appearance,
+                ));
+            }
+            if refs.len() > 3 {
+                badges.add_child(Self::render_ref_badge(
+                    format!("+{}", refs.len() - 3),
+                    false,
+                    appearance,
+                ));
+            }
+
+            let row = Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(Box::new(GraphRowCanvas::new(
+                    graph_row.clone(),
+                    self.graph_layout.max_lanes,
+                    theme.accent().into_solid(),
+                )))
+                .with_child(
+                    Expanded::new(
+                        1.,
+                        Flex::row()
+                            .with_main_axis_size(MainAxisSize::Max)
+                            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                            .with_spacing(6.)
+                            .with_child(
+                                Shrinkable::new(
+                                    1.,
+                                    Text::new_inline(
+                                        commit.subject.clone(),
+                                        appearance.ui_font_family(),
+                                        appearance.ui_font_size(),
                                     )
-                                    .with_child(
-                                        Text::new_inline(
-                                            detail,
-                                            appearance.ui_font_family(),
-                                            appearance.ui_font_size() - 1.,
-                                        )
-                                        .with_clip(ClipConfig::ellipsis())
-                                        .with_color(sub_color)
-                                        .finish(),
-                                    )
+                                    .with_clip(ClipConfig::ellipsis())
+                                    .with_color(main_color)
                                     .finish(),
+                                )
+                                .finish(),
                             )
+                            .with_child(badges.finish())
                             .finish(),
-                        )
-                        .finish(),
+                    )
+                    .finish(),
                 )
-                .with_padding_left(8.)
-                .with_padding_right(8.)
-                .finish(),
+                .finish();
+            let details_card = self.render_commit_details(commit, appearance);
+            let mouse_state = self.commit_mouse_states.get(&commit.hash).cloned().expect(
+                "commit rows are assigned persistent mouse state when a snapshot is applied",
             );
+            let hoverable = Hoverable::new(mouse_state, move |state| {
+                let mut row = Container::new(row)
+                    .with_padding_left(8.)
+                    .with_padding_right(8.);
+                if state.is_hovered() {
+                    row = row.with_background(internal_colors::fg_overlay_3(theme));
+                }
+                let row = ConstrainedBox::new(row.finish()).with_height(24.).finish();
+                if state.is_hovered() {
+                    let mut stack = Stack::new();
+                    stack.add_child(row);
+                    stack.add_positioned_overlay_child(
+                        details_card,
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(8., 0.),
+                            ParentOffsetBounds::WindowByPosition,
+                            ParentAnchor::TopRight,
+                            ChildAnchor::TopLeft,
+                        ),
+                    );
+                    stack.finish()
+                } else {
+                    row
+                }
+            })
+            .finish();
+            column.add_child(hoverable);
         }
         if snapshot.has_more_history {
             column.add_child(
@@ -1017,24 +1383,12 @@ impl SourceControlView {
         column.finish()
     }
 
-    fn render_snapshot(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let Some(snapshot) = &self.snapshot else {
-            return self.render_message(
-                if self.is_loading {
-                    "Loading…"
-                } else {
-                    "Git unavailable"
-                },
-                self.error
-                    .as_deref()
-                    .unwrap_or("Refresh to load repository state."),
-                appearance,
-            );
-        };
+    fn render_changes_content(
+        &self,
+        snapshot: &RepositorySnapshot,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        if let Some(error) = &self.error {
-            content.add_child(self.render_error(error, appearance));
-        }
         if !snapshot.has_changes() {
             content.add_child(self.render_message(
                 "No changes",
@@ -1056,8 +1410,72 @@ impl SourceControlView {
                 }
             }
         }
-        content.add_child(self.render_history(appearance));
         content.finish()
+    }
+
+    fn render_changes_region(
+        &self,
+        snapshot: &RepositorySnapshot,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let changes = ClippedScrollable::vertical(
+            self.changes_scroll_state.clone(),
+            self.render_changes_content(snapshot, appearance),
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            warpui::elements::Fill::None,
+        )
+        .finish();
+        let mut region = Flex::column()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        if let Some(error) = &self.error {
+            region.add_child(self.render_error(error, appearance));
+        }
+        region.add_child(Shrinkable::new(1., changes).finish());
+        region.finish()
+    }
+
+    fn render_history_region(
+        &self,
+        snapshot: &RepositorySnapshot,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let history = ClippedScrollable::vertical(
+            self.history_scroll_state.clone(),
+            self.render_history_content(snapshot, appearance),
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            warpui::elements::Fill::None,
+        )
+        .finish();
+        Flex::column()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(self.render_history_header(appearance))
+            .with_child(Shrinkable::new(1., history).finish())
+            .finish()
+    }
+
+    fn render_single_scrollable(
+        &self,
+        body: Box<dyn Element>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        ClippedScrollable::vertical(
+            self.changes_scroll_state.clone(),
+            body,
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            warpui::elements::Fill::None,
+        )
+        .finish()
     }
 }
 
@@ -1110,35 +1528,108 @@ impl View for SourceControlView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let body: Box<dyn Element> = match &self.selected_repository {
-            None => self.render_message(
-                "No repository",
-                "Open or enter a local Git repository to view source control.",
-                appearance,
-            ),
-            Some(LocalOrRemotePath::Remote(_)) => self.render_message(
-                "Remote repository",
-                "Source-control operations for remote sessions are not supported yet.",
-                appearance,
-            ),
-            Some(LocalOrRemotePath::Local(_)) => self.render_snapshot(appearance),
-        };
-        let theme = appearance.theme();
-        let scrollable = ClippedScrollable::vertical(
-            self.scroll_state.clone(),
-            body,
-            ScrollbarWidth::Auto,
-            theme.nonactive_ui_detail().into(),
-            theme.active_ui_detail().into(),
-            warpui::elements::Fill::None,
-        )
-        .finish();
-        Flex::column()
+        let mut root = Flex::column()
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(self.render_header(appearance, app))
-            .with_child(Shrinkable::new(1., scrollable).finish())
-            .finish()
+            .with_child(self.render_header(appearance, app));
+
+        let local_snapshot = match (&self.selected_repository, &self.snapshot) {
+            (Some(LocalOrRemotePath::Local(_)), Some(snapshot)) => Some(snapshot),
+            _ => None,
+        };
+        if let Some(snapshot) = local_snapshot {
+            let changes_region = self.render_changes_region(snapshot, appearance);
+            if self.history_collapsed {
+                root.add_child(
+                    Shrinkable::new(
+                        1.,
+                        Flex::column()
+                            .with_main_axis_size(MainAxisSize::Max)
+                            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                            .with_child(Shrinkable::new(1., changes_region).finish())
+                            .with_child(self.render_history_header(appearance))
+                            .finish(),
+                    )
+                    .finish(),
+                );
+            } else {
+                let bounds_height = self.split_area_height.clone();
+                let reset_height = self.split_area_height.clone();
+                let reset_state = self.split_state.clone();
+                let changes_region = Resizable::new(self.split_state.clone(), changes_region)
+                    .with_dragbar_side(DragBarSide::Bottom)
+                    .on_resize(|ctx, _| ctx.notify())
+                    .with_bounds_callback(Box::new(move |_| {
+                        let measured = *bounds_height
+                            .lock()
+                            .expect("split area height should be accessible");
+                        if measured <= 0. {
+                            // Preserve the initial size until the split area is measured after layout.
+                            (120., f32::MAX)
+                        } else if measured <= 240. {
+                            let half = measured / 2.;
+                            (half, half)
+                        } else {
+                            (120., measured - 120.)
+                        }
+                    }))
+                    .on_dragbar_double_click(move |ctx, _| {
+                        let measured = *reset_height
+                            .lock()
+                            .expect("split area height should be accessible");
+                        reset_state
+                            .lock()
+                            .expect("source control split state should be accessible")
+                            .set_size(measured / 2.);
+                        ctx.notify();
+                    })
+                    .finish();
+                let split = Flex::column()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                    .with_child(changes_region)
+                    .with_child(
+                        Shrinkable::new(1., self.render_history_region(snapshot, appearance))
+                            .finish(),
+                    )
+                    .finish();
+                root.add_child(
+                    Shrinkable::new(
+                        1.,
+                        MeasuredHeight::new(self.split_area_height.clone(), split).finish(),
+                    )
+                    .finish(),
+                );
+            }
+        } else {
+            let body = match &self.selected_repository {
+                None => self.render_message(
+                    "No repository",
+                    "Open or enter a local Git repository to view source control.",
+                    appearance,
+                ),
+                Some(LocalOrRemotePath::Remote(_)) => self.render_message(
+                    "Remote repository",
+                    "Source-control operations for remote sessions are not supported yet.",
+                    appearance,
+                ),
+                Some(LocalOrRemotePath::Local(_)) => self.render_message(
+                    if self.is_loading {
+                        "Loading…"
+                    } else {
+                        "Git unavailable"
+                    },
+                    self.error
+                        .as_deref()
+                        .unwrap_or("Refresh to load repository state."),
+                    appearance,
+                ),
+            };
+            root.add_child(
+                Shrinkable::new(1., self.render_single_scrollable(body, appearance)).finish(),
+            );
+        }
+        root.finish()
     }
 }
 

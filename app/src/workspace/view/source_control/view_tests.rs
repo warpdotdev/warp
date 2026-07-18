@@ -4,7 +4,9 @@ use pathfinder_geometry::vector::vec2f;
 use warpui::platform::WindowStyle;
 use warpui::{App, EntityIdSet, Presenter, WindowInvalidation};
 
-use super::super::data::{CommitNode, FileChange, GitChangeKind, RepositorySnapshot};
+use super::super::data::{
+    CommitNode, CommitStats, FileChange, GitChangeKind, GitRefKind, GitRefLabel, RepositorySnapshot,
+};
 use super::*;
 
 #[test]
@@ -26,7 +28,22 @@ fn paints_snapshot_with_finite_geometry() {
                     author: "Test Author".to_string(),
                     timestamp: 1_700_000_000,
                     subject: "Latest commit".to_string(),
-                    refs: vec![],
+                    body: "More context about the latest commit.".to_string(),
+                    refs: vec![
+                        GitRefLabel {
+                            name: "HEAD".to_string(),
+                            kind: GitRefKind::Head,
+                        },
+                        GitRefLabel {
+                            name: "main".to_string(),
+                            kind: GitRefKind::LocalBranch,
+                        },
+                    ],
+                    stats: Some(CommitStats {
+                        files_changed: 2,
+                        insertions: 8,
+                        deletions: 3,
+                    }),
                 },
                 CommitNode {
                     hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
@@ -34,7 +51,9 @@ fn paints_snapshot_with_finite_geometry() {
                     author: "Test Author".to_string(),
                     timestamp: 1_699_999_000,
                     subject: "Previous commit".to_string(),
+                    body: String::new(),
                     refs: vec![],
+                    stats: None,
                 },
             ],
             has_more_history: true,
@@ -57,9 +76,11 @@ fn paints_snapshot_with_finite_geometry() {
         };
         let mut presenter = Presenter::new(window_id);
         app.update(move |ctx| {
-            presenter.invalidate(invalidation, ctx);
+            presenter.invalidate(invalidation.clone(), ctx);
             // Before the chevrons were explicitly sized, this paint aborted on
             // Scene::validate_rect debug assertions (infinite rect width).
+            presenter.build_scene(vec2f(300., 800.), 1., None, ctx);
+            presenter.invalidate(invalidation, ctx);
             presenter.build_scene(vec2f(300., 800.), 1., None, ctx);
         });
     })
