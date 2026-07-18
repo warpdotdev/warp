@@ -62,6 +62,33 @@ fn errors_when_directory_is_empty() {
     let err = collect_log_paths_in(tmp.path(), "warp.log").unwrap_err();
     assert!(err.to_string().contains("No warp logs were found"));
 }
+#[test]
+fn creates_log_bundle_zip_with_active_and_rotated_logs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let active = touch(tmp.path(), "warp.log");
+    let old = touch(tmp.path(), "warp.log.old.0");
+    fs::write(&active, "active log").unwrap();
+    fs::write(&old, "rotated log").unwrap();
+
+    let zip_path = create_log_bundle_zip_in(tmp.path(), "warp.log").unwrap();
+    assert_eq!(zip_path.parent(), Some(tmp.path()));
+    assert!(
+        zip_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("warp-")
+    );
+
+    let zip_file = File::open(zip_path).unwrap();
+    let mut archive = zip::ZipArchive::new(zip_file).unwrap();
+    assert_eq!(archive.len(), 2);
+    let mut names = (0..archive.len())
+        .map(|index| archive.by_index(index).unwrap().name().to_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names, vec!["warp.log", "warp.log.old.0"]);
+}
 
 #[test]
 fn respects_channel_specific_logfile_name() {

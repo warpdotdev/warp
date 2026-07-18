@@ -6,13 +6,17 @@ use warp::tui_export::{
     ParsedSlashCommandInput, SlashCommandId, SlashCommandMixer,
 };
 use warp_search_core::inline_menu::InlineMenuSelection;
-use warpui_core::App;
+use warpui_core::elements::tui::{
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
+};
+use warpui_core::{App, AppContext, EntityIdMap};
 
 use super::{
     argument_hint_text_for_parsed_input, highlighted_prefix_len_for_parsed_input,
     menu_query_for_parsed_input, TuiSlashCommandModel, TuiSlashCommandRow, MAX_VISIBLE_ROWS,
 };
-use crate::inline_menu::keep_selected_visible;
+use crate::inline_menu::{keep_selected_visible, TuiInlineMenu};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
 fn parsed_skill(argument: Option<&str>) -> ParsedSlashCommandInput {
@@ -21,6 +25,66 @@ fn parsed_skill(argument: Option<&str>) -> ParsedSlashCommandInput {
         name: "write-product-spec".to_owned(),
         argument: argument.map(str::to_owned),
     })
+}
+
+#[test]
+fn slash_command_menu_renders_view_logs_row() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let input_editor = ctx.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
+            let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
+            suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(TuiInputSuggestionsMode::SlashCommands, ctx);
+            });
+            let mixer = ctx.add_model(|_| SlashCommandMixer::new());
+            let model = ctx.add_model(|_| {
+                TuiSlashCommandModel::new_for_test(
+                    input_editor,
+                    suggestions_mode,
+                    mixer,
+                    vec![TuiSlashCommandRow {
+                        title: "/view-logs".to_owned(),
+                        description: Some("Bundle your TUI logs into a zip archive".to_owned()),
+                        action: AcceptSlashCommandOrSavedPrompt::SlashCommand {
+                            id: SlashCommandId::new(),
+                        },
+                    }],
+                    0,
+                )
+            });
+            let menu = TuiInlineMenu::new(model);
+            let element = menu.render(ctx).expect("slash command menu should render");
+            let lines = render_menu_lines(element, ctx);
+
+            assert!(lines.iter().any(|line| line.contains("/view-logs")));
+            assert!(lines
+                .iter()
+                .any(|line| line.contains("Bundle your TUI logs")));
+        });
+    });
+}
+
+fn render_menu_lines(mut element: Box<dyn TuiElement>, ctx: &AppContext) -> Vec<String> {
+    let mut rendered_views = EntityIdMap::default();
+    let mut layout_ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(
+        TuiConstraint::loose(TuiSize::new(80, 20)),
+        &mut layout_ctx,
+        ctx,
+    );
+    let area = TuiRect::new(0, 0, size.width, size.height);
+    let mut buffer = TuiBuffer::empty(area);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    let mut surface = TuiPaintSurface::new(&mut buffer);
+    element.render(
+        TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+        &mut surface,
+        &mut paint_ctx,
+    );
+    buffer.to_lines()
 }
 
 #[test]

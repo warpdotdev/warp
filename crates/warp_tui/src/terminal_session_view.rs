@@ -1,7 +1,7 @@
 //! Authenticated terminal-session TUI surface.
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -75,6 +75,7 @@ use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::orchestrated_agent_identity_styling::assign_agent_identity_indices;
 use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::orchestration_model::{TuiOrchestrationModel, TuiOrchestrationSnapshot};
+use crate::platform::reveal_path_in_file_manager;
 use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
@@ -166,6 +167,11 @@ const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model."
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
+const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
+
+fn log_bundle_success_message(path: &Path) -> String {
+    format!("Log bundle saved to {}", path.display())
+}
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
     (!input.trim().is_empty()).then_some(input)
@@ -2507,6 +2513,35 @@ impl TuiTerminalSessionView {
             TuiSlashCommand::Exit => {
                 record_static_slash_command_accepted(command.name, true, ctx);
                 ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            }
+            TuiSlashCommand::ViewLogs => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                ctx.spawn(
+                    async move {
+                        tokio::task::spawn_blocking(|| {
+                            let path = warp_logging::create_log_bundle_zip()?;
+                            reveal_path_in_file_manager(&path);
+                            Ok::<_, anyhow::Error>(path)
+                        })
+                        .await
+                    },
+                    |me, result, ctx| match result {
+                        Ok(Ok(path)) => {
+                            me.show_success_hint(log_bundle_success_message(&path), ctx);
+                        }
+                        Ok(Err(error)) => {
+                            report_error!(error.context("Failed to create TUI log bundle"));
+                            me.show_transient_hint(LOG_BUNDLE_FAILED_HINT.to_owned(), ctx);
+                        }
+                        Err(error) => {
+                            report_error!(
+                                anyhow::Error::new(error).context("TUI log bundle task failed")
+                            );
+                            me.show_transient_hint(LOG_BUNDLE_FAILED_HINT.to_owned(), ctx);
+                        }
+                    },
+                );
+                record_static_slash_command_accepted(command.name, true, ctx);
             }
             TuiSlashCommand::CreateNewProject => {
                 let Some(query) = argument

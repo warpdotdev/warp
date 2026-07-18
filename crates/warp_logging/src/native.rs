@@ -336,13 +336,8 @@ pub fn log_file_path() -> Result<PathBuf> {
 /// - For each previous-startup slot `K = 0..max_rotation`, in order:
 ///   `<name>.log.old.K` (that session's final-state log) immediately
 ///   followed by its `<name>.log.old.K.in_session.N` chunks, sorted by N.
-fn current_and_rotated_log_paths() -> Result<Vec<PathBuf>> {
-    let log_directory = log_directory()?;
-    let logfile_name = ChannelState::logfile_name();
-    collect_log_paths_in(&log_directory, &logfile_name)
-}
-
-/// Directory-scanning core of [`current_and_rotated_log_paths`], parameterized
+///
+/// Directory-scanning core of the log-bundle operation, parameterized
 /// for testability. See the parent docs for ordering semantics.
 fn collect_log_paths_in(log_directory: &Path, logfile_name: &str) -> Result<Vec<PathBuf>> {
     let current_log_path = log_directory.join(logfile_name);
@@ -433,10 +428,20 @@ fn collect_log_paths_in(log_directory: &Path, logfile_name: &str) -> Result<Vec<
 /// Creates a timestamped zip archive containing the current log file
 /// and any older logs for the active instance.
 pub fn create_log_bundle_zip() -> Result<PathBuf> {
-    let log_files = current_and_rotated_log_paths()?;
     let log_directory = log_directory()?;
     let logfile_name = ChannelState::logfile_name();
-    let logfile_stem = logfile_name.strip_suffix(".log").unwrap_or(&logfile_name);
+    create_log_bundle_zip_in(&log_directory, &logfile_name)
+}
+
+/// Creates a timestamped zip archive from a parameterized log directory and
+/// file name. This keeps the archive-writing behavior testable without the
+/// process-global logging state.
+pub(crate) fn create_log_bundle_zip_in(
+    log_directory: &Path,
+    logfile_name: &str,
+) -> Result<PathBuf> {
+    let log_files = collect_log_paths_in(log_directory, logfile_name)?;
+    let logfile_stem = logfile_name.strip_suffix(".log").unwrap_or(logfile_name);
 
     let zip_path = log_directory.join(format!(
         "{logfile_stem}-{}.zip",
