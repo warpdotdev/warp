@@ -27,6 +27,7 @@ use cfg_if::cfg_if;
 use get_size::GetSize;
 use string_offset::ByteOffset;
 use thiserror::Error;
+use warp_errors::report_error;
 
 use crate::model::grid::CellType;
 use crate::model::Point;
@@ -166,7 +167,7 @@ impl Index {
         entry_builder.append_to_index_if_nonempty(&mut index);
 
         if index.content_len > old_index.content_len {
-            log::error!("somehow ended up with too much flat storage content!");
+            report_error!("somehow ended up with too much flat storage content!");
         }
 
         index
@@ -235,11 +236,9 @@ impl Index {
         let bounded_count = count.min(self.rows.len());
         let new_start_offset = self.content_offset_for_row(count).unwrap_or_else(|| {
             if count > self.rows.len() {
-                log::error!(
-                    "should not attempt to truncate more rows than exist in flat storage; \
-                     have {} rows, trying to truncate {}",
-                    self.rows.len(),
-                    count
+                report_error!(
+                    "Attempted to truncate more rows than exist in flat storage",
+                    extra: { "rows" => %self.rows.len(), "truncate_count" => %count }
                 );
             }
             self.content_len.into()
@@ -448,7 +447,7 @@ impl Index {
             GraphemeSizing::NonUniform => self.grapheme_sizing.get(&entry.content_offset),
             GraphemeSizing::EmptyRow => return Some(CellType::RegularChar),
         }) else {
-            log::error!(
+            report_error!(
                 "Found entry with non-uniform grapheme sizing and no grapheme run information!"
             );
             return None;
@@ -614,6 +613,15 @@ impl EntryBuilder {
         let mut remaining = count as usize;
 
         while remaining > 0 {
+            // Zero-width graphemes do not occupy terminal cells. They were
+            // historically discarded during rebuild; consume them here so
+            // the batch loop makes progress instead of repeatedly flushing
+            // and retrying the same run.
+            if cell_width == 0 {
+                remaining -= 1;
+                continue;
+            }
+
             let space = index.columns.saturating_sub(self.num_cells);
             let fits = if cell_width > 0 {
                 space / cell_width
@@ -1196,6 +1204,12 @@ fn emit_runs(
         let scan_start = run_idx;
         let mut col = entry_builder.num_cells;
         while run_idx < runs.len() {
+            // Route zero-width graphemes through the batch path so they are
+            // consumed consistently instead of being included in the bulk
+            // byte accounting despite occupying no cells.
+            if runs[run_idx].info.cell_width == 0 {
+                break;
+            }
             let run_cols = runs[run_idx].cols();
             if col + run_cols > index.columns {
                 break;

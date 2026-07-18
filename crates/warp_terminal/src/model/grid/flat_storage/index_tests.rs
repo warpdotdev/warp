@@ -665,6 +665,54 @@ mod differential_tests {
     }
 
     #[test]
+    fn rebuild_discards_zero_width_graphemes_without_hanging() {
+        let zero_width = GraphemeInfo {
+            cell_width: 0,
+            utf8_bytes: NonZeroU16::new(1).unwrap(),
+        };
+        let ascii = GraphemeInfo {
+            cell_width: 1,
+            utf8_bytes: NonZeroU16::new(1).unwrap(),
+        };
+
+        let mut index = Index::new(4, Some(1));
+        let mut entry_builder = index.start_row();
+        for _ in 0..4 {
+            entry_builder.process_grapheme_info_unchecked(ascii);
+        }
+        entry_builder.process_grapheme_info_unchecked(zero_width);
+        entry_builder.process_grapheme_info_unchecked(ascii);
+        entry_builder.append_to_index(&mut index);
+
+        let optimized = Index::rebuild(&index, 2);
+        let baseline = Index::rebuild_baseline(&index, 2);
+
+        assert_indexes_equal(&optimized, &baseline, "zero-width grapheme rebuild");
+        assert_eq!(optimized.len(), 3);
+        assert_eq!(
+            optimized
+                .grapheme_infos_for_row(0)
+                .unwrap()
+                .collect::<Vec<_>>(),
+            vec![ascii, ascii]
+        );
+        assert_eq!(
+            optimized
+                .grapheme_infos_for_row(1)
+                .unwrap()
+                .collect::<Vec<_>>(),
+            vec![ascii, ascii]
+        );
+        assert_eq!(
+            optimized
+                .grapheme_infos_for_row(2)
+                .unwrap()
+                .collect::<Vec<_>>(),
+            vec![ascii]
+        );
+    }
+
+    #[test]
     fn differential_random_inputs() {
         let mut rng = Rng::new(0xDEADBEEF);
         for trial in 0..200 {
