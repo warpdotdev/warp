@@ -64,7 +64,7 @@ acquire the per-channel startup lock
 discover again after acquiring the lock
 if records now exist: release the lock and return them
 if the completed generation advanced since the snapshot:
-    release the lock and reuse that attempt's recorded outcome without launching
+    release the lock and reuse that attempt's recorded failure, timeout, or ready-then-exited result without launching
 otherwise start the next generation with a shared 10-second deadline
 request matching app startup once and poll authenticated discovery every 100 ms
 record the generation's ready, launch-failed, or timed-out outcome
@@ -73,7 +73,7 @@ release the lock and return the discovered records or recorded error
 
 The generation snapshot comes before initial discovery so an attempt that completes between discovery and lock acquisition is still recognized as overlapping. The second discovery under the lock closes the common race in which another command publishes an instance between the first scan and launch. Put the lock and a separate small attempt-state record in the existing owner-only local-control discovery directory and use an OS-released advisory lock (`flock` on the currently supported POSIX platforms), following the existing remote-server startup-lock pattern. The state stores only a monotonically increasing completed generation, its outcome, and the shared deadline; it never stores file paths, selectors, credentials, or other request parameters. Write the completed state to a temporary owner-only file and atomically rename it into place before releasing the lock, so commands can take a consistent pre-lock snapshot without reading a partial update.
 
-Each command snapshots the completed generation before it can block on the lock. The leader records the next completed generation while still holding the lock. A command that overlapped that attempt therefore observes an advanced generation after acquiring the lock and reuses its outcome: it proceeds with its own request after a ready outcome, or returns the same structured launch failure or `no_instance` timeout without launching or waiting for another 10-second window. A later, non-overlapping invocation snapshots the already-completed generation and may start a new generation, so the state does not create a retry cooldown.
+Each command snapshots the completed generation before it can block on the lock. The leader records the next completed generation while still holding the lock. A command that overlapped that attempt therefore observes an advanced generation after acquiring the lock and reuses its outcome. If the instance remains reachable, the second discovery already returned it; otherwise the waiter returns the same structured launch failure or `no_instance` timeout. A leader that recorded readiness whose instance then disappeared is also reported as `no_instance`, without launching or waiting for another 10-second window. A later, non-overlapping invocation snapshots the already-completed generation and may start a new generation, so the state does not create a retry cooldown.
 
 Dropping the file handle releases the advisory lock after success, launch failure, timeout, or process exit. If a leader crashes before recording completion, the next holder re-runs discovery and may start a replacement attempt; an OS-released lock cannot leave a permanent in-progress marker. The lock serializes only startup, not the subsequent file-open requests.
 
@@ -117,6 +117,7 @@ Each product invariant maps to the following automated or manual coverage.
 - `multiple_instances_after_startup_remain_ambiguous` — no instance is silently selected (invariant 7).
 - `concurrent_cold_starts_launch_once` — two helpers sharing a temporary discovery directory serialize on one successful startup generation while both complete their own request (invariant 8).
 - `concurrent_cold_start_timeout_is_shared` and `concurrent_launch_failure_is_shared` — when the leader records a timeout or launch failure, a waiter reuses that outcome without a second launch or a second 10-second wait (invariants 8, 10, 11).
+- `completed_ready_instance_that_exits_is_not_relaunched_by_waiter` — if the leader records readiness but the instance disappears before a waiter re-discovers it, the waiter returns `no_instance` without a second launch (invariants 8, 11).
 - `later_command_can_retry_after_shared_failure` — a non-overlapping invocation snapshots the completed failed generation and can lead a new startup attempt, proving the generation state is not a retry cooldown (invariants 3, 8, 11).
 - `cold_start_timeout_returns_actionable_no_instance` — the fake clock reaches 10 seconds and the structured error mentions startup and Scripting without claiming a definitive disabled state (invariants 10, 11).
 - Add URI parser/handler coverage proving the private startup intent is accepted and produces no file, window, or local-control action when delivered to an existing app (invariant 12).
