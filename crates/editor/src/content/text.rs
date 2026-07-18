@@ -1444,6 +1444,14 @@ impl TextStyles {
         self.vertical_align == Some(VerticalAlign::Sup)
     }
 
+    /// Whether this mask carries *any* vertical alignment. Unlike [`Self::is_subscript`] and
+    /// [`Self::is_superscript`], this doesn't distinguish which one — it's for "strip all styles"
+    /// callers (see [`Self::all`]) that need to treat `Subscript` and `Superscript` as a single
+    /// family, since the underlying `Option<VerticalAlign>` can only ever name one of them at a time.
+    pub fn has_any_vertical_align(&self) -> bool {
+        self.vertical_align.is_some()
+    }
+
     pub fn set_weight(&mut self, weight: Weight) {
         self.weight = weight.to_custom_weight();
     }

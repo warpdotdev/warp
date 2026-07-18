@@ -3665,7 +3665,17 @@ impl Buffer {
             if is_weight && handled_weight {
                 continue;
             }
-            if text_style.exact_match_style(&style) {
+            // `vertical_align` is a single `Option<VerticalAlign>`, so a mask like `TextStyles::all()`
+            // can only ever name one of `Subscript`/`Superscript`. Fall back to `has_any_vertical_align`
+            // for these two variants so a "strip everything" mask clears both markers instead of only
+            // the one it happens to carry.
+            let wants_style = match style {
+                BufferTextStyle::Subscript | BufferTextStyle::Superscript => {
+                    text_style.has_any_vertical_align()
+                }
+                _ => text_style.exact_match_style(&style),
+            };
+            if wants_style {
                 handled_weight |= is_weight;
                 // We only want to unstyle the sub-ranges that has been styled with the target text style.
                 let cursor = self.content.cursor::<CharOffset, BufferSummary>();

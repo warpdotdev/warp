@@ -1916,6 +1916,108 @@ fn test_block_style() {
 }
 
 #[test]
+fn test_block_style_strips_vertical_align() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(3),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().superscript(), selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><sup_s>te<sup_e>st");
+
+            // Converting the superscript-styled run into a code block (a block style that
+            // disallows formatting) must strip the vertical-align marker, same as it strips
+            // bold/italic/etc. Regression test: `TextStyles::all()` used to only carry
+            // `VerticalAlign::Sub`, so a `Superscript` marker survived the strip and kept
+            // rendering inside the code block.
+            let delta = buffer
+                .block_style_range(
+                    CharOffset::from(1)..CharOffset::from(5),
+                    BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default(),
+                    },
+                    selection.clone(),
+                    ctx,
+                )
+                .delta
+                .expect("Should exist");
+            assert_eq!(buffer.content.debug(), "<code:Shell>test<text>");
+            assert_eq!(
+                delta.new_lines,
+                vec![StyledBufferBlock::Text(StyledTextBlock {
+                    block: vec![StyledBufferRun {
+                        run: "test\n".to_string(),
+                        text_styles: TextStylesWithMetadata::default(),
+                        block_style: BufferBlockStyle::CodeBlock {
+                            code_block_type: Default::default()
+                        }
+                    },],
+                    style: BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default()
+                    },
+                    content_length: CharOffset::from(5),
+                }),]
+            );
+        });
+    });
+}
+
+#[test]
+fn test_block_style_strips_subscript() {
+    // Guard case for `test_block_style_strips_vertical_align`: subscript matches the literal
+    // value `TextStyles::all()` carries, so this already passed before the fix, but it's worth
+    // keeping as a regression guard alongside the superscript case.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(3),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().subscript(), selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><sub_s>te<sub_e>st");
+
+            let _delta = buffer
+                .block_style_range(
+                    CharOffset::from(1)..CharOffset::from(5),
+                    BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default(),
+                    },
+                    selection.clone(),
+                    ctx,
+                )
+                .delta
+                .expect("Should exist");
+            assert_eq!(buffer.content.debug(), "<code:Shell>test<text>");
+        });
+    });
+}
+
+#[test]
 fn test_containing_block_start() {
     App::test((), |mut app| async move {
         let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
