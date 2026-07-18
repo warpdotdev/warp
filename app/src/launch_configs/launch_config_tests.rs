@@ -599,13 +599,11 @@ fn test_config_from_snapshot_maps_tab_groups() {
                 name: Some("Backend".to_string()),
                 color: Some(AnsiColorIdentifier::Blue),
                 collapsed: Some(true),
-                pinned: None,
             },
             TabGroupTemplate {
                 name: None,
                 color: None,
                 collapsed: None,
-                pinned: None,
             },
         ],
     );

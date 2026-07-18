@@ -60,8 +60,6 @@ pub struct TabGroupTemplate {
     pub color: Option<AnsiColorIdentifier>,
     #[serde(skip_serializing_if = "is_falsey", default)]
     pub collapsed: Option<bool>,
-    #[serde(skip_serializing_if = "is_falsey", default)]
-    pub pinned: Option<bool>,
 }
 
 impl From<WindowSnapshot> for WindowTemplate {
@@ -87,7 +85,6 @@ impl From<WindowSnapshot> for WindowTemplate {
                     _ => None,
                 },
                 collapsed: group.collapsed.then_some(true),
-                pinned: group.pinned.then_some(true),
             })
             .collect();
 

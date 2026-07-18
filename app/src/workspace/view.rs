@@ -3869,9 +3869,11 @@ impl Workspace {
                             .map_or(SelectedTabColor::Unset, SelectedTabColor::Color),
                         collapsed: group_template.collapsed.unwrap_or_default(),
                         draggable_state: Default::default(),
-                        // Only restore pinned state when the Pinned Tabs feature is enabled.
-                        pinned: FeatureFlag::PinnedTabs.is_enabled()
-                            && group_template.pinned.unwrap_or_default(),
+                        // Launch configs don't persist pinned state (for tabs or
+                        // groups): a config can open into a window that already
+                        // has unpinned tabs, and restoring a pinned group there
+                        // would break the pinned-region ordering invariant.
+                        pinned: false,
                     };
                     let group_id = group.id;
                     self.tab_groups.insert(group_id, group);
