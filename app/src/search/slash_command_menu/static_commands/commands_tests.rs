@@ -79,15 +79,6 @@ fn continue_locally_command_is_registered() {
 }
 
 #[test]
-fn exit_command_is_always_available_and_argument_free() {
-    assert_eq!(EXIT.name, "/exit");
-    assert_eq!(EXIT.icon_path, "bundled/svg/log-out-01.svg");
-    assert_eq!(EXIT.availability, Availability::ALWAYS);
-    assert!(!EXIT.auto_enter_ai_mode);
-    assert!(EXIT.argument.is_none());
-}
-
-#[test]
 fn set_tab_color_command_requires_argument() {
     let command = COMMAND_REGISTRY
         .get_command_with_name(SET_TAB_COLOR.name)

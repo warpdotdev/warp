@@ -127,6 +127,7 @@ fn context_for_editor_binding(
         _ => Some(default_context.clone()),
     }
 }
+
 /// Debug-time guard (no-op in release): every keystroke binding that matches a
 /// TUI view's default keymap context must be TUI-owned.
 fn register_binding_validators(app: &mut AppContext) {
