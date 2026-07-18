@@ -737,6 +737,8 @@ pub struct PrInfo {
 pub struct RepositoryInfo {
     pub name: String,
     pub owner: Option<String>,
+    /// The repository host (e.g. "github.com"), parsed from the repo URL.
+    pub host: Option<String>,
 }
 
 #[cfg(feature = "local_fs")]
@@ -753,9 +755,15 @@ fn repository_info_from_gh_output(output: &str) -> Result<RepositoryInfo> {
         .filter(|owner| !owner.is_empty())
         .ok_or_else(|| anyhow!("Missing 'owner.login' in gh output"))?
         .to_string();
+    // The host is best-effort: parsed from the repo URL when present.
+    let host = parsed["url"]
+        .as_str()
+        .and_then(|u| url::Url::parse(u).ok())
+        .and_then(|u| u.host_str().map(|host| host.to_string()));
     Ok(RepositoryInfo {
         name,
         owner: Some(owner),
+        host,
     })
 }
 
@@ -773,7 +781,7 @@ pub async fn get_repository_info(
 
     match run_gh_command(
         repo_path,
-        &["repo", "view", "--json", "name,owner"],
+        &["repo", "view", "--json", "name,owner,url"],
         path_env,
     )
     .await
