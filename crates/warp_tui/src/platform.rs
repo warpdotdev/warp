@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use command::blocking::Command;
+use warp_core::safe_warn;
 
 /// Whether opening a local file manager is useful for this process.
 ///
@@ -59,9 +60,9 @@ pub(crate) fn reveal_path_in_file_manager(path: &Path) {
         return;
     };
     if let Err(error) = command.spawn() {
-        log::warn!(
-            "Failed to reveal generated log bundle {} in the file manager: {error}",
-            path.display()
+        safe_warn!(
+            safe: ("Failed to reveal generated log bundle in the file manager: {error}"),
+            full: ("Failed to reveal generated log bundle {} in the file manager: {error}", path.display())
         );
     }
 }
