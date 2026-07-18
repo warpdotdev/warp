@@ -937,6 +937,10 @@ fn emit_narrowed_uniform(run: &GraphemeRun, index: &mut Index) {
 ///
 /// Preconditions: `entry_builder` is empty; entry has a trailing newline.
 fn try_emit_row_with_newline(entry: &Entry, row_runs: &[GraphemeRun], index: &mut Index) -> bool {
+    if contains_zero_width_run(row_runs) {
+        return false;
+    }
+
     let (cells, byte_len) = match &entry.grapheme_sizing {
         GraphemeSizing::Uniform(run) => (
             run.cols(),
@@ -984,6 +988,10 @@ fn try_accumulate_softwrap(
     entry_builder: &mut EntryBuilder,
     columns: usize,
 ) -> bool {
+    if contains_zero_width_run(row_runs) {
+        return false;
+    }
+
     match &entry.grapheme_sizing {
         GraphemeSizing::Uniform(run) if run.cols() <= columns => {
             entry_builder.num_cells += run.cols();
@@ -1013,6 +1021,10 @@ fn try_accumulate_softwrap(
         }
         GraphemeSizing::Uniform(_) => false, // cols() > columns — needs splitting
     }
+}
+
+fn contains_zero_width_run(runs: &[GraphemeRun]) -> bool {
+    runs.iter().any(|run| run.info.cell_width == 0)
 }
 
 /// Tries to handle a uniform run using arithmetic carry-over, accounting for

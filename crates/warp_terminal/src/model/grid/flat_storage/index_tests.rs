@@ -712,6 +712,42 @@ mod differential_tests {
         );
     }
 
+    fn index_with_zero_width_row(has_trailing_newline: bool) -> Index {
+        let zero_width = GraphemeInfo {
+            cell_width: 0,
+            utf8_bytes: NonZeroU16::new(1).unwrap(),
+        };
+        let ascii = GraphemeInfo {
+            cell_width: 1,
+            utf8_bytes: NonZeroU16::new(1).unwrap(),
+        };
+
+        let mut index = Index::new(4, Some(1));
+        let mut entry_builder = index.start_row();
+        entry_builder.process_grapheme_info_unchecked(zero_width);
+        entry_builder.process_grapheme_info_unchecked(ascii);
+        if has_trailing_newline {
+            entry_builder.add_trailing_newline();
+        }
+        entry_builder.append_to_index(&mut index);
+        index
+    }
+
+    #[test]
+    fn rebuild_zero_width_fast_paths_match_baseline() {
+        for has_trailing_newline in [false, true] {
+            let index = index_with_zero_width_row(has_trailing_newline);
+            let optimized = Index::rebuild(&index, 4);
+            let baseline = Index::rebuild_baseline(&index, 4);
+
+            assert_indexes_equal(
+                &optimized,
+                &baseline,
+                &format!("zero-width fast path: trailing_newline={has_trailing_newline}"),
+            );
+        }
+    }
+
     #[test]
     fn differential_random_inputs() {
         let mut rng = Rng::new(0xDEADBEEF);
