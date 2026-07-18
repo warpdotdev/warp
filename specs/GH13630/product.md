@@ -41,7 +41,7 @@ That startup gap makes the existing file command unreliable in shell scripts and
 5. Automatic startup is limited to `file open`. Every other `warpctrl` command keeps its current running-instance requirement; `instance list` still returns an empty list when none is reachable.
 6. Startup does not carry the requested file through a URI or an unauthenticated app-open event. The resolved path, `--line`, `--column`, `--new-tab`, target selectors, and output format are sent only through the existing authenticated `file.open` request after discovery succeeds.
 7. After startup, the normal selector rules remain authoritative. If discovery becomes ambiguous, the command returns `ambiguous_instance` instead of guessing which process to target.
-8. Concurrent cold-starting `file open` commands for the same channel coordinate so only one of them requests app startup. Each command still sends its own authenticated `file.open` request after the instance becomes reachable.
+8. Concurrent cold-starting `file open` commands for the same channel share one startup attempt, deadline, and outcome, including when startup fails or times out. Only one command requests app startup; waiting commands do not start serial follow-up attempts. If the instance becomes reachable, each command still sends its own authenticated `file.open` request.
 9. A successful cold start returns the same human-readable or structured success payload as an already-running instance, including the resolved `instance_id`. The response does not expose a separate launcher-only success state.
 10. Settings > Scripting remains authoritative. Automatic startup never enables or changes it. If no controllable instance appears within 10 seconds, the command exits non-zero with `no_instance` and explains that Warp was requested to start but may require Scripting to be enabled.
 11. Failure to invoke the matching app, an app exit during startup, or timeout never falls back to another app installation, a different channel, a file URI, or a weaker control transport.
@@ -82,7 +82,7 @@ Warp may start or already be running, but it does not publish an actionable disc
 3. Relative paths resolve from the caller's current working directory for both cold and already-running app flows; absolute paths are preserved.
 4. Explicit unavailable instance selectors do not start Warp.
 5. Other `warpctrl` commands do not gain auto-start behavior.
-6. Concurrent cold-start commands do not produce duplicate app startup requests or extra windows.
+6. Concurrent cold-start commands produce one shared startup attempt in both success and failure paths, without duplicate startup requests, serial timeout windows, or extra windows.
 7. Scripting-disabled and startup-timeout paths fail closed with actionable errors.
 8. Stable and Preview wrappers start only their corresponding app installation and channel.
 

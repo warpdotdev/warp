@@ -56,19 +56,26 @@ The requested file path is deliberately absent from this URI. Once discovery suc
 Add a small startup helper used only by `run_file_command`, for example `crates/warp_cli/src/local_control/startup.rs`:
 
 ```text
+snapshot the last atomically completed startup-attempt generation
 discover reachable same-channel instances
 if any exist: return them unchanged
 if --instance or --pid was explicit: return the empty set unchanged
 acquire the per-channel startup lock
 discover again after acquiring the lock
-if still empty: request matching app startup once
-poll authenticated discovery every 100 ms for at most 10 seconds
-release the lock and return the discovered records or no_instance
+if records now exist: release the lock and return them
+if the completed generation advanced since the snapshot:
+    release the lock and reuse that attempt's recorded outcome without launching
+otherwise start the next generation with a shared 10-second deadline
+request matching app startup once and poll authenticated discovery every 100 ms
+record the generation's ready, launch-failed, or timed-out outcome
+release the lock and return the discovered records or recorded error
 ```
 
-The second discovery under the lock closes the common race in which another command publishes an instance between the first scan and launch. Put the lock file in the existing owner-only local-control discovery directory and use an OS-released advisory lock (`flock` on the currently supported POSIX platforms), following the existing remote-server startup-lock pattern. Dropping the file handle releases the lock after success, launch failure, timeout, or process exit, so a crashed CLI does not leave a permanent startup marker.
+The generation snapshot comes before initial discovery so an attempt that completes between discovery and lock acquisition is still recognized as overlapping. The second discovery under the lock closes the common race in which another command publishes an instance between the first scan and launch. Put the lock and a separate small attempt-state record in the existing owner-only local-control discovery directory and use an OS-released advisory lock (`flock` on the currently supported POSIX platforms), following the existing remote-server startup-lock pattern. The state stores only a monotonically increasing completed generation, its outcome, and the shared deadline; it never stores file paths, selectors, credentials, or other request parameters. Write the completed state to a temporary owner-only file and atomically rename it into place before releasing the lock, so commands can take a consistent pre-lock snapshot without reading a partial update.
 
-Callers waiting behind the lock do not launch again. After they acquire it, they observe the instance started by the winner and proceed with their own request. The lock serializes only startup, not the subsequent file-open requests.
+Each command snapshots the completed generation before it can block on the lock. The leader records the next completed generation while still holding the lock. A command that overlapped that attempt therefore observes an advanced generation after acquiring the lock and reuses its outcome: it proceeds with its own request after a ready outcome, or returns the same structured launch failure or `no_instance` timeout without launching or waiting for another 10-second window. A later, non-overlapping invocation snapshots the already-completed generation and may start a new generation, so the state does not create a retry cooldown.
+
+Dropping the file handle releases the advisory lock after success, launch failure, timeout, or process exit. If a leader crashes before recording completion, the next holder re-runs discovery and may start a replacement attempt; an OS-released lock cannot leave a permanent in-progress marker. The lock serializes only startup, not the subsequent file-open requests.
 
 Keep `local_control::discovery::list_instances` as the readiness authority. A process is ready only after its record passes the existing liveness, protocol, channel, authority, and authenticated health checks.
 
@@ -108,7 +115,9 @@ Each product invariant maps to the following automated or manual coverage.
 - `non_file_commands_do_not_use_startup_helper` — representative generic commands retain their current behavior (invariant 5).
 - `cold_start_preserves_file_open_params_and_targets` — path, line, column, new-tab, and target selectors reach the same request envelope after startup (invariant 6).
 - `multiple_instances_after_startup_remain_ambiguous` — no instance is silently selected (invariant 7).
-- `concurrent_cold_starts_launch_once` — two helpers sharing a temporary discovery directory serialize on the startup lock while both complete their own request (invariant 8).
+- `concurrent_cold_starts_launch_once` — two helpers sharing a temporary discovery directory serialize on one successful startup generation while both complete their own request (invariant 8).
+- `concurrent_cold_start_timeout_is_shared` and `concurrent_launch_failure_is_shared` — when the leader records a timeout or launch failure, a waiter reuses that outcome without a second launch or a second 10-second wait (invariants 8, 10, 11).
+- `later_command_can_retry_after_shared_failure` — a non-overlapping invocation snapshots the completed failed generation and can lead a new startup attempt, proving the generation state is not a retry cooldown (invariants 3, 8, 11).
 - `cold_start_timeout_returns_actionable_no_instance` — the fake clock reaches 10 seconds and the structured error mentions startup and Scripting without claiming a definitive disabled state (invariants 10, 11).
 - Add URI parser/handler coverage proving the private startup intent is accepted and produces no file, window, or local-control action when delivered to an existing app (invariant 12).
 - Extend wrapper tests to assert the packaged wrapper preserves argument forwarding, exports the matching executable and macOS bundle paths, rejects a mismatched bundle/executable pair, and does not make the standalone validation artifact launch-capable (invariants 3, 11, 13).
@@ -133,7 +142,7 @@ Starting the desktop app and controlling it are separate operations. The private
 
 ### Risk: concurrent commands create duplicate app processes or windows
 
-The per-channel advisory lock serializes the empty-discovery transition, and the file-free startup intent is safe to forward to an app that won a race. Existing OS/app single-instance routing remains a second layer rather than the only coordination mechanism.
+The per-channel advisory lock serializes the empty-discovery transition, while the completed-generation record makes overlapping waiters share both successful and failed outcomes instead of launching serially. The file-free startup intent is safe to forward if a leader crashes before it can record completion and a successor must retry. Existing OS/app single-instance routing remains a second layer rather than the only coordination mechanism.
 
 ### Risk: a wrapper path points at the wrong executable
 
