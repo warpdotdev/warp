@@ -5,7 +5,7 @@
 
 ## Summary
 
-`warpctrl file open <path>` should start the matching Warp desktop app when no controllable same-channel instance is running, wait for that app to publish its local-control endpoint, and then perform the existing `file.open` action. This gives the existing file command a reliable cold-start path without committing to a new top-level `warp <path>` command while Warp's CLI surface is being reorganized.
+`warpctrl file open <path>` should start the matching Warp desktop app when no controllable same-channel instance is running, wait for that app to publish its local-control endpoint, and then perform the existing `file.open` action. Relative paths are resolved from the caller's current working directory before startup so cold and already-running app paths behave consistently. This gives the existing file command a reliable cold-start path without committing to a new top-level `warp <path>` command while Warp's CLI surface is being reorganized.
 
 ## Problem
 
@@ -16,7 +16,8 @@ That startup gap makes the existing file command unreliable in shell scripts and
 ## Goals
 
 - Make `warpctrl file open <path>` work when it is the operation that starts Warp.
-- Start the app for the same channel as the invoked `warpctrl` wrapper.
+- Resolve relative paths from the calling process's current working directory before app discovery or startup.
+- Start the exact app bundle or package that supplied the invoked channel-specific `warpctrl` wrapper.
 - Preserve the existing authenticated `file.open` request and response path after startup.
 - Keep existing instance and target selection deterministic.
 - Fail with a bounded, actionable error when Warp cannot become controllable.
@@ -26,25 +27,26 @@ That startup gap makes the existing file command unreliable in shell scripts and
 - Adding a top-level `warp <path>` or `warp` desktop-launcher command.
 - Adding new directory-opening behavior or a directory-specific command.
 - Starting Warp automatically for other `warpctrl` commands, including `instance list`.
-- Changing the current interpretation, validation, or editor selection behavior of the `file.open` path.
+- Canonicalizing paths, requiring them to exist in the CLI, expanding shell syntax, or changing the current editor selection behavior. Resolving relative paths from the caller's current working directory is the only path-semantics change.
 - Enabling Settings > Scripting from the CLI or weakening the local-control security model.
 - Enabling Warp Control on platforms where authenticated local-control publication is unsupported.
 - Defining the proposed `file open --wait` lifecycle tracked separately by #8741.
 
 ## Behavior invariants
 
-1. If one or more reachable same-channel instances already exist, `warpctrl file open` uses the current instance-selection behavior and does not launch another app process.
-2. If no reachable same-channel instance exists and neither `--instance` nor `--pid` was supplied, `warpctrl file open` requests startup of the matching channel's desktop app exactly once, waits up to 10 seconds for a reachable instance, and then sends the existing `file.open` request.
-3. An explicit `--instance` or `--pid` selector never launches a replacement process. If the selected process is unavailable, the command keeps the existing `no_instance` behavior.
-4. Automatic startup is limited to `file open`. Every other `warpctrl` command keeps its current running-instance requirement; `instance list` still returns an empty list when none is reachable.
-5. Startup does not carry the requested file through a URI or an unauthenticated app-open event. The file path, `--line`, `--column`, `--new-tab`, target selectors, and output format are sent only through the existing authenticated `file.open` request after discovery succeeds.
-6. After startup, the normal selector rules remain authoritative. If discovery becomes ambiguous, the command returns `ambiguous_instance` instead of guessing which process to target.
-7. Concurrent cold-starting `file open` commands for the same channel coordinate so only one of them requests app startup. Each command still sends its own authenticated `file.open` request after the instance becomes reachable.
-8. A successful cold start returns the same human-readable or structured success payload as an already-running instance, including the resolved `instance_id`. The response does not expose a separate launcher-only success state.
-9. Settings > Scripting remains authoritative. Automatic startup never enables or changes it. If no controllable instance appears within 10 seconds, the command exits non-zero with `no_instance` and explains that Warp was requested to start but may require Scripting to be enabled.
-10. Failure to invoke the matching app, an app exit during startup, or timeout never falls back to a different channel, a file URI, or a weaker control transport.
-11. The startup request is safe to deliver to an already-running but undiscoverable app: it must not create an extra window or perform the file operation outside `warpctrl`.
-12. On platforms where `warpctrl` fails closed today, `file open` continues to fail closed and does not attempt an unsupported startup path.
+1. Before discovery, a relative file path is joined to the `warpctrl` process's current working directory and sent as an absolute path. An absolute input path is preserved. Resolution does not canonicalize the path, follow symlinks, or require the path to exist.
+2. If one or more reachable same-channel instances already exist, `warpctrl file open` uses the current instance-selection behavior and does not launch another app process.
+3. If no reachable same-channel instance exists and neither `--instance` nor `--pid` was supplied, `warpctrl file open` requests startup of the exact app bundle or package that supplied the channel-specific wrapper exactly once, waits up to 10 seconds for a reachable instance, and then sends the existing `file.open` request.
+4. An explicit `--instance` or `--pid` selector never launches a replacement process. If the selected process is unavailable, the command keeps the existing `no_instance` behavior.
+5. Automatic startup is limited to `file open`. Every other `warpctrl` command keeps its current running-instance requirement; `instance list` still returns an empty list when none is reachable.
+6. Startup does not carry the requested file through a URI or an unauthenticated app-open event. The resolved path, `--line`, `--column`, `--new-tab`, target selectors, and output format are sent only through the existing authenticated `file.open` request after discovery succeeds.
+7. After startup, the normal selector rules remain authoritative. If discovery becomes ambiguous, the command returns `ambiguous_instance` instead of guessing which process to target.
+8. Concurrent cold-starting `file open` commands for the same channel coordinate so only one of them requests app startup. Each command still sends its own authenticated `file.open` request after the instance becomes reachable.
+9. A successful cold start returns the same human-readable or structured success payload as an already-running instance, including the resolved `instance_id`. The response does not expose a separate launcher-only success state.
+10. Settings > Scripting remains authoritative. Automatic startup never enables or changes it. If no controllable instance appears within 10 seconds, the command exits non-zero with `no_instance` and explains that Warp was requested to start but may require Scripting to be enabled.
+11. Failure to invoke the matching app, an app exit during startup, or timeout never falls back to another app installation, a different channel, a file URI, or a weaker control transport.
+12. The startup request is safe to deliver to an already-running but undiscoverable app: it must not create an extra window or perform the file operation outside `warpctrl`.
+13. On platforms where `warpctrl` fails closed today, `file open` continues to fail closed and does not attempt an unsupported startup path.
 
 ## User experience
 
@@ -54,11 +56,12 @@ That startup gap makes the existing file command unreliable in shell scripts and
 warpctrl file open AGENTS.md
 ```
 
-1. No controllable same-channel Warp instance is found.
-2. The matching Warp app is requested to start.
-3. `warpctrl` waits for the app's authenticated local-control endpoint.
-4. The existing `file.open` action opens `AGENTS.md` and focuses its resolved target.
-5. The command prints the same success response it would have printed if Warp had already been running.
+1. `warpctrl` resolves `AGENTS.md` from the calling shell's current working directory.
+2. No controllable same-channel Warp instance is found.
+3. The app bundle that supplied the invoked wrapper is requested to start.
+4. `warpctrl` waits for the app's authenticated local-control endpoint.
+5. The existing `file.open` action opens the resolved `AGENTS.md` and focuses its target.
+6. The command prints the same success response it would have printed if Warp had already been running.
 
 ### Explicit unavailable instance
 
@@ -74,13 +77,14 @@ Warp may start or already be running, but it does not publish an actionable disc
 
 ## Success criteria
 
-1. With no Warp process running and Scripting enabled, one `warpctrl file open` invocation starts the matching app and opens the requested file.
-2. With a reachable app already running, behavior and output are unchanged and no startup request occurs.
-3. Explicit unavailable instance selectors do not start Warp.
-4. Other `warpctrl` commands do not gain auto-start behavior.
-5. Concurrent cold-start commands do not produce duplicate app startup requests or extra windows.
-6. Scripting-disabled and startup-timeout paths fail closed with actionable errors.
-7. Stable and Preview wrappers start only their corresponding app channel.
+1. With no Warp process running and Scripting enabled, one `warpctrl file open` invocation starts the exact app installation that supplied the wrapper and opens the requested file.
+2. With a reachable app already running, no startup request occurs and existing targeting and output behavior are unchanged.
+3. Relative paths resolve from the caller's current working directory for both cold and already-running app flows; absolute paths are preserved.
+4. Explicit unavailable instance selectors do not start Warp.
+5. Other `warpctrl` commands do not gain auto-start behavior.
+6. Concurrent cold-start commands do not produce duplicate app startup requests or extra windows.
+7. Scripting-disabled and startup-timeout paths fail closed with actionable errors.
+8. Stable and Preview wrappers start only their corresponding app installation and channel.
 
 ## Open questions
 
