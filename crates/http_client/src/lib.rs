@@ -53,6 +53,16 @@ pub mod headers {
 /// list of `Name:Value` pairs, where each pair is split on the first colon.
 const EXTRA_HTTP_HEADERS_ENV_VAR: &str = "WARP_EXTRA_HTTP_HEADERS";
 
+/// Maximum size, in bytes, that [`Response::json_bounded`] will buffer from a
+/// response body before giving up.
+///
+/// Most Warp server/API endpoints return small, structured JSON. A body larger
+/// than this is a sign of a malformed or pathological response, and blindly
+/// deserializing it with `serde_json` can balloon into multiple gigabytes of
+/// heap (see Sentry issue 7259255054 / "Excessive memory usage detected").
+/// Capping the raw body bounds that blow-up.
+pub const MAX_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
 /// A wrapper around a `reqwest::Client` to execute requests. Returns a custom `RequestBuilder` type
 /// that ensures any call to the underlying `reqwest::Client` are properly adapted so that they can
 /// run outside of a Tokio context.
@@ -663,6 +673,72 @@ impl Response {
         }
     }
 
+    /// Deserializes the response body as JSON, failing fast if the body exceeds
+    /// `max_bytes` instead of buffering an unbounded amount of memory.
+    ///
+    /// [`Response::json`] delegates to `reqwest`, which reads the entire body
+    /// into memory with no size limit before handing it to `serde_json`. A
+    /// malformed or pathological response can therefore balloon into multiple
+    /// gigabytes of heap (see Sentry issue 7259255054 / "Excessive memory usage
+    /// detected"). This method bounds that blow-up by checking the advertised
+    /// `Content-Length` up front and enforcing the same cap as the body is read.
+    pub async fn json_bounded<T: DeserializeOwned>(self, max_bytes: usize) -> anyhow::Result<T> {
+        let body = self.bytes_bounded(max_bytes).await?;
+        serde_json::from_slice(&body).map_err(|err| {
+            anyhow::Error::new(err).context("Failed to deserialize bounded JSON response")
+        })
+    }
+
+    /// Reads the response body into memory, failing fast if it exceeds
+    /// `max_bytes`.
+    ///
+    /// The advertised `Content-Length` is checked up front so an oversized
+    /// response is rejected before any large allocation. On native targets the
+    /// body is then streamed and accumulated with the same cap, so a chunked
+    /// response that omits (or lies about) its length still cannot grow the
+    /// buffer past `max_bytes`.
+    pub async fn bytes_bounded(self, max_bytes: usize) -> anyhow::Result<Vec<u8>> {
+        if let Some(len) = advertised_content_length(&self) {
+            anyhow::ensure!(
+                len <= max_bytes as u64,
+                "response body of {len} bytes exceeds maximum of {max_bytes} bytes"
+            );
+        }
+
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                let bytes = self.bytes().await.map_err(|err| {
+                    anyhow::Error::new(err).context("Failed to read response body")
+                })?;
+                anyhow::ensure!(
+                    bytes.len() <= max_bytes,
+                    "response body exceeds maximum of {max_bytes} bytes"
+                );
+                Ok(bytes.to_vec())
+            } else {
+                // Stream the body inside a tokio-compat context (matching the
+                // rest of this module) so reqwest's async IO is driven correctly
+                // on the app's non-tokio executor.
+                Compat::new(async move {
+                    let mut stream = self.0.bytes_stream();
+                    let mut buf: Vec<u8> = Vec::new();
+                    while let Some(chunk) = stream.next().await {
+                        let chunk = chunk.map_err(|err| {
+                            anyhow::Error::new(err).context("Failed to read response chunk")
+                        })?;
+                        anyhow::ensure!(
+                            buf.len() + chunk.len() <= max_bytes,
+                            "response body exceeds maximum of {max_bytes} bytes"
+                        );
+                        buf.extend_from_slice(&chunk);
+                    }
+                    Ok::<Vec<u8>, anyhow::Error>(buf)
+                })
+                .await
+            }
+        }
+    }
+
     /// Checks the response status and returns an error if it's not successful.
     /// Unlike `reqwest::Response::error_for_status`, this returns a `ResponseError`
     /// that includes the response headers, allowing callers to inspect them.
@@ -772,6 +848,18 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Client {
     }
 }
 
+/// Returns the response's advertised body length from its `Content-Length`
+/// header, if present and parseable.
+fn advertised_content_length(response: &Response) -> Option<u64> {
+    response
+        .headers()
+        .get(http::header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()
+}
+
 #[cfg(test)]
 mod origin_tests {
     use super::*;
@@ -793,5 +881,43 @@ mod origin_tests {
     fn third_party_origin_does_not_match() {
         let url = reqwest::Url::parse("https://evil.example.com/graphql/v2").unwrap();
         assert!(!is_warp_server_origin(&url));
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod bounded_body_tests {
+    use super::*;
+
+    fn make_response(body: Vec<u8>, content_length: Option<usize>) -> Response {
+        let mut builder = ::http::Response::builder().status(200);
+        if let Some(len) = content_length {
+            builder = builder.header(::http::header::CONTENT_LENGTH, len.to_string());
+        }
+        let response = builder.body(body).expect("failed to build test response");
+        Response(reqwest::Response::from(response))
+    }
+
+    #[test]
+    fn json_bounded_reads_body_within_limit() {
+        let response = make_response(br#"{"value":"ok"}"#.to_vec(), None);
+        let parsed: serde_json::Value =
+            futures::executor::block_on(response.json_bounded(MAX_JSON_RESPONSE_BYTES)).unwrap();
+        assert_eq!(parsed["value"], "ok");
+    }
+
+    #[test]
+    fn bytes_bounded_rejects_streamed_body_over_limit() {
+        // No Content-Length, so the cap must be enforced while streaming.
+        let response = make_response(vec![b'x'; 200], None);
+        let error = futures::executor::block_on(response.bytes_bounded(10)).unwrap_err();
+        assert!(error.to_string().contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn bytes_bounded_rejects_body_via_content_length_precheck() {
+        // Advertised Content-Length exceeds the cap: rejected before allocation.
+        let response = make_response(vec![b'x'; 200], Some(200));
+        let error = futures::executor::block_on(response.bytes_bounded(10)).unwrap_err();
+        assert!(error.to_string().contains("exceeds maximum"));
     }
 }

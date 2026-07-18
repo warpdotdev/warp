@@ -69,7 +69,9 @@ async fn fetch_channel_versions_from_json_storage(
         .timeout(FETCH_CHANNEL_VERSIONS_TIMEOUT)
         .send()
         .await?;
-    let versions: ChannelVersions = res.json().await?;
+    let versions: ChannelVersions = res
+        .json_bounded(http_client::MAX_JSON_RESPONSE_BYTES)
+        .await?;
     log::info!("Received channel versions from GCP JSON storage: {versions}");
     Ok(versions)
 }

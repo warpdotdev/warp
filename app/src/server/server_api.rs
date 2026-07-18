@@ -1201,7 +1201,9 @@ impl ServerApi {
         if !response.status().is_success() {
             self.observe_iap_challenge(&response);
         }
-        let versions: ChannelVersions = response.json().await?;
+        let versions: ChannelVersions = response
+            .json_bounded(http_client::MAX_JSON_RESPONSE_BYTES)
+            .await?;
         log::info!("Received channel versions from Warp server: {versions}");
         Ok(versions)
     }
