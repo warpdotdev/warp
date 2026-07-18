@@ -6807,18 +6807,24 @@ fn test_classic_completions_close_when_backspaced_past_original_query() {
                 editor_model_snapshot(input, ctx),
                 ctx,
             );
+            input.input_tab(ctx);
         });
 
         input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "cd Downloads");
             assert!(matches!(
                 input.suggestions_mode_model.as_ref(ctx).mode(),
                 InputSuggestionsMode::CompletionSuggestions { .. }
             ));
         });
 
-        // Removing one character from the original `Do` query should dismiss the menu instead
-        // of filtering with `D` and resurrecting the original result set.
-        editor.update(&mut app, |editor, ctx| editor.backspace(ctx));
+        // Backspacing through the selected result until only `D` remains should dismiss the menu
+        // instead of filtering with `D` and resurrecting the original result set.
+        editor.update(&mut app, |editor, ctx| {
+            for _ in 0.."ownloads".len() {
+                editor.backspace(ctx);
+            }
+        });
 
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "cd D");
@@ -6837,6 +6843,7 @@ fn test_classic_completions_keep_fuzzy_selection_open() {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let editor = input.read(&app, |input, _| input.editor().clone());
 
         app.update(|ctx| {
             InputSettings::handle(ctx).update(ctx, |setting, ctx| {
@@ -6870,6 +6877,20 @@ fn test_classic_completions_keep_fuzzy_selection_open() {
                 input.suggestions_mode_model.as_ref(ctx).mode(),
                 InputSuggestionsMode::CompletionSuggestions { .. }
             ));
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            for _ in 0.."esktop".len() {
+                editor.backspace(ctx);
+            }
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "cd D");
+            assert_eq!(
+                *input.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::Closed
+            );
         });
     })
 }
