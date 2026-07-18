@@ -113,6 +113,15 @@ where
     })
 }
 
+/// Maximum number of bytes to read from a non-OK GraphQL response body.
+///
+/// The body of a non-OK response is only used to build an error message for
+/// diagnostics and logging, so we cap how much of it we buffer. Some failure
+/// modes (auth-refresh retry storms via `fetch_user`, captive portals, or
+/// proxy/CDN HTML error pages) would otherwise buffer pathologically large
+/// bodies fully into memory, causing multi-GB memory spikes. See APP-4821.
+const MAX_ERROR_RESPONSE_BODY_BYTES: usize = 64 * 1024;
+
 /// Sends a [`Request`] to the server and returns the response.
 pub(crate) async fn send_graphql_request<Q>(
     client: &http_client::Client,
@@ -155,7 +164,7 @@ where
                     return Err(GraphQLError::StagingAccessBlocked);
                 }
             }
-            let payload = response.text().await.unwrap_or_default();
+            let payload = response.text_capped(MAX_ERROR_RESPONSE_BODY_BYTES).await;
             return Err(GraphQLError::HttpError {
                 status: status_code,
                 body: payload,
