@@ -3,8 +3,8 @@ use std::path::Path;
 
 use warp_core::ui::Icon;
 use warpui::elements::{
-    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, Container, CornerRadius,
-    CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
@@ -664,7 +664,12 @@ impl SourceControlView {
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(4.)
-                    .with_child(chevron.to_warpui_icon(sub_color.into()).finish())
+                    .with_child(
+                        ConstrainedBox::new(chevron.to_warpui_icon(sub_color.into()).finish())
+                            .with_width(appearance.ui_font_size())
+                            .with_height(appearance.ui_font_size())
+                            .finish(),
+                    )
                     .with_child(
                         Text::new_inline(
                             format!("{} ({})", section.title(), changes.len()),
@@ -876,7 +881,12 @@ impl SourceControlView {
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(4.)
-                    .with_child(chevron.to_warpui_icon(sub_color.into()).finish())
+                    .with_child(
+                        ConstrainedBox::new(chevron.to_warpui_icon(sub_color.into()).finish())
+                            .with_width(appearance.ui_font_size())
+                            .with_height(appearance.ui_font_size())
+                            .finish(),
+                    )
                     .with_child(
                         Text::new_inline(
                             "HISTORY",
@@ -1131,3 +1141,7 @@ impl View for SourceControlView {
             .finish()
     }
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;
