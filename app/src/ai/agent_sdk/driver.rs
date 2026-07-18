@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
-use anyhow::{anyhow, Context as _};
+use anyhow::Context as _;
 use futures::channel::oneshot;
 use futures::future::{self, join_all, Either};
 use futures::FutureExt as _;
@@ -878,7 +878,7 @@ impl AgentDriver {
                         .await
                         .context("Failed to update agent task state to InProgress")
                     {
-                        report_error!(e);
+                        log::error!("Failed to update agent task state to InProgress: {e:#}");
                     }
                 }
                 // Primary: WARP_SANDBOX_DEADLINE client-side timer.
@@ -1032,7 +1032,7 @@ impl AgentDriver {
                 Self::run_snapshot_upload(&foreground).await;
 
                 if tx.send(result).is_err() {
-                    report_error!("Caller did not wait for agent driver to finish");
+                    log::warn!("Caller did not wait for agent driver to finish");
                 }
 
                 Self::cleanup(foreground).await;
@@ -2993,7 +2993,7 @@ impl AgentDriver {
         {
             Ok(()) => true,
             Err(err) => {
-                report_error!(err);
+                log::error!("Failed to save harness conversation (final): {err:#}");
                 false
             }
         };
@@ -3010,7 +3010,7 @@ impl AgentDriver {
             .await
             .context("Failed to clean up harness runtime state")
         {
-            report_error!(err);
+            log::warn!("Failed to clean up harness runtime state: {err:#}");
         }
 
         // A runtime failure detected mid-run takes precedence over the
@@ -3716,7 +3716,7 @@ impl AgentDriver {
 
         for provider in providers {
             if let Err(err) = provider.cleanup().await {
-                report_error!(anyhow!(err).context("Unable to clean up cloud provider"));
+                log::warn!("Unable to clean up cloud provider: {err:#}");
             }
         }
     }
@@ -3776,16 +3776,11 @@ impl AgentDriver {
         snapshot::run_declarations_script(&working_dir, &task_id, script_timeout).await;
 
         // Cap the upload so a pathological slow upload cannot wedge cleanup.
-        // On timeout we surface via report_error! so Sentry captures the incident and on-call
-        // alerting can fire, then let cloud-provider teardown continue.
         if let Err(TimeoutError) = snapshot::upload_snapshot_from_declarations(client, &task_id)
             .with_timeout(upload_timeout)
             .await
         {
-            report_error!(
-                "Snapshot upload timed out; continuing with cleanup",
-                extra: { "timeout" => ?upload_timeout, "task_id" => %task_id }
-            );
+            log::warn!("Snapshot upload timed out; continuing with cleanup");
         }
     }
 }
@@ -3940,9 +3935,7 @@ pub(super) async fn report_driver_error(
         .update_agent_task(task_id, Some(state), None, None, Some(status_update))
         .await
     {
-        report_error!(
-            anyhow!(e).context(format!("Failed to report driver error for task {task_id}"))
-        );
+        log::error!("Failed to report driver error for task {task_id}: {e:#}");
     }
 }
 
