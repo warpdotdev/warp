@@ -56,7 +56,7 @@ use warpui_core::{
 
 use crate::alt_screen_view::AltScreenElement;
 use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
-use crate::clipboard::{copy_to_clipboard, ClipboardCopy};
+use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
 use crate::conversation_selection::TuiConversationSelection;
 use crate::editor_interaction::TuiEditorCommand;
@@ -165,9 +165,6 @@ const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model."
 /// Footer hint shown while the input is in `!` shell mode.
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
-/// Shown when a selection copy was emitted via OSC 52 (best-effort) rather than
-/// confirmed on the OS clipboard, so the feedback doesn't overpromise.
-const COPY_SENT_TO_TERMINAL_HINT: &str = "copied via terminal";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
@@ -952,10 +949,7 @@ impl TuiTerminalSessionView {
                     .update(ctx, |input, ctx| input.clear_selection(ctx));
             }
             TuiTranscriptViewEvent::SelectionEnded(text) => match copy_to_clipboard(text) {
-                Ok(ClipboardCopy::Copied) => view.show_copy_hint(ctx),
-                Ok(ClipboardCopy::SentToTerminal) => {
-                    view.show_success_hint(COPY_SENT_TO_TERMINAL_HINT.to_owned(), ctx);
-                }
+                Ok(()) => view.show_copy_hint(ctx),
                 Err(error) => {
                     log::warn!("Failed to copy TUI selection: {error}");
                     view.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
@@ -2541,15 +2535,9 @@ impl TuiTerminalSessionView {
                     let markdown =
                         conversation.export_to_markdown(Some(self.ai_action_model.as_ref(ctx)));
                     match copy_to_clipboard(&markdown) {
-                        Ok(ClipboardCopy::Copied) => {
+                        Ok(()) => {
                             self.show_success_hint(
                                 "Conversation copied to clipboard".to_owned(),
-                                ctx,
-                            );
-                        }
-                        Ok(ClipboardCopy::SentToTerminal) => {
-                            self.show_success_hint(
-                                "Conversation sent to terminal clipboard".to_owned(),
                                 ctx,
                             );
                         }
