@@ -99,6 +99,9 @@ Relevant code:
   definition, `PartialEq`, `as_markdown`, `to_formatted_text_line`.
 - `crates/editor/src/content/edit.rs:721-746` — image layout/sizing (the core change).
 - `crates/editor/src/content/edit.rs:129-131` — `DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`.
+- `crates/editor/src/content/mermaid_diagram.rs:54-107` — `mermaid_diagram_config` /
+  `mermaid_diagram_size`: the existing precedent for layout-time intrinsic-ratio sizing
+  from `AssetCache`, which §4 below reuses verbatim for `<img>` sizing.
 - `crates/editor/src/render/model/mod.rs:1470-1475` — `ImageBlockConfig`.
 - `crates/editor/src/render/element/image.rs` — `RenderableImage` (drawing; likely
   needs a horizontal-offset for `align`).
@@ -227,6 +230,38 @@ plus current grep):
 
 ### 4. Honor sizing and alignment in layout (the core behavior change)
 
+**The existing mechanism this reuses.** Plain Markdown images do not have a
+precedent for intrinsic-ratio sizing today — `BufferBlockItem::Image`'s layout
+(`edit.rs:726-751`) never queries the asset at all, it just always fills
+`available_width` at a hardcoded height. But **Mermaid diagrams already solve exactly
+this problem**, one block type over: `mermaid_diagram_size`
+(`crates/editor/src/content/mermaid_diagram.rs:85-107`) queries
+`AssetCache::load_asset::<ImageType>(asset_source)` *during the same layout pass* that
+builds `ImageBlockConfig`, and when the asset is `AssetState::Loaded`, reads the
+intrinsic size straight off the decoded data (`ImageType::Svg { svg }.size()`,
+or generally `ImageType::image_size()` at `warpui_core/src/image_cache.rs:472-484`,
+which also handles `StaticBitmap`/`AnimatedBitmap`) and computes
+`height = width * intrinsic_height / intrinsic_width` (`mermaid_diagram.rs:104-106`).
+When the asset is not yet `Loaded` (`Loading`/`FailedToLoad`/`Evicted`), it falls back
+to a height-multiplier default (`mermaid_diagram_config`, `:54-71`) — the same shape of
+fallback `BufferBlockItem::Image` already uses today, just parameterized instead of
+hardcoded. This is a real, shipped, layout-time re-derivation, not a speculative
+"generous cap": every time editor content layout re-runs (the same re-run that lets a
+`Loading` Mermaid diagram flip to a rendered `MermaidDiagram` block once its asset
+resolves — driven by the normal buffer/viewport invalidation path, not by the paint
+layer's `repaint_after_load`), the image block re-queries `AssetCache` and gets a
+better answer once decoded data exists. `<img>` sizing adopts this identical pattern
+rather than inventing a new one.
+
+(Note: `Image::layout_using_paint_bounds()` in
+`crates/warpui_core/src/elements/gui/image.rs:153-161` looks like a shortcut but is
+not — it only affects the paint element's own internal `size`, never wired into
+`ImageBlockConfig`, and `RenderableImage` in `crates/editor/src/render/element/image.rs`
+does not call it. Document-flow height, selection rects, and `align` offsets are all
+read from `ImageBlockConfig.width`/`.height` on the content-model `BlockItem::Image`
+(`render/model/mod.rs:4314,4375,4399`), so the fix must land in `edit.rs`'s layout
+task, exactly where Mermaid's does, not in the paint-layer element.)
+
 In `crates/editor/src/content/edit.rs:721-746`, replace the hardcoded size with a
 resolution against the new fields:
 
@@ -234,18 +269,35 @@ resolution against the new fields:
 - Resolve `width`:
   - `Some(Pixels(px))` → `min(px, available_width)` (invariant 4).
   - `Some(Percent(p))` → `available_width * p / 100` (invariant 5).
-  - `None` → today's default (`available_width`, invariant 7).
-- Resolve `height` analogously; the height budget for a `Percent` is the same
-  `default_height` basis used today (`base_line_height * DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`).
-- Aspect ratio when only one dimension is set (invariant 6): because
-  `Image::contain()` already scales by the smaller ratio inside the box
-  (`image.rs:388-394`), passing a large/unconstrained value for the unspecified
-  dimension yields proportional scaling. Concretely: if only `width` is specified, set
-  `height` to a generous cap (e.g. `available_height` budget) so `contain` scales to
-  the width; if only `height` is specified, cap `width` at `available_width`. This
-  reuses the primitive's existing aspect-preservation rather than computing intrinsic
-  ratios in the editor (which would require the decoded image, not available at layout
-  time).
+  - `None` when the other axis is also `None` → today's default (`available_width`,
+    invariant 7).
+- Resolve `height` analogously; the height budget for a `Percent`, or for the
+  neither-specified default, is the same `default_height` basis used today
+  (`base_line_height * DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`).
+- **Aspect ratio when exactly one dimension is set (invariant 6):** resolve the
+  specified axis per the rules above, then derive the other axis from the intrinsic
+  ratio using the Mermaid mechanism verbatim:
+  - Call `AssetCache::as_ref(app).load_asset::<ImageType>(asset_source.clone())`
+    (the `asset_source` is already computed at this point via
+    `resolve_asset_source`, `edit.rs:886`, so this requires no new resolution step).
+  - `AssetState::Loaded { data }` with `data.image_size()` returning
+    `Some((intrinsic_w, intrinsic_h))` with both `> 0`: derive the missing axis —
+    given `width`, `height = width * intrinsic_h / intrinsic_w`; given `height`,
+    `width = min(height * intrinsic_w / intrinsic_h, available_width)`.
+  - `AssetState::Loading | FailedToLoad(_) | Evicted`, or `Loaded` with a
+    zero/unreadable intrinsic size: the missing axis falls back to today's default for
+    that axis (`available_width` for width, `default_height` for height) — a plain
+    box, not a "cap" — until a later layout pass (triggered the same way a `Loading`
+    Mermaid diagram's is) resolves it once the asset decodes. This is a real,
+    bounded-in-time transient state, not a permanent behavior: it is one concrete
+    layout in the "unresolved intrinsic size" case, not an approximation of one.
+- **Both dimensions given:** no ratio math — each axis resolves independently per the
+  rules above (invariant 6 only applies when exactly one axis is specified).
+- **Percentage width with intrinsic ratio:** if `width` is `Percent` and `height` is
+  unspecified, the percent is still resolved against `available_width` first (per
+  invariant 5), then the derived `height` uses that resolved pixel width in the ratio
+  formula above — percent sizing and aspect-ratio derivation compose rather than being
+  mutually exclusive.
 
 Add an `align: ImageAlign` (or a resolved horizontal offset) to `ImageBlockConfig`
 (`render/model/mod.rs:1470-1475`). In `RenderableImage::paint`
@@ -339,6 +391,23 @@ Covers invariants 4–8:
 - No dimensions → identical `ImageBlockConfig` to today (regression against the
   hardcoded default).
 - `align = Center/Right` → expected horizontal offset in the laid-out block.
+- **Width-only + `AssetState::Loaded` intrinsic size** → `height` equals
+  `width * intrinsic_h / intrinsic_w` (mirror the existing
+  `mermaid_diagram_size` test coverage in `mermaid_diagram_tests.rs`, same formula,
+  different block type).
+- **Height-only + `AssetState::Loaded` intrinsic size** → `width` equals
+  `height * intrinsic_w / intrinsic_h`, clamped to `available_width`.
+- **Width-only + `AssetState::Loading`** (asset not yet decoded) → `height` falls back
+  to the plain default (`default_height`), not a placeholder cap; re-running layout
+  after the asset transitions to `Loaded` produces the ratio-derived height (regression
+  guard against silently freezing on the fallback).
+- **Width-only + `AssetState::Loaded` with zero/invalid intrinsic size** → falls back to
+  `default_height` exactly like the `Loading` case (invariant 6 degenerate case).
+- **Both `width` and `height` given** → no ratio math is applied; each axis resolves
+  independently even if it does not match the intrinsic aspect ratio (regression guard
+  against accidentally overriding an explicit two-dimension author intent).
+- **`width="90%"` + intrinsic ratio** → `height` is derived from the *resolved pixel*
+  width (`available_width * 90 / 100`), not from the unresolved percentage.
 
 ### Integration / manual
 
@@ -360,10 +429,12 @@ exercisable there.
   `<img>`-block-parser plumbing that later tags can reuse — notably #13736
   (`<picture>`/`<source>`), which is explicitly blocked on this issue for its fallback
   `<img>` path to mean anything.
-- **Aspect ratio at layout time:** the editor lays out before the image is decoded, so
-  it cannot know intrinsic dimensions; single-dimension sizing relies on the primitive's
-  `contain()` scaling. If a future change wants exact intrinsic-ratio sizing at layout
-  time, it would need the decoded image size threaded back — out of scope here.
+- **Aspect ratio before the asset decodes:** single-dimension sizing (invariant 6) reads
+  intrinsic size from `AssetCache` at layout time, exactly like `mermaid_diagram_size`
+  (`mermaid_diagram.rs:85-107`). If the asset hasn't finished loading yet, the missing
+  axis uses the plain default for one layout pass and self-corrects once the asset
+  resolves and layout re-runs (the same self-correction Mermaid relies on today) — this
+  is not a new invalidation mechanism, just a second consumer of an existing one.
 - **Honoring intrinsic SVG size with no attributes** (the other half of the issue's
   repro) is intentionally deferred: it changes default behavior for existing documents
   and deserves its own spec/PR.
