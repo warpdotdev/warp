@@ -431,3 +431,35 @@ fn test_blank_cells_before_hyperlink_are_not_clickable() {
     assert_eq!(flat[2].c, 'a');
     assert_eq!(flat[2].hyperlink_id(), Some(id));
 }
+
+#[test]
+fn test_hyperlinks_survive_resize() {
+    use crate::model::ansi::control_sequence_parameters::Hyperlink;
+    use crate::model::grid::HyperlinkRegistry;
+
+    let mut registry = HyperlinkRegistry::new();
+    let id = registry
+        .intern(Hyperlink {
+            id: None,
+            uri: "https://example.com".to_string(),
+        })
+        .expect("registry should have capacity for one hyperlink");
+
+    let mut linked = Cell::from('b');
+    linked.set_hyperlink_id(Some(id));
+    let row = Row::from_vec(
+        vec![Cell::from('a'), linked.clone(), linked, Cell::from('c')],
+        4,
+    );
+
+    let mut storage = FlatStorage::new(4, None, Some(2));
+    storage.push_rows([&row]);
+    storage.set_columns(2);
+
+    let rows: Vec<_> = storage.rows_from(0).collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0][0].hyperlink_id(), None);
+    assert_eq!(rows[0][1].hyperlink_id(), Some(id));
+    assert_eq!(rows[1][0].hyperlink_id(), Some(id));
+    assert_eq!(rows[1][1].hyperlink_id(), None);
+}
