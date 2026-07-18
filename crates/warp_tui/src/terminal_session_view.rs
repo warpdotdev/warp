@@ -59,8 +59,10 @@ use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
 use crate::conversation_selection::TuiConversationSelection;
+use crate::editor_interaction::TuiEditorCommand;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
 use crate::inline_menu::{active_inline_menu, TuiInlineMenu, MAX_INLINE_MENU_ROWS};
+use crate::input::view::TuiInputAction;
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
@@ -108,8 +110,6 @@ const ORCHESTRATION_TAB_LABEL_MAX_COLUMNS: u16 = 20;
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
-/// The EOF byte (ctrl-d) forwarded to a running foreground command's PTY.
-const CTRL_D_EOF_BYTE: u8 = 0x04;
 const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
 const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
 
@@ -248,8 +248,8 @@ pub(crate) enum TuiTerminalSessionAction {
     ToggleUsageDisplay,
     /// Raw user bytes to forward to the foreground PTY process.
     ForwardUserPtyBytes(Vec<u8>),
-    /// Ctrl-d: forward EOF to a running foreground command, else exit the TUI
-    /// immediately when the prompt is empty, else delete the next character.
+    /// Ctrl-d while the prompt is focused: exit the TUI immediately when the
+    /// prompt is empty, else delete the next character.
     Eof,
     /// Toggle the latest exposed inline plan.
     TogglePlan,
@@ -337,7 +337,7 @@ pub(crate) fn init(app: &mut AppContext) {
         FixedBinding::new(
             "ctrl-d",
             TuiTerminalSessionAction::Eof,
-            id!(TuiTerminalSessionView::ui_name()),
+            id!(TuiInputView::ui_name()),
         )
         .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
@@ -1894,39 +1894,20 @@ impl TuiTerminalSessionView {
         ctx.notify();
     }
 
-    /// Handles a ctrl-d press. Unlike ctrl-c, ctrl-d exits immediately (no
-    /// press-again confirmation) — but only when nothing is running: if a
-    /// foreground command is active it receives EOF instead, and when the
-    /// prompt has text ctrl-d keeps its editing role of deleting the next
-    /// character.
+    /// Handles ctrl-d while the prompt is focused. Unlike ctrl-c, ctrl-d exits
+    /// immediately when the prompt is empty; otherwise it keeps its editing
+    /// role of deleting the next character.
     fn handle_eof(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.has_active_long_running_command() {
-            ctx.emit(TuiTerminalSessionEvent::WriteUserInput(Cow::Owned(vec![
-                CTRL_D_EOF_BYTE,
-            ])));
-            return;
-        }
         if self.input_view.as_ref(ctx).is_empty(ctx) {
             ctx.terminate_app(TerminationMode::ForceTerminate, None);
         } else {
-            self.input_view
-                .update(ctx, |input, ctx| input.delete_forward(ctx));
+            self.input_view.update(ctx, |input, ctx| {
+                input.handle_action(
+                    &TuiInputAction::EditorCommand(TuiEditorCommand::DeleteForward),
+                    ctx,
+                );
+            });
         }
-    }
-
-    /// Whether a foreground command is currently running in this session — an
-    /// alt-screen or user-controlled inline command (which own keyboard input),
-    /// or any active long-running command block (e.g. one the agent is
-    /// monitoring). Ctrl-d routes EOF to such a command instead of exiting.
-    fn has_active_long_running_command(&self) -> bool {
-        if self.process_owns_input() {
-            return true;
-        }
-        let terminal_model = self.terminal_model.lock();
-        terminal_model
-            .block_list()
-            .active_block()
-            .is_active_and_long_running()
     }
 
     /// Cancels the surface's running conversation (in-flight stream or pending

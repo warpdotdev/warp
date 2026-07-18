@@ -240,15 +240,15 @@ fn ctrl_d_is_owned_by_the_session_surface_not_input_delete_forward() {
                 "editor delete-forward should still bind ctrl-d"
             );
 
-            // The session surface binds ctrl-d as a fixed (non-editable) binding
-            // for exit / EOF: fixed bindings expose an empty name and carry the
-            // TUI group.
+            // The session handles ctrl-d only while the prompt is focused.
+            // When a process owns focus, ctrl-d falls through to the terminal
+            // element's standard PTY key encoding.
             let session_binds_ctrl_d = ctx.get_key_bindings().any(|b| {
                 *b.trigger == ctrl_d && b.name.is_empty() && b.group == Some(TUI_BINDING_GROUP)
             });
             assert!(
                 session_binds_ctrl_d,
-                "the session surface should bind ctrl-d for exit / EOF"
+                "the session should bind ctrl-d for prompt exit / deletion"
             );
         });
     });
