@@ -127,6 +127,55 @@ The reasoning — and the precedent that decides it — is in design question 1.
      width — see §6 and the TUI scope decision). The content model does not
      name `warpui_core::Align`.
 
+   - **Parser-to-buffer contract: how the region boundaries reach the buffer.**
+     The buffer stores the region as top-level `BufferText` markers (above), but
+     those markers are *inserted during lowering* — the parser has to hand the
+     boundaries to the lowering pass somehow. The lowering pass is a single
+     stateful line-by-line loop over the `FormattedTextLine` stream: `edit`
+     (`crates/editor/src/content/core.rs:567`, reached from `from_markdown` →
+     `from_formatted_text` → `replace_with_formatted_text` →
+     `edits_for_formatted_text` → the `Insert` action dispatched at
+     `core.rs:447-457`) matches each `FormattedTextLine` variant and pushes
+     `BufferText` for it, tracking `previous_block_type` across lines. That loop
+     is the *only* place parser output becomes buffer content, so the boundaries
+     must ride the `FormattedTextLine` stream to reach it.
+
+     **Represent each boundary as a zero-content marker line in the parser
+     stream**: two new content-less `FormattedTextLine` variants,
+     `FormattedTextLine::AlignRegionStart(BlockAlignment)` and
+     `FormattedTextLine::AlignRegionEnd`. The block detector (design question 3)
+     emits `AlignRegionStart`, then the interior blocks parsed exactly as if
+     standalone, then `AlignRegionEnd` — a flat run, no wrapper. The `edit` loop
+     gains two arms that translate them directly into the paired top-level
+     `BufferText::AlignStart { alignment }` / `BufferText::AlignEnd` markers,
+     exactly as the `OrderedList` arm (`core.rs:781-825`) translates its line
+     into a `BufferBlockStyle::OrderedList` marker. This mirrors the ordered-list
+     precedent end to end: parser-side metadata (there `number`/`indent_level`;
+     here `alignment`) originates in the parser
+     (`crates/markdown_parser/src/markdown_parser.rs:740-759` builds
+     `OrderedList`), rides as data on a `FormattedTextLine`, and is translated to
+     a `BufferText` marker by the same `edit` loop.
+
+     The reason boundaries are *their own* content-less variants rather than an
+     `alignment` field on the existing line variants: a per-line field would
+     have to be consumed at the point where `edit` produces a `BufferBlockStyle`
+     for that line, which is precisely the "one `BufferBlockStyle` per character"
+     collision this design rejects (and `FormattedIndentTextInline`'s reuse
+     across `OrderedList`/`UnorderedList`, `lib.rs:315-319`, is a *block-style*
+     attribute for exactly that reason). Content-less boundary lines sidestep it:
+     they carry no `BufferBlockStyle`, translating only into the orthogonal
+     top-level align markers, so "aligned **and** a code block" stays two
+     independent facts. `LineBreak` and `HorizontalRule` (`lib.rs:161-162`) are
+     the existing precedent for a content-less `FormattedTextLine` the `edit`
+     loop handles without emitting a block style (`core.rs:570`, `:868`).
+
+     Reverse serialization (`buffer.rs` ~`:6026`, the `BufferBlockStyle →
+     FormattedTextLine` path) brackets the interior on the way out: on hitting an
+     `AlignStart`/`AlignEnd` marker it emits the corresponding boundary line (or,
+     equivalently, wraps the interior's re-serialized `FormattedTextLine`s in the
+     `<div align>`/`<p align>` text form), symmetric with how the ordered-list
+     block style is re-serialized there.
+
    - **Rejected alternative — `FormattedTextLine::AlignedBlock` wrapper
      variant.** An earlier draft recommended a new `markdown_parser`
      `FormattedTextLine::AlignedBlock(Vec<FormattedTextLine>)` wrapper carrying
@@ -175,13 +224,16 @@ The reasoning — and the precedent that decides it — is in design question 1.
    `markdown_parser.rs` (same pattern as those siblings: scan for an own-line
    `<div align="…">` / `<p align="…">`, find the matching own-line closing tag,
    recursively parse the raw content between them as ordinary Markdown). The
-   detector's job is to emit an **alignment-start signal, the interior blocks
-   parsed exactly as if standalone, and an alignment-end signal** — the interior
-   is *not* wrapped in a new parser variant; it stays a flat run of ordinary
-   `FormattedTextLine`s bracketed by the region boundary. When `buffer.rs` lowers
-   this into the content model it inserts the paired `BufferText` align markers
-   (design question 1) around the interior blocks' `BufferText`. Recursion reuses
-   the existing top-level parse function rather than inventing a second grammar.
+   detector's job is to emit a **`FormattedTextLine::AlignRegionStart(alignment)`
+   boundary line, the interior blocks parsed exactly as if standalone, and a
+   `FormattedTextLine::AlignRegionEnd` boundary line** (the parser-to-buffer
+   contract under design question 1) — the interior is *not* wrapped in a new
+   parser variant; it stays a flat run of ordinary `FormattedTextLine`s bracketed
+   by the two content-less boundary lines. When the `edit` lowering loop
+   (`core.rs:567`) reaches those boundary lines it inserts the paired top-level
+   `BufferText` align markers (design question 1) around the interior blocks'
+   `BufferText`. Recursion reuses the existing top-level parse function rather
+   than inventing a second grammar.
 
 4. **`<p align>` vs `<div align>` — single block vs. group.** Both route through
    the same detector and emit the same paired region markers; the only difference
@@ -228,23 +280,36 @@ The reasoning — and the precedent that decides it — is in design question 1.
 ### TUI surface disposition
 
 Master's TUI Markdown renderer (`crates/warp_tui/src/tui_markdown.rs`) consumes
-`FormattedTextLine` directly and implements its **own** alignment for tables,
+`FormattedTextLine` directly — it matches exhaustively on the variant stream
+(`tui_markdown.rs:86-140`) — and implements its **own** alignment for tables,
 separately from the GUI, in `crates/warp_tui/src/tui_markdown/table.rs`
 (`aligned_cell_spans`, `:260`, padding per `TableAlignment`). Block-region
 alignment must therefore have an explicit TUI disposition rather than assuming
 the GUI `Align` element covers it (it does not — `warpui_core::Align` is not a
 TUI concept).
 
-**Scope decision:** the TUI renders an aligned region with **best-effort
-horizontal positioning within the terminal width** (compute the region's
-rendered width, pad leading columns per the alignment, mirroring how
-`aligned_cell_spans` pads table cells), and **falls back to left-aligned** where
-the region's width can't be determined or exceeds the pane. This keeps the TUI
-consuming the same content-model markers as the GUI while acknowledging the
-terminal's coarser layout model; it is an explicit scope decision, not an
-oversight. (This mirrors bnavetta's #13345 framing that region state lives in the
-buffer so every surface can consult it — the TUI reads the same `SumTree`
-dimension the GUI does.)
+**The TUI reads the region boundaries from the stream it already consumes — no
+buffer/SumTree involvement.** Because the parser-to-buffer contract (design
+question 1) represents region boundaries as `FormattedTextLine::AlignRegionStart`
+/ `AlignRegionEnd` lines *in the `FormattedTextLine` stream*, the TUI receives
+them by adding two arms to its existing exhaustive match at
+`tui_markdown.rs:86-140` — the same stream position it already reads
+`OrderedList`, `LineBreak`, etc. It never touches the buffer's `BufferText`
+markers or the `SumTree` dimension; those are the GUI/buffer lowering of the same
+boundaries. Both surfaces read the *same parser boundaries*, each in the form its
+own pipeline consumes (the TUI the boundary lines, the buffer-backed GUI the
+lowered `BufferText` markers).
+
+**Scope decision:** on `AlignRegionStart`, the TUI renders the bracketed interior
+lines with **best-effort horizontal positioning within the terminal width**
+(compute each line's rendered width, pad leading columns per the alignment,
+mirroring how `aligned_cell_spans` pads table cells), and **falls back to
+left-aligned** where a line's width can't be determined or exceeds the pane. This
+acknowledges the terminal's coarser layout model; it is an explicit scope
+decision, not an oversight. (This mirrors bnavetta's #13345 framing that region
+state is expressed once, at the parser boundary, so every surface can consult
+it — the GUI via the lowered buffer markers, the TUI via the boundary lines in
+the stream.)
 
 7. **Feature gating.** No existing flag covers this (`MarkdownTables` is
    table-specific). Recommend a new flag, e.g. `FeatureFlag::MarkdownBlockAlign`,
@@ -322,7 +387,8 @@ now positioned differently."
   renders with best-effort horizontal positioning within a fixed terminal
   width, and falls back to left-aligned when the region width exceeds the pane
   (the explicit TUI scope decision) — asserting the terminal surface reads the
-  same content-model markers as the GUI, not a GUI-only path.
+  `AlignRegionStart`/`AlignRegionEnd` boundary lines from the `FormattedTextLine`
+  stream it already consumes, not a GUI-only path.
 
 ### Integration / manual
 
@@ -334,33 +400,43 @@ horizontal position must be correct).
 
 ## Risks and follow-ups
 
-- **Marker-model blast radius is narrower than the rejected wrapper, but real.**
-  Because alignment rides existing channels — new `BufferText` variants and a
-  `SumTree` dimension, following the ordered-list precedent — it does **not**
-  add an arm to every `match` over `FormattedTextLine`. The touched surface is:
-  the `markdown_parser` block detector (`markdown_parser.rs`, plus
-  `html_parser.rs` if the paste path is in scope), the `buffer.rs` lower/serialize
-  bridge (insert markers around interior blocks on parse; bracket on serialize),
-  and the `SumTree` summary/dimension plumbing that answers "is this character
-  inside an aligned region." Any code that exhaustively matches `BufferText`
-  (e.g. `find.rs:338`, which already special-cases `BufferText::BlockMarker`)
-  gains a new-variant arm — a bounded, compiler-enforced set, not the full
-  `FormattedTextLine` fan-out.
+- **Marker-model blast radius is real but bounded, and shaped differently from
+  the rejected wrapper.** The two content-less boundary variants
+  (`FormattedTextLine::AlignRegionStart`/`AlignRegionEnd`) *do* add arms to
+  exhaustive matches over `FormattedTextLine` — this is honest: the `edit`
+  lowering loop (`core.rs:567`), the TUI renderer (`tui_markdown.rs:86-140`), and
+  any other exhaustive consumer each gain arms. The difference from the rejected
+  wrapper is not arm *count* but arm *cost*: these are marker lines like
+  `LineBreak`/`HorizontalRule`, so most consumers handle them with a trivial or
+  no-op arm (emit a marker, or ignore) rather than recursing into wrapped
+  children, and — decisively — they never produce a `BufferBlockStyle`, so they
+  never collide with the "one block style per character" constraint. On the
+  buffer side the touched surface is: the `markdown_parser` block detector
+  (`markdown_parser.rs`, plus `html_parser.rs` if the paste path is in scope),
+  the two lowering arms in `core.rs`'s `edit` loop plus the `buffer.rs`
+  serialize path (~`:6026`) that brackets on the way out, the paired top-level
+  `BufferText::AlignStart`/`AlignEnd` variants, and the `SumTree`
+  summary/dimension plumbing that answers "is this character inside an aligned
+  region." Any code that exhaustively matches `BufferText` (e.g. `find.rs:338`,
+  which already special-cases `BufferText::BlockMarker`) gains a new-variant arm
+  — a bounded, compiler-enforced set.
 
-  For contrast, the **rejected `FormattedTextLine::AlignedBlock` wrapper** (design
-  question 1) *would* have added a required arm to every exhaustive match over
-  `FormattedTextLine`. That enum is referenced across **20 files** in `crates/`;
-  the production match sites that would have needed a new arm span not just the
-  obvious Markdown files (`markdown_parser` `lib.rs` / `markdown_parser.rs` /
-  `html_parser.rs`; `editor` `content/{buffer,core,markdown,text}.rs`) but two
-  non-obvious ones worth calling out explicitly: the **Jupyter notebook parser**
+  For contrast, the **rejected `FormattedTextLine::AlignedBlock(Vec<…>)`
+  wrapper** (design question 1) added arms to the same exhaustive matches, but
+  each arm was *heavier* — it wrapped a nested `Vec<FormattedTextLine>` every
+  consumer had to recurse into and re-flatten — and it still had to become
+  *some* `BufferBlockStyle` when lowered, failing bnavetta's composition
+  constraint. That enum is referenced across **20 files** in `crates/`; the
+  wrapper's recursion cost would have been paid not just in the obvious Markdown
+  files (`markdown_parser` `lib.rs` / `markdown_parser.rs` / `html_parser.rs`;
+  `editor` `content/{buffer,core,markdown,text}.rs`) but in two non-obvious ones
+  worth calling out — the **Jupyter notebook parser**
   (`crates/ipynb_parser/src/lib.rs`) and the **TUI** (`crates/warp_tui/
-  src/tui_markdown.rs` and `tui_plan_view.rs`), plus the GUI element sink
-  (`crates/warpui_core/src/elements/gui/formatted_text_element.rs`). The wrapper's
-  cost was paid across all of those *and* still failed bnavetta's composition
-  constraint — which is the substantive reason to reject it, the arm-count being
-  secondary. The marker design pays a smaller, differently-shaped cost and
-  composes.
+  src/tui_markdown.rs` and `tui_plan_view.rs`) — plus the GUI element sink
+  (`crates/warpui_core/src/elements/gui/formatted_text_element.rs`). The
+  substantive reason to reject the wrapper is the composition failure, the
+  recursion cost being secondary. The boundary-line design pays a smaller,
+  flatter cost and composes.
 - **Render-layer approach is per-surface and partly unconfirmed** (design
   question 6). GUI: whether `warpui_core::Align` composes cleanly with the
   Markdown block renderer needs a spike; the manual per-line-offset fallback is
