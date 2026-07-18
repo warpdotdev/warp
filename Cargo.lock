@@ -15930,6 +15930,7 @@ version = "0.0.0"
 dependencies = [
  "ai",
  "anyhow",
+ "arboard",
  "async-channel",
  "async-fs",
  "base64 0.22.1",

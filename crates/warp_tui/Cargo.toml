@@ -76,6 +76,13 @@ warpui.workspace = true
 warpui_core = { workspace = true, features = ["tui"] }
 uuid.workspace = true
 
+# Native OS-clipboard transport for local TUI runs (copy-out only, text-only).
+# OSC 52 (see `src/clipboard.rs`) remains the transport for remote/SSH sessions
+# and the local fallback. `arboard` supports macOS/Linux/FreeBSD/Windows, so it
+# is added for all desktop targets to give a single cross-platform native path.
+[target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
+arboard = { workspace = true }
+
 [dev-dependencies]
 tempfile.workspace = true
 # `test-util` exposes `Appearance::mock()`, used to register the `Appearance`
