@@ -1,6 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use ::ai::api_keys::CustomEndpoint;
+use ::ai::api_keys::{CustomEndpoint, CustomEndpointSchema};
 use url::Url;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
@@ -25,6 +25,7 @@ use crate::editor::{
 use crate::modal::{Modal, ModalViewState};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, DangerSecondaryTheme};
+use crate::view_components::{Dropdown, DropdownItem};
 
 const LABEL_FONT_SIZE: f32 = 12.;
 const INPUT_WIDTH: f32 = 480.;
@@ -54,6 +55,7 @@ pub enum CustomEndpointModalEvent {
         name: String,
         url: String,
         api_key: String,
+        schema: CustomEndpointSchema,
         models: Vec<(String, Option<String>, Option<String>)>,
     },
     SaveEndpoint {
@@ -61,6 +63,7 @@ pub enum CustomEndpointModalEvent {
         name: String,
         url: String,
         api_key: String,
+        schema: CustomEndpointSchema,
         models: Vec<(String, Option<String>, Option<String>)>,
     },
     RemoveEndpoint {
@@ -75,6 +78,7 @@ pub enum CustomEndpointModalAction {
     AddModel,
     RemoveModel(usize),
     RemoveEndpoint,
+    SetSchema(CustomEndpointSchema),
 }
 
 struct ModelRow {
@@ -88,6 +92,8 @@ pub struct CustomEndpointModal {
     endpoint_name_editor: ViewHandle<EditorView>,
     endpoint_url_editor: ViewHandle<EditorView>,
     api_key_editor: ViewHandle<EditorView>,
+    schema_dropdown: ViewHandle<Dropdown<CustomEndpointModalAction>>,
+    schema: CustomEndpointSchema,
     model_rows: Vec<ModelRow>,
     cancel_button_mouse_state: MouseStateHandle,
     save_button_mouse_state: MouseStateHandle,
@@ -175,6 +181,30 @@ impl CustomEndpointModal {
             editor
         });
 
+        let schema = endpoint.map(|endpoint| endpoint.schema).unwrap_or_default();
+        let schema_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_items(
+                [
+                    CustomEndpointSchema::OpenaiChatCompletions,
+                    CustomEndpointSchema::OpenaiResponses,
+                    CustomEndpointSchema::AnthropicMessages,
+                ]
+                .into_iter()
+                .map(|schema| {
+                    DropdownItem::new(
+                        schema.display_name(),
+                        CustomEndpointModalAction::SetSchema(schema),
+                    )
+                })
+                .collect(),
+                ctx,
+            );
+            dropdown
+        });
+        schema_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_selected_by_name(schema.display_name(), ctx);
+        });
         let mut model_rows = Vec::new();
         if let Some(ep) = endpoint {
             for model in &ep.models {
@@ -233,6 +263,8 @@ impl CustomEndpointModal {
             endpoint_name_editor,
             endpoint_url_editor,
             api_key_editor,
+            schema_dropdown,
+            schema,
             model_rows,
             cancel_button_mouse_state: Default::default(),
             save_button_mouse_state: Default::default(),
@@ -319,6 +351,16 @@ impl CustomEndpointModal {
         self.api_key_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text(endpoint.map(|e| e.api_key.as_str()).unwrap_or(""), ctx);
         });
+        self.schema_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_selected_by_name(
+                endpoint
+                    .map(|endpoint| endpoint.schema)
+                    .unwrap_or_default()
+                    .display_name(),
+                ctx,
+            );
+        });
+        self.schema = endpoint.map(|endpoint| endpoint.schema).unwrap_or_default();
         // Rebuild model rows
         // Old model row editors will be dropped with the modal body
         self.model_rows.clear();
@@ -434,6 +476,7 @@ impl CustomEndpointModal {
                 name,
                 url,
                 api_key,
+                schema: self.schema,
                 models,
             });
         } else {
@@ -441,6 +484,7 @@ impl CustomEndpointModal {
                 name,
                 url,
                 api_key,
+                schema: self.schema,
                 models,
             });
         }
@@ -703,6 +747,17 @@ impl View for CustomEndpointModal {
             )
             .with_margin_bottom(16.)
             .finish(),
+        );
+        // Request/response protocol
+        column.add_child(
+            Container::new(label("API schema"))
+                .with_margin_bottom(4.)
+                .finish(),
+        );
+        column.add_child(
+            Container::new(ChildView::new(&self.schema_dropdown).finish())
+                .with_margin_bottom(16.)
+                .finish(),
         );
 
         // Endpoint name
@@ -1066,6 +1121,10 @@ impl TypedActionView for CustomEndpointModal {
                 if let Some(index) = self.editing_index {
                     ctx.emit(CustomEndpointModalEvent::RemoveEndpoint { index });
                 }
+            }
+            CustomEndpointModalAction::SetSchema(schema) => {
+                self.schema = *schema;
+                ctx.notify();
             }
         }
     }
