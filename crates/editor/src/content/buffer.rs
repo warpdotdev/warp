@@ -3659,13 +3659,24 @@ impl Buffer {
             if is_weight && handled_weight {
                 continue;
             }
-            if text_style.exact_match_style(&style) {
+            // `weight` is a single `Option<CustomWeight>`, so a mask like `TextStyles::all()` can
+            // only ever name one `BufferTextStyle::Weight(_)` variant (it hardcodes `Bold`). Fall
+            // back to `has_any_weight` for weight variants so a "strip everything" mask clears
+            // whichever weight is actually active instead of only the one it happens to carry.
+            let wants_style = match style {
+                BufferTextStyle::Weight(_) => text_style.has_any_weight(),
+                _ => text_style.exact_match_style(&style),
+            };
+            if wants_style {
                 handled_weight |= is_weight;
                 // We only want to unstyle the sub-ranges that has been styled with the target text style.
                 let cursor = self.content.cursor::<CharOffset, BufferSummary>();
                 let mut buffer_cursor = BufferCursor::new(cursor);
                 buffer_cursor.seek_to_offset_after_markers(range.start);
-                let mut unstyle_range_start = None;
+                // For `Weight(_)`, the concrete weight of each run can vary (e.g. `Black` then
+                // `Light`), so we track the actual `BufferTextStyle::Weight` present at the run's
+                // start rather than assuming it matches the loop's `style` value.
+                let mut unstyle_range: Option<(CharOffset, BufferTextStyle)> = None;
 
                 while buffer_cursor.item().is_some() {
                     let summary = buffer_cursor.start();
@@ -3676,24 +3687,44 @@ impl Buffer {
                         break;
                     }
 
-                    if !active_style.exact_match_style(&style) {
-                        if let Some(start) = unstyle_range_start.take() {
-                            editor_action_set.push(CoreEditorAction::new(
-                                start..offset,
-                                CoreEditorActionType::UnstyleText(style),
-                            ))
+                    let active_matching_style = if is_weight {
+                        active_style
+                            .get_custom_weight()
+                            .map(BufferTextStyle::Weight)
+                    } else if active_style.exact_match_style(&style) {
+                        Some(style)
+                    } else {
+                        None
+                    };
+
+                    match (active_matching_style, &unstyle_range) {
+                        (Some(active), Some((_, tracked))) if active == *tracked => {}
+                        (Some(active), _) => {
+                            if let Some((start, tracked)) = unstyle_range.replace((offset, active))
+                            {
+                                editor_action_set.push(CoreEditorAction::new(
+                                    start..offset,
+                                    CoreEditorActionType::UnstyleText(tracked),
+                                ))
+                            }
                         }
-                    } else if unstyle_range_start.is_none() {
-                        unstyle_range_start = Some(offset);
+                        (None, _) => {
+                            if let Some((start, tracked)) = unstyle_range.take() {
+                                editor_action_set.push(CoreEditorAction::new(
+                                    start..offset,
+                                    CoreEditorActionType::UnstyleText(tracked),
+                                ))
+                            }
+                        }
                     }
 
                     buffer_cursor.seek_to_offset_after_markers(offset + 1);
                 }
 
-                if let Some(start) = unstyle_range_start.take() {
+                if let Some((start, tracked)) = unstyle_range.take() {
                     editor_action_set.push(CoreEditorAction::new(
                         start..range.end,
-                        CoreEditorActionType::UnstyleText(style),
+                        CoreEditorActionType::UnstyleText(tracked),
                     ))
                 }
             }
