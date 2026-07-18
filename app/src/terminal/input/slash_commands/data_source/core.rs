@@ -677,7 +677,6 @@ impl InlineItem {
                 SkillProvider::Warp => WarpIcon::Warp,
                 SkillProvider::Claude => WarpIcon::ClaudeLogo,
                 SkillProvider::Codex => WarpIcon::OpenAILogo,
-                SkillProvider::Omp => WarpIcon::PiLogo,
                 SkillProvider::Gemini => WarpIcon::GeminiLogo,
                 SkillProvider::Droid => WarpIcon::DroidLogo,
                 SkillProvider::OpenCode => WarpIcon::OpenCodeLogo,

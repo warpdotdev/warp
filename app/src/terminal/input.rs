@@ -5153,8 +5153,7 @@ impl Input {
 
         if self.skill_selector_should_invoke {
             // Insert the skill invocation into the buffer using the CLI agent's
-            // native prefix (e.g. "/" for most agents, "$" for Codex, "/skill:"
-            // for OhMyPi).
+            // native prefix (e.g. "/" for most agents, "$" for Codex).
             let prefix = CLIAgentSessionsModel::as_ref(ctx)
                 .session(self.terminal_view_id)
                 .map(|s| s.agent.skill_command_prefix())

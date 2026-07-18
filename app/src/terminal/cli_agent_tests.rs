@@ -571,32 +571,8 @@ fn test_detect_aifx_agent_run_claude_wrong_team() {
 }
 
 #[test]
-fn test_oh_my_pi_supported_skill_providers() {
-    use ai::skills::SkillProvider;
-
-    assert_eq!(
-        CLIAgent::OhMyPi.supported_skill_providers(),
-        &[
-            SkillProvider::Omp,
-            SkillProvider::Agents,
-            SkillProvider::Claude,
-            SkillProvider::Codex,
-            SkillProvider::OpenCode,
-        ]
-    );
-}
-
-#[test]
 fn test_oh_my_pi_supports_bash_mode() {
     assert!(CLIAgent::OhMyPi.supports_bash_mode());
-}
-
-#[test]
-fn test_oh_my_pi_skill_command_prefix() {
-    // OhMyPi invokes skills as `/skill:<name>`; other agents keep their prefixes.
-    assert_eq!(CLIAgent::OhMyPi.skill_command_prefix(), "/skill:");
-    assert_eq!(CLIAgent::Codex.skill_command_prefix(), "$");
-    assert_eq!(CLIAgent::Claude.skill_command_prefix(), "/");
 }
 
 #[test]

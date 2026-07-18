@@ -33,7 +33,6 @@ pub enum SkillProvider {
     Agents,
     Claude,
     Codex,
-    Omp,
     Cursor,
     Gemini,
     Copilot,
@@ -81,7 +80,6 @@ impl SkillProvider {
         match self {
             SkillProvider::Claude => Icon::ClaudeLogo,
             SkillProvider::Codex => Icon::OpenAILogo,
-            SkillProvider::Omp => Icon::PiLogo,
             SkillProvider::Gemini => Icon::GeminiLogo,
             SkillProvider::Droid => Icon::DroidLogo,
             SkillProvider::OpenCode => Icon::OpenCodeLogo,
@@ -123,10 +121,6 @@ pub static SKILL_PROVIDER_DEFINITIONS: LazyLock<Vec<SkillProviderDefinition>> =
             SkillProviderDefinition {
                 provider: SkillProvider::Codex,
                 skills_path: PathBuf::from(".codex").join("skills"),
-            },
-            SkillProviderDefinition {
-                provider: SkillProvider::Omp,
-                skills_path: PathBuf::from(".omp").join("skills"),
             },
             SkillProviderDefinition {
                 provider: SkillProvider::Cursor,
