@@ -18,8 +18,8 @@ cfg_if::cfg_if! {
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use crate::entry::{
             extract_worktree_git_dir, is_commit_related_git_file, is_git_internal_path,
-            is_common_git_config, is_index_lock_file, is_remote_tracking_ref,
-            is_shared_git_ref, is_tracking_state_git_file,
+            is_git_repository_marker, is_common_git_config, is_index_lock_file,
+            is_remote_tracking_ref, is_shared_git_ref, is_tracking_state_git_file,
         };
         /// Duration between filesystem watch events in milliseconds
         const FILESYSTEM_WATCHER_DEBOUNCE_MILLI_SECS: u64 = 500;
@@ -143,17 +143,20 @@ impl DirectoryWatcher {
     }
 
     /// Find repositories affected by a git directory change using scope-aware
-    /// scope-aware routing:
+    /// routing:
     ///
-    /// 1. **Worktree-specific** (`.git/worktrees/<name>/…`): only the repo
+    /// 1. **Repository marker** (`<repo>/.git`): the repo whose working tree
+    ///    contains the marker. This is matched lexically because deleted paths
+    ///    cannot be canonicalized.
+    /// 2. **Worktree-specific** (`.git/worktrees/<name>/…`): only the repo
     ///    whose `external_git_directory` matches the extracted worktree gitdir.
-    /// 2. **Remote refs** (`.git/refs/remotes/*`): repos whose cached tracked
+    /// 3. **Remote refs** (`.git/refs/remotes/*`): repos whose cached tracked
     ///    upstream ref resolves to the changed loose remote ref.
-    /// 3. **Shared refs** (`.git/refs/heads/*`): all repos whose
+    /// 4. **Shared refs** (`.git/refs/heads/*`): all repos whose
     ///    `common_git_dir()` is a prefix of the event path (main repo +
     ///    all linked worktrees).
-    /// 4. **Common config** (`.git/config`): all repos sharing that common Git directory.
-    /// 5. **Repo-specific** (`.git/HEAD`, `.git/index.lock`, etc.): only the
+    /// 5. **Common config** (`.git/config`): all repos sharing that common Git directory.
+    /// 6. **Repo-specific** (`.git/HEAD`, `.git/index.lock`, etc.): only the
     ///    repo whose working tree directly contains `.git` (main repo).
     #[cfg(feature = "local_fs")]
     fn find_repos_for_git_event(
@@ -163,8 +166,27 @@ impl DirectoryWatcher {
     ) -> Vec<ModelHandle<Repository>> {
         let mut affected: Vec<ModelHandle<Repository>> = Vec::new();
 
-        // Tier 1: route to the single linked worktree.
-        if let Some(wt_dir) = extract_worktree_git_dir(git_path) {
+        // Tier 1: route a repository marker without canonicalizing it. The
+        // marker may have just been deleted, and linked worktrees use a .git
+        // file whose Git directory lives outside the working tree.
+        if is_git_repository_marker(git_path) {
+            log::debug!(
+                "[GIT_EVENT_ROUTING] tier=repository-marker path={}",
+                git_path.display()
+            );
+            let marker_path = StandardizedPath::try_from_local(git_path).ok();
+            for repo_handle in self.directories.values() {
+                let marker_matches = repo_handle.read(ctx, |repo, _| {
+                    marker_path
+                        .as_ref()
+                        .is_some_and(|marker| &repo.root_dir().join(".git") == marker)
+                });
+                if marker_matches && !affected.iter().any(|r| r == repo_handle) {
+                    affected.push(repo_handle.clone());
+                }
+            }
+        } else if let Some(wt_dir) = extract_worktree_git_dir(git_path) {
+            // Tier 2: route to the single linked worktree.
             log::debug!(
                 "[GIT_EVENT_ROUTING] tier=worktree-specific path={}",
                 git_path.display()
@@ -449,6 +471,7 @@ impl DirectoryWatcher {
     fn record_git_internal_path_update(
         &self,
         path: &Path,
+        invalidate_repository_marker: bool,
         repo_updates: &mut HashMap<ModelHandle<Repository>, RepositoryUpdate>,
         repos_to_refresh_tracked_remote_ref: &mut HashSet<ModelHandle<Repository>>,
         ctx: &ModelContext<Self>,
@@ -458,11 +481,13 @@ impl DirectoryWatcher {
         let is_lock = is_index_lock_file(path);
         let is_remote_ref = is_remote_tracking_ref(path);
         let is_tracking_state = is_tracking_state_git_file(path);
+        let invalidates_metadata =
+            is_commit || (invalidate_repository_marker && is_git_repository_marker(path));
 
         for repo_handle in &affected {
-            if is_commit || is_lock || is_remote_ref {
+            if invalidates_metadata || is_lock || is_remote_ref {
                 let repo_update = repo_updates.entry(repo_handle.clone()).or_default();
-                if is_commit {
+                if invalidates_metadata {
                     repo_update.commit_updated = true;
                 }
                 if is_lock {
@@ -479,7 +504,7 @@ impl DirectoryWatcher {
 
         if !affected.is_empty() {
             log::debug!(
-                "[GIT_EVENT_ROUTING] dispatched path={} commit_updated={is_commit} remote_ref_updated={is_remote_ref} index_lock={is_lock} tracking_state={is_tracking_state} to {} repo(s)",
+                "[GIT_EVENT_ROUTING] dispatched path={} commit_updated={invalidates_metadata} remote_ref_updated={is_remote_ref} index_lock={is_lock} tracking_state={is_tracking_state} to {} repo(s)",
                 path.display(),
                 affected.len()
             );
@@ -508,6 +533,7 @@ impl DirectoryWatcher {
                         if is_git_internal_path(path) {
                             self.record_git_internal_path_update(
                                 path,
+                                false,
                                 &mut repo_updates,
                                 &mut repos_to_refresh_tracked_remote_ref,
                                 ctx,
@@ -551,6 +577,7 @@ impl DirectoryWatcher {
             if is_git_internal_path(path) {
                 self.record_git_internal_path_update(
                     path,
+                    true,
                     &mut repo_updates,
                     &mut repos_to_refresh_tracked_remote_ref,
                     ctx,
@@ -578,6 +605,7 @@ impl DirectoryWatcher {
                 if is_git_internal_path(to_path) {
                     self.record_git_internal_path_update(
                         to_path,
+                        false,
                         &mut repo_updates,
                         &mut repos_to_refresh_tracked_remote_ref,
                         ctx,
@@ -586,6 +614,7 @@ impl DirectoryWatcher {
                 if is_git_internal_path(from_path) {
                     self.record_git_internal_path_update(
                         from_path,
+                        true,
                         &mut repo_updates,
                         &mut repos_to_refresh_tracked_remote_ref,
                         ctx,

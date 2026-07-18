@@ -703,6 +703,10 @@ pub fn is_git_internal_path(path: &Path) -> bool {
     })
 }
 
+pub(crate) fn is_git_repository_marker(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some(".git")
+}
+
 /// Returns `true` when `path` is, contains, or lies on the way to one of the
 /// `force_included_paths`. Each force-included path is a relative component
 /// sequence (e.g. `.agents/skills`) matched against the tail of `path`, so a
@@ -921,6 +925,9 @@ pub(crate) fn is_index_lock_file(path: &Path) -> bool {
 pub fn should_ignore_git_path(path: &Path) -> bool {
     if !is_git_internal_path(path) {
         return false; // Not a git path, don't ignore
+    }
+    if is_git_repository_marker(path) {
+        return false;
     }
     // Ignore everything inside .git/ except the allowlisted patterns.
     !is_commit_related_git_file(path)
