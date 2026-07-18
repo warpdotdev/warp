@@ -230,17 +230,17 @@ fn snapshot_is_shared_across_tree_and_filters_conversations_without_sessions() {
             assert_eq!(child.root_conversation_id, parent_conversation_id);
             assert_eq!(
                 parent
-                    .tabs
+                    .children
                     .iter()
-                    .map(|tab| tab.conversation_id)
+                    .map(|child| child.conversation_id)
                     .collect::<Vec<_>>(),
                 vec![first_child_id, second_child_id]
             );
             assert_eq!(
                 parent
-                    .tabs
+                    .children
                     .iter()
-                    .map(|tab| tab.spawn_index)
+                    .map(|child| child.spawn_index)
                     .collect::<Vec<_>>(),
                 vec![0, 1]
             );
@@ -261,7 +261,7 @@ fn snapshot_is_shared_across_tree_and_filters_conversations_without_sessions() {
         });
         app.update(|ctx| {
             TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
-                model.set_explicit_page(parent_conversation_id, second_child_id, ctx);
+                model.set_explicit_page(second_child_id, ctx);
             });
         });
         app.read(|ctx| {

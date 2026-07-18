@@ -1,6 +1,5 @@
 //! Authenticated terminal-session TUI surface.
 use std::borrow::Cow;
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -316,8 +315,6 @@ pub(crate) struct TuiTerminalSessionView {
     /// visibility itself is derived at render time, never stored.
     active_blocker_view_id: Option<EntityId>,
     orchestration_tab_bar: ViewHandle<TuiTabBarView>,
-    orchestration_snapshot: Option<TuiOrchestrationSnapshot>,
-    orchestration_tabs_available: Rc<Cell<bool>>,
     orchestration_tabs_focused: bool,
 }
 
@@ -920,8 +917,8 @@ impl TuiTerminalSessionView {
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
         let transcript_for_input = transcript.clone();
-        let orchestration_tabs_available = Rc::new(Cell::new(false));
-        let orchestration_tabs_available_for_input = orchestration_tabs_available.clone();
+        let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
+        let orchestration_tab_bar_for_input = orchestration_tab_bar.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
             TuiInputView::new(
                 input_editor_model,
@@ -929,12 +926,11 @@ impl TuiTerminalSessionView {
                 suggestions_mode_for_input,
                 inline_menus_for_input,
                 transcript_for_input,
-                move |_| orchestration_tabs_available_for_input.get(),
+                move |ctx| orchestration_tab_bar_for_input.as_ref(ctx).has_tabs(),
                 ctx,
             )
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
         });
-        let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
 
         ctx.subscribe_to_view(&transcript, |view, _, event, ctx| match event {
             TuiTranscriptViewEvent::SelectionStarted => {
@@ -997,11 +993,8 @@ impl TuiTerminalSessionView {
                 let Ok(page_anchor) = AIConversationId::try_from(page_anchor.clone()) else {
                     return;
                 };
-                let Some(snapshot) = view.orchestration_snapshot.as_ref() else {
-                    return;
-                };
                 TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.set_explicit_page(snapshot.root_conversation_id, page_anchor, ctx);
+                    model.set_explicit_page(page_anchor, ctx);
                 });
             }
         });
@@ -1223,8 +1216,6 @@ impl TuiTerminalSessionView {
             exit_summary,
             active_blocker_view_id: None,
             orchestration_tab_bar,
-            orchestration_snapshot: None,
-            orchestration_tabs_available,
             orchestration_tabs_focused: false,
         }
     }
@@ -1274,29 +1265,29 @@ impl TuiTerminalSessionView {
     /// Refreshes this session's retained bar from live semantic state.
     pub(crate) fn refresh_orchestration_tab_state(&mut self, ctx: &mut ViewContext<Self>) {
         let snapshot = self.compute_orchestration_tab_snapshot(ctx);
-        let snapshot_changed = self.orchestration_snapshot != snapshot;
-        self.orchestration_tabs_available.set(snapshot.is_some());
-        self.orchestration_snapshot = snapshot;
-        if snapshot_changed {
-            if let Some(snapshot) = self.orchestration_snapshot.as_ref() {
-                let builder = TuiUiBuilder::from_app(ctx);
-                self.sync_orchestration_tab_bar(snapshot, &builder, ctx);
-            }
+        let tabs_were_available = self.orchestration_tab_bar.as_ref(ctx).has_tabs();
+        if let Some(snapshot) = snapshot.as_ref() {
+            let builder = TuiUiBuilder::from_app(ctx);
+            self.sync_orchestration_tab_bar(snapshot, &builder, ctx);
+        } else {
+            self.clear_orchestration_tab_bar(ctx);
         }
+        let tabs_are_available = self.orchestration_tab_bar.as_ref(ctx).has_tabs();
+        let availability_changed = tabs_were_available != tabs_are_available;
         let mut focus_changed = false;
-        if self.orchestration_snapshot.is_none() && self.orchestration_tabs_focused {
+        if !tabs_are_available && self.orchestration_tabs_focused {
             self.orchestration_tabs_focused = false;
             focus_changed = true;
             self.focus_current_owner(ctx);
         }
-        if snapshot_changed || focus_changed {
+        if availability_changed || focus_changed {
             ctx.notify();
         }
     }
 
     /// Gives keyboard focus to the orchestration tab bar when it is available.
     fn focus_orchestration_tabs(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.orchestration_snapshot.is_none() {
+        if !self.orchestration_tab_bar.as_ref(ctx).has_tabs() {
             return;
         }
         self.set_orchestration_tab_focus(true, ctx);
@@ -1311,9 +1302,9 @@ impl TuiTerminalSessionView {
     }
 
     fn refresh_orchestration_tab_bar(&self, ctx: &mut ViewContext<Self>) {
-        if let Some(snapshot) = self.orchestration_snapshot.as_ref() {
+        if let Some(snapshot) = self.compute_orchestration_tab_snapshot(ctx) {
             let builder = TuiUiBuilder::from_app(ctx);
-            self.sync_orchestration_tab_bar(snapshot, &builder, ctx);
+            self.sync_orchestration_tab_bar(&snapshot, &builder, ctx);
         }
     }
 
@@ -1367,32 +1358,34 @@ impl TuiTerminalSessionView {
         builder: &TuiUiBuilder,
     ) -> TuiTabBarConfig {
         let palette = builder.agent_identity_palette();
-        let mut tabs_in_spawn_order = snapshot.tabs.iter().collect::<Vec<_>>();
-        tabs_in_spawn_order.sort_by_key(|tab| tab.spawn_index);
+        let mut children_in_spawn_order = snapshot.children.iter().collect::<Vec<_>>();
+        children_in_spawn_order.sort_by_key(|child| child.spawn_index);
         let identity_indices = assign_agent_identity_indices(
-            tabs_in_spawn_order.iter().map(|tab| tab.label.as_str()),
+            children_in_spawn_order
+                .iter()
+                .map(|child| child.label.as_str()),
             palette.len(),
         );
-        let identity_by_conversation = tabs_in_spawn_order
+        let identity_by_conversation = children_in_spawn_order
             .into_iter()
-            .map(|tab| tab.conversation_id)
+            .map(|child| child.conversation_id)
             .zip(identity_indices)
             .collect::<HashMap<_, _>>();
         let tabs = snapshot
-            .tabs
+            .children
             .iter()
-            .map(|tab| {
+            .map(|child| {
                 let identity = palette
                     .get(
                         identity_by_conversation
-                            .get(&tab.conversation_id)
+                            .get(&child.conversation_id)
                             .copied()
                             .unwrap_or_default(),
                     )
                     .or_else(|| palette.first())
                     .cloned()
                     .unwrap_or_default();
-                TuiTab::new(tab.conversation_id.to_string(), tab.label.clone())
+                TuiTab::new(child.conversation_id.to_string(), child.label.clone())
                     .with_leading_text(identity.glyph, identity.style)
             })
             .collect();
@@ -1420,6 +1413,18 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         let config = self.orchestration_tab_bar_config(snapshot, builder);
+        self.set_orchestration_tab_bar_config(config, ctx);
+    }
+
+    fn clear_orchestration_tab_bar(&self, ctx: &mut ViewContext<Self>) {
+        self.set_orchestration_tab_bar_config(TuiTabBarConfig::new(Vec::new()), ctx);
+    }
+
+    fn set_orchestration_tab_bar_config(
+        &self,
+        config: TuiTabBarConfig,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let result = self
             .orchestration_tab_bar
             .update(ctx, |tab_bar, ctx| tab_bar.set_config(config, ctx));
@@ -2719,7 +2724,7 @@ impl TuiView for TuiTerminalSessionView {
             })
             .flatten();
         let builder = TuiUiBuilder::from_app(ctx);
-        let orchestration_tabs_available = self.orchestration_tabs_available.get();
+        let orchestration_tabs_available = self.orchestration_tab_bar.as_ref(ctx).has_tabs();
 
         // Ctrl-c (cancel/clear/exit) is handled by the keymap pass via the
         // fixed binding registered in [`Self::init`], so no element-level key

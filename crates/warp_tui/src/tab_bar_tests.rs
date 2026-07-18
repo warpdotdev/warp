@@ -7,7 +7,8 @@ use warpui_core::{App, AppContext, TuiView};
 use super::{
     deterministic_pages_at_width, minimum_label_width, minimum_row_width, page_variant_at_width,
     validated_live_keys, TuiTab, TuiTabBarConfig, TuiTabBarConfigError,
-    TuiTabBarNavigationDirection, TuiTabBarSecondaryEdge, TuiTabBarStyles, TuiTabBarView,
+    TuiTabBarNavigationDirection, TuiTabBarPagingState, TuiTabBarSecondaryEdge, TuiTabBarStyles,
+    TuiTabBarView,
 };
 
 fn key(key: u8) -> String {
@@ -36,6 +37,40 @@ fn config(tabs: Vec<TuiTab>) -> TuiTabBarConfig {
 
 fn view(config: TuiTabBarConfig) -> TuiTabBarView {
     TuiTabBarView::new(config).unwrap()
+}
+
+#[test]
+fn tab_availability_is_derived_from_the_retained_config() {
+    let empty = view(config(Vec::new()));
+    assert!(!empty.has_tabs());
+
+    let secondary = view(config(vec![tab(1, "one")]));
+    assert!(secondary.has_tabs());
+
+    let mut main_only = config(Vec::new());
+    main_only.main_tab = Some(tab(1, "main"));
+    assert!(view(main_only).has_tabs());
+}
+#[test]
+fn paging_state_preserves_only_a_valid_explicit_anchor() {
+    let mut state = TuiTabBarPagingState::default();
+    let automatic = state.resolve(Some(key(1)), |_| false);
+    assert_eq!(automatic.page_anchor, Some(key(1)));
+    assert!(automatic.reveal_selected);
+
+    state.set_explicit_anchor(key(2));
+    let explicit = state.resolve(Some(key(1)), |anchor| anchor == "2");
+    assert_eq!(explicit.page_anchor, Some(key(2)));
+    assert!(!explicit.reveal_selected);
+
+    let invalid = state.resolve(Some(key(1)), |_| false);
+    assert_eq!(invalid.page_anchor, Some(key(1)));
+    assert!(invalid.reveal_selected);
+
+    state.clear_explicit_anchor();
+    let cleared = state.resolve(Some(key(1)), |_| true);
+    assert_eq!(cleared.page_anchor, Some(key(1)));
+    assert!(cleared.reveal_selected);
 }
 
 fn render(

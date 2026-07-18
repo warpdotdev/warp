@@ -27,11 +27,12 @@ use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
 use crate::session_registry::{TuiSessionId, TuiSessions};
+use crate::tab_bar::TuiTabBarPagingState;
 use crate::terminal_session_view::TuiTerminalSessionView;
 
-/// One navigable child tab in an orchestration snapshot.
+/// One navigable child conversation in an orchestration snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TuiOrchestrationTab {
+pub(crate) struct TuiOrchestrationChild {
     pub(crate) conversation_id: AIConversationId,
     pub(crate) label: String,
     pub(crate) spawn_index: usize,
@@ -42,8 +43,10 @@ pub(crate) struct TuiOrchestrationTab {
 pub(crate) struct TuiOrchestrationSnapshot {
     pub(crate) root_conversation_id: AIConversationId,
     pub(crate) selected_conversation_id: AIConversationId,
-    pub(crate) tabs: Vec<TuiOrchestrationTab>,
+    pub(crate) children: Vec<TuiOrchestrationChild>,
+    /// Stable child ID used to resolve the page start at the current width.
     pub(crate) page_anchor: Option<AIConversationId>,
+    /// Whether the tab bar may override the anchor to reveal the selection.
     pub(crate) reveal_selected: bool,
 }
 
@@ -55,10 +58,8 @@ pub(crate) struct TuiOrchestrationModel {
     child_session_by_conversation: HashMap<AIConversationId, TuiSessionId>,
     /// Conversations whose event streams are consumed by each live session.
     event_consumers_by_session: HashMap<TuiSessionId, HashSet<AIConversationId>>,
-    /// Page state for the single orchestration tab bar visible at a time.
-    page_root_conversation_id: Option<AIConversationId>,
-    page_anchor: Option<AIConversationId>,
-    explicitly_paged: bool,
+    /// Paging intent shared by the per-session tab-bar views.
+    tab_bar_paging: TuiTabBarPagingState<AIConversationId>,
 }
 pub(crate) enum TuiOrchestrationEvent {
     CreateLocalOzChildSession {
@@ -95,14 +96,13 @@ impl TuiOrchestrationModel {
         let model = ctx.add_singleton_model(|_| Self {
             child_session_by_conversation: HashMap::new(),
             event_consumers_by_session: HashMap::new(),
-            page_root_conversation_id: None,
-            page_anchor: None,
-            explicitly_paged: false,
+            tab_bar_paging: TuiTabBarPagingState::default(),
         });
         let model_for_history = model.clone();
         ctx.subscribe_to_model(&history, move |_, event, ctx| {
             let topology_changed = match event {
                 BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                | BlocklistAIHistoryEvent::AppendedExchange { .. }
                 | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
                 | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                 | BlocklistAIHistoryEvent::SplitConversation { .. }
@@ -115,7 +115,6 @@ impl TuiOrchestrationModel {
                 } => true,
                 BlocklistAIHistoryEvent::CreatedSubtask { .. }
                 | BlocklistAIHistoryEvent::UpgradedTask { .. }
-                | BlocklistAIHistoryEvent::AppendedExchange { .. }
                 | BlocklistAIHistoryEvent::ReassignedExchange { .. }
                 | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
                 | BlocklistAIHistoryEvent::SetActiveConversation { .. }
@@ -151,13 +150,13 @@ impl TuiOrchestrationModel {
         let session_ids_by_conversation = sessions.session_ids_by_conversation(history);
         session_ids_by_conversation.get(&root_conversation_id)?;
 
-        let tabs = descendant_conversations_in_pill_order(history, root_conversation_id)
+        let children = descendant_conversations_in_pill_order(history, root_conversation_id)
             .into_iter()
             .filter_map(|descendant| {
                 let conversation_id = descendant.conversation_id;
                 session_ids_by_conversation.get(&conversation_id)?;
                 let conversation = history.conversation(&conversation_id)?;
-                Some(TuiOrchestrationTab {
+                Some(TuiOrchestrationChild {
                     conversation_id,
                     label: conversation
                         .agent_name()
@@ -168,35 +167,34 @@ impl TuiOrchestrationModel {
                 })
             })
             .collect::<Vec<_>>();
-        if tabs.is_empty() {
+        if children.is_empty() {
             return None;
         }
 
-        let page_state_applies = self.page_root_conversation_id == Some(root_conversation_id);
-        let page_anchor = (page_state_applies && self.explicitly_paged)
-            .then_some(self.page_anchor)
-            .flatten()
-            .filter(|anchor| tabs.iter().any(|tab| tab.conversation_id == *anchor))
-            .or_else(|| tabs.first().map(|tab| tab.conversation_id));
+        let resolved_page = self.tab_bar_paging.resolve(
+            children.first().map(|child| child.conversation_id),
+            |anchor| {
+                children
+                    .iter()
+                    .any(|child| child.conversation_id == *anchor)
+            },
+        );
         Some(TuiOrchestrationSnapshot {
             root_conversation_id,
             selected_conversation_id,
-            tabs,
-            page_anchor,
-            reveal_selected: !page_state_applies || !self.explicitly_paged,
+            children,
+            page_anchor: resolved_page.page_anchor,
+            reveal_selected: resolved_page.reveal_selected,
         })
     }
 
     /// Stores an explicitly selected secondary page without switching sessions.
     pub(crate) fn set_explicit_page(
         &mut self,
-        root_conversation_id: AIConversationId,
         page_anchor: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.page_root_conversation_id = Some(root_conversation_id);
-        self.page_anchor = Some(page_anchor);
-        self.explicitly_paged = true;
+        self.tab_bar_paging.set_explicit_anchor(page_anchor);
         ctx.notify();
     }
 
@@ -207,13 +205,11 @@ impl TuiOrchestrationModel {
         ctx: &mut ModelContext<Self>,
     ) -> Option<TuiSessionId> {
         let history = BlocklistAIHistoryModel::as_ref(ctx);
-        let root_conversation_id = orchestration_root_conversation_id(history, conversation_id)?;
+        orchestration_root_conversation_id(history, conversation_id)?;
         let session_id = *TuiSessions::as_ref(ctx)
             .session_ids_by_conversation(history)
             .get(&conversation_id)?;
-        self.page_root_conversation_id = Some(root_conversation_id);
-        self.page_anchor = None;
-        self.explicitly_paged = false;
+        self.tab_bar_paging.clear_explicit_anchor();
         TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
             sessions.focus_session(session_id, ctx);
         });
@@ -221,13 +217,6 @@ impl TuiOrchestrationModel {
     }
 
     fn topology_changed(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.page_root_conversation_id.is_some_and(|root| {
-            orchestration_root_conversation_id(BlocklistAIHistoryModel::as_ref(ctx), root).is_none()
-        }) {
-            self.page_root_conversation_id = None;
-            self.page_anchor = None;
-            self.explicitly_paged = false;
-        }
         ctx.notify();
     }
 
