@@ -1318,7 +1318,26 @@ impl View for LeftPanelView {
                 Shrinkable::new(1.0, ChildView::new(&self.conversation_list_view).finish()).finish()
             }
             ToolPanelView::SourceControl => {
-                Shrinkable::new(1.0, ChildView::new(&self.source_control_view).finish()).finish()
+                // A vertical clipped scroll view is intentionally unbounded along its scroll
+                // axis, but it still needs a finite cross-axis constraint. The surrounding
+                // left-panel flex can measure a child with an unbounded width before Resizable
+                // applies its final size, so bind Source Control to the panel's current width.
+                let panel_width = self
+                    .resizable_state_handle
+                    .lock()
+                    .map_or(MIN_SIDEBAR_WIDTH, |state| state.size());
+                let panel_width = if panel_width.is_finite() {
+                    panel_width.max(MIN_SIDEBAR_WIDTH)
+                } else {
+                    MIN_SIDEBAR_WIDTH
+                };
+                Shrinkable::new(
+                    1.0,
+                    ConstrainedBox::new(ChildView::new(&self.source_control_view).finish())
+                        .with_max_width(panel_width)
+                        .finish(),
+                )
+                .finish()
             }
         };
 
