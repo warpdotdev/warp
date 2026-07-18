@@ -446,13 +446,19 @@ mod property_tests {
             cell_width: 1,
             utf8_bytes: NonZeroU16::new(3).unwrap(),
         };
+        let zero_width_info = GraphemeInfo {
+            cell_width: 0,
+            utf8_bytes: NonZeroU16::new(3).unwrap(),
+        };
 
         for _ in 0..rows {
             let mut eb = index.start_row();
             let mut cells_used = 0;
             while cells_used < cols {
                 let kind = rng.next() % 10;
-                let info = if kind < 6 {
+                let info = if kind == 0 {
+                    zero_width_info
+                } else if kind < 6 {
                     ascii_info
                 } else if kind < 8 {
                     wide_info
@@ -474,7 +480,7 @@ mod property_tests {
     }
 
     #[test]
-    fn prop_content_len_preserved() {
+    fn prop_content_len_matches_rebuild_semantics() {
         let mut rng = Rng::new(12345);
         for _ in 0..100 {
             let cols = rng.range(10, 200);
@@ -483,9 +489,10 @@ mod property_tests {
             let index = random_index(&mut rng, rows, cols);
             let original_content_len = index.content_len;
             let rebuilt = Index::rebuild(&index, new_cols);
+            let expected_content_len = expected_rebuild_content_len(&index);
             assert_eq!(
-                rebuilt.content_len, original_content_len,
-                "content_len mismatch: cols={cols}->{new_cols}, rows={rows}"
+                rebuilt.content_len, expected_content_len,
+                "content_len mismatch: source={original_content_len}, expected={expected_content_len}, cols={cols}->{new_cols}, rows={rows}"
             );
         }
     }
@@ -554,6 +561,26 @@ mod property_tests {
             );
         }
     }
+
+    fn expected_rebuild_content_len(index: &Index) -> usize {
+        let mut content_len = index
+            .get_entry(0)
+            .map(|entry| entry.content_offset.as_usize())
+            .unwrap_or(index.content_len);
+
+        for row_idx in 0..index.len() {
+            for run in index.grapheme_runs_for_row(row_idx).unwrap_or_default() {
+                if run.info.cell_width > 0 {
+                    content_len += run.count.get() as usize * run.info.utf8_bytes.get() as usize;
+                }
+            }
+            if index.get_entry(row_idx).unwrap().has_trailing_newline {
+                content_len += 1;
+            }
+        }
+
+        content_len
+    }
 }
 
 #[cfg(test)]
@@ -592,13 +619,19 @@ mod differential_tests {
             cell_width: 1,
             utf8_bytes: NonZeroU16::new(3).unwrap(),
         };
+        let zero_width_info = GraphemeInfo {
+            cell_width: 0,
+            utf8_bytes: NonZeroU16::new(3).unwrap(),
+        };
 
         for _ in 0..rows {
             let mut eb = index.start_row();
             let mut cells_used = 0;
             while cells_used < cols {
                 let kind = rng.next() % 10;
-                let info = if kind < 6 {
+                let info = if kind == 0 {
+                    zero_width_info
+                } else if kind < 6 {
                     ascii_info
                 } else if kind < 8 {
                     wide_info
@@ -668,7 +701,7 @@ mod differential_tests {
     fn rebuild_discards_zero_width_graphemes_without_hanging() {
         let zero_width = GraphemeInfo {
             cell_width: 0,
-            utf8_bytes: NonZeroU16::new(1).unwrap(),
+            utf8_bytes: NonZeroU16::new(3).unwrap(),
         };
         let ascii = GraphemeInfo {
             cell_width: 1,
@@ -688,6 +721,7 @@ mod differential_tests {
         let baseline = Index::rebuild_baseline(&index, 2);
 
         assert_indexes_equal(&optimized, &baseline, "zero-width grapheme rebuild");
+        assert_eq!(optimized.content_len, 5);
         assert_eq!(optimized.len(), 3);
         assert_eq!(
             optimized
@@ -710,12 +744,64 @@ mod differential_tests {
                 .collect::<Vec<_>>(),
             vec![ascii]
         );
+        assert!((0..optimized.len())
+            .flat_map(|row_idx| optimized.grapheme_infos_for_row(row_idx).unwrap())
+            .all(|info| info.cell_width > 0));
+    }
+
+    #[test]
+    fn rebuild_handles_zero_width_only_rows_and_multiple_runs() {
+        let zero_width_short = GraphemeInfo {
+            cell_width: 0,
+            utf8_bytes: NonZeroU16::new(3).unwrap(),
+        };
+        let zero_width_long = GraphemeInfo {
+            cell_width: 0,
+            utf8_bytes: NonZeroU16::new(4).unwrap(),
+        };
+        let ascii = GraphemeInfo {
+            cell_width: 1,
+            utf8_bytes: NonZeroU16::new(1).unwrap(),
+        };
+
+        let mut index = Index::new(4, Some(1));
+        let mut empty_row = index.start_row();
+        empty_row.process_grapheme_info_unchecked(zero_width_short);
+        empty_row.process_grapheme_info_unchecked(zero_width_long);
+        empty_row.add_trailing_newline();
+        empty_row.append_to_index(&mut index);
+
+        let mut content_row = index.start_row();
+        content_row.process_grapheme_info_unchecked(zero_width_short);
+        content_row.process_grapheme_info_unchecked(ascii);
+        content_row.process_grapheme_info_unchecked(zero_width_long);
+        content_row.process_grapheme_info_unchecked(ascii);
+        content_row.append_to_index(&mut index);
+
+        let optimized = Index::rebuild(&index, 2);
+        let baseline = Index::rebuild_baseline(&index, 2);
+
+        assert_indexes_equal(&optimized, &baseline, "zero-width-only row rebuild");
+        assert_eq!(optimized.content_len, 3);
+        assert_eq!(optimized.len(), 2);
+        assert!(optimized
+            .grapheme_infos_for_row(0)
+            .unwrap()
+            .next()
+            .is_none());
+        assert_eq!(
+            optimized
+                .grapheme_infos_for_row(1)
+                .unwrap()
+                .collect::<Vec<_>>(),
+            vec![ascii, ascii]
+        );
     }
 
     fn index_with_zero_width_row(has_trailing_newline: bool) -> Index {
         let zero_width = GraphemeInfo {
             cell_width: 0,
-            utf8_bytes: NonZeroU16::new(1).unwrap(),
+            utf8_bytes: NonZeroU16::new(3).unwrap(),
         };
         let ascii = GraphemeInfo {
             cell_width: 1,
@@ -744,6 +830,10 @@ mod differential_tests {
                 &optimized,
                 &baseline,
                 &format!("zero-width fast path: trailing_newline={has_trailing_newline}"),
+            );
+            assert_eq!(
+                optimized.content_len,
+                if has_trailing_newline { 2 } else { 1 }
             );
         }
     }

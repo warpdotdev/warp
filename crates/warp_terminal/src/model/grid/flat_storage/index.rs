@@ -167,7 +167,15 @@ impl Index {
         entry_builder.append_to_index_if_nonempty(&mut index);
 
         if index.content_len > old_index.content_len {
-            report_error!("somehow ended up with too much flat storage content!");
+            report_error!(
+                "Flat storage rebuild produced more content than its source",
+                extra: {
+                    "rebuilt_content_len" => %index.content_len,
+                    "source_content_len" => %old_index.content_len,
+                    "source_columns" => %old_index.columns,
+                    "target_columns" => %columns,
+                }
+            );
         }
 
         index
