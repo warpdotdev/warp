@@ -5,6 +5,7 @@
 //! orchestration pill bar so other surfaces (e.g. keyboard navigation and
 //! the agent-mode usage footer's credit rollup) can walk and order the same
 //! tree without duplicating the logic.
+#[cfg(feature = "tui")]
 use std::collections::HashSet;
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
@@ -105,6 +106,7 @@ pub fn resolve_orchestration_participant(
 ///
 /// Conversations without descendants are not orchestration roots. Malformed
 /// parent cycles and missing ancestors fail closed.
+#[cfg(feature = "tui")]
 pub fn orchestration_root_conversation_id(
     history: &BlocklistAIHistoryModel,
     conversation_id: AIConversationId,
