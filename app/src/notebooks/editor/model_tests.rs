@@ -727,6 +727,256 @@ fn test_heading_slug_pure_function() {
     }
 }
 
+// --- `<a id>`/`<a name>` anchor-target resolution ---
+//
+// Characterization first: the phase-1 inline parser only recognizes `<a href>` as a delimiter
+// pair (`parse_inline_token_html_anchor_start` requires an `href` attribute to match at all).
+// A bare `<a id="x">`/`<a name="x">` with no `href` never becomes that token, falls through the
+// `alt` parser chain to literal text, and its raw markup — including the id/name value — survives
+// verbatim in the buffer. This is confirmed at the parser level by
+// `markdown_parser_tests::test_parse_html_anchor_unterminated_falls_back_to_text`'s trailing case
+// (`<a id="x"></a>` -> `FormattedTextFragment::plain_text("<a id=\"x\"></a>")`). The tests below
+// exercise that same fact end-to-end through the editor buffer, which is what makes the
+// zero-cache, live-text-scan resolution mechanism possible: there is no separate anchor token to
+// carry from parse time to click time, because the tag's literal text already survives the trip.
+
+#[test]
+fn test_anchor_tag_survives_as_literal_text_in_buffer() {
+    // Characterization: an `<a id>`/`<a name>` tag with no `href` is not parsed into any special
+    // token — it round-trips into the buffer as plain visible text, exactly as authored.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("<a id=\"custom-anchor\"></a>\n\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            let text = editor.content.as_ref(ctx).text().into_string();
+            assert!(
+                text.contains("<a id=\"custom-anchor\"></a>"),
+                "anchor tag markup should survive verbatim in the buffer, got: {text:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_resolves_anchor_id() {
+    // Invariant: `#custom-anchor` resolves against a bare `<a id="custom-anchor"></a>` marker
+    // with no heading involved at all.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown(
+            "Intro\n\n<a id=\"custom-anchor\"></a>\n\nBody",
+            &mut app,
+            true,
+        );
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.find_matching_header("#custom-anchor", ctx).is_some());
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_resolves_anchor_name() {
+    // The `name` attribute is an equally valid anchor-target form (older HTML convention).
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown(
+            "Intro\n\n<a name=\"custom-anchor\"></a>\n\nBody",
+            &mut app,
+            true,
+        );
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.find_matching_header("#custom-anchor", ctx).is_some());
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_anchor_id_matches_verbatim_not_slugged() {
+    // No id rewriting: an explicit `<a id>` value is matched exactly as authored, not run through
+    // `heading_slug`. A mixed-case, underscore-bearing id would be mangled by the heading
+    // normalizer (which lowercases and treats `_` as a non-alphanumeric drop candidate is wrong
+    // here) — matching it verbatim is the point.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("<a id=\"Custom_Anchor-1\"></a>\n\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            assert!(
+                editor
+                    .find_matching_header("#Custom_Anchor-1", ctx)
+                    .is_some(),
+                "exact-case id should resolve"
+            );
+            assert!(
+                editor
+                    .find_matching_header("#custom_anchor-1", ctx)
+                    .is_none(),
+                "lowercased fragment must NOT match a differently-cased explicit id — anchor ids \
+                 are not slug-normalized"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_anchor_and_heading_first_in_document_order_wins() {
+    // Frederic's ruling: anchors and headings share one namespace; when both match the same
+    // fragment, whichever occurs FIRST in document order wins — not "anchors always win."
+    // Case 1: the anchor appears before the colliding heading, so the anchor wins.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown(
+            "<a id=\"target\"></a>\n\nIntro\n\n## Target\nBody",
+            &mut app,
+            true,
+        );
+
+        editor.read(&app, |editor, ctx| {
+            let range = editor
+                .find_matching_header("#target", ctx)
+                .expect("should resolve to the earlier anchor");
+            // The anchor tag sits before the heading; assert the resolved range starts before the
+            // heading block by checking it's the anchor tag's position, not the heading's.
+            let heading_range = {
+                let content = editor.content.as_ref(ctx);
+                content
+                    .outline_blocks()
+                    .find(|o| {
+                        matches!(
+                            &o.block_type,
+                            BlockType::Text(BufferBlockStyle::Header { .. })
+                        )
+                    })
+                    .map(|o| o.start..o.end)
+                    .expect("document has one heading")
+            };
+            assert!(
+                range.start < heading_range.start,
+                "anchor occurs earlier in the document and must win"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_heading_before_anchor_wins() {
+    // Case 2: the heading appears FIRST and the colliding anchor comes later — document order
+    // means the heading wins here, demonstrating this is not an "anchors always win" rule.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor =
+            model_from_markdown("## Target\nBody\n\n<a id=\"target\"></a>", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            let range = editor
+                .find_matching_header("#target", ctx)
+                .expect("should resolve to the earlier heading");
+            let content = editor.content.as_ref(ctx);
+            let heading_range = content
+                .outline_blocks()
+                .find(|o| {
+                    matches!(
+                        &o.block_type,
+                        BlockType::Text(BufferBlockStyle::Header { .. })
+                    )
+                })
+                .map(|o| o.start..o.end)
+                .expect("document has one heading");
+            assert_eq!(
+                range, heading_range,
+                "heading occurs earlier in the document and must win over the later anchor"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_anchor_miss_is_silent_none() {
+    // A fragment matching neither an anchor nor a heading is a silent miss, same as the
+    // heading-only miss path (product invariant 7).
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("<a id=\"some-anchor\"></a>\n\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor
+                .find_matching_header("#no-such-anchor", ctx)
+                .is_none());
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_urlencoded_fragment_matches_anchor_id() {
+    // A URL-encoded fragment (e.g. produced by a browser-style link) decodes before comparison,
+    // matching an anchor id containing characters that require encoding.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("<a id=\"custom anchor\"></a>\n\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            assert!(
+                editor
+                    .find_matching_header("#custom%20anchor", ctx)
+                    .is_some(),
+                "urlencoded fragment should decode and match the anchor id verbatim"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_anchor_single_quotes() {
+    // The anchor-tag scan accepts single-quoted attribute values too, mirroring the `<a href>`
+    // parser's support for both quote styles.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("<a id='custom-anchor'></a>\n\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.find_matching_header("#custom-anchor", ctx).is_some());
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_anchor_tag_pure_function() {
+    // Pure function test for the underlying scanner, independent of the editor model. The
+    // matched range covers the opening tag through its id/name attribute value (the regex has no
+    // `>`/`</a>` requirement) — enough to identify a scroll-to position; only `.start` is used by
+    // callers, so the exact end isn't load-bearing, but it's asserted here to pin the contract.
+    assert_eq!(
+        super::find_matching_anchor_tag(r#"<a id="foo"></a>"#, "foo"),
+        Some(CharOffset::from(0)..CharOffset::from(11))
+    );
+    assert_eq!(
+        super::find_matching_anchor_tag(r#"<a name="foo"></a>"#, "foo"),
+        Some(CharOffset::from(0)..CharOffset::from(13))
+    );
+    assert_eq!(
+        super::find_matching_anchor_tag(r#"<a id="foo"></a>"#, "bar"),
+        None
+    );
+    assert_eq!(
+        super::find_matching_anchor_tag(r#"<a id="foo"></a>"#, ""),
+        None
+    );
+    // First occurrence wins among multiple anchors sharing the same id.
+    let text = r#"<a id="dup"></a> middle <a id="dup"></a>"#;
+    let first = super::find_matching_anchor_tag(text, "dup").expect("should match");
+    assert_eq!(first.start, CharOffset::from(0));
+    // A non-ASCII prefix before the tag must not misplace the char offset — regression guard for
+    // the byte-vs-char distinction `CharCounter` bridges.
+    let text_with_unicode_prefix = "日本語 <a id=\"foo\"></a>";
+    let range = super::find_matching_anchor_tag(text_with_unicode_prefix, "foo")
+        .expect("should match after unicode prefix");
+    // "日本語 " is 4 chars (3 CJK + 1 space); the tag starts at char offset 4.
+    assert_eq!(range.start, CharOffset::from(4));
+}
+
 #[test]
 fn test_cursor_bias_editing() {
     App::test((), |mut app| async move {

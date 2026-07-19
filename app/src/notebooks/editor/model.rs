@@ -12,7 +12,7 @@ use markdown_parser::FormattedText;
 use mermaid_to_svg::MermaidTheme;
 use num_traits::SaturatingSub;
 use regex::Regex;
-use string_offset::CharOffset;
+use string_offset::{CharCounter, CharOffset};
 use url::Url;
 use vec1::{vec1, Vec1};
 use warp_core::features::FeatureFlag;
@@ -86,6 +86,17 @@ lazy_static! {
         Regex::new(r"^\[ ?\] $").expect("Markdown shortcut regex should be valid");
     static ref COMPLETE_TASKLIST_INLINE_REGEX: Regex =
         Regex::new(r"^\[[xX]\] $").expect("Markdown shortcut regex should be valid");
+
+    /// Matches a raw HTML `<a id="…">`/`<a name="…">` anchor-target tag (single or double
+    /// quotes), capturing the id/name value. This is a plain text scan over the rendered buffer,
+    /// not a parser token: the phase-1 inline parser only recognizes `<a href>` as a delimiter
+    /// pair (see `markdown_parser::parse_inline_token_html_anchor_start`) — a bare `<a id>`/`<a
+    /// name>` tag with no `href` never matches that grammar and falls through to literal text,
+    /// so its raw markup (including the id) survives verbatim in the buffer. Scanning for it here
+    /// avoids adding any new zero-width content-model construct.
+    static ref HTML_ANCHOR_TARGET_TAG: Regex = Regex::new(
+        r#"(?i)<a\s+(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')"#
+    ).expect("Anchor-tag regex should be valid");
 }
 
 #[cfg(test)]
@@ -184,6 +195,49 @@ fn heading_slug(text: &str) -> String {
         // Everything else (ASCII punctuation, symbols) is dropped.
     }
     slug
+}
+
+/// Find the first `<a id="…">`/`<a name="…">` anchor tag in `text` whose value exactly matches
+/// `target` (as authored — no slug normalization, no `user-content-` rewriting), returning the
+/// tag's own `CharOffset` range. Anchor ids are compared to the fragment via [`urlencoding`]
+/// alone (already applied by the caller before this runs), not [`heading_slug`]: unlike a
+/// heading's derived slug, an explicit `<a id>` is an author-chosen literal string.
+///
+/// This walks the buffer's plain text with a regex rather than any parsed anchor index, mirroring
+/// how heading matching re-reads text from the buffer on every click (no cache, nothing to
+/// invalidate). Byte offsets from the regex match are converted to `CharOffset` with
+/// [`CharCounter`], the same bridge used for search-match highlighting
+/// (`global_search::view`) — necessary because a `CharOffset` counts `char`s, not bytes, and a
+/// naive byte offset would misplace the scroll target on any non-ASCII text preceding the tag.
+fn find_matching_anchor_tag(text: &str, target: &str) -> Option<Range<CharOffset>> {
+    if target.is_empty() {
+        return None;
+    }
+    let total_chars = CharOffset::from(text.chars().count());
+    let mut char_counter = CharCounter::new(text);
+    for capture in HTML_ANCHOR_TARGET_TAG.captures_iter(text) {
+        let whole_match = capture.get(0).expect("capture group 0 always matches");
+        let value = capture
+            .get(1)
+            .or_else(|| capture.get(2))
+            .expect("id/name value must be captured by one of the quote alternatives")
+            .as_str();
+        if value != target {
+            continue;
+        }
+        let start = char_counter.char_offset(whole_match.start())?;
+        // `char_offset` returns `None` when the byte offset is exactly the length of the string
+        // (there is no character starting there) — the tag-is-the-last-thing-in-the-document
+        // case. Fall back to the total character count, mirroring the same edge case handled in
+        // `GlobalSearchView::highlight_indices_from_submatches`.
+        let end = if whole_match.end() == text.len() {
+            total_chars
+        } else {
+            char_counter.char_offset(whole_match.end())?
+        };
+        return Some(start..end);
+    }
+    None
 }
 
 impl NotebooksEditorModel {
@@ -1412,38 +1466,62 @@ impl NotebooksEditorModel {
         true
     }
 
+    /// Resolve a `#fragment` against the document's addressable targets: explicit `<a id>`/`<a
+    /// name>` anchor tags and implicit heading slugs. Both kinds share one namespace — when a
+    /// fragment matches more than one candidate (an anchor and a heading colliding, or two of the
+    /// same kind), **first occurrence in document order wins**, mirroring GitHub's single shared
+    /// id space. This is a live walk with no cached index: anchors and headings are both read
+    /// straight out of the current buffer on every call, exactly like the pre-existing
+    /// heading-only walk this extends.
     fn find_matching_header(&self, fragment: &str, ctx: &AppContext) -> Option<Range<CharOffset>> {
-        let target = fragment.strip_prefix('#')?;
-        if target.is_empty() {
+        let raw_target = fragment.strip_prefix('#')?;
+        if raw_target.is_empty() {
             return None;
         }
-        let target = urlencoding::decode(target).ok()?;
-        let target = heading_slug(&target);
-        if target.is_empty() {
+        let raw_target = urlencoding::decode(raw_target).ok()?;
+        if raw_target.trim().is_empty() {
             return None;
         }
+        // Anchor ids match verbatim (as authored, no rewriting); headings match through the
+        // slug normalizer. Precompute both comparison keys once.
+        let anchor_target = raw_target.trim();
+        let heading_target = heading_slug(&raw_target);
 
         let content = self.content.as_ref(ctx);
-        for outline in content.outline_blocks() {
+
+        let heading_match = content.outline_blocks().find_map(|outline| {
             if !matches!(
                 &outline.block_type,
                 BlockType::Text(BufferBlockStyle::Header { .. })
             ) {
-                continue;
+                return None;
             }
-
+            if heading_target.is_empty() {
+                return None;
+            }
             let heading = content
                 .text_in_range(outline.start + 1..outline.end)
                 .into_string();
-            // Both the incoming fragment and the heading text run through the same normalizer, so
-            // a hyphenated fragment (`#target-section`) matches a spaced heading ("Target
-            // Section"). First match wins, satisfying the spec's "first wins" collision stance.
-            if heading_slug(&heading) == target {
-                return Some(outline.start..outline.end);
-            }
-        }
+            (heading_slug(&heading) == heading_target).then_some(outline.start..outline.end)
+        });
 
-        None
+        let anchor_match = find_matching_anchor_tag(&content.text().into_string(), anchor_target);
+
+        // Merge both candidate kinds and take whichever starts earlier in the document — the
+        // shared-namespace, first-occurrence-wins rule (invariant: explicit anchors and headings
+        // compete on position, not on kind).
+        match (anchor_match, heading_match) {
+            (Some(anchor_range), Some(heading_range)) => {
+                Some(if anchor_range.start <= heading_range.start {
+                    anchor_range
+                } else {
+                    heading_range
+                })
+            }
+            (Some(anchor_range), None) => Some(anchor_range),
+            (None, Some(heading_range)) => Some(heading_range),
+            (None, None) => None,
+        }
     }
 
     /// Whether or not there's an active command block selection.
