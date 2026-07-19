@@ -842,5 +842,5 @@ mod origin_tests {
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]
-#[path = "trace_link_tests.rs"]
-mod trace_link_tests;
+#[path = "lib_tests.rs"]
+mod tests;
