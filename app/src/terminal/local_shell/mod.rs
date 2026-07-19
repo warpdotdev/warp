@@ -7,6 +7,8 @@ use anyhow::{anyhow, Result};
 use command::r#async::Command;
 #[cfg(feature = "local_tty")]
 use futures::future::{BoxFuture, FutureExt};
+#[cfg(feature = "local_tty")]
+use futures::io::AsyncReadExt;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::local_tty::shell::ShellStarter;
@@ -257,6 +259,31 @@ fn extract_captured_path(output: &str) -> Option<&str> {
     Some(&after_start[..end])
 }
 
+/// Maximum number of stdout bytes buffered while capturing the interactive shell's PATH.
+///
+/// A login shell sources the user's rc/profile files, which can print arbitrary — and
+/// occasionally unbounded — startup output before our PATH sentinels. `Command::output()`
+/// buffers the child's *entire* stdout into a single `Vec<u8>` with no limit, so a
+/// misbehaving profile (or a streaming/infinite command in an rc file) could drive Warp's
+/// memory into the tens of GB. `PATH` plus any reasonable banner is tiny, so 1 MiB is
+/// comfortably enough while bounding worst-case memory.
+#[cfg(feature = "local_tty")]
+const MAX_INTERACTIVE_CAPTURE_BYTES: u64 = 1024 * 1024;
+
+/// Reads at most `limit` bytes from `reader`, returning the buffered bytes.
+///
+/// This bounds memory usage even when the underlying stream is effectively unbounded, which
+/// is the key safeguard against a runaway shell (see [`MAX_INTERACTIVE_CAPTURE_BYTES`]).
+#[cfg(feature = "local_tty")]
+async fn read_capped<R: futures::io::AsyncRead + Unpin>(
+    reader: R,
+    limit: u64,
+) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    reader.take(limit).read_to_end(&mut buf).await?;
+    Ok(buf)
+}
+
 /// Captures the PATH environment variable from an interactive login shell.
 /// This uses setsid() to start a new session (fully detaching from the terminal)
 /// and stdin(null) to prevent interactive prompts from blocking.
@@ -317,26 +344,45 @@ async fn capture_interactive_shell_env(
         command.env("HOME", home);
     }
 
-    // stdin(null) prevents any prompts from blocking
-    let output: std::process::Output = command
+    // Spawn the shell and read only a bounded prefix of stdout rather than using
+    // `Command::output()`, which would buffer the child's entire stdout into one unbounded
+    // `Vec<u8>`. stderr is routed to `null` so the child can neither block on a full stderr
+    // pipe (which would deadlock the bounded stdout read) nor contribute to memory growth.
+    //
+    // stdin(null) prevents any prompts from blocking. kill_on_drop tears down a runaway
+    // shell if we bail out early.
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
         .map_err(|e| anyhow!("Failed to spawn interactive shell: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout_buf = match child.stdout.take() {
+        Some(stdout) => read_capped(stdout, MAX_INTERACTIVE_CAPTURE_BYTES)
+            .await
+            .unwrap_or_else(|e| {
+                log::warn!("[LSP PATH] error reading interactive shell stdout: {}", e);
+                Vec::new()
+            }),
+        None => Vec::new(),
+    };
+
+    // Stop the shell if it is still running (e.g. it produced more than the cap, or never
+    // exits) and reap it so we don't leak a runaway process.
+    let _ = child.kill();
+    let _ = child.status().await;
+
+    if stdout_buf.len() as u64 >= MAX_INTERACTIVE_CAPTURE_BYTES {
         log::warn!(
-            "[LSP PATH] Interactive shell capture had non-zero exit: {}",
-            stderr
+            "[LSP PATH] interactive shell produced >= {} bytes of stdout; output was \
+             truncated and PATH capture may fail",
+            MAX_INTERACTIVE_CAPTURE_BYTES
         );
-        // Still try to use stdout even if exit was non-zero
-        // (some shells exit non-zero but still produce valid output)
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&stdout_buf);
 
     let Some(path) = extract_captured_path(&stdout) else {
         log::warn!("[LSP PATH] capture output missing PATH sentinels; ignoring");
