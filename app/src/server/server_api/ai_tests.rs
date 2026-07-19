@@ -5,7 +5,8 @@ use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
 use super::super::ServerApi;
 use super::{
     build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
-    AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
+    AgentMessageHeader, AgentRunClientCacheInvocationPayload, AgentRunClientCacheModePayload,
+    AgentRunClientEventRequest, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
     ArtifactDownloadResponse, ArtifactType, ConnectedSelfHostedWorker, ExecutionLocation,
     ForkConversationResponse, ListConnectedSelfHostedWorkersResponse, ListRunsResponse,
     ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
@@ -13,6 +14,107 @@ use super::{
 };
 use crate::notebooks::NotebookId;
 
+#[test]
+fn ordinary_setup_metric_event_omits_cache_invocations() {
+    let start = Utc.with_ymd_and_hms(2026, 7, 10, 1, 2, 3).unwrap();
+    let finish = Utc.with_ymd_and_hms(2026, 7, 10, 1, 2, 4).unwrap();
+
+    let value = serde_json::to_value(AgentRunClientEventRequest::setup_metric_event(
+        "setup_environment_resolution",
+        start,
+        finish,
+        false,
+    ))
+    .unwrap();
+
+    assert_eq!(
+        value["payload"],
+        serde_json::json!({
+            "start_ts": "2026-07-10T01:02:03Z",
+            "finish_ts": "2026-07-10T01:02:04Z",
+            "latency_ms": 1000,
+            "is_error": false,
+        })
+    );
+}
+
+#[test]
+fn namespace_cache_mount_event_serializes_bounded_diagnostics() {
+    let start = Utc.with_ymd_and_hms(2026, 7, 10, 1, 2, 3).unwrap();
+    let finish = Utc.with_ymd_and_hms(2026, 7, 10, 1, 2, 5).unwrap();
+    let repo_key = "a".repeat(64);
+    let request = AgentRunClientEventRequest::namespace_cache_mount_event(
+        "setup_namespace_cache_mount",
+        start,
+        finish,
+        true,
+        vec![
+            AgentRunClientCacheInvocationPayload::shared(
+                false,
+                vec![AgentRunClientCacheModePayload::new("go", 2, 1)],
+            ),
+            AgentRunClientCacheInvocationPayload::repository(
+                &repo_key,
+                true,
+                vec![
+                    AgentRunClientCacheModePayload::new("rust", 4, 3),
+                    AgentRunClientCacheModePayload::new("xcode", 0, 0),
+                ],
+            ),
+        ],
+    );
+
+    let value = serde_json::to_value(request).unwrap();
+
+    assert_eq!(value["event_name"], "setup_namespace_cache_mount");
+    assert_eq!(value["timestamp"], "2026-07-10T01:02:05Z");
+    assert_eq!(
+        value["payload"],
+        serde_json::json!({
+            "start_ts": "2026-07-10T01:02:03Z",
+            "finish_ts": "2026-07-10T01:02:05Z",
+            "latency_ms": 2000,
+            "is_error": true,
+            "cache_invocations": [
+                {
+                    "scope": "shared",
+                    "is_error": false,
+                    "modes": [
+                        {"name": "go", "cache_hits": 2, "cache_misses": 1},
+                    ],
+                },
+                {
+                    "scope": "repository",
+                    "repo_key": repo_key,
+                    "is_error": true,
+                    "modes": [
+                        {"name": "rust", "cache_hits": 4, "cache_misses": 3},
+                        {"name": "xcode", "cache_hits": 0, "cache_misses": 0},
+                    ],
+                },
+            ],
+        })
+    );
+}
+
+#[test]
+fn platform_and_shared_diagnostics_have_the_same_serialized_scope() {
+    let platform = AgentRunClientCacheInvocationPayload::shared(false, vec![]);
+    let shared = AgentRunClientCacheInvocationPayload::shared(false, vec![]);
+
+    assert_eq!(
+        serde_json::to_value(&platform).unwrap(),
+        serde_json::to_value(&shared).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&shared).unwrap(),
+        serde_json::json!({
+            "scope": "shared",
+            "is_error": false,
+            "modes": [],
+        })
+    );
+}
 #[test]
 fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
     let server_api = ServerApi::new_for_test();

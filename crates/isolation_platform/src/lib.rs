@@ -13,8 +13,9 @@ mod docker;
 mod docker_sandbox;
 #[cfg(not(target_family = "wasm"))]
 mod kubernetes;
+/// Namespace isolation-platform integration.
 #[cfg(not(target_family = "wasm"))]
-mod namespace;
+pub mod namespace;
 
 /// Environment variable set by the server to identify the isolation platform.
 /// The value should match one of the `IsolationPlatformType` variants in snake_case.

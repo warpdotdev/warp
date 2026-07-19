@@ -398,6 +398,70 @@ pub struct AgentRunClientEventRequest {
 pub enum AgentRunClientEventPayload {
     SetupMetric(AgentRunClientSetupMetricPayload),
 }
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase", tag = "scope")]
+enum AgentRunClientCacheInvocationScope {
+    Shared,
+    Repository { repo_key: String },
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct AgentRunClientCacheModePayload {
+    name: String,
+    cache_hits: u64,
+    cache_misses: u64,
+}
+
+#[allow(dead_code)]
+impl AgentRunClientCacheModePayload {
+    pub(crate) fn new(name: impl Into<String>, cache_hits: u64, cache_misses: u64) -> Self {
+        Self {
+            name: name.into(),
+            cache_hits,
+            cache_misses,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct AgentRunClientCacheInvocationPayload {
+    #[serde(flatten)]
+    scope: AgentRunClientCacheInvocationScope,
+    is_error: bool,
+    modes: Vec<AgentRunClientCacheModePayload>,
+}
+
+#[allow(dead_code)]
+impl AgentRunClientCacheInvocationPayload {
+    pub(crate) fn shared(is_error: bool, modes: Vec<AgentRunClientCacheModePayload>) -> Self {
+        Self {
+            scope: AgentRunClientCacheInvocationScope::Shared,
+            is_error,
+            modes,
+        }
+    }
+
+    pub(crate) fn repository(
+        repo_key: impl Into<String>,
+        is_error: bool,
+        modes: Vec<AgentRunClientCacheModePayload>,
+    ) -> Self {
+        Self {
+            scope: AgentRunClientCacheInvocationScope::Repository {
+                repo_key: repo_key.into(),
+            },
+            is_error,
+            modes,
+        }
+    }
+
+    pub(crate) fn is_error(&self) -> bool {
+        self.is_error
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentRunClientSetupMetricPayload {
@@ -405,6 +469,8 @@ pub struct AgentRunClientSetupMetricPayload {
     pub finish_ts: DateTime<Utc>,
     pub latency_ms: i64,
     pub is_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_invocations: Option<Vec<AgentRunClientCacheInvocationPayload>>,
 }
 
 impl AgentRunClientEventRequest {
@@ -436,6 +502,33 @@ impl AgentRunClientEventRequest {
                         .num_milliseconds()
                         .max(0),
                     is_error,
+                    cache_invocations: None,
+                },
+            )),
+        }
+    }
+
+    pub(crate) fn namespace_cache_mount_event(
+        event_name: impl Into<String>,
+        start_timestamp: DateTime<Utc>,
+        finish_timestamp: DateTime<Utc>,
+        is_error: bool,
+        cache_invocations: Vec<AgentRunClientCacheInvocationPayload>,
+    ) -> Self {
+        Self {
+            event_uuid: uuid::Uuid::new_v4().to_string(),
+            event_name: event_name.into(),
+            timestamp: finish_timestamp,
+            payload: Some(AgentRunClientEventPayload::SetupMetric(
+                AgentRunClientSetupMetricPayload {
+                    start_ts: start_timestamp,
+                    finish_ts: finish_timestamp,
+                    latency_ms: finish_timestamp
+                        .signed_duration_since(start_timestamp)
+                        .num_milliseconds()
+                        .max(0),
+                    is_error,
+                    cache_invocations: Some(cache_invocations),
                 },
             )),
         }

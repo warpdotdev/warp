@@ -7,7 +7,35 @@ use tracing::Instrument as _;
 use warpui::r#async::executor::Background;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::{AIClient, AgentRunClientEventRequest};
+use crate::server::server_api::ai::{
+    AIClient, AgentRunClientCacheInvocationPayload, AgentRunClientEventRequest,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamespaceCacheMountReport {
+    setup_is_error: bool,
+    cache_invocations: Vec<AgentRunClientCacheInvocationPayload>,
+}
+
+impl NamespaceCacheMountReport {
+    pub(crate) fn new(
+        setup_is_error: bool,
+        cache_invocations: Vec<AgentRunClientCacheInvocationPayload>,
+    ) -> Self {
+        Self {
+            setup_is_error,
+            cache_invocations,
+        }
+    }
+
+    fn is_error(&self) -> bool {
+        self.setup_is_error
+            || self
+                .cache_invocations
+                .iter()
+                .any(|result| result.is_error())
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct SetupClientEventReporter {
@@ -85,6 +113,26 @@ impl SetupClientEventReporter {
         );
         value
     }
+
+    pub(crate) async fn record_namespace_cache_mount(
+        &self,
+        future: impl Future<Output = NamespaceCacheMountReport>,
+    ) -> NamespaceCacheMountReport {
+        let (step_name, span) = SetupStep::NamespaceCacheMount.to_event_name_and_span();
+
+        let start_timestamp = Utc::now();
+        let report = future.instrument(span).await;
+        let finish_timestamp = Utc::now();
+
+        self.post_namespace_cache_mount_event_best_effort(
+            step_name,
+            start_timestamp,
+            finish_timestamp,
+            report.is_error(),
+            report.cache_invocations.clone(),
+        );
+        report
+    }
     pub(crate) fn record_value_detached<T>(
         &self,
         step: SetupStep,
@@ -145,6 +193,32 @@ impl SetupClientEventReporter {
             .detach();
     }
 
+    fn post_namespace_cache_mount_event_best_effort(
+        &self,
+        event_name: &'static str,
+        start_timestamp: DateTime<Utc>,
+        finish_timestamp: DateTime<Utc>,
+        is_error: bool,
+        cache_invocations: Vec<AgentRunClientCacheInvocationPayload>,
+    ) {
+        let Some(run_id) = self.run_id else {
+            return;
+        };
+
+        let ai_client = self.ai_client.clone();
+        self.background
+            .spawn(async move {
+                let request = AgentRunClientEventRequest::namespace_cache_mount_event(
+                    event_name,
+                    start_timestamp,
+                    finish_timestamp,
+                    is_error,
+                    cache_invocations,
+                );
+                Self::post_client_event(run_id, ai_client, event_name, request).await;
+            })
+            .detach();
+    }
     async fn post_client_event(
         run_id: AmbientAgentTaskId,
         ai_client: Arc<dyn AIClient>,
@@ -161,6 +235,10 @@ impl SetupClientEventReporter {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "setup_observability_tests.rs"]
+mod tests;
 
 #[derive(Clone, Copy)]
 pub(crate) enum OzRunTimelineEvent {
@@ -193,6 +271,7 @@ pub(crate) enum SetupStep {
     GlobalSkillResolution,
     GlobalSkillRepoClone,
     EnvironmentRepoClone,
+    NamespaceCacheMount,
     EnvironmentSetupCommands,
     EnvironmentCodebaseIndexing,
     FileBasedMcpDiscovery,
@@ -260,6 +339,9 @@ impl SetupStep {
             }
             Self::EnvironmentRepoClone => {
                 span_and_name!("setup_environment_repo_clone")
+            }
+            Self::NamespaceCacheMount => {
+                span_and_name!("setup_namespace_cache_mount")
             }
             Self::EnvironmentSetupCommands => {
                 span_and_name!("setup_environment_setup_commands")

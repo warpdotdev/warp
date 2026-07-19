@@ -1,0 +1,25 @@
+[package]
+name = "build_cache"
+description = "Build-cache planning and spacectl integration for Warp cloud agents"
+version = "0.1.0"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+edition = "2024"
+
+[dependencies]
+async-fs.workspace = true
+async-io.workspace = true
+async-trait.workspace = true
+command.workspace = true
+futures-lite.workspace = true
+hex.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+vec1.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

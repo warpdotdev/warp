@@ -17,6 +17,8 @@ use warp_core::{safe_info, safe_warn};
 use warpui::r#async::FutureExt;
 use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
+#[cfg(not(target_family = "wasm"))]
+use super::namespace_cache;
 use super::terminal::TerminalDriver;
 use super::AgentDriverError;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -42,9 +44,10 @@ pub enum PrepareEnvironmentError {
 
 /// Prepare a cloud agent environment within a terminal session. This will:
 /// 1. Clone all repositories, skipping any that are already cloned.
-/// 2. Begin codebase indexing for all repositories (Oz harness only).
-/// 3. Run any setup commands.
-/// 4. If there is only one repository, navigate into it.
+/// 2. Apply Namespace build caches when available.
+/// 3. Begin codebase indexing for all repositories (Oz harness only).
+/// 4. Run any setup commands.
+/// 5. If there is only one repository, navigate into it.
 ///
 /// `is_sandbox` tells the preparer that `working_dir` only exists inside a
 /// Docker sandbox container and therefore the host filesystem can't be used
@@ -156,6 +159,17 @@ async fn prepare_environment_impl(
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(build_root) = namespace_cache::build_cache_root() {
+        setup_events
+            .record_namespace_cache_mount(namespace_cache::setup_namespace_caches(
+                source_repos,
+                working_dir,
+                &build_root,
+                spawner,
+            ))
+            .await;
+    }
     let has_setup_commands = !setup_commands.is_empty();
     if has_setup_commands {
         setup_events
