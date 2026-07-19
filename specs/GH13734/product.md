@@ -40,9 +40,11 @@ In scope:
 - Content inside `<sub>`/`<sup>` keeps its own inline formatting (bold, italic, code,
   links) composing normally with the sub/sup treatment, the same way `<u>` composes with
   other inline styles today.
-- Nesting: `<sup>` inside `<sub>` (or vice versa) does not need to compound the offset in
-  this slice — the tech spec picks a sane degraded behavior (e.g. innermost wins) and
-  documents it, as long as it doesn't panic or produce garbled output.
+- Nesting: `<sup>` inside `<sub>` (or vice versa), or any nesting of `<sub>`/`<sup>` at
+  all, does not need to compound the offset in this slice, does not need to render styled
+  at any level, and must not panic or produce garbled output. The chosen degraded behavior
+  is a **whole-formula literal bail**: any nested vertical-align construct renders as plain
+  source text in its entirety (see Behavior invariant 7 and the tech spec's rationale).
 - Copy/export canonically re-serializes the semantic markup (emits `<sub>`/`<sup>` HTML, or
   an equivalent internal representation) — a user pasting or exporting content with
   sub/superscript should not silently lose that information. This is canonical
@@ -62,7 +64,10 @@ Out of scope (explicit non-goals):
 - Changing GFM Markdown syntax to add native sub/sup shorthand (e.g. `H~2~O` /
   `x^2^`) — this spec is scoped to the raw-HTML tags only, matching the issue.
 - Compounding nested `<sub><sup>` offsets into a deeper stack (see nesting note above) —
-  deferred if it turns out to need more than the MVP data model supports.
+  deferred, since it needs more than the current MVP data model supports (a single
+  tri-state `vertical_align` attribute per run has no way to represent depth or
+  compose stacked offsets). Documented as a future direction on #13734 rather than a
+  separate tracked ticket, since it's not currently planned work.
 - Script execution / event handlers / navigation from `<sub>`/`<sup>` markup (no
   attributes on these tags carry meaning here).
 
@@ -92,10 +97,25 @@ Out of scope (explicit non-goals):
    opening tag as literal text (matching how other unpaired inline delimiters degrade
    today) rather than swallowing the rest of the document or panicking.
 
-7. `<sup>` nested inside `<sub>` (or vice versa) does not panic or produce garbled/
-   overlapping glyphs. The tech spec documents the exact degraded behavior chosen (e.g.
-   only the innermost tag's offset applies), since compounding true nested offsets is
-   out of scope for this slice.
+7. Any nesting of `<sub>`/`<sup>` tags — same direction (`<sup>` inside `<sup>`), opposite
+   direction (`<sub>` inside `<sup>` or vice versa), or depth beyond one level — does not
+   panic, and renders the **entire outermost span, tags and contents, as plain literal
+   text**, with no partial styling applied at any level. Only a single, non-nested
+   `<sub>` or `<sup>` renders with a visible vertical offset.
+
+   This is a deliberately stricter rule than "pick an innermost-wins tie": a
+   partially-styled nested construct can still be read as a plausible (if unusual)
+   formula even when the styling is wrong. For example, `2<sup>3<sub>4</sub></sup>` is
+   authored to mean 2^(3-sub-4), but rendering the inner "4" as a subscript relative to
+   "2"'s own baseline reads as (2³)₄ — a different, wrong expression, not an obviously
+   broken one. Because Warp cannot compound nested offsets (see Non-goals), any styled
+   rendering of a nested construct risks silently showing a plausible-looking wrong
+   formula. Showing the whole span as literal source text is the one rendering that
+   cannot be misread as a valid (if different) formula — it's honest about not
+   supporting compound rendering rather than guessing. This reasoning applies equally
+   to towers of the same direction (e.g. `2<sup>3<sup>4</sup></sup>`, meant to read as
+   2^(3^4) but which would otherwise flatten to 2^(34), a different number) and to
+   single opposite-direction ties nested inside another level.
 
 8. Copy and export of content containing `<sub>`/`<sup>` canonically re-serializes the tag
    semantics into the copied/exported representation — the semantic markup survives a

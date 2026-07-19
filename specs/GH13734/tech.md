@@ -212,13 +212,65 @@ be riskier than expected.
 line-height/clipping question before committing the full slice, since it's the one
 sub-question that could push this back toward Option B or a smaller MVP.
 
-### 3. Nesting (`<sup>` inside `<sub>`)
+### 3. Nesting (`<sup>` inside `<sub>`, or any nesting of `<sub>`/`<sup>`)
 
-Because `vertical_align` is a single `Option<VerticalAlign>` (not independently
-stackable), the innermost tag wins — `backtrack_styles` for the inner tag overwrites the
-flag last, matching how nested `<u>`/emphasis already resolve via the same backtracking
-mechanism. Document this as the explicit degraded behavior (product invariant 7). True
-compounding (e.g. doubled offset for doubly-nested) is out of scope.
+**Superseded**: an earlier version of this section specified an innermost-wins tie rule
+(the inner tag's `backtrack_styles` call overwrites the outer's, mirroring how nested
+`<u>`/emphasis resolve). That rule shipped, then was replaced after live verification
+surfaced two motivating cases where it (and even a flat same-direction collapse) render a
+plausible-looking but factually wrong formula rather than an obviously-broken one:
+
+- **Same-direction towers** — `2<sup>3<sup>4</sup></sup>` is authored to mean 2^(3^4).
+  Since `vertical_align` is a single tri-state attribute with no compounding, both
+  nesting levels collapse to the identical single-step superscript offset, rendering "34"
+  raised — which reads as 2^(34), a different number, not as an obviously degraded
+  rendering.
+- **Opposite-direction ties nested a level deep** — `2<sup>3<sub>4</sub></sup>` is
+  authored to mean 2^(3-sub-4). Innermost-wins renders "4" as a full subscript relative
+  to "2"'s own baseline (since the buffer/style model has no notion of "subscript
+  relative to an already-superscripted position"), which reads as (2³)₄ — again a
+  different, wrong expression that still looks like a plausible formula.
+
+**Current rule (product invariant 7): whole-formula literal bail.** Any nesting of
+`<sub>`/`<sup>` — same direction, opposite direction, or depth ≥ 2 — degrades the
+**entire outermost span** (its open tag through its matching close tag, all contents,
+including any nested tags) to plain literal text, with no partial styling applied
+anywhere in the span. Only a single, non-nested `<sub>` or `<sup>` renders styled.
+Rationale: a partially-styled nested construct can still misread as a valid (if unusual)
+formula even when the styling is wrong or incomplete; showing the whole span as source
+text is the only rendering that cannot be mistaken for a real formula. Put simply: it's
+better to show the code than to show the wrong math.
+
+Implementation (`crates/markdown_parser/src/markdown_parser.rs`, `parse_vertical_align`
+and `Delimiter::vertical_align_poisoned`): nesting is detected when a `<sub>`/`<sup>`
+close finds an *outer* vertical-align delimiter still active earlier on the delimiter
+stack (meaning this tag opened inside an already-open vertical-align span). When that
+happens, this tag's own span reverts to literal (its opening placeholder node — already
+literal tag text at push time — is left untouched, and its own literal closing tag text
+is pushed alongside it), and the outer delimiter is marked `vertical_align_poisoned` so
+that when *it* eventually closes, it also bails its entire span to literal rather than
+applying its own alignment. This propagates outward through arbitrarily many enclosing
+levels without needing to reconstruct any already-resolved (and already-removed) inner
+delimiter state.
+
+True compounding (doubled/scaled offset for doubly-nested sub/sup, so towers and nested
+ties render styled instead of bailing) remains out of scope for this slice — documented
+as a future direction on #13734 rather than a separate tracked ticket, since it's not
+currently planned work. It would require `vertical_align` to become a depth-aware
+representation (e.g. a signed integer level rather than a `None`/`Sub`/`Sup` tri-state)
+threaded through the buffer summary, the CoreText attribute round-trip, and the paint
+path's baseline-offset/font-scale calculation.
+
+Editor-only note: overlapping subscript/superscript buffer markers are unreachable via
+Markdown import under this rule (the parser bails any nesting to a single literal
+fragment before the buffer ever sees it). They remain reachable only via live
+interactive style editing — applying one alignment over an in-buffer selection that
+already carries the other, which has no equivalent "is this nested" concept for the
+editor to refuse the operation. For that internal case only, `StyleSummary` and the
+render iterator must still agree with each other on *some* consistent tie rule
+(currently innermost-wins) purely so cursor/toolbar state and rendered runs don't
+diverge — this has no visible product behavior, since it's never reachable from parsed
+Markdown source.
 
 ### 4. Feature gating
 
@@ -250,7 +302,12 @@ favor of Option A.
 - Unterminated `<sub>` (no closing tag) → literal-text fallback for the unmatched tag,
   rest of document unaffected (invariant 6), mirroring the existing unmatched-`<u>`
   fallback test if one exists.
-- `<sup>` nested inside `<sub>` → innermost (`Sup`) wins, no panic (invariant 7).
+- `<sup>` nested inside `<sub>` (any direction, any depth) → the entire outermost span
+  renders as plain literal text, no panic, zero styled runs (invariant 7; supersedes the
+  earlier innermost-wins expectation). Named cases: the same-direction tower
+  `2<sup>3<sup>4</sup></sup>` and the opposite-direction nested tie
+  `2<sup>3<sub>4</sub></sup>` — both motivating examples for the whole-formula-bail rule,
+  both assert the entire construct is literal.
 - `<sub class="foo">` → attribute ignored, only tag semantics consulted (invariant 9).
 
 ### Paint/render tests (`crates/editor/src/render/element/paint.rs` tests, or
@@ -275,8 +332,8 @@ favor of Option A.
 
 Per CONTRIBUTING, before/after screenshots using the issue's own test case (H<sub>2</sub>O,
 CO<sub>2</sub>, and the footnote-marker `<sup>1</sup>` example) rendered in the Markdown
-viewer, plus a case exercising composed styling (`<sub>*n*</sub>`) and the nested-tag
-degraded case.
+viewer, plus a case exercising composed styling (`<sub>*n*</sub>`) and the whole-formula
+literal-bail case for nesting.
 
 ## Risks and follow-ups
 
@@ -298,3 +355,10 @@ degraded case.
 - **Interaction with other tier-zero specs:** sub/sup fragments inside a `<table>` cell (per
   the `<table>` spec) or a `<details>` body should compose for free once both land, since
   both are ordinary inline content paths; verify once both are implemented.
+- **Depth-aware cumulative rendering is a real future direction, not a hypothetical.** Math
+  notation (nested exponents, stacked subscripts) is not uncommon in Markdown on GitHub and
+  elsewhere — the whole-formula literal bail (section 3) is a deliberate MVP scope choice,
+  not a claim that nesting is unimportant. Lifting the bail for towers and nested ties would
+  need `vertical_align` to become depth-aware (signed level rather than tri-state) through
+  the buffer, CoreText round-trip, and paint layers. Documented as a future direction on
+  #13734 rather than a separate tracked ticket, since it's not currently planned work.
