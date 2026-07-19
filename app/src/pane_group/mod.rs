@@ -549,8 +549,9 @@ pub enum Event {
     OpenFileInWarp {
         /// The file path to open.
         path: LocalOrRemotePath,
-        /// The session that the path was opened from.
-        session: Arc<Session>,
+        /// The session that the path was opened from, if any. `None` when the link was opened in a
+        /// standalone Markdown viewer tab, which has no terminal session.
+        session: Option<Arc<Session>>,
         /// A `#fragment` anchor to scroll to once the destination Markdown notebook loads, if the
         /// originating link carried one. `None` for a plain file open.
         anchor: Option<String>,

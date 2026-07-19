@@ -38,9 +38,11 @@ pub enum LinkTarget {
         /// file, not a literal `#section` path) and carried here so the destination notebook can
         /// perform a deferred scroll — the cross-document analog of `line_and_column`.
         anchor: Option<String>,
-        /// The base session when the link was resolved. It's stored here in case it changes
-        /// between resolving and opening the link.
-        session: Arc<Session>,
+        /// The base session when the link was resolved, if there was one. Stored here in case it
+        /// changes between resolving and opening the link. `None` for a link resolved in a
+        /// standalone Markdown viewer tab (opened from Finder / `open -a Warp file.md`), which has
+        /// a base directory — the document's own dir — but no terminal session.
+        session: Option<Arc<Session>>,
         /// Whether or not this file is a Markdown file viewable in Warp.
         is_markdown: bool,
     },
@@ -93,7 +95,13 @@ impl PartialEq for LinkTarget {
                 my_path == other_path
                     && my_location == other_location
                     && my_anchor == other_anchor
-                    && Arc::ptr_eq(my_session, other_session)
+                    && match (my_session, other_session) {
+                        (Some(my_session), Some(other_session)) => {
+                            Arc::ptr_eq(my_session, other_session)
+                        }
+                        (None, None) => true,
+                        _ => false,
+                    }
             }
             (Self::LocalDirectory { path: my_path }, Self::LocalDirectory { path: other_path }) => {
                 my_path == other_path
@@ -192,7 +200,7 @@ impl NotebookLinks {
                 if let Some(session) = self.session_source.session(ctx) {
                     if let Ok(file) = url.to_file_path() {
                         // TODO(ben): Support line and column in file:// URLs.
-                        return Either::Left(Self::resolve_file(file, session, None, None));
+                        return Either::Left(Self::resolve_file(file, Some(session), None, None));
                     }
                 }
             }
@@ -251,7 +259,10 @@ impl NotebookLinks {
             }
         }
 
-        // At this point, we can only resolve file targets, which require a session.
+        // At this point, we can only resolve file targets. These are normally resolved against a
+        // session's context, but a standalone Markdown viewer tab has no session — only a base
+        // directory (the document's own dir). The second arm below handles that case so relative
+        // links still resolve there.
         match self.session_source.session(ctx) {
             Some(session) if session.launch_data().is_some() => {
                 let launch_data = session
@@ -292,12 +303,16 @@ impl NotebookLinks {
 
                 Either::Left(Self::resolve_file(
                     path,
-                    session,
+                    Some(session),
                     clean_path.line_and_column_num,
                     anchor,
                 ))
             }
-            Some(session) => {
+            session => {
+                // Either a session without launch data, or no session at all (a standalone
+                // Markdown viewer tab). Both resolve a relative path against the base directory,
+                // which must be present — the document's own directory supplies it in the
+                // no-session case.
                 let clean_path_result = CleanPathResult::with_line_and_column_number(link);
                 let clean_path = Path::new(&clean_path_result.path);
                 let path = if clean_path.is_relative() {
@@ -320,14 +335,15 @@ impl NotebookLinks {
                     anchor,
                 ))
             }
-            None => Either::Right(future::ready(Err(ResolveError::MissingContext))),
         }
     }
 
-    /// Resolve a file path into a [`LinkTarget`], checking if it exists.
+    /// Resolve a file path into a [`LinkTarget`], checking if it exists. `session` is `None` for a
+    /// standalone Markdown viewer tab, which resolves relative links against the document's own
+    /// directory without any terminal session.
     async fn resolve_file(
         path: PathBuf,
-        session: Arc<Session>,
+        session: Option<Arc<Session>>,
         line_and_column: Option<LineAndColumnArg>,
         anchor: Option<String>,
     ) -> Result<LinkTarget, ResolveError> {
@@ -548,7 +564,9 @@ pub enum LinkEvent {
     /// Emitted when the view should open a Markdown file as a notebook.
     OpenFileNotebook {
         path: PathBuf,
-        session: Arc<Session>,
+        /// The session the link was resolved from, if any. `None` for a link opened in a
+        /// standalone Markdown viewer tab, which has no terminal session.
+        session: Option<Arc<Session>>,
         /// A `#fragment` anchor to scroll to once the destination notebook loads, if the link
         /// carried one (`other-file.md#section`). `None` for a plain file link.
         anchor: Option<String>,

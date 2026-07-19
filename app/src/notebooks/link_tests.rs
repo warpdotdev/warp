@@ -35,7 +35,20 @@ fn local_file(path: impl Into<PathBuf>) -> LinkTarget {
         path,
         line_and_column: None,
         anchor: None,
-        session: TEST_SESSION.clone(),
+        session: Some(TEST_SESSION.clone()),
+    }
+}
+
+/// Like [`local_file`], but for the standalone-viewer case where the link was resolved without a
+/// terminal session (see [`init_link_model_no_session`]).
+fn local_file_no_session(path: impl Into<PathBuf>) -> LinkTarget {
+    let path = path.into();
+    LinkTarget::LocalFile {
+        is_markdown: is_markdown_file(&path),
+        path,
+        line_and_column: None,
+        anchor: None,
+        session: None,
     }
 }
 
@@ -46,7 +59,7 @@ fn local_file_anchor(path: impl Into<PathBuf>, anchor: &str) -> LinkTarget {
         path,
         line_and_column: None,
         anchor: Some(anchor.to_owned()),
-        session: TEST_SESSION.clone(),
+        session: Some(TEST_SESSION.clone()),
     }
 }
 
@@ -60,7 +73,7 @@ fn local_file_location(path: impl Into<PathBuf>, line: usize, column: Option<usi
             column_num: column,
         }),
         anchor: None,
-        session: TEST_SESSION.clone(),
+        session: Some(TEST_SESSION.clone()),
     }
 }
 
@@ -89,6 +102,23 @@ fn init_link_model(app: &mut App, base_directory: Option<&Path>) -> ModelHandle<
         session.set_session_for_test(window_id, TEST_SESSION.clone(), base_directory, None, ctx);
         session
     });
+    app.add_model(|ctx| NotebookLinks::new(source, ctx))
+}
+
+/// Initialize the link resolver for a *standalone Markdown viewer* tab: a file-backed notebook
+/// whose window has no active terminal session, so the only base-directory context is the
+/// document's own directory (`SessionSource::active_for_document`). This mirrors the real GUI
+/// condition of opening a `.md` from Finder / `open -a Warp file.md`, which
+/// [`init_link_model`] cannot reproduce because it always installs a `TEST_SESSION`.
+fn init_link_model_no_session(app: &mut App, document_dir: &Path) -> ModelHandle<NotebookLinks> {
+    initialize_settings_for_tests(app);
+
+    let window_id = WindowId::new();
+    // Register the window with ActiveSession, but with *no* session and no working directory, so
+    // `session(window_id)` and `path_if_local(window_id)` both return `None` — the standalone
+    // viewer case. The document directory is the sole base-directory source.
+    app.add_singleton_model(|_ctx| ActiveSession::default());
+    let source = SessionSource::active_for_document(window_id, Some(document_dir.to_owned()));
     app.add_model(|ctx| NotebookLinks::new(source, ctx))
 }
 
@@ -615,7 +645,9 @@ fn test_open_markdown_file_uses_viewer_when_preferred() {
                 anchor,
             }) => {
                 assert_eq!(path, &root.join("README.md"));
-                assert!(Arc::ptr_eq(&TEST_SESSION, session));
+                assert!(session
+                    .as_ref()
+                    .is_some_and(|s| Arc::ptr_eq(&TEST_SESSION, s)));
                 assert_eq!(anchor, &None);
             }
             other => panic!("Expected OpenFileNotebook event, got {other:?}"),
@@ -660,8 +692,82 @@ fn test_cross_document_fragment_threads_anchor_to_open_event() {
                 anchor,
             }) => {
                 assert_eq!(path, &base_path.join("other-file.md"));
-                assert!(Arc::ptr_eq(&TEST_SESSION, session));
+                assert!(session
+                    .as_ref()
+                    .is_some_and(|s| Arc::ptr_eq(&TEST_SESSION, s)));
                 assert_eq!(anchor.as_deref(), Some("target-section"));
+            }
+            other => panic!("Expected OpenFileNotebook event, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn test_cross_document_link_resolves_without_session() {
+    // Regression (#13725): a standalone Markdown viewer tab — opened from Finder / `open -a Warp
+    // file.md` — has a valid base directory (the document's own dir) but *no* terminal session.
+    // Resolving a cross-document file link must still succeed against that base directory. Before
+    // the fix, `resolve` fell through to its session `match` and returned `Err(MissingContext)`
+    // for the no-session case even though the file existed, so every relative/cross-document link
+    // was a silent no-op in the standalone viewer while in-document `#fragment` links (which never
+    // touch the resolver) kept working.
+    App::test((), |mut app| async move {
+        let base = tempdir().unwrap();
+        let base_path = base.path();
+        touch(base_path.join("other-file.md")).await;
+        let links = init_link_model_no_session(&mut app, base_path);
+
+        let resolved = links
+            .read(&app, |links, ctx| links.resolve("other-file.md", ctx))
+            .await
+            .expect("cross-document link should resolve without a session");
+        assert_eq!(
+            resolved,
+            local_file_no_session(base_path.join("other-file.md"))
+        );
+    });
+}
+
+#[test]
+fn test_cross_document_link_opens_in_viewer_without_session() {
+    // The end-to-end standalone-viewer path: `resolve_and_open` must emit `OpenFileNotebook` (with
+    // no session) so the workspace opens the target document. This is the seam the live GUI failure
+    // exercised — `resolve_and_open` silently drops a resolve `Err`, so a session-gated failure
+    // produced no event and no visible action.
+    App::test((), |mut app| async move {
+        let base = tempdir().unwrap();
+        let base_path = base.path();
+        touch(base_path.join("other-file.md")).await;
+        let links = init_link_model_no_session(&mut app, base_path);
+
+        let events = Arc::new(Mutex::new(vec![]));
+        {
+            let events = events.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&links, move |_, event, _| {
+                    events.lock().push(event.clone());
+                })
+            });
+        }
+
+        links
+            .update(&mut app, |links, ctx| {
+                let future = links.resolve_and_open("other-file.md#far-section", ctx);
+                ctx.await_spawned_future(future.future_id())
+            })
+            .await;
+
+        let events = events.lock();
+        assert_eq!(events.len(), 1);
+        match events.first() {
+            Some(LinkEvent::OpenFileNotebook {
+                path,
+                session,
+                anchor,
+            }) => {
+                assert_eq!(path, &base_path.join("other-file.md"));
+                assert!(session.is_none());
+                assert_eq!(anchor.as_deref(), Some("far-section"));
             }
             other => panic!("Expected OpenFileNotebook event, got {other:?}"),
         }

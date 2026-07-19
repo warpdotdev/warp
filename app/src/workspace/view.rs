@@ -16164,7 +16164,7 @@ impl Workspace {
                     let layout = *EditorSettings::as_ref(ctx).open_file_layout.value();
                     self.open_file_notebook(
                         path.clone(),
-                        Some(session.clone()),
+                        session.clone(),
                         layout,
                         anchor.clone(),
                         ctx,
