@@ -2,9 +2,7 @@ use std::path::Path;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 
-use anyhow::anyhow;
 use ui_components::lightbox::{LightboxImage, LightboxImageSource};
-use warp_errors::report_error;
 use warp_multi_agent_api as api;
 #[cfg(feature = "local_fs")]
 use warpui::platform::SaveFilePickerConfiguration;
@@ -277,7 +275,7 @@ where
         .filter_map(|value| match serde_json::from_value::<Artifact>(value) {
             Ok(artifact) => Some(artifact),
             Err(e) => {
-                report_error!(anyhow!("Failed to deserialize artifact, skipping: {}", e));
+                log::warn!("Failed to deserialize artifact, skipping: {e}");
                 None
             }
         })

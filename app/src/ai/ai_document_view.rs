@@ -1052,7 +1052,7 @@ impl AIDocumentView {
                     if let Err(e) =
                         std::fs::write(&path, &markdown).context("Failed to export AI document")
                     {
-                        report_error!(e);
+                        log::warn!("{e:#}");
                     }
                 }
             },
