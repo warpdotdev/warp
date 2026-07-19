@@ -350,3 +350,41 @@ fn markdown_external_link_stays_url() {
         "an external markdown hyperlink must remain a Url, got {link:?}"
     );
 }
+
+/// Guard: a markdown link whose *label* happens to match an existing local file
+/// but whose href is an explicit external URL must open the URL, not the local
+/// file. Such a label carries no line number, so the line-preserving guard must
+/// not apply -- the explicit href wins.
+#[cfg(feature = "local_fs")]
+#[test]
+fn markdown_external_link_with_file_like_label_stays_url() {
+    use crate::ai::blocklist::block::TextLocation;
+
+    let dir = tempfile::tempdir().unwrap();
+    // A file whose name matches the link label exists in the working directory.
+    std::fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
+    let cwd = dir.path().to_str().unwrap().to_owned();
+    let location = TextLocation::Output {
+        section_index: 0,
+        line_index: 0,
+    };
+
+    // `[Cargo.toml](https://example.com)` -> display text `Cargo.toml` (a real
+    // local file, but with NO line number) and an external href over the same
+    // char range 0..10.
+    let texts = vec![("Cargo.toml".to_string(), location)];
+    let md_hyperlinks: HyperlinksByLocation =
+        vec![(location, vec![(0..10, "https://example.com".to_string())])];
+
+    let all_links = detect_all_links(&texts, md_hyperlinks, Some(&cwd), None);
+
+    let link = all_links
+        .get(&location)
+        .and_then(|links| links.get(&(0..10)))
+        .expect("the hyperlink should be detected");
+    assert!(
+        matches!(link, DetectedLinkType::Url(url) if url == "https://example.com"),
+        "a file-like label with an explicit external href must stay a Url (not open \
+         the local file), got {link:?}"
+    );
+}
