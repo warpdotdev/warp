@@ -57,10 +57,20 @@ BufferBlockItem::Image { alt_text, source, title: _ } => {
 `ImageBlockConfig` (`crates/editor/src/render/model/mod.rs:1470-1475`) carries only
 `width: Pixels`, `height: Pixels`, `spacing: BlockSpacing`. The drawn element
 `RenderableImage` (`crates/editor/src/render/element/image.rs`) uses the
-`warpui_core::elements::Image` primitive with `.contain()`, which already preserves
-aspect ratio inside the config box (`crates/warpui_core/src/elements/gui/image.rs:120-121`,
-`388-394`) and already supports SVG via `usvg`/`resvg`
-(`crates/warpui_core/src/image_cache.rs:274-283, 463, 472-476`).
+`warpui_core::elements::Image` primitive with `.contain()`
+(`crates/warpui_core/src/elements/gui/image.rs:120-121`, `388-394`), which already
+supports SVG via `usvg`/`resvg`
+(`crates/warpui_core/src/image_cache.rs:274-283, 463, 472-476`). **This `.contain()`
+call is not, by itself, an aspect-ratio mechanism for this feature**: it only fit-scales
+the decoded image *within whatever box `ImageBlockConfig.width`/`.height` already are*
+(`render/element/image.rs`'s `layout()` passes `SizeConstraint::new(vec2f(0.,0.), size)`
+with `size = (config.width, config.height)` — the element's box, not a free constraint).
+If those two config values aren't already the correct aspect-ratio-correct pair, no
+amount of `.contain()` fixes that; it can only shrink-to-fit inside a wrong box. §4
+below is the single source of truth for how `ImageBlockConfig.width`/`.height` are
+derived to be aspect-ratio-correct in the first place (the Mermaid-precedent
+`AssetCache` mechanism); `.contain()`'s role is unchanged from today — final
+fit-clamping in case of any residual rounding, not ratio derivation.
 
 Two facts make this change tractable and low-risk:
 
@@ -103,8 +113,12 @@ Relevant code:
   `mermaid_diagram_size`: the existing precedent for layout-time intrinsic-ratio sizing
   from `AssetCache`, which §4 below reuses verbatim for `<img>` sizing.
 - `crates/editor/src/render/model/mod.rs:1470-1475` — `ImageBlockConfig`.
-- `crates/editor/src/render/element/image.rs` — `RenderableImage` (drawing; likely
-  needs a horizontal-offset for `align`).
+- `crates/editor/src/render/model/positioned.rs:62-64, 202-204` — `Positioned::image()`
+  and the generic `content_origin()` that `align` must override (§4).
+- `crates/editor/src/render/model/bounds.rs:20-25` — `bounds::content_origin`, today's
+  block-type-wide x-origin with no per-instance offset.
+- `crates/editor/src/render/element/image.rs` — `RenderableImage` (drawing; the paint
+  origin `align` must offset, per §4).
 - `crates/editor/src/content/markdown.rs:~1129` — HTML serialization branch for images.
 - Test files: `crates/editor/src/content/text_tests.rs`,
   `crates/editor/src/content/core_tests.rs`,
@@ -299,12 +313,63 @@ resolution against the new fields:
   formula above — percent sizing and aspect-ratio derivation compose rather than being
   mutually exclusive.
 
-Add an `align: ImageAlign` (or a resolved horizontal offset) to `ImageBlockConfig`
-(`render/model/mod.rs:1470-1475`). In `RenderableImage::paint`
-(`crates/editor/src/render/element/image.rs`), offset the paint origin horizontally:
-`Left` = no offset (today's behavior), `Center` = `(available_width - image_width)/2`,
-`Right` = `available_width - image_width` (invariant 8). Left alignment must be
-pixel-identical to today so untagged/`align="left"` images do not shift.
+**Alignment: what layout must carry, and why `contain()`'s internal centering is not
+in the way.** Alignment needs two things at paint time: (a) the block's available
+content width, and (b) the actual displayed image bounds. Both already exist by this
+point in layout — nothing new needs to be threaded in to know them:
+
+- **(a) Available content width** is `available_width` from this same layout task
+  (`layout.max_width() - spacing.x_axis_offset()`, computed above for width
+  resolution) — the block's max width, already known at `ImageBlockConfig`
+  construction.
+- **(b) Displayed image bounds** are exactly `ImageBlockConfig.width`/`.height` as
+  resolved by the rules above — by construction these are always the specified
+  dimension exactly, and (per invariant 6) the intrinsic-ratio-correct derived
+  dimension once the asset is `Loaded`, or today's plain default while it isn't.
+
+**Why `Image::contain()`'s internal centering is not a conflict.**
+`RenderableImage::layout()` (`crates/editor/src/render/element/image.rs:39-51`)
+constructs the primitive as `Image::new(asset_source, CacheOption::BySize).contain()`
+and lays it out with `SizeConstraint::new(vec2f(0., 0.), size)` where
+`size = vec2f(config.width.as_f32(), config.height.as_f32())` — i.e. the primitive's
+box *is* `ImageBlockConfig.width × .height`, not some larger constraint. Once §4's
+sizing makes those two values the aspect-ratio-correct pair (the common case once the
+asset is `Loaded`), `contain()` has zero slack to center within: the decoded image
+already fills the box exactly, so the primitive's internal
+centering/`top_aligned`/`right_aligned` logic in
+`crates/warpui_core/src/elements/gui/image.rs` never has room to run. The only case
+where the primitive's box and the decoded image's aspect ratio disagree is the
+transient "asset not yet `Loaded`" fallback (§4's plain-default case) — during that
+one layout pass `contain()` may show letterboxing inside the fallback box, which
+self-corrects on the next layout pass exactly like Mermaid's transient case does.
+Alignment therefore happens **one level up from the primitive**, at the block's paint
+origin, not by fighting `contain()`'s behavior.
+
+**Where the offset is applied.** Add `align: ImageAlign` to `ImageBlockConfig`
+(`render/model/mod.rs:1470-1475`) and to `Positioned<ImageBlockConfig>`'s origin
+computation. Today, `Positioned::image()` (`render/model/positioned.rs:202-204`) builds
+its position via the generic `position_centered`, whose `content_origin()`
+(`render/model/positioned.rs:62-64` → `bounds::content_origin`,
+`render/model/bounds.rs:20-25`) returns `x = spacing.left_offset()` — a block-type-wide
+constant with no per-instance horizontal offset. This is the gap: no block today can
+shift itself independently within its available width. Fix: give `ImageBlockConfig`'s
+positioning an `align`-aware x-origin — either a dedicated `Positioned<ImageBlockConfig>`
+constructor (paralleling `image()`) that adds an alignment offset on top of
+`bounds::content_origin`, or an equivalent adjustment applied where
+`RenderableImage::paint` reads `positioned_image.content_origin()`
+(`render/element/image.rs:66-74`). The offset itself uses the same slack-splitting
+arithmetic as the align-blocks spec (GH13735; per-line/block offset applied at paint,
+not at the primitive level — the same altitude this fix operates at):
+
+- `Left` → offset `0` (today's behavior, pixel-identical — untagged/`align="left"`
+  images do not shift).
+- `Center` → offset `(available_width - config.width) / 2`.
+- `Right` → offset `available_width - config.width`.
+
+(invariant 8). This offset shifts only the block's own paint origin — selection rects
+and the cursor position in `RenderableImage::paint` (`render/element/image.rs:75-95`),
+which are derived from the same `content_origin()`, automatically follow the aligned
+position with no separate change needed.
 
 ### 5. Serialization / round-trip
 
@@ -390,7 +455,12 @@ Covers invariants 4–8:
 - Percent width → `available_width * p / 100`.
 - No dimensions → identical `ImageBlockConfig` to today (regression against the
   hardcoded default).
-- `align = Center/Right` → expected horizontal offset in the laid-out block.
+- `align = Left` → `Positioned<ImageBlockConfig>`'s x-origin is pixel-identical to the
+  no-`align`-field baseline (regression guard against shifting untagged images).
+- `align = Center` → x-origin offset equals `(available_width - config.width) / 2`.
+- `align = Right` → x-origin offset equals `available_width - config.width`.
+- `align = Center/Right` with a narrower-than-pane pixel width → offset uses the
+  resolved (post-clamp) `config.width`, not the raw requested width.
 - **Width-only + `AssetState::Loaded` intrinsic size** → `height` equals
   `width * intrinsic_h / intrinsic_w` (mirror the existing
   `mermaid_diagram_size` test coverage in `mermaid_diagram_tests.rs`, same formula,
