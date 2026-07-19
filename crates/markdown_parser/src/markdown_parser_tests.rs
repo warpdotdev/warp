@@ -1982,6 +1982,16 @@ fn test_parse_empty_underline() {
     )
 }
 
+#[test]
+fn test_parse_two_unclosed_underlines_fall_back_to_literal() {
+    // Sibling of #13734 finding 4: two unmatched `<u>` opens must not be paired against each
+    // other by the emphasis resolver (which would silently swallow the tags as underline).
+    assert_eq!(
+        parse_all("<u>a<u>b", parse_inline),
+        vec![FormattedTextFragment::plain_text("<u>a<u>b")]
+    );
+}
+
 // --- Subscript / superscript (`<sub>` / `<sup>`) — issue #13734 --------------------------
 
 #[test]
@@ -2051,6 +2061,25 @@ fn test_parse_unclosed_subscript_falls_back_to_literal() {
     assert_eq!(
         parse_all("H<sub>2 and more", parse_inline),
         vec![FormattedTextFragment::plain_text("H<sub>2 and more")]
+    );
+}
+
+#[test]
+fn test_parse_two_unclosed_subscripts_fall_back_to_literal() {
+    // Two unmatched `<sub>` opens must both degrade to literal text — they must NOT be
+    // paired with each other by the emphasis resolver (which would drop the tags or, worse,
+    // apply italic). Regression guard for #13734 finding 4.
+    assert_eq!(
+        parse_all("<sub>a<sub>b", parse_inline),
+        vec![FormattedTextFragment::plain_text("<sub>a<sub>b")]
+    );
+}
+
+#[test]
+fn test_parse_two_unclosed_superscripts_fall_back_to_literal() {
+    assert_eq!(
+        parse_all("<sup>a<sup>b", parse_inline),
+        vec![FormattedTextFragment::plain_text("<sup>a<sup>b")]
     );
 }
 

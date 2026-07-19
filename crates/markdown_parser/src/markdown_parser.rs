@@ -1881,27 +1881,37 @@ impl Delimiter {
         let right_flanking = !preceded_by_whitespace
             && (!preceded_by_punctuation || (followed_by_whitespace || followed_by_punctuation));
 
+        // NOTE: The HTML-tag delimiters (`<u>`, `<sub>`, `<sup>`) are resolved exclusively by their
+        // explicit close handlers (`parse_underline`/`parse_vertical_align`), which locate their
+        // start by `kind` and do not consult `can_open`/`can_close`. They must therefore be
+        // non-openable and non-closable for the *emphasis* resolver: otherwise two unmatched opens
+        // of the same kind (e.g. `<sub>a<sub>b`) get paired against each other by `process_emphasis`
+        // and either mis-styled as italic (sub/sup, which have no dedicated branch there) or silently
+        // swallowed (underline). Leaving them off the emphasis pairing path lets an unmatched open
+        // degrade to its literal tag text, which is the desired behavior. (#13734 finding 4.)
         let can_open = match kind {
-            DelimiterKind::LinkStart => false,
+            DelimiterKind::LinkStart
+            | DelimiterKind::UnderlineStart
+            | DelimiterKind::SubStart
+            | DelimiterKind::SupStart => false,
             DelimiterKind::Asterisk => left_flanking,
             DelimiterKind::Underscore => {
                 left_flanking && (!right_flanking || preceded_by_punctuation)
             }
             // The GFM spec doesn't fully specify how strikethrough works, so treat it like asterisks.
             DelimiterKind::Strikethrough => left_flanking,
-            DelimiterKind::UnderlineStart => left_flanking,
-            DelimiterKind::SubStart | DelimiterKind::SupStart => left_flanking,
         };
 
         let can_close = match kind {
-            DelimiterKind::LinkStart => false,
+            DelimiterKind::LinkStart
+            | DelimiterKind::UnderlineStart
+            | DelimiterKind::SubStart
+            | DelimiterKind::SupStart => false,
             DelimiterKind::Asterisk => right_flanking,
             DelimiterKind::Underscore => {
                 right_flanking && (!left_flanking || followed_by_punctuation)
             }
             DelimiterKind::Strikethrough => right_flanking,
-            DelimiterKind::UnderlineStart => right_flanking,
-            DelimiterKind::SubStart | DelimiterKind::SupStart => right_flanking,
         };
 
         Self {
