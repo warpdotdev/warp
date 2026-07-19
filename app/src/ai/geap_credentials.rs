@@ -7,7 +7,6 @@ use ai::api_keys::{
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
 use warp_core::features::FeatureFlag;
-use warp_errors::report_error;
 use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::r#async::Timer;
@@ -317,7 +316,7 @@ fn apply_geap_mint_result(
             schedule_geap_token_refresh(manager, ctx);
         }
         Err(err) => {
-            report_error!("GEAP: credential mint failed", extra: { "error" => ?err });
+            log::warn!("GEAP: credential mint failed: {err:?}");
             match previous {
                 // A failed background re-mint keeps the previous token — even
                 // near/past expiry (Google remains the authority on validity;

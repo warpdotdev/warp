@@ -462,8 +462,9 @@ impl MCPServerExt for MCPServer {
                     apply_values(&mut cli_server.static_env_vars, &env_vars);
                 }
                 Err(error) => {
-                    report_error!(anyhow::Error::new(error)
-                        .context("Could not read MCP server environment variables from sqlite"));
+                    log::warn!(
+                        "Could not read MCP server environment variables from sqlite: {error:#}"
+                    );
                 }
             }
         }

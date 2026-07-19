@@ -9,7 +9,6 @@ use futures::channel::oneshot::channel;
 use futures::future::BoxFuture;
 use tokio::sync::Mutex;
 use vec1::vec1;
-use warp_errors::report_error;
 use warp_managed_secrets::client::IdentityTokenOptions;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
@@ -365,8 +364,7 @@ fn refresh_aws_credentials_oidc(
                         .as_service_error()
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| err.to_string());
-                    report_error!(anyhow::Error::new(err)
-                        .context("Bedrock OIDC: STS AssumeRoleWithWebIdentity SDK error"));
+                    log::warn!("Bedrock OIDC: STS AssumeRoleWithWebIdentity SDK error: {err}");
                     anyhow::anyhow!("STS AssumeRoleWithWebIdentity failed: {detail}")
                 })?
                 .credentials
@@ -393,7 +391,7 @@ fn refresh_aws_credentials_oidc(
                 }
                 Err(e) => {
                     let message = e.to_string();
-                    report_error!(e.context("Bedrock OIDC: failed to load credentials"));
+                    log::warn!("Bedrock OIDC: failed to load credentials: {e:#}");
                     (
                         AwsCredentialsState::Failed {
                             message: message.clone(),

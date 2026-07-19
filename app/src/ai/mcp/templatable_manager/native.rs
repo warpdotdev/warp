@@ -682,9 +682,9 @@ impl TemplatableMCPServerManager {
             running,
         };
         if let Err(err) = sender.send(event) {
-            report_error!(anyhow::Error::new(err).context(
-                "Failed to save TemplatableMCPServerInstallation running status to database"
-            ));
+            log::warn!(
+                "Failed to save TemplatableMCPServerInstallation running status to database: {err:#}"
+            );
         }
     }
 
@@ -1187,8 +1187,7 @@ impl TemplatableMCPServerManager {
                 mcp_server_installation: mcp_server_installation.clone(),
             };
             if let Err(err) = sender.send(event) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to save TemplatableMCPServerInstallation to database"));
+                log::warn!("Failed to save TemplatableMCPServerInstallation to database: {err:#}");
             }
         }
 
@@ -1271,8 +1270,7 @@ impl TemplatableMCPServerManager {
                 installation_uuids: installation_uuids.clone(),
             };
             if let Err(err) = sender.send(event) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to delete installations from local database"));
+                log::warn!("Failed to delete installations from local database: {err:#}");
             }
         }
 
@@ -1350,9 +1348,8 @@ impl TemplatableMCPServerManager {
         updates: Vec<MCPServerUpdate>,
     ) -> Vec<MCPServerUpdate> {
         let Some(installation) = self.get_installed_server(&installation_uuid) else {
-            report_error!(
-                "Could not find installed server",
-                extra: { "installation_uuid" => %installation_uuid }
+            log::warn!(
+                "Could not find installed server for deduplication (installation_uuid={installation_uuid})"
             );
             return updates.to_vec();
         };
@@ -1614,8 +1611,9 @@ impl TemplatableMCPServerManager {
                         ctx
                     );
                 }
-                Err(e) => report_error!(anyhow::Error::new(e)
-                    .context("Failed to convert legacy MCP server to templatable")),
+                Err(e) => {
+                    log::warn!("Failed to convert legacy MCP server to templatable: {e:#}");
+                }
             }
         }
     }

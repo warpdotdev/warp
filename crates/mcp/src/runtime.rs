@@ -16,7 +16,6 @@ use rmcp::ServiceExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
-use warp_errors::report_error;
 
 use super::TemplatableMCPServerInfo;
 
@@ -193,9 +192,7 @@ pub async fn spawn_server(
                             Ok(_) => logger.log(format!("[info] MCP [pid: {pid}] stderr: {buf}")),
                             // Failed to read from the child process's stderr.
                             Err(e) => {
-                                report_error!(
-                                    anyhow::Error::new(e).context("Failed to read stderr")
-                                );
+                                log::warn!("Failed to read MCP child stderr: {e:#}");
                                 return;
                             }
                         }

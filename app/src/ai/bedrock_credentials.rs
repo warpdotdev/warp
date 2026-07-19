@@ -14,7 +14,6 @@ use std::time::{Duration, SystemTime};
 use ai::api_keys::{ApiKeyManager, AwsCredentials, AwsCredentialsState};
 use anyhow::{Context as _, Result};
 use vec1::vec1;
-use warp_errors::report_error;
 use warp_managed_secrets::client::IdentityTokenOptions;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::{ModelSpawner, SingletonEntity};
@@ -77,8 +76,7 @@ async fn try_refresh(
                 .as_service_error()
                 .map(|e| e.to_string())
                 .unwrap_or_else(|| err.to_string());
-            report_error!(anyhow::Error::new(err)
-                .context("Bedrock OIDC refresh: STS AssumeRoleWithWebIdentity error"));
+            log::warn!("Bedrock OIDC refresh: STS AssumeRoleWithWebIdentity error: {err}");
             anyhow::anyhow!("STS AssumeRoleWithWebIdentity failed: {detail}")
         })?
         .credentials
