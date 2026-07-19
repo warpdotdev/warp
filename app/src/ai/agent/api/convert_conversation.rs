@@ -671,7 +671,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .map(|file| FileContext::from(file.clone()))
                         .collect();
                     let failed_files = success
-                        .failed_files
+                        .failed_reads
                         .iter()
                         .map(|failed_file| ReadFilesFailedFile {
                             path: failed_file.path.clone(),
@@ -691,7 +691,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .map(|file| FileContext::from(file.clone()))
                         .collect();
                     let failed_files = success
-                        .failed_files
+                        .failed_reads
                         .iter()
                         .map(|failed_file| ReadFilesFailedFile {
                             path: failed_file.path.clone(),

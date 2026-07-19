@@ -174,9 +174,9 @@ impl TryFrom<ReadFilesResult> for api::request::input::tool_call_result::Result 
                                 .into_iter()
                                 .flat_map(Into::<Vec<api::AnyFileContent>>::into)
                                 .collect(),
-                            failed_files: failed_files
+                            failed_reads: failed_files
                                 .into_iter()
-                                .map(|failed_file| api::read_files_result::FailedFile {
+                                .map(|failed_file| api::read_files_result::FailedRead {
                                     path: failed_file.path,
                                     message: failed_file.message,
                                 })
