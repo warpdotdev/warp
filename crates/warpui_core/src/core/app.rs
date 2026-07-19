@@ -2107,6 +2107,46 @@ impl AppContext {
         }
     }
 
+    /// Dispatches the custom-action binding currently assigned to a keystroke, if one matches in
+    /// the active responder chain for the window.
+    pub fn dispatch_custom_action_for_keystroke(
+        &mut self,
+        window_id: WindowId,
+        keystroke: &Keystroke,
+    ) -> bool {
+        if !self.key_bindings_enabled(window_id) {
+            return false;
+        }
+
+        let responder_chain = self.get_responder_chain(window_id);
+        let Ok(mut context_chain) = self.contexts_from_responder_chain(window_id, &responder_chain)
+        else {
+            return false;
+        };
+
+        for (i, ctx) in context_chain.iter_mut().enumerate().rev() {
+            let MatchResult::Action(action) = self
+                .keystroke_matcher
+                .match_custom_keystroke(keystroke, ctx)
+            else {
+                continue;
+            };
+
+            let handled = self.dispatch_typed_action(
+                window_id,
+                &responder_chain[0..=i],
+                action.as_ref(),
+                log::Level::Info,
+            );
+            if handled {
+                self.dispatch_self_or_child_interacted_with(window_id, &responder_chain);
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Figures out what keystroke (if any) is bound to a custom action and dispatches it as a key event.
     /// This is used when the user is in the course of editing their keybindings and we need
     /// to get the raw keystroke for something that is currently bound to a custom action.

@@ -177,6 +177,61 @@ fn test_editable_binding_matching() {
 }
 
 #[test]
+fn test_custom_action_keystroke_matching() {
+    #[derive(Debug, PartialEq)]
+    enum Action {
+        SplitPane,
+    }
+
+    const SPLIT_PANE_CUSTOM_TAG: CustomTag = 1;
+
+    let mut keymap = Keymap::default();
+    keymap.register_editable_bindings([EditableBinding::new(
+        "split_pane",
+        "Split pane",
+        Action::SplitPane,
+    )
+    .with_custom_action(SPLIT_PANE_CUSTOM_TAG)
+    .with_context_predicate(id!("pane"))]);
+
+    let mut matcher = Matcher::new(keymap);
+    matcher.register_default_keystroke_triggers_for_custom_actions(|tag| match tag {
+        SPLIT_PANE_CUSTOM_TAG => Keystroke::parse("cmd-d").ok(),
+        _ => None,
+    });
+
+    let mut pane_ctx = Context::default();
+    pane_ctx.set.insert("pane");
+    let other_ctx = Context::default();
+
+    let MatchResult::Action(action) =
+        matcher.match_custom_keystroke(&Keystroke::parse("cmd-d").unwrap(), &pane_ctx)
+    else {
+        panic!("expected custom action to match default keystroke");
+    };
+    assert_eq!(action.as_action::<Action>(), &Action::SplitPane);
+    assert!(matches!(
+        matcher.match_custom_keystroke(&Keystroke::parse("cmd-d").unwrap(), &other_ctx),
+        MatchResult::None
+    ));
+
+    matcher.set_custom_trigger(
+        "split_pane".to_string(),
+        Trigger::Keystrokes(vec![Keystroke::parse("cmd-k").unwrap()]),
+    );
+
+    assert!(matches!(
+        matcher.match_custom_keystroke(&Keystroke::parse("cmd-d").unwrap(), &pane_ctx),
+        MatchResult::None
+    ));
+    let MatchResult::Action(action) =
+        matcher.match_custom_keystroke(&Keystroke::parse("cmd-k").unwrap(), &pane_ctx)
+    else {
+        panic!("expected custom action to match customized keystroke");
+    };
+    assert_eq!(action.as_action::<Action>(), &Action::SplitPane);
+}
+#[test]
 fn test_bindings_for_context() {
     #[derive(Debug)]
     enum Action {
