@@ -92,11 +92,11 @@ use crate::window_settings::{
 };
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
-    canonical_directory_key, DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs,
-    PreserveActiveTabColor, ShowCodeReviewButton, ShowIndicatorsButton,
-    ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition, TabSettings,
-    TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
-    WorkspaceDecorationVisibility,
+    canonical_directory_key, AssignColorToNewTabGroups, DirectoryTabColor,
+    HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor, ShowCodeReviewButton,
+    ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition,
+    TabSettings, TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames,
+    UseVerticalTabs, WorkspaceDecorationVisibility,
 };
 use crate::workspace::WorkspaceAction;
 use crate::{send_telemetry_from_ctx, themes};
@@ -453,6 +453,17 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         flags::PRESERVE_ACTIVE_TAB_COLOR_FLAG,
     ));
 
+    if FeatureFlag::GroupedTabs.is_enabled() {
+        toggle_binding_pairs.push(ToggleSettingActionPair::new(
+            "assign color to new tab groups",
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::ToggleAssignColorToNewTabGroups,
+            )),
+            context,
+            flags::ASSIGN_COLOR_TO_NEW_TAB_GROUPS_FLAG,
+        ));
+    }
+
     toggle_binding_pairs.push(ToggleSettingActionPair::new(
         "custom padding in alt-screen",
         builder(SettingsAction::AppearancePageToggle(
@@ -520,6 +531,7 @@ pub enum AppearancePageAction {
     ToggleTabIndicators,
     ToggleShowCodeReviewButton,
     TogglePreserveActiveTabColor,
+    ToggleAssignColorToNewTabGroups,
     ToggleVerticalTabs,
     ToggleShowVerticalTabPanelInRestoredWindows,
     ToggleHideTitleBarSearchBarInVerticalTabs,
@@ -694,6 +706,7 @@ impl TypedActionView for AppearanceSettingsPageView {
             ToggleTabIndicators => self.toggle_tab_indicators(ctx),
             ToggleShowCodeReviewButton => self.toggle_show_code_review_button(ctx),
             TogglePreserveActiveTabColor => self.toggle_preserve_active_tab_color(ctx),
+            ToggleAssignColorToNewTabGroups => self.toggle_assign_color_to_new_tab_groups(ctx),
             ToggleVerticalTabs => self.toggle_vertical_tabs(ctx),
             ToggleShowVerticalTabPanelInRestoredWindows => {
                 self.toggle_show_vertical_tab_panel_in_restored_windows(ctx)
@@ -1522,6 +1535,9 @@ impl AppearanceSettingsPageView {
             tab_settings_widgets.push(Box::new(TabCloseButtonPositionWidget::default()));
         }
         tab_settings_widgets.push(Box::new(PreserveActiveTabColorWidget::default()));
+        if FeatureFlag::GroupedTabs.is_enabled() {
+            tab_settings_widgets.push(Box::new(AssignColorToNewTabGroupsWidget::default()));
+        }
 
         if FeatureFlag::VerticalTabs.is_enabled() {
             tab_settings_widgets.push(Box::new(VerticalTabsWidget::default()));
@@ -2461,6 +2477,20 @@ impl AppearanceSettingsPageView {
             TelemetryEvent::TogglePreserveActiveTabColor { enabled: new_value },
             ctx
         );
+    }
+
+    fn toggle_assign_color_to_new_tab_groups(&mut self, ctx: &mut ViewContext<Self>) {
+        let tab_settings = TabSettings::handle(ctx);
+        let new_value = !*tab_settings
+            .as_ref(ctx)
+            .assign_color_to_new_tab_groups
+            .value();
+
+        ctx.update_model(&tab_settings, move |tab_settings, ctx| {
+            report_if_error!(tab_settings
+                .assign_color_to_new_tab_groups
+                .set_value(new_value, ctx));
+        });
     }
 
     fn toggle_vertical_tabs(&mut self, ctx: &mut ViewContext<Self>) {
@@ -4909,6 +4939,53 @@ impl SettingsWidget for PreserveActiveTabColorWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(AppearancePageAction::TogglePreserveActiveTabColor);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct AssignColorToNewTabGroupsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for AssignColorToNewTabGroupsWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "tab group color assign new automatic cycle palette"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+
+        render_body_item::<AppearancePageAction>(
+            "Assign color to new tab groups".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                AssignColorToNewTabGroups::storage_key(),
+                AssignColorToNewTabGroups::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*tab_settings.assign_color_to_new_tab_groups)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(
+                        AppearancePageAction::ToggleAssignColorToNewTabGroups,
+                    );
                 })
                 .finish(),
             None,

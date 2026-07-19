@@ -2,13 +2,14 @@ use std::collections::HashSet;
 
 use itertools::{Either, Itertools};
 use warp_core::features::FeatureFlag;
-use warpui::{EntityId, UpdateView, ViewContext};
+use warpui::{EntityId, SingletonEntity, UpdateView, ViewContext};
 
 use super::{group_member_indices, Workspace};
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::tab::{TabData, MOVE_TO_GROUP_LABEL};
 use crate::workspace::action::{TabContextMenuAnchor, WorkspaceAction};
-use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::workspace::tab_group::{next_group_color, TabGroup, TabGroupId};
+use crate::workspace::tab_settings::TabSettings;
 use crate::workspace::util::PaneViewLocator;
 
 // TODO(johnturcoo) move tab grouping helpers here from workspace/view.rs.
@@ -225,7 +226,10 @@ impl Workspace {
             .filter_map(|index| self.tabs[*index].group_id)
             .collect();
 
-        let group = TabGroup::new();
+        let mut group = TabGroup::new();
+        if *TabSettings::as_ref(ctx).assign_color_to_new_tab_groups {
+            group.color = next_group_color(&self.tab_groups);
+        }
         let group_id = group.id;
         self.tab_groups.insert(group_id, group);
 
