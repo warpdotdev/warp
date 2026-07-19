@@ -176,9 +176,15 @@ Out of scope (explicit non-goals):
    the rest of the document. The unparseable region renders as literal (escaped) source
    text, not undefined behavior.
 
-9. Empty structures degrade cleanly: `<table></table>` renders as an empty (or
-   single-empty-row) table or nothing, per the tech spec's chosen convention, never a
-   panic; a `<tr></tr>` with no cells is dropped or padded, not a crash.
+9. Empty structures degrade cleanly, never a panic. `<table></table>` (no rows at all) is
+   a well-formed empty table, not a fallback-to-text case (invariant 8 is for content the
+   parser can't form into a grid; an empty table trivially is one) — it renders as a
+   single-column table with one empty header cell and zero body rows, per the tech spec's
+   "Empty structures" rule (tech.md §2), which is the same `normalize_shape` normalization
+   every ragged table already goes through (invariant 6), not a separate empty-table code
+   path. A `<tr></tr>` with no cells is **padded** to the
+   table's column count with empty cells, not dropped — consistent with invariant 2's
+   principle of never silently discarding an authored row.
 
 10. Only structural tags (`table`/`thead`/`tbody`/`tr`/`th`/`td`) and the `align`/
     `text-align`/`colspan`/`rowspan` attributes are read (the last two only to decide the

@@ -255,6 +255,26 @@ parsing, landing as `FormattedTextLine::Line` — the same plain-text sink (rend
 `FormattedTextElement`) that any other unrecognized text renders through. Never an
 unspecified/undefined outcome.
 
+Empty structures (product invariant 9): `<table></table>` (no rows at all) is a
+**successful, well-formed parse, not a fallback** — it is structurally valid HTML, not
+malformed input, so invariant 8's literal-text fallback does not apply to it (that
+fallback is reserved for a region the parser cannot form into a grid at all; an empty
+table trivially forms a zero-row grid). The reader constructs the `FormattedTable` with
+`headers: vec![]`, `rows: vec![]`, and calls the existing `FormattedTable::normalize_shape`
+(`lib.rs:414-429`) exactly as it does for a ragged table (invariant 6) — no new
+degenerate-case branch is added. `normalize_shape` already defines what "empty" resolves
+to: its `column_count == 0 { column_count = 1; }` guard means an empty table always
+normalizes to **one column with a single empty header cell and zero body rows**, never a
+zero-column table and never "nothing" (there is no code path in `normalize_shape` that
+produces zero columns or an absent table). This is the same reasoning invariant 6 already
+relies on — reuse the existing normalization function's behavior rather than inventing a
+bespoke empty-table rule — so the chosen convention is not a new decision, it is what the
+already-cited function does. A `<tr></tr>` with no cells inside an otherwise non-empty
+table is handled identically: it becomes a row of zero cells, then `normalize_shape` pads
+it to the table's column count with empty cells (invariant 9's "dropped or padded" — this
+spec resolves that to **padded**, not dropped, for consistency with invariant 2's general
+principle of not silently discarding authored rows).
+
 ### 3. Feature gating
 
 HTML tables should ride the **existing `FeatureFlag::MarkdownTables`** gate
@@ -307,7 +327,11 @@ boundary. Inline images inside cells resolve through the same asset-source resol
   (invariant 7).
 - Unterminated `<table>` / non-grid content → literal-text fallback, document below intact
   (invariant 8).
-- `<table></table>` / empty `<tr>` → no panic (invariant 9).
+- `<table></table>` (no rows) → not literal-text fallback; produces a `FormattedTable`
+  with exactly one column, one empty header cell, zero rows (via `normalize_shape`'s
+  `column_count == 0 → 1` guard), no panic (invariant 9).
+- `<tr></tr>` with no cells inside an otherwise non-empty table → row padded to the
+  table's column count with empty cells, not dropped, no panic (invariant 9).
 - Ignored attributes (`onclick`, `class`) → not consulted (invariant 10).
 - `<table class="data" id="results">` (attributed opening tag, whitespace-tolerant,
   single/double-quoted values) → still **recognized** by the block detector and produces
