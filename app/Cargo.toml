@@ -608,7 +608,6 @@ default = [
     "force_classic_completions",
     "team_api_keys",
     "named_agents",
-    "agent_tips",
     "pluggable_notifications",
     "agent_onboarding",
     "global_search",
@@ -963,7 +962,6 @@ agent_view = []
 agent_view_block_context = ["agent_view"]
 warp_managed_secrets = []
 v4a_file_diffs = []
-agent_tips = []
 agent_toolbar_editor = ["agent_view"]
 cloud_conversations = []
 agent_view_prompt_chip = ["agent_view"]

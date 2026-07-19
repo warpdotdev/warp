@@ -571,9 +571,6 @@ pub enum FeatureFlag {
     /// Enables loading conversations in the Agent Management View.
     InteractiveConversationManagementView,
 
-    /// Enables agent tips displayed below the warping indicator in Agent Mode.
-    AgentTips,
-
     /// Allows agent mode to use computer use tools.
     AgentModeComputerUse,
 

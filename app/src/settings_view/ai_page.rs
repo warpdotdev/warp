@@ -297,8 +297,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             ),
             None,
         )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| FeatureFlag::AgentTips.is_enabled())],
+        .with_group(bindings::BindingGroup::WarpAi)],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
@@ -6501,18 +6500,16 @@ impl SettingsWidget for AIInputWidget {
             show_input_hint_text,
         ];
 
-        if FeatureFlag::AgentTips.is_enabled() {
-            let agent_tips_toggle = render_ai_setting_toggle::<ShowAgentTips>(
-                "Show agent tips",
-                AISettingsPageAction::ToggleShowAgentTips,
-                *InputSettings::as_ref(app).show_agent_tips,
-                is_any_ai_enabled,
-                self.show_agent_tips_toggle.clone(),
-                &view.local_only_icon_tooltip_states,
-                app,
-            );
-            widget_children.push(agent_tips_toggle);
-        }
+        let agent_tips_toggle = render_ai_setting_toggle::<ShowAgentTips>(
+            "Show agent tips",
+            AISettingsPageAction::ToggleShowAgentTips,
+            *InputSettings::as_ref(app).show_agent_tips,
+            is_any_ai_enabled,
+            self.show_agent_tips_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        );
+        widget_children.push(agent_tips_toggle);
 
         widget_children.push(render_ai_setting_toggle::<IncludeAgentCommandsInHistory>(
             "Include agent-executed commands in history",

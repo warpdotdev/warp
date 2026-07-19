@@ -503,9 +503,7 @@ impl BlocklistAIStatusBar {
             self.is_summarization_cancel_dialog_open = false;
             self.stop_summarization_timer();
 
-            if FeatureFlag::AgentTips.is_enabled() {
-                self.update_agent_tip(ctx);
-            }
+            self.update_agent_tip(ctx);
         }
     }
 
@@ -726,7 +724,7 @@ impl BlocklistAIStatusBar {
     }
 
     fn update_agent_tip(&mut self, ctx: &mut ViewContext<Self>) {
-        if FeatureFlag::AgentTips.is_enabled() && *InputSettings::as_ref(ctx).show_agent_tips {
+        if *InputSettings::as_ref(ctx).show_agent_tips {
             let current_working_directory = self
                 .terminal_model
                 .lock()
@@ -757,7 +755,7 @@ impl BlocklistAIStatusBar {
     }
 
     fn render_tip(&self, app: &AppContext) -> Option<Box<dyn Element>> {
-        if FeatureFlag::AgentTips.is_enabled() && *InputSettings::as_ref(app).show_agent_tips {
+        if *InputSettings::as_ref(app).show_agent_tips {
             self.current_tip
                 .as_ref()
                 .map(|tip| render_agent_tip(tip, app))
