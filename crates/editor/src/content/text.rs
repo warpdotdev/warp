@@ -366,23 +366,14 @@ impl LinkMarker {
 }
 
 /// Paired boundary marker for a horizontally-aligned block region
-/// (`<div align>`/`<p align>`, GH-13735). Modeled on [`LinkMarker`]: the markers
-/// come in balanced pairs and a `SumTree` counter tracks region nesting depth so
-/// that any character can be asked whether it is inside an aligned region (and
-/// with what alignment) independently of its own block style.
+/// (`<div align>`/`<p align>`, GH-13735). Modeled on [`LinkMarker`]: the markers come in balanced
+/// pairs bracketing the region's blocks. They are zero-width (see the text-summary arm), balanced
+/// by `validate_content`, and their alignment is consumed at layout time by walking the block
+/// stream — so they carry no `SumTree` style/dimension bookkeeping of their own.
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum AlignMarker {
     Start(BlockAlignment),
     End,
-}
-
-impl AlignMarker {
-    fn to_counter_delta(&self) -> i32 {
-        match &self {
-            AlignMarker::Start(_) => 1,
-            AlignMarker::End => -1,
-        }
-    }
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -1557,15 +1548,11 @@ pub struct BlockCount(usize);
 pub struct LinkCount(pub usize);
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct AlignCount(pub usize);
-
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SyntaxColorId(pub usize);
 
 impl_offset!(LineCount);
 impl_offset!(BlockCount);
 impl_offset!(LinkCount);
-impl_offset!(AlignCount);
 impl_offset!(SyntaxColorId);
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug, Default)]
@@ -1595,15 +1582,10 @@ pub struct StyleSummary {
     strikethrough_counter: i32,
     link_counter: i32,
     syntax_color_counter: i32,
-    /// Nesting depth of horizontally-aligned block regions at this position.
-    align_counter: i32,
     /// We need to keep track the total link marker count so we could index into a specific link marker
     /// to retrieve the url metadata.
     total_link_marker: i32,
     total_color_marker: i32,
-    /// Total align-marker count so we can index into a specific align marker to retrieve its
-    /// `BlockAlignment`, mirroring `total_link_marker`.
-    total_align_marker: i32,
 }
 
 impl AddAssign<&StyleSummary> for StyleSummary {
@@ -1618,8 +1600,6 @@ impl AddAssign<&StyleSummary> for StyleSummary {
         self.total_color_marker += other.total_color_marker;
         self.strikethrough_counter += other.strikethrough_counter;
         self.underline_counter += other.underline_counter;
-        self.align_counter += other.align_counter;
-        self.total_align_marker += other.total_align_marker;
     }
 }
 
@@ -1640,21 +1620,6 @@ impl StyleSummary {
 
     pub(super) fn syntax_link_counter(&self) -> i32 {
         self.total_color_marker
-    }
-
-    /// The number of align markers seen up to this position — used to index into a specific
-    /// align marker to retrieve its `BlockAlignment`.
-    // Consumed by the GUI/TUI render layers (GH-13735), which query alignment at a position.
-    #[allow(dead_code)]
-    pub(super) fn total_align_counter(&self) -> i32 {
-        self.total_align_marker
-    }
-
-    /// Whether this position is inside a horizontally-aligned block region.
-    // Consumed by the GUI/TUI render layers (GH-13735).
-    #[allow(dead_code)]
-    pub(super) fn is_aligned(&self) -> bool {
-        self.align_counter > 0
     }
 
     fn set_weight(&mut self, weight: Option<CustomWeight>) {
@@ -1704,10 +1669,6 @@ impl From<TextStyles> for StyleSummary {
             strikethrough_counter: styles.strikethrough.into(),
             total_color_marker: 0,
             total_link_marker: 0,
-            // `TextStyles` is inline-only and carries no alignment; a summary built from it
-            // is outside any region.
-            align_counter: 0,
-            total_align_marker: 0,
         }
     }
 }
@@ -1805,14 +1766,6 @@ impl sum_tree::Dimension<'_, BufferSummary> for LinkCount {
     fn add_summary(&mut self, summary: &BufferSummary) {
         if let Some(style) = &summary.style {
             *self += style.total_link_marker as usize;
-        }
-    }
-}
-
-impl sum_tree::Dimension<'_, BufferSummary> for AlignCount {
-    fn add_summary(&mut self, summary: &BufferSummary) {
-        if let Some(style) = &summary.style {
-            *self += style.total_align_marker as usize;
         }
     }
 }
@@ -1917,13 +1870,10 @@ impl sum_tree::Item for BufferText {
                 s.total_link_marker += 1;
                 Some(Box::new(s))
             }
-            BufferText::Align(marker) => {
-                let mut s = StyleSummary::default();
-                let delta = marker.to_counter_delta();
-                s.align_counter += delta;
-                s.total_align_marker += 1;
-                Some(Box::new(s))
-            }
+            // Align-region markers carry no inline style summary. They are made zero-width by the
+            // text-summary arm above, kept balanced by `validate_content`, and their alignment is
+            // consumed at layout time by walking the `AlignBoundary` block stream — no `SumTree`
+            // style/dimension bookkeeping is needed.
             _ => None,
         };
 

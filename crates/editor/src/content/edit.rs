@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
-use markdown_parser::{Hyperlink, TableAlignment};
+use markdown_parser::{BlockAlignment, Hyperlink, TableAlignment};
 use num_traits::SaturatingSub;
 use rangemap::RangeSet;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -28,7 +28,7 @@ use warpui_core::{AppContext, SingletonEntity};
 use super::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use super::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
 use super::text::{
-    BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache,
+    AlignMarker, BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache,
 };
 use crate::parallel_util::Last;
 use crate::render::layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font};
@@ -524,15 +524,30 @@ impl EditDelta {
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
 
         // First, build a Vec of layout tasks with information about whether they're hidden
+        // Track the alignment of the enclosing `<div align>`/`<p align>` region as we walk the
+        // block stream. The zero-width `AlignBoundary` markers push/pop the stack; the nearest
+        // enclosing region governs each interior block (innermost wins). The markers themselves
+        // are filtered out (zero content length) after updating the stack.
+        let mut align_stack: Vec<BlockAlignment> = Vec::new();
         let layout_tasks: Vec<_> = self
             .new_lines
             .into_iter()
             .filter_map(|block| {
+                if let StyledBufferBlock::AlignBoundary(marker) = &block {
+                    match marker {
+                        AlignMarker::Start(alignment) => align_stack.push(*alignment),
+                        AlignMarker::End => {
+                            align_stack.pop();
+                        }
+                    }
+                    return None;
+                }
                 let content_length = block.content_length();
                 if content_length == CharOffset::zero() {
                     None
                 } else {
                     let block_start = current_offset;
+                    let alignment = align_stack.last().copied().unwrap_or_default();
                     let task = LayoutTask::from_styled_block(
                         block,
                         layout,
@@ -543,7 +558,7 @@ impl EditDelta {
                     );
                     let is_hidden = hidden_ranges.contains(&current_offset);
                     current_offset += content_length;
-                    Some((task, is_hidden))
+                    Some((task, is_hidden, alignment))
                 }
             })
             .collect();
@@ -555,7 +570,7 @@ impl EditDelta {
         let (block_items, has_trailing_newline): (Vec<_>, Last<_>) = layout_tasks
             .into_par_iter()
             .enumerate()
-            .filter_map(|(idx, (task, is_hidden))| {
+            .filter_map(|(idx, (task, is_hidden, alignment))| {
                 let location = if idx == 0 {
                     BlockLocation::Start
                 } else if idx >= last_task {
@@ -565,7 +580,13 @@ impl EditDelta {
                 };
 
                 match task.run(layout, location, is_hidden) {
-                    Ok(result) => Some(result),
+                    Ok((mut block_item, has_trailing_newline)) => {
+                        // Apply the enclosing region's alignment to the laid-out block's paragraph.
+                        // A no-op for `Left` (the unaligned default), so blocks outside any region
+                        // are bit-identical to before.
+                        block_item.set_alignment(alignment);
+                        Some((block_item, has_trailing_newline))
+                    }
                     Err(e) => {
                         report_error!(
                             e.context("Failed to lay out BlockItem"),

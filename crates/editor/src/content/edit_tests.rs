@@ -795,6 +795,50 @@ fn test_layout_text_block_uses_plain_text_when_flag_disabled() {
 }
 
 #[test]
+fn test_set_alignment_threads_region_alignment_to_paragraph() {
+    use markdown_parser::BlockAlignment;
+
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let content = "A centered caption line.\n";
+            let block = StyledTextBlock {
+                block: vec![StyledBufferRun {
+                    run: content.to_string(),
+                    text_styles: TextStylesWithMetadata::default(),
+                    block_style: BufferBlockStyle::PlainText,
+                }],
+                style: BufferBlockStyle::PlainText,
+                content_length: CharOffset::from(content.chars().count()),
+            };
+
+            let (mut item, _) =
+                layout_text_block(block, &text_layout, BlockLocation::Middle, false)
+                    .expect("plain-text layout should succeed");
+
+            // A freshly-laid-out paragraph defaults to left (unaligned).
+            let BlockItem::Paragraph(paragraph) = &item else {
+                panic!("expected a paragraph block");
+            };
+            assert_eq!(paragraph.alignment(), BlockAlignment::Left);
+
+            // Applying the enclosing region's alignment threads it onto the paragraph.
+            item.set_alignment(BlockAlignment::Center);
+            let BlockItem::Paragraph(paragraph) = &item else {
+                panic!("expected a paragraph block");
+            };
+            assert_eq!(paragraph.alignment(), BlockAlignment::Center);
+        });
+    })
+}
+
+#[test]
 fn test_layout_table_block_caches_cell_text_frames() {
     App::test((), |app| async move {
         app.read(|ctx| {

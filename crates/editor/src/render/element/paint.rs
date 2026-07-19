@@ -2,6 +2,7 @@
 
 use std::ops::Range;
 
+use markdown_parser::BlockAlignment;
 use string_offset::CharOffset;
 use vim::vim::VimMode;
 use warp_core::ui::appearance::DEFAULT_UI_FONT_SIZE;
@@ -19,6 +20,20 @@ use crate::render::model::{
 };
 
 const DEFAULT_BLOCK_CURSOR_WIDTH: f32 = 8.;
+
+/// The horizontal offset to add to a line's left edge so it sits at `alignment` within
+/// `available_width` (GH-13735). `Left` is always zero. For `Center`/`Right`, the offset fills the
+/// slack between the line's rendered width and the available width; when the line is at least as
+/// wide as the available width the slack is zero, so it degrades to left-aligned (the same
+/// best-effort-within-width behavior as the TUI surface). Never negative.
+fn align_line_offset(alignment: BlockAlignment, available_width: f32, line_width: f32) -> f32 {
+    let slack = (available_width - line_width).max(0.0);
+    match alignment {
+        BlockAlignment::Left => 0.0,
+        BlockAlignment::Center => slack / 2.0,
+        BlockAlignment::Right => slack,
+    }
+}
 
 /// Cursor display types for vim mode support.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -145,11 +160,12 @@ impl<'a, 'b> RenderContext<'a, 'b> {
     ) {
         let paint_style_override =
             self.paint_style_override(paragraph.start_char_offset..paragraph.end_char_offset());
-        self.draw_text(
+        self.draw_text_aligned(
             paragraph.content_origin(),
             paint_style_override,
             paragraph.item.frame(),
             style,
+            paragraph.item.alignment(),
         );
 
         paragraph.draw_selection(state, self);
@@ -203,6 +219,26 @@ impl<'a, 'b> RenderContext<'a, 'b> {
         frame: &TextFrame,
         style: &ParagraphStyles,
     ) {
+        self.draw_text_aligned(
+            content_position,
+            paint_style_override,
+            frame,
+            style,
+            BlockAlignment::Left,
+        );
+    }
+
+    /// Like [`Self::draw_text`], but positions each line horizontally within the block's available
+    /// width per `alignment` (GH-13735). `Left` is the default left-edge behavior (each line's
+    /// offset is zero), so unaligned callers are unaffected.
+    pub fn draw_text_aligned(
+        &mut self,
+        content_position: Vector2F,
+        paint_style_override: PaintStyleOverride,
+        frame: &TextFrame,
+        style: &ParagraphStyles,
+        alignment: BlockAlignment,
+    ) {
         // The origin of the item on the screen, which all lines are painted relative to.
         let mut render_origin = self.content_to_screen(content_position);
         for (index, line) in frame.lines().iter().enumerate() {
@@ -221,7 +257,13 @@ impl<'a, 'b> RenderContext<'a, 'b> {
                 break;
             }
 
-            let line_origin = render_origin;
+            let mut line_origin = render_origin;
+            // Shift the line horizontally within the block's available width per the region
+            // alignment. Zero for `Left`, so unaligned text is unaffected. Operates on the
+            // already-shaped line (reads `line.width`); it never touches the text shaper.
+            let available_width = self.bounds.max_x() - line_origin.x();
+            line_origin
+                .set_x(line_origin.x() + align_line_offset(alignment, available_width, line.width));
 
             // Add the line height to the render origin so that we know where the next line begins.
             // Conveniently for viewporting, this also tells us where the current line ends.
@@ -333,5 +375,40 @@ impl<'a, 'b> RenderContext<'a, 'b> {
     pub fn is_visible(&self, rect: RectF) -> bool {
         let origin = Point::from_vec2f(rect.origin(), self.paint.scene.z_index());
         self.paint.scene.visible_rect(origin, rect.size()).is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use markdown_parser::BlockAlignment;
+
+    use super::align_line_offset;
+
+    #[test]
+    fn left_alignment_never_offsets() {
+        // Left is the unaligned default: always zero, regardless of slack.
+        assert_eq!(align_line_offset(BlockAlignment::Left, 100.0, 20.0), 0.0);
+        assert_eq!(align_line_offset(BlockAlignment::Left, 100.0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn center_alignment_splits_the_slack() {
+        // 100 wide pane, 20 wide line → 80 slack → 40 leading to center.
+        assert_eq!(align_line_offset(BlockAlignment::Center, 100.0, 20.0), 40.0);
+    }
+
+    #[test]
+    fn right_alignment_uses_all_the_slack() {
+        // 100 wide pane, 20 wide line → 80 leading to push it to the right edge.
+        assert_eq!(align_line_offset(BlockAlignment::Right, 100.0, 20.0), 80.0);
+    }
+
+    #[test]
+    fn no_slack_degrades_to_left() {
+        // A line at least as wide as the pane leaves no room; center/right degrade to left (zero
+        // offset), never negative — the best-effort-within-width fallback.
+        assert_eq!(align_line_offset(BlockAlignment::Center, 50.0, 50.0), 0.0);
+        assert_eq!(align_line_offset(BlockAlignment::Right, 50.0, 80.0), 0.0);
+        assert_eq!(align_line_offset(BlockAlignment::Center, 50.0, 80.0), 0.0);
     }
 }
