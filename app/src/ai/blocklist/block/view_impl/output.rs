@@ -1141,7 +1141,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 }
 
                 // Only render suggested rules and prompts if the response is complete.
-                if should_render_suggestions && FeatureFlag::SuggestedRules.is_enabled() {
+                if should_render_suggestions {
                     if let Some(suggestions) = render_suggested_rules_and_prompts_footer(props, app)
                     {
                         output_items.add_child(suggestions);

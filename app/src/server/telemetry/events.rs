@@ -5214,13 +5214,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::CodePanelsFileOpened { .. } => EnablementState::Always,
             #[cfg(feature = "local_fs")]
             Self::PreviewPanePromoted => EnablementState::Always,
-            Self::AISuggestedRuleAdded { .. } => EnablementState::Flag(FeatureFlag::SuggestedRules),
-            Self::AISuggestedRuleEdited { .. } => {
-                EnablementState::Flag(FeatureFlag::SuggestedRules)
-            }
-            Self::AISuggestedRuleContentChanged { .. } => {
-                EnablementState::Flag(FeatureFlag::SuggestedRules)
-            }
+            Self::AISuggestedRuleAdded { .. } => EnablementState::Always,
+            Self::AISuggestedRuleEdited { .. } => EnablementState::Always,
+            Self::AISuggestedRuleContentChanged { .. } => EnablementState::Always,
             Self::ToggleFocusPaneOnHover { .. } => EnablementState::Always,
             Self::InitiateAnonymousUserSignup { .. }
             | Self::LoginLaterButtonClicked
