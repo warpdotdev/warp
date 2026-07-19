@@ -25,8 +25,6 @@ use super::manager::{
     RetrieveFileError,
 };
 use super::merkle_tree::{MerkleTree, SerializedCodebaseIndex};
-#[cfg(feature = "local_fs")]
-use super::search_shaping::build_fragments_from_file_contents;
 use super::search_shaping::{fragments_to_context_locations, ReadFragmentResult};
 use super::store_client::StoreClient;
 use super::sync_client::{FlushFragmentResult, SyncOperationError};
@@ -2321,18 +2319,102 @@ impl CodebaseIndex {
 pub(super) async fn build_fragments_from_metadata(
     metadatas: impl IntoIterator<Item = (ContentHash, FragmentMetadata)>,
 ) -> ReadFragmentResult {
-    let metadatas = metadatas.into_iter().collect::<Vec<_>>();
-    let mut file_contents = HashMap::new();
-    for path in metadatas
-        .iter()
-        .map(|(_, metadata)| metadata.absolute_path.clone())
-        .collect::<HashSet<_>>()
-    {
-        if let Ok(file_content) = async_fs::read_to_string(&path).await {
-            file_contents.insert(path, file_content);
+    use super::FragmentLocation;
+
+    // Group fragments by file path to minimize file I/O.
+    let mut fragments_by_path: HashMap<
+        PathBuf,
+        Vec<(ContentHash, std::ops::Range<string_offset::ByteOffset>)>,
+    > = HashMap::new();
+    for (content_hash, metadata) in metadatas {
+        fragments_by_path
+            .entry(metadata.absolute_path)
+            .or_default()
+            .push((content_hash, metadata.location.byte_range));
+    }
+
+    let mut successfully_read = Vec::new();
+    let mut fail_to_read = Vec::new();
+    let mut fail_to_read_path = Vec::new();
+
+    // Process files one at a time: read the file, extract the needed fragment
+    // content, then drop the full file string before reading the next file.
+    // This avoids accumulating all file contents in memory simultaneously,
+    // which could cause large memory spikes when files are large (e.g.
+    // minified JS bundles) even though the batch fragment content is small.
+    for (file_path, file_fragments) in fragments_by_path {
+        let mut has_failed_to_read_fragments = false;
+
+        match async_fs::read_to_string(&file_path).await {
+            Ok(file_content) => {
+                for (content_hash, fragment_range) in file_fragments {
+                    let start_idx = fragment_range.start.as_usize();
+                    let end_idx = fragment_range.end.as_usize();
+
+                    if start_idx <= end_idx
+                        && end_idx <= file_content.len()
+                        && file_content.is_char_boundary(start_idx)
+                        && file_content.is_char_boundary(end_idx)
+                    {
+                        let content = file_content[start_idx..end_idx].to_string();
+                        if content.is_empty() {
+                            log::trace!(
+                                "Fragment for {:?} with range {:?} is empty",
+                                file_path.display(),
+                                fragment_range
+                            );
+                            fail_to_read.push(content_hash);
+                            has_failed_to_read_fragments = true;
+                        } else if ContentHash::from_content(&content) != content_hash {
+                            log::trace!(
+                                "Fragment for {:?} with range {:?} does not match its content hash",
+                                file_path.display(),
+                                fragment_range
+                            );
+                            fail_to_read.push(content_hash);
+                            has_failed_to_read_fragments = true;
+                        } else {
+                            successfully_read.push(Fragment {
+                                content,
+                                content_hash,
+                                location: FragmentLocation {
+                                    absolute_path: file_path.clone(),
+                                    byte_range: fragment_range,
+                                },
+                            });
+                        }
+                    } else {
+                        log::trace!(
+                            "Invalid byte range {fragment_range:?} for file: {:?}",
+                            file_path
+                        );
+                        fail_to_read.push(content_hash);
+                        has_failed_to_read_fragments = true;
+                    }
+                }
+                // file_content is dropped here, freeing memory before the next file is read
+            }
+            Err(_) => {
+                log::trace!("Failed to read file: {file_path:?}");
+                fail_to_read.extend(
+                    file_fragments
+                        .into_iter()
+                        .map(|(content_hash, _)| content_hash),
+                );
+                has_failed_to_read_fragments = true;
+            }
+        }
+
+        if has_failed_to_read_fragments {
+            fail_to_read_path.push(file_path);
         }
     }
-    build_fragments_from_file_contents(metadatas, &file_contents)
+
+    ReadFragmentResult {
+        successfully_read,
+        fail_to_read,
+        fail_to_read_path,
+    }
 }
 
 #[cfg(not(feature = "local_fs"))]
