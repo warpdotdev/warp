@@ -537,7 +537,7 @@ fn make_new_ai_menu(ctx: &AppContext) -> Menu {
         ]);
     }
 
-    if FeatureFlag::McpServer.is_enabled() && ContextFlag::ShowMCPServers.is_enabled() {
+    if ContextFlag::ShowMCPServers.is_enabled() {
         items.push(updateable_custom_item_without_checkmark(
             CustomAction::OpenMCPServerCollection,
             ctx,
