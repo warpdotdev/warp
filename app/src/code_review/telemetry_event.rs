@@ -7,7 +7,7 @@ use serde_with::SerializeDisplay;
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
-use crate::code_review::diff_state::{BackendOrigin, DiffMode, DiffOperation};
+use crate::code_review::diff_state::DiffMode;
 use crate::features::FeatureFlag;
 use crate::server::telemetry::CLIAgentType;
 use crate::view_components::find::FindDirection;
@@ -212,25 +212,6 @@ pub enum CodeReviewTelemetryEvent {
         /// The new diff mode.
         mode: DiffMode,
     },
-    /// Failure when we are calculating the diff metadata.
-    LoadMetadataFailed {
-        backend_origin: BackendOrigin,
-        mode: DiffMode,
-        error: String,
-    },
-    /// Failure when we are loading the actual diff content. Shared across
-    /// file-invalidation, full diff load, and remote diff paths; the
-    /// `operation` field distinguishes which one produced the failure.
-    LoadDiffFailed {
-        backend_origin: BackendOrigin,
-        operation: DiffOperation,
-        mode: DiffMode,
-        error: String,
-        /// Time elapsed between when the tracked diff load was requested and
-        /// when this failure was observed. `None` if no tracked load was in
-        /// flight (e.g. a background invalidation error).
-        load_duration: Option<Duration>,
-    },
     /// Emitted when a full diff load completes successfully.
     DiffLoadCompleted {
         is_local: Option<bool>,
@@ -384,28 +365,6 @@ impl TelemetryEvent for CodeReviewTelemetryEvent {
             CodeReviewTelemetryEvent::BaseChanged { is_local, mode } => {
                 Some(json!({ "is_local": is_local, "mode": mode }))
             }
-            CodeReviewTelemetryEvent::LoadMetadataFailed {
-                backend_origin,
-                mode,
-                error,
-            } => Some(json!({
-                "backend_origin": backend_origin,
-                "mode": mode,
-                "error": error,
-            })),
-            CodeReviewTelemetryEvent::LoadDiffFailed {
-                backend_origin,
-                operation,
-                mode,
-                error,
-                load_duration,
-            } => Some(json!({
-                "backend_origin": backend_origin,
-                "operation": operation,
-                "mode": mode,
-                "error": error,
-                "load_duration": load_duration,
-            })),
             CodeReviewTelemetryEvent::DiffLoadCompleted {
                 is_local,
                 mode,
@@ -546,8 +505,6 @@ impl TelemetryEventDesc for CodeReviewTelemetryEventDiscriminants {
             Self::FileSaved => "CodeReview.FileSaved",
             Self::PaneStateChanged => "CodeReview.PaneStateChanged",
             Self::BaseChanged => "CodeReview.BaseChanged",
-            Self::LoadMetadataFailed => "CodeReview.LoadMetadataFailed",
-            Self::LoadDiffFailed => "CodeReview.LoadDiffFailed",
             Self::DiffLoadCompleted => "CodeReview.DiffLoadCompleted",
             Self::FindBarToggled => "CodeReview.FindBarToggled",
             Self::FindBarModeChanged => "CodeReview.FindBarModeChanged",
@@ -576,8 +533,6 @@ impl TelemetryEventDesc for CodeReviewTelemetryEventDiscriminants {
             Self::FileSaved => "File saved in code review pane",
             Self::PaneStateChanged => "Code review pane minimized or maximized",
             Self::BaseChanged => "Diff base changed in code review",
-            Self::LoadMetadataFailed => "Failure when calculating diff metadata",
-            Self::LoadDiffFailed => "Failure when loading diff content",
             Self::DiffLoadCompleted => "Diff content loaded successfully",
             Self::FindBarToggled => "Code review find bar opened or closed",
             Self::FindBarModeChanged => "Search mode changed in code review find bar",

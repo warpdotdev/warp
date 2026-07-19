@@ -12,17 +12,15 @@ use std::sync::Arc;
 
 use instant::Instant;
 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
-use warp_core::{send_telemetry_from_ctx, HostId, SessionId};
+use warp_core::{HostId, SessionId};
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{ModelContext, SingletonEntity};
 
 use super::{
-    BackendOrigin, CommitChainMode, DiffMetadata, DiffMode, DiffOperation, DiffState,
-    DiffStateError, DiffStateModelEvent, DiffStats, FileDiffAndContent, GitDiffData,
-    GitDiffWithBaseContent,
+    BackendOrigin, CommitChainMode, DiffMetadata, DiffMode, DiffState, DiffStateError,
+    DiffStateModelEvent, DiffStats, FileDiffAndContent, GitDiffData, GitDiffWithBaseContent,
 };
-use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
 use crate::remote_server::diff_state_proto::{try_decode_file_delta, try_decode_snapshot};
 use crate::remote_server::proto;
 use crate::util::git::{BranchEntry, Commit, FileChangeEntry, PrInfo};
@@ -403,22 +401,9 @@ impl RemoteDiffStateModel {
                 });
             }
             DiffState::Error(msg) => {
-                let load_duration = self
-                    .tracked_diff_load_start_time
-                    .take()
-                    .map(|start| start.elapsed());
+                let _ = self.tracked_diff_load_start_time.take();
                 let err = DiffStateError::from_message(&msg);
                 err.report_and_log();
-                send_telemetry_from_ctx!(
-                    CodeReviewTelemetryEvent::LoadDiffFailed {
-                        backend_origin: BackendOrigin::ClientRemote,
-                        operation: DiffOperation::RemoteDiff,
-                        mode: self.mode.clone(),
-                        error: err.to_string(),
-                        load_duration,
-                    },
-                    ctx
-                );
                 self.state = InternalRemoteDiffState::Error(msg);
                 ctx.emit(DiffStateModelEvent::NewDiffsComputed {
                     diffs: None,
@@ -427,22 +412,9 @@ impl RemoteDiffStateModel {
             }
             DiffState::Loaded => {
                 let Some(base_content) = diffs else {
-                    let load_duration = self
-                        .tracked_diff_load_start_time
-                        .take()
-                        .map(|start| start.elapsed());
+                    let _ = self.tracked_diff_load_start_time.take();
                     let err = DiffStateError::empty_diff_data();
                     err.report_and_log();
-                    send_telemetry_from_ctx!(
-                        CodeReviewTelemetryEvent::LoadDiffFailed {
-                            backend_origin: BackendOrigin::ClientRemote,
-                            operation: DiffOperation::RemoteDiff,
-                            mode: self.mode.clone(),
-                            error: err.to_string(),
-                            load_duration,
-                        },
-                        ctx
-                    );
                     self.state = InternalRemoteDiffState::Error(err.to_string());
                     ctx.emit(DiffStateModelEvent::NewDiffsComputed {
                         diffs: None,

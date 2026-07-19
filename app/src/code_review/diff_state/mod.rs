@@ -64,28 +64,6 @@ pub enum BackendOrigin {
     RemoteDaemon,
 }
 
-/// Identifies the diff-state operation that produced a [`DiffStateError`]
-/// on the `LoadDiffFailed` telemetry path. Carried alongside the error so
-/// failures can be sliced by originating operation — every operation shares
-/// the same failure pool, so the error variant alone doesn't reveal where
-/// it came from.
-///
-/// Metadata-load failures are reported through a dedicated
-/// `LoadMetadataFailed` event and therefore don't need a variant here.
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
-#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-pub enum DiffOperation {
-    /// Per-file diff refresh triggered by the file-invalidation queue.
-    #[serde(rename = "file_invalidation")]
-    FileInvalidation,
-    /// Full repo-wide diff snapshot load.
-    #[serde(rename = "diff_load")]
-    DiffLoad,
-    /// Client-side reaction to a remote daemon's diff-state response.
-    #[serde(rename = "remote_diff")]
-    RemoteDiff,
-}
-
 // -- Shared types ──────────────────────────────────────────────────────
 
 /// Represents the status of a file in the git working directory
