@@ -57,7 +57,6 @@ use parent_bridge::{MessageBridge, MessageBridgeCleanupDisposition};
 use shell_words::quote as shell_quote;
 #[cfg(test)]
 use wake_driver::{ClaudeWakeRemoteContext, CLAUDE_WAKE_PROMPT_FILE_NAME};
-use warp_errors::report_error;
 
 #[cfg(test)]
 use super::super::OZ_MESSAGE_LISTENER_STATE_ROOT_ENV;
@@ -461,7 +460,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
                             .create_external_conversation(CLAUDE_CODE_FORMAT)
                             .await
                             .map_err(|e| {
-                                report_error!(&e);
+                                log::error!("Failed to create external conversation: {e:#}");
                                 AgentDriverError::ConfigBuildFailed(e)
                             })
                     })

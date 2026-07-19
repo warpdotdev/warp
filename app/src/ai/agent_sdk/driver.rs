@@ -878,7 +878,7 @@ impl AgentDriver {
                         .await
                         .context("Failed to update agent task state to InProgress")
                     {
-                        report_error!(e);
+                        log::error!("Failed to update agent task state to InProgress: {e:#}");
                     }
                 }
                 // Primary: WARP_SANDBOX_DEADLINE client-side timer.
@@ -1032,7 +1032,7 @@ impl AgentDriver {
                 Self::run_snapshot_upload(&foreground).await;
 
                 if tx.send(result).is_err() {
-                    report_error!("Caller did not wait for agent driver to finish");
+                    log::warn!("Caller did not wait for agent driver to finish");
                 }
 
                 Self::cleanup(foreground).await;
@@ -3010,7 +3010,7 @@ impl AgentDriver {
             .await
             .context("Failed to clean up harness runtime state")
         {
-            report_error!(err);
+            log::warn!("Failed to clean up harness runtime state: {err:#}");
         }
 
         // A runtime failure detected mid-run takes precedence over the
@@ -3940,9 +3940,7 @@ pub(super) async fn report_driver_error(
         .update_agent_task(task_id, Some(state), None, None, Some(status_update))
         .await
     {
-        report_error!(
-            anyhow!(e).context(format!("Failed to report driver error for task {task_id}"))
-        );
+        log::error!("Failed to report driver error for task {task_id}: {e:#}");
     }
 }
 

@@ -34,7 +34,6 @@ use warp_cli::share::ShareRequest;
 use warp_cli::task::{MessageCommand, TaskCommand};
 use warp_cli::{CliCommand, GlobalOptions, OZ_HARNESS_ENV};
 use warp_core::features::FeatureFlag;
-use warp_errors::report_error;
 use warp_graphql::object_permissions::OwnerType;
 use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
@@ -1148,7 +1147,7 @@ impl AgentDriverRunner {
                 Some(id)
             }
             Err(e) => {
-                report_error!(e);
+                log::error!("Failed to create task: {e:#}");
                 // Continue without a task_id rather than failing entirely
                 None
             }
@@ -1193,7 +1192,7 @@ impl AgentDriverRunner {
         let parsed_task_id = match task_id_str.parse().context("Failed to parse task ID") {
             Ok(id) => Some(id),
             Err(e) => {
-                report_error!(e);
+                log::warn!("Failed to parse task ID: {e:#}");
                 None
             }
         };
@@ -1435,10 +1434,7 @@ impl AgentDriverRunner {
         let environment = foreground
             .spawn(move |_, ctx| -> Result<_, AgentDriverError> {
                 let server_id = ServerId::try_from(environment_id.as_str()).map_err(|_| {
-                    report_error!(
-                        "Invalid environment ID",
-                        extra: { "environment_id" => %environment_id }
-                    );
+                    log::warn!("Invalid environment ID");
                     AgentDriver::log_valid_environments(ctx);
                     AgentDriverError::EnvironmentNotFound(environment_id.clone())
                 })?;
@@ -1446,10 +1442,7 @@ impl AgentDriverRunner {
 
                 CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx)
                     .ok_or_else(|| {
-                        report_error!(
-                            "Environment not found with ID",
-                            extra: { "environment_id" => %environment_id }
-                        );
+                        log::warn!("Environment not found with ID");
                         AgentDriver::log_valid_environments(ctx);
                         AgentDriverError::EnvironmentNotFound(environment_id)
                     })

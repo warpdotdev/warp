@@ -145,10 +145,7 @@ pub(super) async fn run_declarations_script(
     };
     let script_path = PathBuf::from(script_path);
     if !script_path.exists() {
-        report_error!(
-            "Snapshot declarations script not found; skipping",
-            extra: { "script_path" => %script_path.display(), "task_id" => %task_id }
-        );
+        log::warn!("Snapshot declarations script not found; skipping");
         return;
     }
 
@@ -173,21 +170,11 @@ pub(super) async fn run_declarations_script(
     let output = match command.output().with_timeout(script_timeout).await {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
-            report_error!(
-                anyhow::Error::new(e).context("Failed to spawn snapshot declarations script"),
-                extra: { "script_path" => %script_path.display(), "task_id" => %task_id }
-            );
+            log::error!("Failed to spawn snapshot declarations script: {e:#}");
             return;
         }
         Err(_) => {
-            report_error!(
-                "Snapshot declarations script timed out",
-                extra: {
-                    "script_path" => %script_path.display(),
-                    "timeout" => ?script_timeout,
-                    "task_id" => %task_id
-                }
-            );
+            log::warn!("Snapshot declarations script timed out");
             return;
         }
     };
@@ -195,14 +182,7 @@ pub(super) async fn run_declarations_script(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         log::error!("Snapshot declarations script stderr: {stderr}");
-        report_error!(
-            "Snapshot declarations script exited with non-zero status",
-            extra: {
-                "script_path" => %script_path.display(),
-                "status" => %output.status,
-                "task_id" => %task_id
-            }
-        );
+        log::error!("Snapshot declarations script exited with non-zero status");
     }
 }
 
