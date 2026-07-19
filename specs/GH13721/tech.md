@@ -291,19 +291,25 @@ resolution against the new fields:
   rules (an unclamped percent path alongside an already-clamped pixel path) into one.
 - Resolve `width`:
   - `Some(Pixels(px))` → `clamp_to_bound(px, available_width)` (invariant 4).
-  - `Some(Percent(p))` → `clamp_to_bound(available_width * p.clamp(0, 100) / 100,
-    available_width)` (invariant 5). Clamping `p` to `[0, 100]` before the multiply
-    means `width="200%"` behaves identically to `width="100%"` (full `available_width`),
-    not an overflow that then gets clamped after the fact; `width="0%"` or a negative
-    percent floors at the `clamp_to_bound` minimum of `1px` rather than a zero-size box
-    (consistent with invariant 10's "never a blank/zero-size image box").
+  - `Some(Percent(p))` → `clamp_to_bound(available_width * p / 100, available_width)`
+    (invariant 5), where `p` is already non-negative and at most `u16::MAX` by
+    construction — `parse_image_dimension` rejects a negative percent at parse time
+    (invariant 12; a negative percent never reaches this resolution step at all, it is
+    `None` here exactly like an unparseable string). `width="200%"` still clamps to
+    `available_width` (full width, same result as `width="100%"`), since
+    `clamp_to_bound`'s upper bound is `available_width` regardless of how large the
+    resolved pixel value is; `width="0%"` resolves to `0` and then floors at the
+    `clamp_to_bound` minimum of `1px` (consistent with invariant 10's "never a
+    blank/zero-size image box") — `0` is a valid, in-range percent, distinct from a
+    negative one, which is invalid and ignored at parse.
   - `None` when the other axis is also `None` → today's default (`available_width`,
     invariant 7; already within bounds, `clamp_to_bound` is a no-op here).
 - Resolve `height` the same way, against the height reference bound `default_height`
   (`base_line_height * DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`) in place of
   `available_width` — i.e. `Some(Pixels(px))` → `clamp_to_bound(px, default_height)`;
-  `Some(Percent(p))` → `clamp_to_bound(default_height * p.clamp(0, 100) / 100,
-  default_height)`; `None` with `width` also `None` → `default_height` itself. This is
+  `Some(Percent(p))` → `clamp_to_bound(default_height * p / 100, default_height)`,
+  where `p` is non-negative by construction for the same parse-time reason as width
+  above; `None` with `width` also `None` → `default_height` itself. This is
   the same shared `clamp_to_bound` function, just parameterized on the height budget
   instead of the width budget — one clamping rule, two call sites, not two rules.
 - **Aspect ratio when exactly one dimension is set (invariant 6):** resolve the
@@ -501,8 +507,9 @@ Covers invariants 1–3, 8–13:
 - `<img src="a.png" width="640px">` → `px` suffix parsed as pixels.
 - `WIDTH`/`Width`/`ALIGN="Center"` → case-insensitive names and `align` value.
 - `align="left|center|right"` → each alignment; unknown value → `Left`.
-- `width="abc"`, `width=""`, `width="-40"` → dimension ignored (`None`), image still
-  parses (invariant 12).
+- `width="abc"`, `width=""`, `width="-40"`, `width="-10%"` → dimension ignored
+  (`None`), image still parses (invariant 12; negative is rejected uniformly for both
+  the pixel and percent forms — there is no negative-percent special case).
 - `<img alt="x">` (no `src`) and `<img>` → parser fails, line renders as text
   (assert it becomes `FormattedTextLine::Line`, invariant 10).
 - `text <img src="a.png"> more text` → renders as text, not image (invariant 11).
@@ -533,9 +540,16 @@ Covers invariants 4–8:
   hardcoded default).
 - **`width="200%"`** → clamps to `available_width` (invariant 5, same result as
   `width="100%"`), not an unclamped `2 * available_width` overflow.
-- **`width="0%"` / `width="-10%"`** → floors at the `clamp_to_bound` minimum of `1px`,
-  never a zero-size or negative box (invariant 10's "never a blank/zero-size image
-  box" applies to percentages too, not just the unparseable-attribute case).
+- **`width="0%"`** → resolves to a valid, in-range `0` percent, then floors at the
+  `clamp_to_bound` minimum of `1px`, never a zero-size box (invariant 10's "never a
+  blank/zero-size image box" applies to percentages too, not just the
+  unparseable-attribute case).
+- **`width="-10%"`** — a parser-level case, not a layout-level one: per invariant 12,
+  `parse_image_dimension` rejects any negative value (percent or pixel) at parse time,
+  so the attribute never reaches this resolution step at all — it is `None`, identical
+  to `width="abc"`, and the image falls back to default sizing for that axis
+  (invariant 7). See the parser test coverage above; this file does not re-clamp a
+  negative percent to `1px`.
 - **`height="150%"`** → clamps to `default_height` (sibling of the width-percent clamp,
   applied against the height reference bound instead of `available_width`).
 - **Percent width and percent height both given, both `>100%`** → each axis clamps
