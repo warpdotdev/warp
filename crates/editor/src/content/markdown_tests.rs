@@ -338,7 +338,6 @@ fn test_table_markdown_round_trip() {
 #[test]
 fn test_align_region_markdown_round_trip() {
     App::test((), |mut app| async move {
-        let _flag = warp_core::features::FeatureFlag::MarkdownBlockAlign.override_enabled(true);
         // A centered div wrapping a heading and a paragraph.
         let markdown = "<div align=\"center\">\n\n# Centered Title\n\nSome text\n\n</div>\n";
         let (buffer, _selection) = Buffer::mock_from_markdown(

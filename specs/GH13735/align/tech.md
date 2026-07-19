@@ -436,118 +436,44 @@ state is expressed once, at the parser boundary, so every surface can consult
 it — the GUI via the lowered buffer markers, the TUI via the boundary lines in
 the stream.)
 
-7. **Feature gating.** No existing flag covers this (`MarkdownTables` is
-   table-specific). Recommend a new flag, `FeatureFlag::MarkdownBlockAlign`, and
-   gate it **in the parser crate**, at the same layer the detector lives in
-   (design question 3), rather than only at the `buffer.rs` call site — the
-   spec's own TUI disposition has `tui_markdown.rs` consuming
-   `FormattedTextLine` directly, so a gate that only wraps the buffer's
-   `from_markdown` selection would leave the TUI ungated and the two surfaces
-   would diverge on whether alignment is live.
+7. **Feature gating — none; the feature ships enabled.** Unlike GFM tables,
+   this does not get a feature flag. A `FeatureFlag` is reserved for genuinely
+   complex or risky features that need a controlled, decoupled rollout —
+   `MarkdownTables` guards a whole layout/render/scroll/selection subsystem;
+   block alignment is a bounded parser-plus-paint change with deterministic
+   fallbacks at every boundary (malformed → literal, unrecognized value →
+   unaligned, unterminated → literal, content-fills-pane → left-aligned). It
+   carries the same risk profile as the sibling raw-HTML-subset features in this
+   split (`<br>` #13732, `<kbd>` #13733, `<sub>`/`<sup>` #13734), which ship
+   enabled without a flag; block alignment follows them. So the align-region
+   detector always runs — there is no `FeatureFlag::MarkdownBlockAlign` and no
+   ungated-vs-gated divergence between the GUI and TUI surfaces to worry about,
+   because both always see the boundary variants.
 
-   The exact mechanism to mirror is `MarkdownTables`'s, verified end to end:
-   `crates/editor/src/content/buffer.rs:850-855` doesn't gate table parsing
-   itself — it selects between two *public parser-crate entry points*,
-   `parse_markdown` vs. `parse_markdown_with_gfm_tables`
-   (`crates/markdown_parser/src/markdown_parser.rs:111-117`), both of which
-   delegate to one internal function, `parse_markdown_impl(markdown,
-   parse_gfm_tables: bool)` (`markdown_parser.rs:119-134`) — the boolean is
-   what actually reaches the table detector inside the parser. `buffer.rs` is
-   just one of two call sites that make this choice today: `from_ipynb`
-   (`buffer.rs:890-891`) checks the *same* `FeatureFlag::MarkdownTables` and
-   threads the resulting bool into `ipynb_parser::ipynb_to_formatted_text`,
-   which re-exports and re-checks against the same `parse_markdown` /
-   `parse_markdown_with_gfm_tables` pair (`crates/ipynb_parser/src/lib.rs:16,
-   124`). Every call site reads the same flag and funnels it to the same
-   underlying boolean parameter — that's what keeps them from diverging, not
-   any single call site being canonical.
+   Concretely: the detector is unconditional inside `parse_markdown_internal`
+   (design question 3), so **every** parse entry point emits align regions —
+   `parse_markdown`, `parse_markdown_with_gfm_tables`, and the notebook path all
+   detect them. No parser signature changes for alignment; the existing
+   `parse_markdown` / `parse_markdown_with_gfm_tables` pair and the internal
+   `parse_markdown_impl(markdown, parse_gfm_tables: bool)` boolean stay exactly
+   as they are today. The GFM-tables flag threading is untouched — the
+   `buffer.rs` `from_markdown` selection between the two entry points, the
+   `from_ipynb` → `ipynb_parser::ipynb_to_formatted_text(json, gfm_tables: bool)`
+   thread, and the TUI plan-view's `parse_markdown_with_gfm_tables` call all
+   remain as-is, gating only `MarkdownTables`.
 
-   **The master mechanism only composes for one flag, so don't extend it as
-   a second boolean entry point.** Today's two public entry points
-   (`parse_markdown`, `parse_markdown_with_gfm_tables`) encode a single binary
-   choice, and the call sites express it as an either/or —
-   `if MarkdownTables { parse_markdown_with_gfm_tables } else { parse_markdown }`
-   (`buffer.rs:850-855`). Adding a sibling `parse_markdown_with_block_align`
-   the same way would leave the **both-enabled** state (GFM tables *and* block
-   alignment on together) unrepresentable: there is no entry point for it and
-   no `else` branch that selects it, so a caller with both flags set would have
-   to pick one feature and silently drop the other. Two independent boolean
-   features need a 2×2 of behaviors, which two mutually-exclusive entry points
-   cannot express. So evolve the one shared internal function to take an
-   **options struct** instead of accumulating positional booleans:
-
-   ```rust
-   #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-   pub struct MarkdownParseOptions {
-       pub gfm_tables: bool,
-       pub block_align: bool,
-   }
-
-   fn parse_markdown_impl(markdown: &str, options: MarkdownParseOptions) -> Result<FormattedText>
-   ```
-
-   `parse_markdown_internal` takes the same `options` and hands each field to
-   the detector it gates — `options.gfm_tables` to the existing table detector,
-   `options.block_align` to the new align-region detector (design question 3).
-   All **four** combinations are well-defined by construction, because the two
-   fields are independent inputs to independent detectors: neither on (plain
-   Markdown), tables only, align only, or both on (tables and align regions
-   both detected in the same pass; they don't interact — a table can appear
-   inside an aligned region and is detected normally). `#[derive(Default)]`
-   makes "neither" the zero value, so the plain path stays a one-liner.
-
-   Keep the public entry points as **thin wrappers** over the one impl, so no
-   existing caller signature breaks and the composable state is reachable:
-
-   ```rust
-   pub fn parse_markdown(markdown: &str) -> Result<FormattedText> {
-       parse_markdown_impl(markdown, MarkdownParseOptions::default())
-   }
-   pub fn parse_markdown_with_gfm_tables(markdown: &str) -> Result<FormattedText> {
-       parse_markdown_impl(markdown, MarkdownParseOptions { gfm_tables: true, ..Default::default() })
-   }
-   pub fn parse_markdown_with_options(markdown: &str, options: MarkdownParseOptions) -> Result<FormattedText> {
-       parse_markdown_impl(markdown, options)
-   }
-   ```
-
-   The existing two wrappers keep working unchanged (`parse_markdown_with_gfm_tables`
-   is now just `gfm_tables: true`), and the new `parse_markdown_with_options`
-   is the entry point for callers that populate **both** fields. There is no
-   `parse_markdown_with_block_align` sibling — a third boolean wrapper would
-   reintroduce the same non-composing pattern this replaces (it still couldn't
-   express tables-and-align-together).
-
-   Then have **each** call site that currently chooses between the two entry
-   points build a `MarkdownParseOptions` from **both** `FeatureFlag` checks and
-   route through `parse_markdown_with_options`:
-
-   ```rust
-   let options = MarkdownParseOptions {
-       gfm_tables: FeatureFlag::MarkdownTables.is_enabled(),
-       block_align: FeatureFlag::MarkdownBlockAlign.is_enabled(),
-   };
-   let parsed = parse_markdown_with_options(markdown, options)?;
-   ```
-
-   The call sites to convert are the same set that reads `MarkdownTables`
-   today — `buffer.rs:850-855` (`from_markdown`), `buffer.rs:890-891` /
-   `ipynb_parser::ipynb_to_formatted_text` (whose signature widens from a
-   `gfm_tables: bool` parameter to a `MarkdownParseOptions` parameter,
-   re-checking both flags the same way, `crates/ipynb_parser/src/lib.rs:16,
-   124`), and any TUI call site that selects a parse entry point. Each reads
-   **both** flags and funnels them to the same `MarkdownParseOptions`, so the
-   surfaces stay in lockstep on *both* features — the same anti-divergence
-   guarantee the single-boolean threading gives today, now extended to two
-   independent flags. Because a detector only runs when its `options` field is
-   true, the align-region-boundary variants (`AlignRegionStart`/`AlignRegionEnd`)
-   are simply never emitted when `block_align` is false — every downstream
-   consumer (the `edit` lowering loop, the TUI renderer, `find.rs`) can assume
-   the variants don't exist in that mode without a separate runtime check,
-   identical to how `Table` lines don't appear unless `gfm_tables` is on. This
-   lets the feature ship dark and be enabled independently of unrelated Markdown
-   work, with the GUI and TUI guaranteed to agree because they read the same
-   `MarkdownParseOptions` rather than two independently-maintained checks.
+   **No `MarkdownParseOptions` struct, no `parse_markdown_with_options`.** An
+   earlier draft of this spec proposed evolving the single `gfm_tables: bool`
+   into a `MarkdownParseOptions { gfm_tables, block_align }` struct so two
+   independent feature flags could compose (a 2×2 of behaviors that two
+   mutually-exclusive entry points cannot express). With block alignment
+   ungated there is no second flag to compose, so that machinery would be a
+   single-field wrapper around a bool — ceremony with no payoff. The plain
+   boolean is the right shape by the code's grain: `gfm_tables` stays a bare
+   parameter, and the composable-options design is explicitly **not** adopted.
+   (If a *future* second gated Markdown detector ever lands, the options-struct
+   evolution is the correct pattern to reach for then — it just isn't warranted
+   by this feature alone.)
 
 ## Security
 
@@ -714,7 +640,9 @@ horizontal position must be correct).
   to correct block *positioning* only; if maintainers want the wrap behavior
   too, it is a substantially larger follow-up (needs float-equivalent layout)
   tracked against #13721.
-- **Feature flag choice** (design question 7) should be confirmed with the
-  team rather than assumed — it's possible this should ride an existing
-  general "raw HTML subset" flag if one gets introduced for the sibling specs
-  in this split (tables, kbd, sub/sup, br), rather than a bespoke one.
+- **No feature flag** (design question 7): the feature ships enabled, matching
+  the unflagged sibling raw-HTML-subset features in this split (`<br>`,
+  `<kbd>`, `<sub>`/`<sup>`). A flag is reserved for genuinely complex/risky
+  subsystems like `MarkdownTables`; this bounded parser-plus-paint change with
+  deterministic fallbacks doesn't warrant one. Rollout wiring is therefore not
+  this PR's concern.

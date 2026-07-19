@@ -10,33 +10,11 @@ use crate::{
 
 // Simple transformer to make testing easier.
 fn test_parse_markdown(source: &str) -> Vec<FormattedTextLine> {
-    parse_all(source, |input| {
-        parse_markdown_internal(input, MarkdownParseOptions::default())
-    })
+    parse_all(source, |input| parse_markdown_internal(input, false))
 }
 
 fn test_parse_markdown_with_gfm_tables(source: &str) -> Vec<FormattedTextLine> {
-    parse_all(source, |input| {
-        parse_markdown_internal(
-            input,
-            MarkdownParseOptions {
-                gfm_tables: true,
-                ..Default::default()
-            },
-        )
-    })
-}
-
-fn test_parse_markdown_with_block_align(source: &str) -> Vec<FormattedTextLine> {
-    parse_all(source, |input| {
-        parse_markdown_internal(
-            input,
-            MarkdownParseOptions {
-                block_align: true,
-                ..Default::default()
-            },
-        )
-    })
+    parse_all(source, |input| parse_markdown_internal(input, true))
 }
 
 #[test]
@@ -2974,7 +2952,7 @@ fn assert_no_region(lines: &[FormattedTextLine]) {
 fn test_align_div_group_center() {
     // invariant 1: `<div align="center">` wrapping a heading + blank line + text.
     let source = "<div align=\"center\">\n\n# Centered Title\n\nSome text\n\n</div>\n";
-    let lines = test_parse_markdown_with_block_align(source);
+    let lines = test_parse_markdown(source);
     let interior = assert_aligned_region(&lines, BlockAlignment::Center);
     // The heading stays a Heading (not flattened to Line) — invariant 5. The blank line after
     // the opening tag is preserved as an ordinary `LineBreak`, so the heading may not be first.
@@ -2993,7 +2971,7 @@ fn test_align_div_group_center() {
 fn test_align_p_single_line_right() {
     // invariant 2 / single-line detection path.
     let source = "<p align=\"right\">caption</p>";
-    let lines = test_parse_markdown_with_block_align(source);
+    let lines = test_parse_markdown(source);
     let interior = assert_aligned_region(&lines, BlockAlignment::Right);
     assert_eq!(interior.len(), 1);
     assert!(matches!(&interior[0], FormattedTextLine::Line(fragments)
@@ -3004,7 +2982,7 @@ fn test_align_p_single_line_right() {
 fn test_align_p_mixed_same_line_text_before_falls_through() {
     // Mixed-same-line rule: non-whitespace text before the open tag → literal fallback.
     let source = "Note: <p align=\"center\">caption</p>";
-    let lines = test_parse_markdown_with_block_align(source);
+    let lines = test_parse_markdown(source);
     assert_no_region(&lines);
 }
 
@@ -3012,7 +2990,7 @@ fn test_align_p_mixed_same_line_text_before_falls_through() {
 fn test_align_p_mixed_same_line_text_after_falls_through() {
     // Non-whitespace text after the close tag → literal fallback.
     let source = "<p align=\"center\">caption</p> — see above";
-    let lines = test_parse_markdown_with_block_align(source);
+    let lines = test_parse_markdown(source);
     assert_no_region(&lines);
 }
 
@@ -3020,7 +2998,7 @@ fn test_align_p_mixed_same_line_text_after_falls_through() {
 fn test_align_style_text_align_equals_align() {
     // invariant 3: `style="text-align: center"` == `align="center"`.
     let source = "<p style=\"text-align: center\">hi</p>";
-    let lines = test_parse_markdown_with_block_align(source);
+    let lines = test_parse_markdown(source);
     assert_aligned_region(&lines, BlockAlignment::Center);
 }
 
@@ -3028,7 +3006,7 @@ fn test_align_style_text_align_equals_align() {
 fn test_align_style_wins_conflict() {
     // invariant 3: `align` and conflicting `style` → `style` wins.
     let source = "<p align=\"left\" style=\"text-align: right\">hi</p>";
-    let lines = test_parse_markdown_with_block_align(source);
+    let lines = test_parse_markdown(source);
     assert_aligned_region(&lines, BlockAlignment::Right);
 }
 
@@ -3036,29 +3014,27 @@ fn test_align_style_wins_conflict() {
 fn test_align_style_micro_grammar_cases() {
     // Mixed case property/value.
     assert_aligned_region(
-        &test_parse_markdown_with_block_align("<p style=\"Text-Align: CENTER\">x</p>"),
+        &test_parse_markdown("<p style=\"Text-Align: CENTER\">x</p>"),
         BlockAlignment::Center,
     );
     // Whitespace around `:`/`;`.
     assert_aligned_region(
-        &test_parse_markdown_with_block_align("<p style=\"text-align : right ;\">x</p>"),
+        &test_parse_markdown("<p style=\"text-align : right ;\">x</p>"),
         BlockAlignment::Right,
     );
     // Unrelated property ignored, doesn't invalidate the rest.
     assert_aligned_region(
-        &test_parse_markdown_with_block_align("<p style=\"color: red; text-align: center\">x</p>"),
+        &test_parse_markdown("<p style=\"color: red; text-align: center\">x</p>"),
         BlockAlignment::Center,
     );
     // Multiple text-align declarations: last wins.
     assert_aligned_region(
-        &test_parse_markdown_with_block_align(
-            "<p style=\"text-align: left; text-align: center\">x</p>",
-        ),
+        &test_parse_markdown("<p style=\"text-align: left; text-align: center\">x</p>"),
         BlockAlignment::Center,
     );
     // Unrecognized text-align value → unaligned (Left), not an error.
     assert_aligned_region(
-        &test_parse_markdown_with_block_align("<p style=\"text-align: justify\">x</p>"),
+        &test_parse_markdown("<p style=\"text-align: justify\">x</p>"),
         BlockAlignment::Left,
     );
 }
@@ -3067,11 +3043,11 @@ fn test_align_style_micro_grammar_cases() {
 fn test_align_unrecognized_value_is_unaligned() {
     // invariant 4: `align="justify"`/`align="bogus"` → consumed but unaligned (Left), not error.
     assert_aligned_region(
-        &test_parse_markdown_with_block_align("<p align=\"justify\">x</p>"),
+        &test_parse_markdown("<p align=\"justify\">x</p>"),
         BlockAlignment::Left,
     );
     assert_aligned_region(
-        &test_parse_markdown_with_block_align("<p align=\"bogus\">x</p>"),
+        &test_parse_markdown("<p align=\"bogus\">x</p>"),
         BlockAlignment::Left,
     );
 }
@@ -3084,10 +3060,7 @@ fn test_align_quoting_variants() {
         "<p align='center'>x</p>",
         "<p align=center>x</p>",
     ] {
-        assert_aligned_region(
-            &test_parse_markdown_with_block_align(source),
-            BlockAlignment::Center,
-        );
+        assert_aligned_region(&test_parse_markdown(source), BlockAlignment::Center);
     }
 }
 
@@ -3095,11 +3068,11 @@ fn test_align_quoting_variants() {
 fn test_align_attribute_name_case_insensitive() {
     // `<div ALIGN>` / `<p Align>` detect identically to lowercase.
     assert_aligned_region(
-        &test_parse_markdown_with_block_align("<div ALIGN=\"center\">\n\ntext\n\n</div>\n"),
+        &test_parse_markdown("<div ALIGN=\"center\">\n\ntext\n\n</div>\n"),
         BlockAlignment::Center,
     );
     assert_aligned_region(
-        &test_parse_markdown_with_block_align("<p Align=\"right\">x</p>"),
+        &test_parse_markdown("<p Align=\"right\">x</p>"),
         BlockAlignment::Right,
     );
 }
@@ -3108,27 +3081,24 @@ fn test_align_attribute_name_case_insensitive() {
 fn test_align_unrelated_attributes_ignored() {
     // Extra attributes neither block detection nor fall the tag to literal text.
     let source = "<div class=\"hero\" id=\"x\" align=\"center\">\n\ntext\n\n</div>\n";
-    assert_aligned_region(
-        &test_parse_markdown_with_block_align(source),
-        BlockAlignment::Center,
-    );
+    assert_aligned_region(&test_parse_markdown(source), BlockAlignment::Center);
 }
 
 #[test]
 fn test_align_malformed_syntax_is_literal() {
     // Unterminated quote → whole tag renders as literal text, no region.
     let source = "<div align=\"center>\n\ntext\n\n</div>\n";
-    assert_no_region(&test_parse_markdown_with_block_align(source));
+    assert_no_region(&test_parse_markdown(source));
     // Distinct from the softer unrecognized-value case (already asserted aligned/unaligned above).
     let source_single = "<p align=\"center>caption</p>";
-    assert_no_region(&test_parse_markdown_with_block_align(source_single));
+    assert_no_region(&test_parse_markdown(source_single));
 }
 
 #[test]
 fn test_align_nested_content_keeps_semantics() {
     // invariant 5: a heading inside stays a Heading, not flattened to Line.
     let source = "<div align=\"center\">\n\n## Sub\n\n</div>\n";
-    let lines = test_parse_markdown_with_block_align(source);
+    let lines = test_parse_markdown(source);
     let interior = assert_aligned_region(&lines, BlockAlignment::Center);
     assert!(matches!(
         interior.iter().find(|l| matches!(l, FormattedTextLine::Heading(_))),
@@ -3141,7 +3111,7 @@ fn test_align_nested_regions_no_panic() {
     // design question 5: nested `<div align><p align></div>` — innermost region present,
     // no panic / infinite recursion. We assert both regions are emitted and outer brackets inner.
     let source = "<div align=\"center\">\n\n<p align=\"right\">inner</p>\n\n</div>\n";
-    let lines = test_parse_markdown_with_block_align(source);
+    let lines = test_parse_markdown(source);
     let starts = lines
         .iter()
         .filter(|l| matches!(l, FormattedTextLine::AlignRegionStart(_)))
@@ -3167,7 +3137,7 @@ fn test_align_nested_regions_no_panic() {
 fn test_align_unterminated_div_is_literal() {
     // invariant 7: unterminated `<div align>` (no close) → literal, rest of doc unaffected.
     let source = "<div align=\"center\">\n\n# Heading\n\nmore text\n";
-    let lines = test_parse_markdown_with_block_align(source);
+    let lines = test_parse_markdown(source);
     assert_no_region(&lines);
     // The heading still parses normally (document not corrupted).
     assert!(
@@ -3175,12 +3145,4 @@ fn test_align_unterminated_div_is_literal() {
             .iter()
             .any(|l| matches!(l, FormattedTextLine::Heading(_)))
     );
-}
-
-#[test]
-fn test_align_flag_off_emits_no_region() {
-    // Flag OFF ⇒ boundary variants never emitted.
-    let source = "<p align=\"center\">caption</p>";
-    let lines = test_parse_markdown(source);
-    assert_no_region(&lines);
 }

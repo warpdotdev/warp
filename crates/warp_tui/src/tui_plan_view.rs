@@ -4,9 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use ai::agent::document_action_presentation::DocumentActionPresentation;
-use markdown_parser::{
-    parse_markdown_with_options, FormattedText, FormattedTextLine, MarkdownParseOptions,
-};
+use markdown_parser::{parse_markdown_with_gfm_tables, FormattedText, FormattedTextLine};
 use warp::tui_export::{
     AIAgentAction, AIAgentActionType, BlocklistAIActionEvent, BlocklistAIActionModel,
 };
@@ -123,16 +121,11 @@ impl TuiPlanView {
             return false;
         }
 
-        // Plan documents always render GFM tables; block alignment follows its feature flag.
-        let options = MarkdownParseOptions {
-            gfm_tables: true,
-            block_align: warp_core::features::FeatureFlag::MarkdownBlockAlign.is_enabled(),
-        };
         self.documents = resolved
             .documents
             .iter()
             .map(|document| TuiPlanDocument {
-                formatted: parse_markdown_with_options(&document.content, options)
+                formatted: parse_markdown_with_gfm_tables(&document.content)
                     .ok()
                     .map(Arc::new),
             })

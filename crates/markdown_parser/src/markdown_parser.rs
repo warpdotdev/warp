@@ -108,48 +108,16 @@ impl ListIndentationContext {
     }
 }
 
-/// Feature toggles that select which optional block detectors run during a parse.
-///
-/// Each field gates an independent detector, so all four combinations are well-defined:
-/// neither (plain Markdown), tables only, block-align only, or both — a table can appear
-/// inside an aligned region and is detected normally. `#[derive(Default)]` makes "neither"
-/// the zero value, keeping the plain path a one-liner.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MarkdownParseOptions {
-    /// Parse GFM pipe tables (gated by `FeatureFlag::MarkdownTables` at call sites).
-    pub gfm_tables: bool,
-    /// Detect `<div align>`/`<p align>` block-alignment regions
-    /// (gated by `FeatureFlag::MarkdownBlockAlign` at call sites).
-    pub block_align: bool,
-}
-
 pub fn parse_markdown(markdown: &str) -> Result<FormattedText> {
-    parse_markdown_impl(markdown, MarkdownParseOptions::default())
+    parse_markdown_impl(markdown, false)
 }
 
 pub fn parse_markdown_with_gfm_tables(markdown: &str) -> Result<FormattedText> {
-    parse_markdown_impl(
-        markdown,
-        MarkdownParseOptions {
-            gfm_tables: true,
-            ..Default::default()
-        },
-    )
+    parse_markdown_impl(markdown, true)
 }
 
-/// Parse with an explicit set of [`MarkdownParseOptions`]. This is the entry point for callers
-/// that populate **both** feature fields (GFM tables *and* block alignment), since the two
-/// mutually-exclusive `parse_markdown` / `parse_markdown_with_gfm_tables` wrappers cannot express
-/// the both-enabled state.
-pub fn parse_markdown_with_options(
-    markdown: &str,
-    options: MarkdownParseOptions,
-) -> Result<FormattedText> {
-    parse_markdown_impl(markdown, options)
-}
-
-fn parse_markdown_impl(markdown: &str, options: MarkdownParseOptions) -> Result<FormattedText> {
-    parse_markdown_internal::<'_, nom::error::Error<_>>(markdown, options)
+fn parse_markdown_impl(markdown: &str, parse_gfm_tables: bool) -> Result<FormattedText> {
+    parse_markdown_internal::<'_, nom::error::Error<_>>(markdown, parse_gfm_tables)
         .map(|(_, mut res)| {
             if let Some(FormattedTextLine::LineBreak) = res.last() {
                 res.pop();
@@ -172,12 +140,8 @@ pub fn parse_markdown_to_raw_text(markdown: &str) -> Result<String> {
 
 fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     markdown: &'a str,
-    options: MarkdownParseOptions,
+    parse_gfm_tables: bool,
 ) -> IResult<&'a str, Vec<FormattedTextLine>, E> {
-    let MarkdownParseOptions {
-        gfm_tables: parse_gfm_tables,
-        block_align: parse_block_align,
-    } = options;
     let indentation_context = RefCell::new(ListIndentationContext::new());
 
     let mut block = context(
@@ -234,9 +198,8 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
         // the interior blocks parsed as ordinary Markdown, and an `AlignRegionEnd` boundary)
         // rather than the single line the block loop otherwise consumes per iteration. When it
         // doesn't match, it consumes nothing and control falls through to the normal grammar.
-        if parse_block_align
-            && let Some((remaining_after_region, region_lines)) =
-                parse_align_region::<E>(remaining, options)?
+        if let Some((remaining_after_region, region_lines)) =
+            parse_align_region::<E>(remaining, parse_gfm_tables)?
         {
             remaining = remaining_after_region;
             // A block boundary always terminates any list run.
@@ -500,16 +463,16 @@ type AlignRegion<'a> = (&'a str, Vec<FormattedTextLine>);
 /// ordinary parsing). Only hard interior-parse failures surface as `Err`.
 fn parse_align_region<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
-    options: MarkdownParseOptions,
+    parse_gfm_tables: bool,
 ) -> Result<Option<AlignRegion<'a>>, nom::Err<E>> {
     // Leading spaces (up to a small block indent) are allowed before the opening tag,
     // matching how own-line block HTML is detected elsewhere.
     let trimmed = input.trim_start_matches([' ', '\t']);
 
-    if let Some(region) = parse_single_line_p_region::<E>(input, trimmed, options)? {
+    if let Some(region) = parse_single_line_p_region::<E>(input, trimmed)? {
         return Ok(Some(region));
     }
-    if let Some(region) = parse_own_line_region::<E>(input, trimmed, options)? {
+    if let Some(region) = parse_own_line_region::<E>(input, trimmed, parse_gfm_tables)? {
         return Ok(Some(region));
     }
     Ok(None)
@@ -522,9 +485,6 @@ fn parse_align_region<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 fn parse_single_line_p_region<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
     trimmed: &'a str,
-    // The single-line `<p>` content is inline phrasing, never recursively block-parsed, so the
-    // options don't reach a nested `parse_markdown_internal` here (unlike the own-line detector).
-    _options: MarkdownParseOptions,
 ) -> Result<Option<AlignRegion<'a>>, nom::Err<E>> {
     // Isolate this source line (single-line detection never spans a newline).
     let line_end = trimmed.find(['\n', '\r']).unwrap_or(trimmed.len());
@@ -563,11 +523,11 @@ fn parse_single_line_p_region<'a, E: ContextError<&'a str> + ParseError<&'a str>
 
 /// Detect an own-line `<div …>` / `<p …>` region: the opening tag on its own
 /// line, one or more interior Markdown blocks, then a matching own-line closing
-/// tag. The interior is parsed recursively with the same [`MarkdownParseOptions`].
+/// tag. The interior is parsed recursively with the same GFM-table setting.
 fn parse_own_line_region<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
     trimmed: &'a str,
-    options: MarkdownParseOptions,
+    parse_gfm_tables: bool,
 ) -> Result<Option<AlignRegion<'a>>, nom::Err<E>> {
     for tag in ["div", "p"] {
         let Some((tag_align, after_open)) = match_open_tag_own_line(trimmed, tag) else {
@@ -586,7 +546,7 @@ fn parse_own_line_region<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
         // The remainder of `input` corresponding to `after_close`.
         let rest = &input[input.len() - after_close.len()..];
         // Recursively parse the interior as ordinary Markdown.
-        let (_, interior_lines) = parse_markdown_internal::<E>(interior, options)?;
+        let (_, interior_lines) = parse_markdown_internal::<E>(interior, parse_gfm_tables)?;
         let mut lines = Vec::with_capacity(interior_lines.len() + 2);
         lines.push(FormattedTextLine::AlignRegionStart(alignment));
         lines.extend(interior_lines);

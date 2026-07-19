@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use markdown_parser::{
     CodeBlockText, FormattedImage, FormattedText, FormattedTextFragment, FormattedTextLine,
-    MarkdownParseOptions, parse_markdown_with_options,
+    parse_markdown, parse_markdown_with_gfm_tables,
 };
 use serde::Deserialize;
 
@@ -40,17 +40,14 @@ pub enum IpynbError {
 
 /// Convert the JSON contents of a `.ipynb` file into [`FormattedText`].
 ///
-/// `options` selects which optional Markdown block detectors run for markdown
-/// cells, mirroring the `Buffer::from_markdown` behavior (the caller populates
-/// it from the `MarkdownTables` and `MarkdownBlockAlign` feature flag states).
+/// `gfm_tables` selects the GFM-table-aware Markdown parser for markdown cells,
+/// mirroring the `Buffer::from_markdown` behavior (the caller passes the
+/// `MarkdownTables` feature flag state).
 ///
 /// Returns an [`IpynbError`] if the input is not a parseable nbformat v4
 /// notebook; callers should fall back to [`raw_fallback_formatted_text`] in that
 /// case so the contents are shown verbatim (never a blank view).
-pub fn ipynb_to_formatted_text(
-    json: &str,
-    options: MarkdownParseOptions,
-) -> Result<FormattedText, IpynbError> {
+pub fn ipynb_to_formatted_text(json: &str, gfm_tables: bool) -> Result<FormattedText, IpynbError> {
     let notebook: Notebook = serde_json::from_str(json)?;
 
     // Guard against arbitrary JSON that happens to deserialize into an empty
@@ -68,7 +65,7 @@ pub fn ipynb_to_formatted_text(
     let per_cell: Vec<Vec<FormattedTextLine>> = notebook
         .cells
         .iter()
-        .map(|cell| cell_lines(cell, &language, options))
+        .map(|cell| cell_lines(cell, &language, gfm_tables))
         .collect();
     let total_lines = per_cell.iter().map(Vec::len).sum();
     let mut lines = Vec::with_capacity(total_lines);
@@ -91,15 +88,11 @@ pub fn raw_fallback_formatted_text(content: &str) -> FormattedText {
 }
 
 /// Convert a single notebook cell into its formatted-text lines.
-fn cell_lines(
-    cell: &Cell,
-    language: &str,
-    options: MarkdownParseOptions,
-) -> Vec<FormattedTextLine> {
+fn cell_lines(cell: &Cell, language: &str, gfm_tables: bool) -> Vec<FormattedTextLine> {
     match cell.cell_type.as_str() {
         "markdown" => {
             let source = cell.source.to_text();
-            markdown_block_lines(source.trim_end_matches('\n'), options)
+            markdown_block_lines(source.trim_end_matches('\n'), gfm_tables)
         }
         "code" => {
             let source = cell.source.to_text();
@@ -121,14 +114,19 @@ fn cell_lines(
 
 /// A markdown cell, parsed into formatted text and separated from surrounding
 /// blocks by a line break. Empty cells produce no lines.
-fn markdown_block_lines(content: &str, options: MarkdownParseOptions) -> Vec<FormattedTextLine> {
+fn markdown_block_lines(content: &str, gfm_tables: bool) -> Vec<FormattedTextLine> {
     if content.is_empty() {
         return Vec::new();
     }
+    let parse_fn = if gfm_tables {
+        parse_markdown_with_gfm_tables
+    } else {
+        parse_markdown
+    };
     // A markdown cell is, by definition, Markdown; parse it once. If parsing
     // somehow fails, preserve the content verbatim as a plain line rather than
     // dropping it.
-    let parsed = parse_markdown_with_options(content, options).unwrap_or_else(|_| {
+    let parsed = parse_fn(content).unwrap_or_else(|_| {
         FormattedText::new(vec![FormattedTextLine::Line(vec![
             FormattedTextFragment::plain_text(content),
         ])])

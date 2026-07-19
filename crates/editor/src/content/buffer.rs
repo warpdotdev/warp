@@ -10,7 +10,7 @@ use line_ending::LineEnding;
 use markdown_parser::{
     CodeBlockText, FormattedIndentTextInline, FormattedTable, FormattedTaskList, FormattedText,
     FormattedTextFragment, FormattedTextHeader, FormattedTextLine, FormattedTextStyles,
-    MarkdownParseOptions, OrderedFormattedIndentTextInline, parse_markdown_with_options,
+    OrderedFormattedIndentTextInline, parse_markdown, parse_markdown_with_gfm_tables,
 };
 use num_traits::SaturatingSub;
 use pathfinder_color::ColorU;
@@ -847,11 +847,12 @@ impl Buffer {
         selection_model: ModelHandle<BufferSelectionModel>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let options = MarkdownParseOptions {
-            gfm_tables: warp_core::features::FeatureFlag::MarkdownTables.is_enabled(),
-            block_align: warp_core::features::FeatureFlag::MarkdownBlockAlign.is_enabled(),
+        let parse_fn = if warp_core::features::FeatureFlag::MarkdownTables.is_enabled() {
+            parse_markdown_with_gfm_tables
+        } else {
+            parse_markdown
         };
-        let parsed_formatted_text = match parse_markdown_with_options(markdown, options) {
+        let parsed_formatted_text = match parse_fn(markdown) {
             Ok(parsed) => parsed,
             Err(e) => {
                 safe_error! {
@@ -886,11 +887,8 @@ impl Buffer {
         selection_model: ModelHandle<BufferSelectionModel>,
         ctx: &mut ModelContext<Self>,
     ) -> Result<Self, ipynb_parser::IpynbError> {
-        let options = MarkdownParseOptions {
-            gfm_tables: warp_core::features::FeatureFlag::MarkdownTables.is_enabled(),
-            block_align: warp_core::features::FeatureFlag::MarkdownBlockAlign.is_enabled(),
-        };
-        let formatted_text = ipynb_parser::ipynb_to_formatted_text(ipynb, options)?;
+        let gfm_tables = warp_core::features::FeatureFlag::MarkdownTables.is_enabled();
+        let formatted_text = ipynb_parser::ipynb_to_formatted_text(ipynb, gfm_tables)?;
         Ok(Self::from_formatted_text(
             formatted_text,
             embedded_item_conversion,
