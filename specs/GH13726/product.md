@@ -41,6 +41,10 @@ its own; see the note on issue linkage below.
 tracked as its own follow-up issue, #13953, and this PR keeps "Closes #13726" for the
 un-spanned raw-HTML table subset (the deliverable this issue's title describes). Spanned
 tables degrade deterministically per the malformed-input rules below until #13953 lands.
+This linkage is not just a PR-comment decision — it is binding on this spec and on issue
+#13726 itself: see the Non-goals section's acceptance criteria for what must be true
+before "Closes #13726" is valid, and #13726's own body must be narrowed to match (not
+left describing spans as in-scope) as part of landing this PR.
 
 The repo's own paste-path test, `test_unsupported_html_types`
 (`crates/markdown_parser/src/html_parser_tests.rs:191-222`, TODO-marked), documents
@@ -74,11 +78,20 @@ In scope:
 
 Out of scope (explicit non-goals):
 
-- **`colspan` / `rowspan`.** Spanning cells require a non-rectangular grid model that the
-  current data model, layout, render, and selection code do not support. A `<td colspan>`
-  or `<td rowspan>` is handled as a **degraded** single-cell (the span attribute is
-  ignored and the cell occupies one slot), never a panic or corrupt layout. Full span
-  support is a documented follow-up.
+- **`colspan` / `rowspan` — owned by follow-up issue #13953, not by this spec.**
+  Spanning cells require a non-rectangular grid model that the current data model,
+  layout, render, and selection code do not support. A `<td colspan>` or
+  `<td rowspan>` is handled as a **degraded** single-cell (the span attribute is
+  ignored and the cell occupies one slot), never a panic or corrupt layout — that
+  degraded behavior is this spec's entire contribution to spans; anything beyond it is
+  explicitly deferred. **Acceptance criteria for the split (both must hold for this PR
+  to close #13726):** (1) this spec/PR delivers the un-spanned subset — simple tables
+  and `<br>`-in-cell — with the degraded single-cell behavior above for any
+  `colspan`/`rowspan` input, and (2) issue #13726 itself is narrowed (see "Issue
+  linkage" below) so its remaining acceptance criteria describe only the un-spanned
+  subset, with `colspan`/`rowspan` cross-linked to #13953 as the issue that owns them.
+  If either half is missing — the degraded behavior isn't implemented, or #13726's body
+  still reads as promising full span support — this PR must not close #13726.
 - `<caption>`, `<colgroup>`/`<col>`, and nested tables inside a cell.
 - Inline `<table>` mixed with other text on the same line.
 - Arbitrary CSS beyond the discrete `align` / `text-align` used for alignment.
@@ -88,10 +101,14 @@ Out of scope (explicit non-goals):
 
 ## Behavior
 
-1. A Markdown document region delimited by `<table>` … `</table>` on their own lines
+1. A Markdown document region delimited by `<table ...>` … `</table>` on their own lines
    renders as a table in the viewer, using Warp's existing table appearance (borders,
    dividers, alignment, horizontal scrolling for wide tables), identical to how a GFM
-   pipe-table of the same content renders.
+   pipe-table of the same content renders. The opening tag is recognized whether or not
+   it carries attributes (`<table>`, `<table class="data">`, `<table id="x" class="y">`,
+   …) — invariant 10's read-and-ignore rule for `class`/`id`/etc. only makes sense if the
+   tag was recognized in the first place, so a `<table>` with ignored attributes is a
+   detector match, never literal-text fallback.
 
 2. Exactly one row becomes the table's header, chosen by this precedence (first rule that
    matches wins):
@@ -123,7 +140,14 @@ Out of scope (explicit non-goals):
 4. A `<br>` inside a cell renders as a hard line break, so the cell's content occupies
    multiple lines within its row. The row's height grows to fit the tallest cell. This is
    distinct from the automatic word-wrapping the viewer already does for long cell content
-   — `<br>` is an author-specified break that is honored regardless of column width.
+   — `<br>` is an author-specified break that is honored regardless of column width. An
+   author who wants the literal text `<br>` to appear in a cell (rather than a break) writes
+   the escaped form, `&lt;br&gt;`, which renders as the visible characters `<br>` on a single
+   line, never as a break — the escaped and unescaped forms are unambiguous and never
+   collide, in either direction: exporting a cell containing the literal text `<br>` must
+   re-escape it, and a cell round-tripped through copy/export must not turn an authored
+   break into literal text or vice versa (see invariant 11 for the general round-trip rule;
+   the tech spec defines the escaping mechanism).
 
 5. Column alignment follows `align`/`text-align` where present, defaulting to left.
    Because `FormattedTable` stores one alignment **per column**, not per cell, disagreement

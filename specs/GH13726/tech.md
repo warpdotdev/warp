@@ -129,15 +129,85 @@ Add a `<table>` reader that produces a `FormattedTable`. Two placement options:
 - Extend `html_parser.rs`: remove `"table"` from `TOP_LEVEL_ELEMENT_TAGS_TO_SKIP` (`:23-25`)
   and add explicit handling that walks `<thead>/<tbody>/<tr>/<th>/<td>`, builds rows of
   cells via the existing `parse_phrasing_content` (`:410`) for inline content, reads
-  `align`/`text-align` for `TableAlignment`, maps `<br>` (already `→ LineBreak` at `:335`)
-  into the new intra-cell break, and assembles a `FormattedTable`. Reuses the DOM + helpers
+  `align`/`text-align` for `TableAlignment`, and assembles a `FormattedTable`.
+  **Correction to an earlier draft of this spec:** `<br>` is *not* already handled inside
+  cell content. `"br" => FormattedTextLine::LineBreak` at `:335` is a top-level block-match
+  arm — it never fires for a `<br>` nested inside `parse_phrasing_content` (`:410-457`),
+  whose own `NodeData::Element` match (`:439-446`) has no `"br"` case today: an unhandled
+  element falls to the generic styling no-op and recurses into its (empty, for a void
+  element) children, so a `<br>` inside phrasing content is currently **silently dropped**,
+  not converted to a break. This spec must add a `"br"` arm to `parse_phrasing_content`
+  itself (pushing the new intra-cell break construct from item 1, not
+  `FormattedTextLine::LineBreak` — a cell can't hold a `FormattedTextLine`, per item 1's
+  model change) — this is new code, not a reuse of `:335`, and reuses the DOM + helpers
   already there.
+
+  **Escape ambiguity (author intent vs. literal text) — resolved by construction, and
+  the reason must be stated because it does not generalize from `specs/GH13732/tech.md`.**
+  A cell author must be able to write a literal `<br>` as visible text (e.g. documenting
+  HTML syntax inside a table) without it becoming a hard break, by escaping it as
+  `&lt;br&gt;`. Because this reader operates on an `html5ever`-parsed DOM (not the raw
+  Markdown inline tokenizer `specs/GH13732/tech.md` modifies for GFM cells), entity
+  decoding and tag recognition are **not two competing parsers over the same character
+  span** — they happen at different DOM-construction stages that cannot collide:
+
+  - **Parse direction.** `html5ever`'s tokenizer decodes character references (`&lt;`,
+    `&amp;`, `&#60;`, …) while building `NodeData::Text` nodes, and recognizes `<br>` as
+    a `NodeData::Element` with `name == "br"` as a structurally separate tokenization
+    decision — an element boundary, not a character sequence inside a text node's
+    content. A source cell containing `&lt;br&gt;` therefore *always* produces a single
+    `NodeData::Text` node whose decoded content is the four characters `<br>`; that text
+    can never be reclassified as a `NodeData::Element("br")` later, because element
+    recognition already happened (or didn't) during tokenization, before decoded text
+    content exists to be reinterpreted. A source cell containing a literal, unescaped
+    `<br>` produces a `NodeData::Element("br")` node instead — the fork happens once, at
+    tokenization, never at any later pass this reader runs. Concretely: authored break —
+    `<td>a<br>b</td>` → DOM: text "a", element `br`, text "b" → cell holds 2 lines.
+    Escaped literal — `<td>a&lt;br&gt;b</td>` → DOM: one text node "a\<br\>b" (already
+    decoded) → cell holds 1 line containing the literal string `<br>`. There is no
+    parser-ordering decision for this spec to make (unlike GH13732's raw-tokenizer case,
+    where `<br>`-token recognition and entity decoding are both stages of the *same*
+    linear scan and their relative order is a real design choice) — this is a
+    consequence of using `parse_phrasing_content`/DOM parsing for table cells rather
+    than the GFM inline tokenizer, and should be called out explicitly so a reader
+    doesn't assume the two specs share a hazard they don't.
+  - **Serialize direction (`to_internal_format` / GFM `to_plain_text` export, per item
+    1 below).** An authored break must serialize as literal `<br>` text (per
+    `specs/GH13732/tech.md`'s recommendation, reused here for consistency between the
+    two specs' cell-break encoding). A cell whose content is the *literal string* `<br>`
+    (from an escaped source, not a break) must serialize as `&lt;br&gt;`, i.e.
+    serialization must escape any literal `<`/`>` characters in cell text through the
+    existing HTML-entity-escaping path (the same one `specs/GH13721/tech.md` §5 uses for
+    attribute-value escaping) *before* emitting the break-token `<br>` for actual breaks
+    — the break token is inserted as a raw, unescaped `<br>` at the break's position,
+    never itself subject to the cell-text escaping pass, so the two are never
+    indistinguishable in the serialized form either. A **double-escaped** source cell
+    (`&amp;lt;br&amp;gt;`) decodes at parse time to the literal text `&lt;br&gt;`
+    (`&amp;` → `&`, and the resulting `&lt;br&gt;` is *not* re-decoded — HTML entity
+    decoding is single-pass, per `html5ever`, matching this repo's own single-pass
+    `parse_html_entity`, `markdown_parser.rs:1903-1959`), which then re-escapes on
+    serialization to `&amp;lt;br&amp;gt;`, round-tripping exactly.
 - Because `html_parser.rs` is currently paste-oriented (whole-document), the file-viewer
   path needs the block Markdown grammar to *detect* a raw `<table>` block and route its text
   through this reader. Add a block-level detector in `markdown_parser.rs` (near the image
-  block branch) that recognizes an own-line `<table>` … `</table>` region, extracts the raw
-  HTML, and calls the table reader — emitting `FormattedTextLine::Table(FormattedTable)`.
+  block branch) that recognizes an own-line `<table ...>` … `</table>` region, extracts the
+  raw HTML, and calls the table reader — emitting `FormattedTextLine::Table(FormattedTable)`.
   This mirrors how the `<img>` and `<details>` specs add own-line raw-HTML block detectors.
+  **The detector's opening-tag match must tolerate attributes and whitespace, not just the
+  bare `<table>` literal** — a table opened as `<table class="data" id="results">` is a
+  block-level `<table>` for every purpose this spec cares about (product invariant 10 already
+  says `class`/`id`/etc. are read-and-ignored, which presupposes the tag was recognized in
+  the first place). Concretely, the detector's opening-tag grammar is: `<table`
+  (case-insensitive), then a sequence of `name="value"`/`name='value'`/bare attributes
+  tolerant of arbitrary whitespace, terminated by `>` (a self-closing `/>` on `<table>` is not
+  meaningful HTML and is treated as a non-match, falling to invariant 8's literal-text
+  fallback same as any other malformed tag) — the same attribute-scanning shape
+  `specs/GH13721/tech.md` §2 uses for its `parse_html_image` attribute loop (hand-written,
+  quoted/unquoted values, ends at the first unquoted `>`, unrecognized attributes consumed
+  and discarded). A bare `<table>` with no attributes is simply the zero-attribute case of
+  this same grammar, not a separate path. The closing `</table>` match is unaffected (closing
+  tags carry no attributes in valid HTML; a `</table foo>`-shaped malformed closer is not a
+  match and falls to invariant 8 like any other unparseable region).
 
 Header determination (product invariant 2) — `FormattedTable` has exactly one `headers`
 slot, so the reader must pick exactly one source row for it, by precedence:
@@ -216,6 +286,16 @@ boundary. Inline images inside cells resolve through the same asset-source resol
   (invariant 3).
 - `<br>` in a cell → multi-line cell (invariant 4); assert the cell holds ≥2 lines under
   the chosen cell model.
+- **Escape-ambiguity matrix (invariant 4's escape rule):**
+  - Authored break: `<td>a<br>b</td>` → cell holds 2 lines, `["a", "b"]`.
+  - Escaped literal: `<td>a&lt;br&gt;b</td>` → cell holds 1 line, text `a<br>b` (the
+    literal 4 characters `<br>` visible, not a break).
+  - Mixed cell: `<td>line1<br>literal: &lt;br&gt;<br>line3</td>` → cell holds 3 lines,
+    the middle line containing the literal text `literal: <br>`, unambiguous from the
+    two real breaks around it.
+  - Double-escape: `<td>&amp;lt;br&amp;gt;</td>` → cell holds 1 line, text `&lt;br&gt;`
+    (single-pass entity decode: `&amp;` → `&`, the resulting `&lt;br&gt;` is not
+    re-decoded), never a break, never the raw text `<br>`.
 - `align`/`text-align` on cells → `TableAlignment` (invariant 5).
 - Header cell and a body cell in the same column disagree on alignment → header wins
   (invariant 5).
@@ -229,6 +309,12 @@ boundary. Inline images inside cells resolve through the same asset-source resol
   (invariant 8).
 - `<table></table>` / empty `<tr>` → no panic (invariant 9).
 - Ignored attributes (`onclick`, `class`) → not consulted (invariant 10).
+- `<table class="data" id="results">` (attributed opening tag, whitespace-tolerant,
+  single/double-quoted values) → still **recognized** by the block detector and produces
+  a `FormattedTable` identical to the bare-`<table>` case, not literal-text fallback
+  (invariant 1, invariant 10 — detector-grammar/attribute-allowlist alignment).
+- `<table/>` (self-closing, meaningless for a container element) → not a detector match,
+  falls to literal-text fallback (invariant 8), same as any other malformed tag.
 
 ### Round-trip (`crates/markdown_parser` + `crates/editor/src/content/text_tests.rs`)
 
@@ -237,6 +323,12 @@ boundary. Inline images inside cells resolve through the same asset-source resol
 - HTML table **with** `<br>` in a cell → round-trips preserving the line break (encoded as
   `<br>` in the internal/GFM forms), not collapsed and not turned into a new row
   (invariant 11 + 4).
+- HTML table with a cell containing the **literal text** `<br>` (from an escaped
+  `&lt;br&gt;` source) → round-trips to a cell whose serialized form re-escapes it as
+  `&lt;br&gt;`, not a raw `<br>` that would misparse as a break on the next read
+  (invariant 11 + 4's escape rule).
+- Double-escaped source (`&amp;lt;br&amp;gt;`) → round-trips to the same double-escaped
+  serialized form, confirming single-pass decode/re-escape symmetry.
 
 ### Layout / render tests (`crates/editor/src/render/model/mod_tests.rs`)
 
@@ -270,12 +362,13 @@ Markdown file containing an HTML table if exercisable there.
   explicit non-goal here (invariant 7 degrades it). It deserves its own spec/PR — likely
   the largest single piece of the whole #13652 effort — and should be scoped separately
   once simple + `<br>` tables land.
-- **Issue-linkage decision needed before merge.** #13726 cites `colspan`/`rowspan` as a
-  motivating requirement this PR does not deliver; per product.md's "Issue linkage" note,
-  the PR should not read "Closes #13726" without either downgrading it to
-  "Contributes to"/"Partially addresses," or splitting a dedicated follow-up issue for
-  spans and retargeting #13726's remaining scope to it. This is a maintainer call, not an
-  engineering one — flagging for explicit sign-off.
+- **Issue-linkage: resolved, tracked for follow-through.** #13726 cited `colspan`/`rowspan`
+  as a motivating requirement this PR does not deliver; per product.md's "Issue linkage
+  (resolved)" note and the Non-goals acceptance criteria, the resolution is option (b) —
+  `colspan`/`rowspan` is split to its own follow-up issue, #13953, and this PR keeps
+  "Closes #13726" for the un-spanned subset. What remains before merge is mechanical, not
+  a decision: issue #13726's own body must be narrowed to match (not left describing spans
+  as in-scope), per product.md's Non-goals acceptance criteria.
 - **Interaction with the other tier-zero specs:** inline images inside cells depend on the
   `<img>` spec's inline-image support; an HTML table inside a `<details>` body should work
   under that spec's Option-A model since the table is an ordinary top-level block. Verify
