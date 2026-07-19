@@ -280,38 +280,107 @@ In `crates/editor/src/content/edit.rs:721-746`, replace the hardcoded size with 
 resolution against the new fields:
 
 - Compute `available_width = layout.max_width() - spacing.x_axis_offset()` (as today).
+- **One clamping rule, shared by both resolved-dimension paths:** define
+  `clamp_to_bound(px, bound) = px.clamp(1.0, bound.max(1.0))` — both an absolute pixel
+  value and a resolved percentage value pass through this same function before becoming
+  `ImageBlockConfig`'s field. `bound.max(1.0)` guards `f32::clamp`'s `min <= max`
+  precondition for the degenerate case where `available_width` or `default_height`
+  itself is sub-1px (a pathologically collapsed pane/container), so `clamp_to_bound`
+  never panics; the result is still floored at `1px` in that case, consistent with the
+  narrow-pane sibling case below. This unifies what were two separate, inconsistent
+  rules (an unclamped percent path alongside an already-clamped pixel path) into one.
 - Resolve `width`:
-  - `Some(Pixels(px))` → `min(px, available_width)` (invariant 4).
-  - `Some(Percent(p))` → `available_width * p / 100` (invariant 5).
+  - `Some(Pixels(px))` → `clamp_to_bound(px, available_width)` (invariant 4).
+  - `Some(Percent(p))` → `clamp_to_bound(available_width * p.clamp(0, 100) / 100,
+    available_width)` (invariant 5). Clamping `p` to `[0, 100]` before the multiply
+    means `width="200%"` behaves identically to `width="100%"` (full `available_width`),
+    not an overflow that then gets clamped after the fact; `width="0%"` or a negative
+    percent floors at the `clamp_to_bound` minimum of `1px` rather than a zero-size box
+    (consistent with invariant 10's "never a blank/zero-size image box").
   - `None` when the other axis is also `None` → today's default (`available_width`,
-    invariant 7).
-- Resolve `height` analogously; the height budget for a `Percent`, or for the
-  neither-specified default, is the same `default_height` basis used today
-  (`base_line_height * DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`).
+    invariant 7; already within bounds, `clamp_to_bound` is a no-op here).
+- Resolve `height` the same way, against the height reference bound `default_height`
+  (`base_line_height * DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`) in place of
+  `available_width` — i.e. `Some(Pixels(px))` → `clamp_to_bound(px, default_height)`;
+  `Some(Percent(p))` → `clamp_to_bound(default_height * p.clamp(0, 100) / 100,
+  default_height)`; `None` with `width` also `None` → `default_height` itself. This is
+  the same shared `clamp_to_bound` function, just parameterized on the height budget
+  instead of the width budget — one clamping rule, two call sites, not two rules.
 - **Aspect ratio when exactly one dimension is set (invariant 6):** resolve the
-  specified axis per the rules above, then derive the other axis from the intrinsic
-  ratio using the Mermaid mechanism verbatim:
+  specified axis per the rules above (already clamped), then derive the other axis
+  from the intrinsic ratio using the Mermaid mechanism verbatim. The invariant that
+  governs every sub-case below: **the author-specified dimension, once resolved and
+  clamped, is never altered again by fallback or fit logic in any load state** —
+  pre-decode and post-decode alike. Only the *derived* (unspecified) axis is ever
+  adjusted layout-to-layout.
   - Call `AssetCache::as_ref(app).load_asset::<ImageType>(asset_source.clone())`
     (the `asset_source` is already computed at this point via
     `resolve_asset_source`, `edit.rs:886`, so this requires no new resolution step).
-  - `AssetState::Loaded { data }` with `data.image_size()` returning
-    `Some((intrinsic_w, intrinsic_h))` with both `> 0`: derive the missing axis —
-    given `width`, `height = width * intrinsic_h / intrinsic_w`; given `height`,
-    `width = min(height * intrinsic_w / intrinsic_h, available_width)`.
-  - `AssetState::Loading | FailedToLoad(_) | Evicted`, or `Loaded` with a
-    zero/unreadable intrinsic size: the missing axis falls back to today's default for
-    that axis (`available_width` for width, `default_height` for height) — a plain
-    box, not a "cap" — until a later layout pass (triggered the same way a `Loading`
-    Mermaid diagram's is) resolves it once the asset decodes. This is a real,
-    bounded-in-time transient state, not a permanent behavior: it is one concrete
-    layout in the "unresolved intrinsic size" case, not an approximation of one.
-- **Both dimensions given:** no ratio math — each axis resolves independently per the
-  rules above (invariant 6 only applies when exactly one axis is specified).
+  - **Post-decode — `AssetState::Loaded { data }` with `data.image_size()` returning
+    `Some((intrinsic_w, intrinsic_h))` with both `> 0`:** derive the missing axis from
+    the specified axis's *resolved* (post-clamp) value — given `width`,
+    `height = width * intrinsic_h / intrinsic_w`; given `height`,
+    `width = min(height * intrinsic_w / intrinsic_h, available_width)`. The specified
+    axis itself is not recomputed or reclamped at this point; it keeps the value
+    resolved above.
+  - **Pre-decode — `AssetState::Loading | FailedToLoad(_) | Evicted`, or `Loaded` with
+    a zero/unreadable intrinsic size:** this is the state that needs its own explicit
+    contract, because a naive "derived axis gets a plain default box" description
+    (what earlier drafts of this spec said) leaves a gap — see "Why the pre-decode
+    fallback needs `stretch()`, not `contain()`" below. The specified axis keeps its
+    resolved value unchanged (per the invariant above); the derived axis uses today's
+    plain default for that axis (`available_width` for a derived width,
+    `default_height` for a derived height) as before. What changes is *how the element
+    renders that box*: for this one transient layout, `RenderableImage::layout()`
+    (§4 "Where the offset is applied" sibling section, `render/element/image.rs:39-51`)
+    must use `Image::new(...).stretch()` instead of `.contain()` for this block. A
+    later layout pass (triggered the same way a `Loading` Mermaid diagram's is)
+    re-resolves once the asset decodes, switching back to `.contain()` for the
+    post-decode, aspect-ratio-correct box (which by construction has zero slack for
+    `contain()` vs. `stretch()` to differ on — see below).
+- **Why the pre-decode fallback needs `stretch()`, not `contain()`.** `Image::contain()`
+  (`warpui_core/src/elements/gui/image.rs:120-123`) fit-scales the decoded image by the
+  *smaller* of the box's width/height ratios — it shrinks-to-fit, it does not stretch
+  either axis independently. If width is specified (say `640px`) and, pre-decode, the
+  derived height falls back to `default_height`, the primitive's box is
+  `640 × default_height`. Once the asset decodes on a *later* frame the box gets fixed,
+  but the *fallback frame itself* renders through the exact same `contain()` call with
+  no asset-size information yet — `Image::new(..).contain()` fit-scales the placeholder
+  content (or, once loaded on this same pass in a race, the real decoded image) to
+  whichever of the two axes is more constraining. If `default_height` happens to be
+  short relative to the eventual intrinsic ratio, `contain()` can shrink the *displayed
+  width* below `640px` for that frame — a visible, if transient, violation of "the
+  requested width is honored" (invariant 6), not merely cosmetic letterboxing. Using
+  `.stretch()` (`warpui_core/src/elements/gui/image.rs:126-129`, already a first-class
+  `FitType` alongside `Contain`/`Cover`) for this one fallback frame fills the
+  `640 × default_height` box on both axes independently, so the specified axis (width)
+  renders at exactly its resolved value — the *only* axis this spec makes a promise
+  about pre-decode — while the derived axis (height) is a guess either way and
+  stretching it introduces no new distortion the fallback box wasn't already going to
+  have. This makes the invariant ("specified dimension exact in every load state")
+  literally true instead of true-only-once-decoded.
+- **Both dimensions given:** no ratio math, and no `AssetCache` query — each axis
+  resolves independently per the clamp rules above (invariant 6 only applies when
+  exactly one axis is specified). `RenderableImage` uses `.contain()` as today; since
+  both axes are author-specified there is no fallback frame to reason about.
 - **Percentage width with intrinsic ratio:** if `width` is `Percent` and `height` is
-  unspecified, the percent is still resolved against `available_width` first (per
-  invariant 5), then the derived `height` uses that resolved pixel width in the ratio
-  formula above — percent sizing and aspect-ratio derivation compose rather than being
-  mutually exclusive.
+  unspecified, the percent is still resolved (and clamped) against `available_width`
+  first (per invariant 5), then the derived `height` uses that resolved pixel width in
+  the ratio formula above — percent sizing and aspect-ratio derivation compose rather
+  than being mutually exclusive.
+- **Percentage height with intrinsic ratio (sibling case):** symmetric — if `height` is
+  `Percent` and `width` is unspecified, the percent resolves (and clamps) against
+  `default_height` first, then the derived `width` uses that resolved pixel height in
+  the ratio formula, clamped to `available_width` exactly as the plain height-only case
+  is (§4's `width = min(height * intrinsic_w / intrinsic_h, available_width)`).
+- **Zero/near-zero `available_width` (sibling case — narrow pane or deeply nested
+  constrained container):** `clamp_to_bound`'s `1.0` floor means a percent or pixel
+  width never resolves to `0` or negative regardless of how small `available_width` is;
+  a pathologically narrow pane renders a 1px-wide image rather than panicking on a
+  degenerate `SizeConstraint` or dividing by zero in the ratio formula (the ratio
+  formula's denominator is always the *intrinsic* width/height from decoded asset data,
+  never `available_width`, so a narrow pane cannot introduce a divide-by-zero there
+  either).
 
 **Alignment: what layout must carry, and why `contain()`'s internal centering is not
 in the way.** Alignment needs two things at paint time: (a) the block's available
@@ -325,25 +394,32 @@ point in layout — nothing new needs to be threaded in to know them:
 - **(b) Displayed image bounds** are exactly `ImageBlockConfig.width`/`.height` as
   resolved by the rules above — by construction these are always the specified
   dimension exactly, and (per invariant 6) the intrinsic-ratio-correct derived
-  dimension once the asset is `Loaded`, or today's plain default while it isn't.
+  dimension once the asset is `Loaded`, or today's plain default (rendered via
+  `.stretch()`, not `.contain()`, per the pre-decode sub-case above) while it isn't.
 
 **Why `Image::contain()`'s internal centering is not a conflict.**
 `RenderableImage::layout()` (`crates/editor/src/render/element/image.rs:39-51`)
 constructs the primitive as `Image::new(asset_source, CacheOption::BySize).contain()`
-and lays it out with `SizeConstraint::new(vec2f(0., 0.), size)` where
+(or `.stretch()`, per the pre-decode sub-case above — the fit-mode selection is a
+one-line branch on `AssetState`, not a structural change to `layout()`) and lays it out
+with `SizeConstraint::new(vec2f(0., 0.), size)` where
 `size = vec2f(config.width.as_f32(), config.height.as_f32())` — i.e. the primitive's
 box *is* `ImageBlockConfig.width × .height`, not some larger constraint. Once §4's
 sizing makes those two values the aspect-ratio-correct pair (the common case once the
-asset is `Loaded`), `contain()` has zero slack to center within: the decoded image
-already fills the box exactly, so the primitive's internal
-centering/`top_aligned`/`right_aligned` logic in
+asset is `Loaded`, and by construction whenever both dimensions are author-specified),
+`contain()` has zero slack to center within: the decoded image already fills the box
+exactly, so the primitive's internal centering/`top_aligned`/`right_aligned` logic in
 `crates/warpui_core/src/elements/gui/image.rs` never has room to run. The only case
-where the primitive's box and the decoded image's aspect ratio disagree is the
-transient "asset not yet `Loaded`" fallback (§4's plain-default case) — during that
-one layout pass `contain()` may show letterboxing inside the fallback box, which
-self-corrects on the next layout pass exactly like Mermaid's transient case does.
-Alignment therefore happens **one level up from the primitive**, at the block's paint
-origin, not by fighting `contain()`'s behavior.
+where the primitive's box and the decoded image's aspect ratio could disagree is the
+transient "asset not yet `Loaded`" fallback with exactly one dimension specified — and
+that is precisely the case switched to `.stretch()` above, so it does not letterbox or
+shrink the specified axis; it self-corrects to the ratio-correct `.contain()` box on
+the next layout pass exactly like Mermaid's transient case does. (An author who
+specifies *both* `width` and `height` with a mismatched aspect ratio, per the
+"both dimensions given" case above, keeps `.contain()` and can see legitimate
+letterboxing — that is direct author intent, not a fallback artifact, and is
+unaffected by this fix.) Alignment therefore happens **one level up from the
+primitive**, at the block's paint origin, not by fighting `contain()`'s behavior.
 
 **Where the offset is applied.** Add `align: ImageAlign` to `ImageBlockConfig`
 (`render/model/mod.rs:1470-1475`) and to `Positioned<ImageBlockConfig>`'s origin
@@ -455,6 +531,16 @@ Covers invariants 4–8:
 - Percent width → `available_width * p / 100`.
 - No dimensions → identical `ImageBlockConfig` to today (regression against the
   hardcoded default).
+- **`width="200%"`** → clamps to `available_width` (invariant 5, same result as
+  `width="100%"`), not an unclamped `2 * available_width` overflow.
+- **`width="0%"` / `width="-10%"`** → floors at the `clamp_to_bound` minimum of `1px`,
+  never a zero-size or negative box (invariant 10's "never a blank/zero-size image
+  box" applies to percentages too, not just the unparseable-attribute case).
+- **`height="150%"`** → clamps to `default_height` (sibling of the width-percent clamp,
+  applied against the height reference bound instead of `available_width`).
+- **Percent width and percent height both given, both `>100%`** → each axis clamps
+  independently against its own bound (`available_width` / `default_height`); no ratio
+  math applies (both dimensions given).
 - `align = Left` → `Positioned<ImageBlockConfig>`'s x-origin is pixel-identical to the
   no-`align`-field baseline (regression guard against shifting untagged images).
 - `align = Center` → x-origin offset equals `(available_width - config.width) / 2`.
@@ -475,9 +561,27 @@ Covers invariants 4–8:
   `default_height` exactly like the `Loading` case (invariant 6 degenerate case).
 - **Both `width` and `height` given** → no ratio math is applied; each axis resolves
   independently even if it does not match the intrinsic aspect ratio (regression guard
-  against accidentally overriding an explicit two-dimension author intent).
+  against accidentally overriding an explicit two-dimension author intent). `RenderableImage`
+  uses `.contain()`, not `.stretch()`, for this case (no fallback frame to reason about).
 - **`width="90%"` + intrinsic ratio** → `height` is derived from the *resolved pixel*
   width (`available_width * 90 / 100`), not from the unresolved percentage.
+- **`height="90%"` + intrinsic ratio (sibling of the above)** → `width` is derived from
+  the *resolved pixel* height (`default_height * 90 / 100`), clamped to
+  `available_width`.
+- **Width-only + `AssetState::Loading` → element fit mode** → assert
+  `RenderableImage::layout()` constructs the primitive with `.stretch()`, not
+  `.contain()`, while the derived height is still the plain `default_height` fallback;
+  assert the *specified* width equals the resolved value exactly (not shrunk by any
+  fit-scaling) even when `default_height` implies a different aspect ratio than the
+  eventual intrinsic size. This is the regression guard for the pre-decode
+  width-guarantee hole.
+- **Same asset transitions `Loading` → `Loaded` across two layout passes** → first pass
+  uses `.stretch()` with the plain-default derived axis; second pass uses `.contain()`
+  with the intrinsic-ratio-derived axis; the specified axis's value is identical across
+  both passes (never recomputed once resolved).
+- **Zero/near-zero `available_width`** (e.g. a deeply nested constrained container) →
+  a percent or pixel width still resolves to at least `1px`, no panic, no
+  `NaN`/divide-by-zero in the ratio-derivation formula.
 
 ### Integration / manual
 
@@ -502,9 +606,14 @@ exercisable there.
 - **Aspect ratio before the asset decodes:** single-dimension sizing (invariant 6) reads
   intrinsic size from `AssetCache` at layout time, exactly like `mermaid_diagram_size`
   (`mermaid_diagram.rs:85-107`). If the asset hasn't finished loading yet, the missing
-  axis uses the plain default for one layout pass and self-corrects once the asset
-  resolves and layout re-runs (the same self-correction Mermaid relies on today) — this
-  is not a new invalidation mechanism, just a second consumer of an existing one.
+  (derived) axis uses the plain default for one layout pass, rendered via `.stretch()`
+  rather than `.contain()` so the *specified* axis is never shrunk by fit-scaling
+  during that transient frame, and self-corrects to the intrinsic-ratio-derived value
+  (and back to `.contain()`) once the asset resolves and layout re-runs (the same
+  self-correction Mermaid relies on today) — this is not a new invalidation mechanism,
+  just a second consumer of an existing one, plus a one-line fit-mode branch that
+  Mermaid's own diagram block does not need (Mermaid has no author-specified dimension
+  to protect pre-decode; `<img>` does).
 - **Honoring intrinsic SVG size with no attributes** (the other half of the issue's
   repro) is intentionally deferred: it changes default behavior for existing documents
   and deserves its own spec/PR.
