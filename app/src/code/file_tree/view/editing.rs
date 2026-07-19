@@ -7,7 +7,7 @@ mod tests;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use repo_metadata::file_tree_store::FileTreeEntryState;
+use repo_metadata::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntryState};
 use repo_metadata::{FileMetadata, FileTreeEntry};
 use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::MouseStateHandle;
@@ -125,6 +125,66 @@ impl FileTreeView {
         });
     }
 
+    /// Creates a new directory below the directory at the given identifier.
+    pub(super) fn create_new_directory(
+        &mut self,
+        id: &FileTreeIdentifier,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(root_dir) = self.root_directories.get_mut(&id.root) else {
+            return;
+        };
+        let (path, depth) = match root_dir.items.get(id.index) {
+            Some(FileTreeItem::File { .. }) => {
+                log::warn!("Cannot create a new directory below a file");
+                return;
+            }
+            Some(FileTreeItem::DirectoryHeader {
+                directory, depth, ..
+            }) => (directory.path.clone(), *depth),
+            _ => return,
+        };
+
+        // Ensure the parent directory is expanded before creating a directory beneath it.
+        if !self.is_folder_expanded(&id.root, &path) {
+            self.toggle_folder_expansion(&id.root, &path, ctx);
+        }
+
+        // Create a dummy FileTreeItem for the directory we are about to create--we'll replace
+        // this with something real once the user types in the actual directory name.
+        let new_item_index = id.index + 1;
+        let Some(root_dir) = self.root_directories.get_mut(&id.root) else {
+            return;
+        };
+        root_dir.items.insert(
+            new_item_index,
+            FileTreeItem::DirectoryHeader {
+                directory: FileTreeDirectoryEntryState {
+                    path: Arc::new(path.join("new_directory")),
+                    ignored: false,
+                    loaded: true,
+                },
+                depth: depth + 1,
+                mouse_state_handle: MouseStateHandle::default(),
+                draggable_state: warpui::elements::DraggableState::default(),
+            },
+        );
+
+        // Ensure the new item we just created is selected.
+        let new_id = FileTreeIdentifier {
+            root: id.root.clone(),
+            index: new_item_index,
+        };
+        self.select_id(&new_id, ctx);
+
+        // Ensure the editor is focused.
+        ctx.focus(&self.editor_view);
+        self.pending_edit = Some(PendingEdit {
+            id: new_id,
+            kind: PendingEditKind::CreateNewDirectory,
+        });
+    }
+
     /// Starts a rename edit on the item at the given identifier.
     pub(super) fn start_rename(&mut self, id: &FileTreeIdentifier, ctx: &mut ViewContext<Self>) {
         let Some(root_dir) = self.root_directories.get(&id.root) else {
@@ -201,6 +261,42 @@ impl FileTreeView {
                 self.open_in_new_pane(&file_tree_id, ctx);
                 self.rebuild_flattened_items();
             }
+            PendingEditKind::CreateNewDirectory => {
+                let new_entry = {
+                    let Some(root_dir) = self.root_directories.get_mut(&file_tree_id.root) else {
+                        return;
+                    };
+                    let Some(item) = root_dir.items.get_mut(file_tree_id.index) else {
+                        return;
+                    };
+
+                    if let FileTreeItem::DirectoryHeader { directory, .. } = item {
+                        let mut new_std = (*directory.path).clone();
+                        new_std.set_file_name(&buffer_content);
+                        let local_path = new_std.to_local_path_lossy();
+                        directory.path = Arc::new(new_std);
+
+                        if let Err(e) = std::fs::create_dir(&local_path) {
+                            log::warn!("Failed to create directory: {e}");
+                            return;
+                        }
+
+                        send_telemetry_from_ctx!(TelemetryEvent::FileTreeItemCreated, ctx);
+
+                        FileTreeEntryState::Directory(directory.clone())
+                    } else {
+                        return;
+                    }
+                };
+
+                if let Some(root_dir) = self.root_directories.get_mut(&file_tree_id.root) {
+                    // Ensure the file tree has the new item we've just created.
+                    Self::insert_entry(&mut root_dir.entry, new_entry);
+                }
+
+                self.rebuild_flatten_items_impl(Some(&file_tree_id), None, None);
+                ctx.notify();
+            }
             PendingEditKind::RenameExisting => {
                 let Some(root_dir) = self.root_directories.get(&file_tree_id.root) else {
                     return;
@@ -254,8 +350,11 @@ impl FileTreeView {
             self.editor_view.update(ctx, |view, ctx| {
                 view.clear_buffer(ctx);
             });
-            // Only remove placeholder in the create-new-file flow.
-            if pending_edit.kind == PendingEditKind::CreateNewFile {
+            // Only remove placeholder in the create-new-file and create-new-directory flows.
+            if matches!(
+                pending_edit.kind,
+                PendingEditKind::CreateNewFile | PendingEditKind::CreateNewDirectory
+            ) {
                 if let Some(root_dir) = self.root_directories.get_mut(&id.root) {
                     root_dir.items.remove(id.index);
                 }
