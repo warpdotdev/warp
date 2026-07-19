@@ -605,6 +605,7 @@ pub struct BlockListElement {
     scroll_position: ScrollPosition,
     is_terminal_focused: bool,
     is_terminal_selecting: bool,
+    is_extending_block_text_selection: bool,
     /// This map contains the IDs of sessions that were subshells as keys. Their corresponding
     /// values are the command that spawned the subshell, which is needed to paint the "flag"
     subshell_sessions: HashMap<SessionId, SubshellSource>,
@@ -910,6 +911,8 @@ impl BlockListElement {
             scroll_position: terminal_view_render_context.scroll_position,
             is_terminal_focused: terminal_view_render_context.is_terminal_focused,
             is_terminal_selecting: terminal_view_render_context.is_terminal_selecting,
+            is_extending_block_text_selection: terminal_view_render_context
+                .is_extending_block_text_selection,
             subshell_sessions: terminal_view_render_context.spawning_command_for_subshell_sessions,
             subshell_flags: HashMap::new(),
             size: None,
@@ -1596,41 +1599,65 @@ impl BlockListElement {
                                 }
                             }
 
-                            // If the find bar is open, allow selecting the active block again so users can
-                            // scope find to that block.
-                            let find_bar_open = self.find_model.as_ref(app).is_find_bar_open();
-                            // If there's only a non-simple selection, clear the clicked block to avoid a
-                            // text selection and a block selection being rendered at the same time.
-                            // Note we should only dispatch block selection actions when the mouse is not
-                            // clicking on highlighted links or a rich block or if this mouse_down is unselecting
-                            // text.
-                            if selection_type == SelectionType::Simple
+                            // iTerm-style shift+left-click extends the existing text selection
+                            // by moving the nearest boundary instead of starting a fresh one.
+                            // Only kicks in when there's actually a selection to extend and the
+                            // click isn't on a link or a revealed secret.
+                            let extend_text_selection = modifiers.shift
+                                && selection_type == SelectionType::Simple
                                 && self.highlighted_url.is_none()
                                 && self.hovered_secret.is_none()
-                                && model.block_list().selection().is_none()
-                                // Clicking on an active long running block should focus that block instead,
-                                // except when the find bar is open, in which case we allow selecting it.
-                                && (!on_long_running_block || find_bar_open)
-                            {
-                                ctx.dispatch_typed_action(TerminalAction::BlockSelect {
-                                    action: BlockSelectAction::MouseDown(Some(block_index)),
-                                    should_redetermine_focus,
-                                });
-                            } else {
+                                && model.block_list().selection().is_some();
+
+                            if extend_text_selection {
                                 ctx.dispatch_typed_action(TerminalAction::BlockSelect {
                                     action: BlockSelectAction::ClearAllBlocks,
                                     should_redetermine_focus,
                                 });
-                            }
+                                ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
+                                    BlockTextSelectAction::Extend {
+                                        point,
+                                        side,
+                                        position,
+                                    },
+                                ));
+                            } else {
+                                // If the find bar is open, allow selecting the active block again so users can
+                                // scope find to that block.
+                                let find_bar_open = self.find_model.as_ref(app).is_find_bar_open();
+                                // If there's only a non-simple selection, clear the clicked block to avoid a
+                                // text selection and a block selection being rendered at the same time.
+                                // Note we should only dispatch block selection actions when the mouse is not
+                                // clicking on highlighted links or a rich block or if this mouse_down is unselecting
+                                // text.
+                                if selection_type == SelectionType::Simple
+                                    && self.highlighted_url.is_none()
+                                    && self.hovered_secret.is_none()
+                                    && model.block_list().selection().is_none()
+                                    // Clicking on an active long running block should focus that block instead,
+                                    // except when the find bar is open, in which case we allow selecting it.
+                                    && (!on_long_running_block || find_bar_open)
+                                {
+                                    ctx.dispatch_typed_action(TerminalAction::BlockSelect {
+                                        action: BlockSelectAction::MouseDown(Some(block_index)),
+                                        should_redetermine_focus,
+                                    });
+                                } else {
+                                    ctx.dispatch_typed_action(TerminalAction::BlockSelect {
+                                        action: BlockSelectAction::ClearAllBlocks,
+                                        should_redetermine_focus,
+                                    });
+                                }
 
-                            ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
-                                BlockTextSelectAction::Begin {
-                                    point,
-                                    side,
-                                    selection_type,
-                                    position,
-                                },
-                            ));
+                                ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
+                                    BlockTextSelectAction::Begin {
+                                        point,
+                                        side,
+                                        selection_type,
+                                        position,
+                                    },
+                                ));
+                            }
                         }
                         // While rich content blocks can't be selected like command blocks,
                         // text selections can still originate in them (i.e. with AI blocks)
@@ -1971,7 +1998,9 @@ impl BlockListElement {
             let side = self
                 .size_info
                 .get_mouse_side(position - vec2f(bounds.origin().x(), snackbar_bottom));
-            if !is_selecting_blocks {
+            // Shift+Click Extend starts as a text-selection gesture. Keep allowing drag updates
+            // even though the Shift modifier would otherwise classify the drag as block selection.
+            if !is_selecting_blocks || self.is_extending_block_text_selection {
                 if let Some(point) = self.coord_to_point(
                     SnackbarPoint::underneath_snackbar(position),
                     ClampingMode::ClampToGrid,
