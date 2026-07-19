@@ -241,9 +241,7 @@ fn link_tooltip_anchor_ids_are_unique_per_block() {
     );
 }
 
-/// Regression guard: a plain-text file reference with a `:line` suffix in AI
-/// output resolves to a line-aware `FilePath` link. This is the baseline the
-/// markdown-link case below must not regress from.
+/// Baseline: a plain-text `foo.rs:59` reference resolves to a line-aware `FilePath`.
 #[cfg(feature = "local_fs")]
 #[test]
 fn plain_text_file_reference_is_line_aware() {
@@ -276,13 +274,9 @@ fn plain_text_file_reference_is_line_aware() {
     );
 }
 
-/// Regression test for the reported bug: clicking a file link in agent output
-/// that carries a `:line` suffix opened the file at line 1 instead of the target
-/// line. When the agent renders the reference as a markdown link
-/// `[foo.rs:59](foo.rs)`, file-path detection produces a line-aware `FilePath`
-/// from the display text, but the markdown-hyperlink merge used to clobber it
-/// with a line-less `DetectedLinkType::Url`, dropping the `:59`. The merge must
-/// preserve the line-aware file link.
+/// Regression for the reported bug: a markdown link `[foo.rs:59](foo.rs)` must
+/// stay a line-aware `FilePath` rather than being clobbered by a line-less `Url`
+/// (which opened the file at line 1).
 #[cfg(feature = "local_fs")]
 #[test]
 fn markdown_link_preserves_line_aware_file_path() {
@@ -296,8 +290,7 @@ fn markdown_link_preserves_line_aware_file_path() {
         line_index: 0,
     };
 
-    // Stripped display text is `foo.rs:59`; the extracted markdown hyperlink URL
-    // is `foo.rs` (no line), over the same char range 0..9.
+    // Display text `foo.rs:59`; markdown URL `foo.rs` (no line) over range 0..9.
     let texts = vec![("foo.rs:59".to_string(), location)];
     let md_hyperlinks: HyperlinksByLocation = vec![(location, vec![(0..9, "foo.rs".to_string())])];
 
@@ -320,8 +313,7 @@ fn markdown_link_preserves_line_aware_file_path() {
     );
 }
 
-/// Guard: a genuine external markdown hyperlink stays a `Url` (opens in the
-/// browser) and is not mistaken for a local file link.
+/// Guard: a genuine external markdown hyperlink stays a `Url`.
 #[cfg(feature = "local_fs")]
 #[test]
 fn markdown_external_link_stays_url() {
@@ -334,7 +326,6 @@ fn markdown_external_link_stays_url() {
         line_index: 0,
     };
 
-    // `[docs](https://example.com)` -> display text `docs`, url the web link.
     let texts = vec![("docs".to_string(), location)];
     let md_hyperlinks: HyperlinksByLocation =
         vec![(location, vec![(0..4, "https://example.com".to_string())])];
@@ -351,17 +342,14 @@ fn markdown_external_link_stays_url() {
     );
 }
 
-/// Guard: a markdown link whose *label* happens to match an existing local file
-/// but whose href is an explicit external URL must open the URL, not the local
-/// file. Such a label carries no line number, so the line-preserving guard must
-/// not apply -- the explicit href wins.
+/// Guard: a file-like label with an explicit external href stays a `Url` (the
+/// guard is line-aware only, so a line-less local-file label doesn't hijack it).
 #[cfg(feature = "local_fs")]
 #[test]
 fn markdown_external_link_with_file_like_label_stays_url() {
     use crate::ai::blocklist::block::TextLocation;
 
     let dir = tempfile::tempdir().unwrap();
-    // A file whose name matches the link label exists in the working directory.
     std::fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
     let cwd = dir.path().to_str().unwrap().to_owned();
     let location = TextLocation::Output {
@@ -369,9 +357,7 @@ fn markdown_external_link_with_file_like_label_stays_url() {
         line_index: 0,
     };
 
-    // `[Cargo.toml](https://example.com)` -> display text `Cargo.toml` (a real
-    // local file, but with NO line number) and an external href over the same
-    // char range 0..10.
+    // `[Cargo.toml](https://example.com)`: label is a real local file (no line).
     let texts = vec![("Cargo.toml".to_string(), location)];
     let md_hyperlinks: HyperlinksByLocation =
         vec![(location, vec![(0..10, "https://example.com".to_string())])];
