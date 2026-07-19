@@ -870,10 +870,7 @@ fn render_collapsible_body(
     props: Props,
 ) -> Option<Box<dyn Element>> {
     let Some(state) = props.collapsible_block_states.get(message_id) else {
-        report_error!(
-            "Missing collapsible state for orchestration message",
-            extra: { "message_id" => ?message_id }
-        );
+        log::warn!("Missing collapsible state for orchestration message: {message_id:?}");
         return None;
     };
     render_scrollable_collapsible_content(
