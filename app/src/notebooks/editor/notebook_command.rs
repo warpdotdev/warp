@@ -86,6 +86,29 @@ lazy_static! {
         "JSON",
         "PHP",
     ];
+
+    /// Cached syntax highlighting configuration (SyntaxSet + Theme).
+    ///
+    /// `SyntaxSet::load_defaults_newlines()` deserializes ~30 MB of embedded
+    /// syntax grammars via bincode. Previously this happened in every
+    /// `NotebookCommand::new()` call, allocating tens of GB when many code
+    /// blocks existed. Loading once and sharing the immutable data removes
+    /// the single largest source of memory growth.
+    static ref SYNTAX_CONFIG: Option<(SyntaxSet, Theme)> = {
+        let ps = SyntaxSet::load_defaults_newlines();
+        if let Ok(asset) = ASSETS.get("bundled/syntax_theme/base16.tmTheme") {
+            let mut cursor = std::io::Cursor::new(asset);
+            match ThemeSet::load_from_reader(&mut cursor) {
+                Ok(theme) => Some((ps, theme)),
+                Err(e) => {
+                    log::debug!("Failed to load theme set from asset: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    };
 }
 
 #[derive(Default)]
@@ -161,8 +184,6 @@ pub struct NotebookCommand {
     syntax_highlighting_handle: Option<SpawnedFutureHandle>,
     cached_highlight_delta: Option<CachedHighlightColors>,
 
-    syntax_config: Option<(SyntaxSet, Theme)>,
-
     handle: WeakModelHandle<Self>,
 }
 
@@ -221,22 +242,6 @@ impl NotebookCommand {
             dropdown
         });
 
-        let syntax_config = {
-            let ps = SyntaxSet::load_defaults_newlines();
-            if let Ok(asset) = ASSETS.get("bundled/syntax_theme/base16.tmTheme") {
-                let mut cursor = std::io::Cursor::new(asset);
-                match ThemeSet::load_from_reader(&mut cursor) {
-                    Ok(theme) => Some((ps, theme)),
-                    Err(e) => {
-                        log::debug!("Failed to load theme set from asset: {e}");
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        };
-
         ctx.subscribe_to_model(&content, Self::on_buffer_content_updated);
 
         let (debounce_highlighting_tx, debounce_highlighting_rx) = async_channel::unbounded();
@@ -259,7 +264,6 @@ impl NotebookCommand {
             syntax_highlighting_handle: None,
             cached_highlight_delta: None,
             debounce_highlighting_tx,
-            syntax_config,
             handle: ctx.handle(),
         };
 
@@ -338,7 +342,7 @@ impl NotebookCommand {
             // Skip highlighting for default code.
             CodeBlockType::Code { lang } if lang == "text" => (),
             CodeBlockType::Code { lang } => {
-                let Some((syntax_set, syntax_theme)) = self.syntax_config.clone() else {
+                let Some((syntax_set, syntax_theme)) = SYNTAX_CONFIG.as_ref() else {
                     return;
                 };
 
@@ -878,18 +882,18 @@ impl ChildModelHandle for ModelHandle<NotebookCommand> {
 async fn parse_code_into_style_ranges(
     buffer_text: String,
     language: String,
-    syntax_set: SyntaxSet,
-    theme: Theme,
+    syntax_set: &'static SyntaxSet,
+    theme: &'static Theme,
 ) -> Option<CodeHighlightResult> {
     // Find the syntax corresponding to the input language.
     let syntax = syntax_set.find_syntax_by_name(&language)?;
 
-    let mut h = HighlightLines::new(syntax, &theme);
+    let mut h = HighlightLines::new(syntax, theme);
     let mut runs = Vec::new();
 
     let mut byte_offset = 0;
     for line in LinesWithEndings::from(&buffer_text) {
-        let ranges = h.highlight_line(line, &syntax_set).ok()?;
+        let ranges = h.highlight_line(line, syntax_set).ok()?;
 
         for (text_style, content) in ranges {
             let text_color = text_style.foreground;
