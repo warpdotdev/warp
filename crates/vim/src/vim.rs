@@ -2073,5 +2073,6 @@ pub trait VimHandler {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 #[path = "vim_tests.rs"]
 mod tests;
