@@ -654,6 +654,103 @@ fn realistic_nav_items() -> Vec<SettingsNavItem> {
     ]
 }
 
+fn search_nav_items() -> Vec<SettingsNavItem> {
+    let mut nav_items = realistic_nav_items();
+    nav_items.extend([
+        SettingsNavItem::Page(SettingsSection::Appearance),
+        SettingsNavItem::Page(SettingsSection::Features),
+        SettingsNavItem::Page(SettingsSection::About),
+    ]);
+    nav_items
+}
+
+// ── Navigation-label search ─────────────────────────────────────────────────
+
+#[test]
+fn navigation_label_search_matches_page_name_prefixes_case_insensitively() {
+    let nav_items = search_nav_items();
+
+    assert_eq!(
+        navigation_sections_matching_query(&nav_items, "Appearance"),
+        vec![SettingsSection::Appearance]
+    );
+    assert_eq!(
+        navigation_sections_matching_query(&nav_items, "fe"),
+        vec![SettingsSection::Features]
+    );
+    assert_eq!(
+        navigation_sections_matching_query(&nav_items, "billing and"),
+        vec![SettingsSection::BillingAndUsage]
+    );
+}
+
+#[test]
+fn navigation_label_search_does_not_match_label_infixes() {
+    let nav_items = search_nav_items();
+
+    assert_eq!(
+        navigation_sections_matching_query(&nav_items, "and"),
+        Vec::<SettingsSection>::new()
+    );
+    assert_eq!(
+        navigation_sections_matching_query(&nav_items, "usage"),
+        Vec::<SettingsSection>::new()
+    );
+}
+
+#[test]
+fn navigation_label_search_matches_umbrella_and_subpage_labels() {
+    let nav_items = search_nav_items();
+
+    assert_eq!(
+        navigation_sections_matching_query(&nav_items, "Agents"),
+        SettingsSection::ai_subpages()
+    );
+    assert_eq!(
+        navigation_sections_matching_query(&nav_items, "Warp Agent"),
+        vec![SettingsSection::WarpAgent]
+    );
+}
+
+#[test]
+fn preferred_navigation_section_prioritizes_exact_and_unique_prefix_matches() {
+    let nav_items = search_nav_items();
+
+    assert_eq!(
+        preferred_navigation_section(&nav_items, "Appearance"),
+        Some(SettingsSection::Appearance)
+    );
+    assert_eq!(
+        preferred_navigation_section(&nav_items, "fe"),
+        Some(SettingsSection::Features)
+    );
+    assert_eq!(
+        preferred_navigation_section(&nav_items, "Agents"),
+        Some(SettingsSection::WarpAgent)
+    );
+    assert_eq!(preferred_navigation_section(&nav_items, "a"), None);
+}
+
+#[test]
+fn backing_page_navigation_match_handles_direct_pages_and_subpages() {
+    assert!(backing_page_has_navigation_match(
+        SettingsSection::Appearance,
+        &[SettingsSection::Appearance]
+    ));
+    assert!(backing_page_has_navigation_match(
+        SettingsSection::AI,
+        &[SettingsSection::WarpAgent]
+    ));
+    assert!(backing_page_has_navigation_match(
+        SettingsSection::MCPServers,
+        &[SettingsSection::AgentMCPServers]
+    ));
+    assert!(!backing_page_has_navigation_match(
+        SettingsSection::Account,
+        &[SettingsSection::Appearance]
+    ));
+}
+
 /// Mutably flips an umbrella's `expanded` flag at `nav_index`.
 fn set_expanded(nav_items: &mut [SettingsNavItem], nav_index: usize, expanded: bool) {
     if let Some(SettingsNavItem::Umbrella(u)) = nav_items.get_mut(nav_index) {

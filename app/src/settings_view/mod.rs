@@ -970,6 +970,108 @@ enum CycleDirection {
     Down,
 }
 
+/// Returns whether `label` starts with the non-empty, trimmed search query.
+///
+/// Navigation labels use prefix matching so users can progressively type a
+/// page name (for example, "fe" for "Features") without broad infix matches
+/// such as "and" matching "Billing and usage".
+fn navigation_label_matches_query(label: &str, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    !query.is_empty() && label.to_lowercase().starts_with(&query)
+}
+
+/// Returns the concrete settings sections whose visible navigation labels
+/// match `query`. Matching an umbrella label includes all of its subpages.
+fn navigation_sections_matching_query(
+    nav_items: &[SettingsNavItem],
+    query: &str,
+) -> Vec<SettingsSection> {
+    nav_items
+        .iter()
+        .flat_map(|item| match item {
+            SettingsNavItem::Page(section) => {
+                navigation_label_matches_query(&section.to_string(), query)
+                    .then_some(*section)
+                    .into_iter()
+                    .collect()
+            }
+            SettingsNavItem::Umbrella(umbrella) => {
+                let mut matches = Vec::new();
+                if navigation_label_matches_query(umbrella.label, query) {
+                    matches.extend(umbrella.subpages.iter().copied());
+                }
+                matches.extend(
+                    umbrella.subpages.iter().copied().filter(|section| {
+                        navigation_label_matches_query(&section.to_string(), query)
+                    }),
+                );
+                matches
+            }
+        })
+        .unique()
+        .collect()
+}
+
+/// Returns the section that should be selected for a navigation-label query.
+///
+/// An exact label match wins. Otherwise, a prefix is preferred only when it
+/// resolves to one concrete section, avoiding arbitrary navigation for broad
+/// prefixes such as "a".
+fn preferred_navigation_section(
+    nav_items: &[SettingsNavItem],
+    query: &str,
+) -> Option<SettingsSection> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return None;
+    }
+
+    let candidates = nav_items
+        .iter()
+        .flat_map(|item| match item {
+            SettingsNavItem::Page(section) => vec![(section.to_string(), *section)],
+            SettingsNavItem::Umbrella(umbrella) => {
+                let mut candidates = umbrella
+                    .subpages
+                    .first()
+                    .map(|section| vec![(umbrella.label.to_string(), *section)])
+                    .unwrap_or_default();
+                candidates.extend(
+                    umbrella
+                        .subpages
+                        .iter()
+                        .map(|section| (section.to_string(), *section)),
+                );
+                candidates
+            }
+        })
+        .collect_vec();
+
+    if let Some((_, section)) = candidates
+        .iter()
+        .find(|(label, _)| label.to_lowercase() == query)
+    {
+        return Some(*section);
+    }
+
+    let matching_sections = candidates
+        .iter()
+        .filter(|(label, _)| label.to_lowercase().starts_with(&query))
+        .map(|(_, section)| *section)
+        .unique()
+        .collect_vec();
+    (matching_sections.len() == 1).then(|| matching_sections[0])
+}
+
+fn backing_page_has_navigation_match(
+    page_section: SettingsSection,
+    matching_sections: &[SettingsSection],
+) -> bool {
+    matching_sections
+        .iter()
+        .any(|section| section.parent_page_section() == page_section)
+}
+
 /// A stop in the arrow-key navigation order over the sidebar.
 ///
 /// A collapsed umbrella occupies a single stop rather than being skipped,
@@ -1475,6 +1577,10 @@ impl SettingsView {
             EditorEvent::Edited(_) => {
                 let search_query = editor.as_ref(ctx).buffer_text(ctx);
                 let is_search_active = !search_query.is_empty();
+                let navigation_matches =
+                    navigation_sections_matching_query(&self.nav_items, &search_query);
+                let preferred_navigation_section =
+                    preferred_navigation_section(&self.nav_items, &search_query);
 
                 if is_search_active {
                     // Save umbrella expanded state before search modifies it.
@@ -1496,25 +1602,43 @@ impl SettingsView {
                             continue;
                         }
                         if let Some(subpage) = AISubpage::from_section(subpage_section) {
+                            let navigation_match = navigation_matches.contains(&subpage_section);
+                            let filter_query = if navigation_match { "" } else { &search_query };
                             self.ai_page_handle.update(ctx, |view, ctx| {
                                 view.set_active_subpage(Some(subpage), ctx);
                             });
                             let match_data = self
                                 .ai_page_handle
-                                .update(ctx, |view, ctx| view.update_filter(&search_query, ctx));
-                            self.subpage_filter.insert(subpage_section, match_data);
+                                .update(ctx, |view, ctx| view.update_filter(filter_query, ctx));
+                            self.subpage_filter.insert(
+                                subpage_section,
+                                if navigation_match {
+                                    MatchData::Uncounted(true)
+                                } else {
+                                    match_data
+                                },
+                            );
                         }
                     }
                     // Do the same for Code subpages.
                     for &subpage_section in SettingsSection::code_subpages() {
                         if let Some(subpage) = CodeSubpage::from_section(subpage_section) {
+                            let navigation_match = navigation_matches.contains(&subpage_section);
+                            let filter_query = if navigation_match { "" } else { &search_query };
                             self.code_page_handle.update(ctx, |view, ctx| {
                                 view.set_active_subpage(Some(subpage), ctx);
                             });
                             let match_data = self
                                 .code_page_handle
-                                .update(ctx, |view, ctx| view.update_filter(&search_query, ctx));
-                            self.subpage_filter.insert(subpage_section, match_data);
+                                .update(ctx, |view, ctx| view.update_filter(filter_query, ctx));
+                            self.subpage_filter.insert(
+                                subpage_section,
+                                if navigation_match {
+                                    MatchData::Uncounted(true)
+                                } else {
+                                    match_data
+                                },
+                            );
                         }
                     }
                 } else {
@@ -1543,34 +1667,23 @@ impl SettingsView {
                 }
 
                 for (i, page) in self.settings_pages.iter().enumerate() {
-                    self.pages_filter[i] = update_page!(
+                    let navigation_match =
+                        backing_page_has_navigation_match(page.section, &navigation_matches);
+                    let filter_query = if navigation_match { "" } else { &search_query };
+                    let match_data = update_page!(
                         &page.view_handle,
                         |view, ctx| {
-                            let match_data = view.update_filter(&search_query, ctx);
+                            let match_data = view.update_filter(filter_query, ctx);
                             ctx.notify();
                             match_data
                         },
                         ctx
                     );
-                }
-
-                // Restore the active subpage after filtering.
-                if is_search_active {
-                    let current = self.current_settings_page;
-                    if current.is_ai_subpage() && current != SettingsSection::AgentMCPServers {
-                        if let Some(subpage) = AISubpage::from_section(current) {
-                            self.ai_page_handle.update(ctx, |view, ctx| {
-                                view.set_active_subpage(Some(subpage), ctx);
-                            });
-                        }
-                    }
-                    if current.is_code_subpage() {
-                        if let Some(subpage) = CodeSubpage::from_section(current) {
-                            self.code_page_handle.update(ctx, |view, ctx| {
-                                view.set_active_subpage(Some(subpage), ctx);
-                            });
-                        }
-                    }
+                    self.pages_filter[i] = if navigation_match {
+                        MatchData::Uncounted(true)
+                    } else {
+                        match_data
+                    };
                 }
 
                 // Auto-expand umbrellas that have matching subpages during search.
@@ -1617,7 +1730,19 @@ impl SettingsView {
                         .any(|(page, _)| page.section == current_backing)
                 };
 
-                if !current_still_visible {
+                let preferred_navigation_section = preferred_navigation_section
+                    .filter(|section| self.section_passes_search_filter(*section));
+
+                if let Some(new_section) = preferred_navigation_section {
+                    if new_section != self.current_settings_page {
+                        self.set_and_refresh_current_page_internal(
+                            new_section,
+                            false, /* should_clear_query */
+                            false, /* allow_steal_focus */
+                            ctx,
+                        );
+                    }
+                } else if !current_still_visible {
                     // Find the first visible section: check subpages first, then pages.
                     let first_visible = if is_search_active {
                         self.nav_items
@@ -1650,6 +1775,35 @@ impl SettingsView {
                             false, /* allow_steal_focus */
                             ctx,
                         );
+                    }
+                }
+
+                // Subpage selection rebuilds its PageType, resetting the saved widget
+                // filter. Restore the final active subpage after auto-selection and
+                // immediately reapply the effective query so its rendered contents
+                // stay filtered like standalone settings pages.
+                if is_search_active {
+                    let current = self.current_settings_page;
+                    let filter_query = if navigation_matches.contains(&current) {
+                        ""
+                    } else {
+                        &search_query
+                    };
+                    if current.is_ai_subpage() && current != SettingsSection::AgentMCPServers {
+                        if let Some(subpage) = AISubpage::from_section(current) {
+                            self.ai_page_handle.update(ctx, |view, ctx| {
+                                view.set_active_subpage(Some(subpage), ctx);
+                                view.update_filter(filter_query, ctx);
+                            });
+                        }
+                    }
+                    if current.is_code_subpage() {
+                        if let Some(subpage) = CodeSubpage::from_section(current) {
+                            self.code_page_handle.update(ctx, |view, ctx| {
+                                view.set_active_subpage(Some(subpage), ctx);
+                                view.update_filter(filter_query, ctx);
+                            });
+                        }
                     }
                 }
                 ctx.notify();
