@@ -727,6 +727,19 @@ pub(crate) fn detect_all_links(
     for (location, line_hyperlinks) in md_hyperlinks {
         let entry = all_links.entry(location).or_default();
         for (range, url) in line_hyperlinks {
+            // Don't let a markdown hyperlink clobber a line-aware file link that
+            // file-path detection already produced at the same range. When the
+            // agent renders a file reference as a markdown link (e.g.
+            // `[foo.rs:59](foo.rs)`), the display text yields a
+            // `DetectedLinkType::FilePath` carrying the `:59` line number, while
+            // the link's URL usually omits it -- so overwriting with a `Url` here
+            // would drop the line and open the file at line 1.
+            #[cfg(feature = "local_fs")]
+            {
+                if matches!(entry.get(&range), Some(DetectedLinkType::FilePath { .. })) {
+                    continue;
+                }
+            }
             entry.insert(range, DetectedLinkType::Url(url));
         }
     }
