@@ -10,7 +10,8 @@ use line_ending::LineEnding;
 use markdown_parser::{
     CodeBlockText, FormattedIndentTextInline, FormattedTable, FormattedTaskList, FormattedText,
     FormattedTextFragment, FormattedTextHeader, FormattedTextLine, FormattedTextStyles,
-    OrderedFormattedIndentTextInline, parse_markdown, parse_markdown_with_gfm_tables,
+    OrderedFormattedIndentTextInline, VerticalAlign, parse_markdown,
+    parse_markdown_with_gfm_tables,
 };
 use num_traits::SaturatingSub;
 use pathfinder_color::ColorU;
@@ -5611,6 +5612,10 @@ struct ActiveTextBlock {
     /// never disagree (issue #13734 finding 3).
     subscript_depth: i32,
     superscript_depth: i32,
+    /// Which of subscript/superscript was most recently *opened* (a close never updates this), so
+    /// `resolve_vertical_align` can pick the innermost still-active marker rather than a fixed
+    /// type-priority. See `resolve_vertical_align` for the full tie-rule rationale.
+    last_opened_vertical_align: Option<VerticalAlign>,
 }
 
 impl<'a> StyledBufferBlocks<'a> {
@@ -5881,10 +5886,20 @@ impl Iterator for StyledBufferBlocks<'_> {
                             text.subscript_depth >= 0 && text.superscript_depth >= 0,
                             "sub/sup end-marker without a matching start"
                         );
+                        // Only a *start* marker updates "last opened" — a close must never make an
+                        // already-closed marker look innermost again (see `resolve_vertical_align`).
+                        if is_start {
+                            text.last_opened_vertical_align = Some(match marker_type {
+                                BufferTextStyle::Subscript => VerticalAlign::Sub,
+                                BufferTextStyle::Superscript => VerticalAlign::Sup,
+                                _ => unreachable!(),
+                            });
+                        }
                     }
                     let resolved_vertical_align = resolve_vertical_align(
-                        text.subscript_depth > 0,
-                        text.superscript_depth > 0,
+                        text.subscript_depth,
+                        text.superscript_depth,
+                        text.last_opened_vertical_align,
                     );
 
                     text.update_styles(|styles| {
@@ -5996,6 +6011,9 @@ impl ActiveTextBlock {
         // so at most one alignment can be active at a block boundary — hence a 0/1 seed is exact.
         let subscript_depth = text_styles.is_subscript() as i32;
         let superscript_depth = text_styles.is_superscript() as i32;
+        // At most one alignment can be active at a block boundary (see above), so it's
+        // unambiguously the "last opened" one carried into this block.
+        let last_opened_vertical_align = text_styles.vertical_align();
         Self {
             block_style,
             current_text_styles: text_styles,
@@ -6003,6 +6021,7 @@ impl ActiveTextBlock {
             last_run_open: false,
             subscript_depth,
             superscript_depth,
+            last_opened_vertical_align,
         }
     }
 

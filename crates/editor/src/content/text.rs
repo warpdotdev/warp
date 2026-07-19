@@ -1256,6 +1256,12 @@ impl TextStylesWithMetadata {
         self.vertical_align == Some(VerticalAlign::Sup)
     }
 
+    /// The raw collapsed alignment, if any. Used to seed the render iterator's `last_opened`
+    /// tracking at a block boundary, where at most one alignment can be carried over.
+    pub(super) fn vertical_align(&self) -> Option<VerticalAlign> {
+        self.vertical_align
+    }
+
     pub fn is_link(&self) -> bool {
         self.link.is_some()
     }
@@ -1691,6 +1697,14 @@ pub struct StyleSummary {
     strikethrough_counter: i32,
     subscript_counter: i32,
     superscript_counter: i32,
+    /// Which of subscript/superscript was most recently *opened* (never updated by a close) as of
+    /// this summary's right edge, so the innermost-wins tie rule can be recovered from a purely
+    /// additive, order-agnostic-looking `AddAssign`. A leaf's own summary sets this to `Some(_)` only
+    /// when the leaf itself is a start marker; `AddAssign` then prefers the right-hand summary's value
+    /// whenever it carries one, which is well-defined because the sum-tree cursor always folds leaf
+    /// summaries left-to-right in document order (never re-associated out of order). See
+    /// `resolve_vertical_align` for how this combines with the depth counters.
+    last_opened_vertical_align: Option<VerticalAlign>,
     link_counter: i32,
     syntax_color_counter: i32,
     /// We need to keep track the total link marker count so we could index into a specific link marker
@@ -1713,28 +1727,49 @@ impl AddAssign<&StyleSummary> for StyleSummary {
         self.subscript_counter += other.subscript_counter;
         self.superscript_counter += other.superscript_counter;
         self.underline_counter += other.underline_counter;
+        // `other` is always the right-hand (later-in-document-order) summary in a left-to-right
+        // fold, so it wins whenever it recorded an open of its own.
+        if other.last_opened_vertical_align.is_some() {
+            self.last_opened_vertical_align = other.last_opened_vertical_align;
+        }
     }
 }
 
 /// The single tie/nesting rule for overlapping subscript and superscript, shared by every consumer
 /// that has to collapse the two independent markers into one `Option<VerticalAlign>`.
 ///
-/// Subscript and superscript are tracked as independent markers (`StyleSummary` keeps a counter for
-/// each; the buffer emits properly-nested `<sub_s>…<sup_s>…<sup_e>…<sub_e>` pairs), so a span can have
-/// BOTH active at once. When that happens the storage can name only one, so **superscript wins the
-/// overlap**. Both the style-summary reconstruction and the render-run iterator MUST route through
-/// this function so they never disagree about which alignment a nested span renders as, or which one
-/// an inner end-marker restores (issue #13734 finding 3).
+/// Subscript and superscript are tracked as independent markers (`StyleSummary` keeps a depth counter
+/// for each; the buffer emits properly-nested `<sub_s>…<sup_s>…<sup_e>…<sub_e>` pairs), so a span can
+/// have BOTH active at once. When that happens, **the innermost still-active marker wins** — this
+/// matches the browser mental model, where a nested `<sup>` inside a `<sub>` controls its own text,
+/// and the outer alignment resumes once the inner element closes. `last_opened` names whichever of the
+/// two markers was most recently *opened* (not closed) in document order; a close never updates it, so
+/// that once the inner marker's depth returns to zero this function falls through to whichever marker
+/// is still active. Both the style-summary reconstruction and the render-run iterator MUST route
+/// through this function so they never disagree about which alignment a nested span renders as, or
+/// which one an inner end-marker restores (issue #13734 finding 3; tie rule flipped to innermost-wins
+/// per product ruling — superscript-wins was an implementation convenience, not intended behavior).
+///
+/// Note: this collapses same-direction nesting flat rather than compounding it — nesting two
+/// superscripts, for instance, still renders as a single superscript baseline offset, not a taller
+/// stacked one. `vertical_align` is a tri-state (`None`/`Sub`/`Sup`) attribute on the run, so there is
+/// no representation for "two levels of superscript." See the sub/sup spec for the follow-up ticket
+/// tracking depth-aware cumulative rendering.
 pub(super) fn resolve_vertical_align(
-    subscript_active: bool,
-    superscript_active: bool,
+    subscript_depth: i32,
+    superscript_depth: i32,
+    last_opened: Option<VerticalAlign>,
 ) -> Option<VerticalAlign> {
-    if superscript_active {
-        Some(VerticalAlign::Sup)
-    } else if subscript_active {
-        Some(VerticalAlign::Sub)
-    } else {
-        None
+    match last_opened {
+        // The innermost marker is still active: it wins outright, regardless of the other marker.
+        Some(VerticalAlign::Sup) if superscript_depth > 0 => Some(VerticalAlign::Sup),
+        Some(VerticalAlign::Sub) if subscript_depth > 0 => Some(VerticalAlign::Sub),
+        // The innermost marker already closed (or neither marker was ever opened here): fall
+        // back to whichever marker is still active. The properly-nested-markers invariant means
+        // at most one of these can be true once `last_opened`'s marker has closed.
+        _ if superscript_depth > 0 => Some(VerticalAlign::Sup),
+        _ if subscript_depth > 0 => Some(VerticalAlign::Sub),
+        _ => None,
     }
 }
 
@@ -1783,9 +1818,12 @@ impl StyleSummary {
             None
         };
         // Sub and sup are independent markers and can overlap; `resolve_vertical_align` is the shared
-        // tie rule (superscript wins) that the render iterator also uses, so the two agree.
-        let vertical_align =
-            resolve_vertical_align(self.subscript_counter > 0, self.superscript_counter > 0);
+        // tie rule (innermost-wins) that the render iterator also uses, so the two agree.
+        let vertical_align = resolve_vertical_align(
+            self.subscript_counter,
+            self.superscript_counter,
+            self.last_opened_vertical_align,
+        );
         TextStyles {
             weight,
             italic: self.italic_counter > 0,
@@ -1813,6 +1851,10 @@ impl From<TextStyles> for StyleSummary {
             strikethrough_counter: styles.strikethrough.into(),
             subscript_counter: styles.is_subscript().into(),
             superscript_counter: styles.is_superscript().into(),
+            // A `TextStyles` snapshot only ever carries one active alignment (it's a single
+            // `Option<VerticalAlign>`, not independently-overlapping counters), so seeding
+            // "last opened" directly from it is exact and unambiguous.
+            last_opened_vertical_align: styles.vertical_align,
             total_color_marker: 0,
             total_link_marker: 0,
         }
@@ -1997,6 +2039,17 @@ impl sum_tree::Item for BufferText {
                     s.set_weight(Some(*weight));
                 }
                 *s.style_counter_mut(marker_type) += delta;
+                // Only a *start* marker records an "open" for the innermost-wins tie rule; a close
+                // leaves `last_opened_vertical_align` as `None` here so `AddAssign` never lets a
+                // close override a still-active outer marker recorded in an earlier chunk (see
+                // `resolve_vertical_align`).
+                if matches!(dir, MarkerDir::Start) {
+                    s.last_opened_vertical_align = match marker_type {
+                        BufferTextStyle::Subscript => Some(VerticalAlign::Sub),
+                        BufferTextStyle::Superscript => Some(VerticalAlign::Sup),
+                        _ => None,
+                    };
+                }
                 Some(Box::new(s))
             }
             BufferText::Color(marker) => {

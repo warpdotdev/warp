@@ -2037,8 +2037,15 @@ fn render_run_vertical_aligns(buffer: &Buffer) -> Vec<(char, bool, bool)> {
 fn test_nested_sub_inside_sup_render_matches_summary() {
     // #13734 finding 3: subscript and superscript are independent, overlappable markers. When one
     // is applied inside the other, the render iterator must (a) render the overlap with the same
-    // superscript-wins tie rule `StyleSummary` uses, and (b) *restore* the outer alignment at the
+    // innermost-wins tie rule `StyleSummary` uses, and (b) *restore* the outer alignment at the
     // inner end-marker instead of clearing to None. Both views must agree on every character.
+    //
+    // NOTE: this test's buffer is subscript-outer / superscript-inner, so the overlap ("bcd") is
+    // Sup under BOTH the old superscript-wins rule and the current innermost-wins rule — the
+    // assertions below are unchanged from before the tie-rule flip. Don't read "test still passes"
+    // as "nothing to verify here": see `test_nested_sup_inside_sub_render_matches_summary` below
+    // for the sup-outer/sub-inner case, which is the one that actually flips and would catch a
+    // regression back to superscript-wins.
     App::test((), |mut app| async move {
         let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
         let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
@@ -2101,8 +2108,11 @@ fn test_nested_sub_inside_sup_render_matches_summary() {
 #[test]
 fn test_nested_sup_inside_sub_render_matches_summary() {
     // Mirror of the above with the outer/inner alignments swapped: superscript outer, subscript
-    // inner. The tie rule is superscript-wins, so the overlap renders Sup and the inner end-marker
-    // restores the outer Sup.
+    // inner. The tie rule is innermost-wins, so the overlap ("bcd") renders Sub — the inner,
+    // more-deeply-nested marker — even though it's the outer marker (superscript) that would have
+    // won under the old superscript-wins rule. The inner end-marker then restores the outer Sup.
+    // This is the regression case: a naive revert to type-priority tie-breaking flips "bcd" back
+    // to Sup and this assertion catches it.
     App::test((), |mut app| async move {
         let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
         let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
@@ -2134,15 +2144,16 @@ fn test_nested_sup_inside_sub_render_matches_summary() {
                 "<text><sup_s>a<sub_s>bcd<sub_e>e<sup_e>"
             );
 
-            // Superscript wins the overlap, so every character with sup active renders Sup.
+            // Innermost wins the overlap: "bcd" is the more-deeply-nested subscript span, so it
+            // renders Sub even though the outer span is superscript. "e" then restores the outer Sup.
             let render = render_run_vertical_aligns(buffer);
             assert_eq!(
                 render,
                 vec![
                     ('a', false, true),
-                    ('b', false, true),
-                    ('c', false, true),
-                    ('d', false, true),
+                    ('b', true, false),
+                    ('c', true, false),
+                    ('d', true, false),
                     ('e', false, true),
                 ]
             );
@@ -3272,6 +3283,47 @@ fn test_sub_sup_style_and_font_from_real_styled_run() {
                 "expected style_and_font to carry Sup through from a real StyledBufferRun"
             );
         });
+    });
+}
+
+/// Nested `<sub>`/`<sup>` reaching the render path through *markdown import*, as opposed to
+/// `test_nested_sub_inside_sup_render_matches_summary` / `test_nested_sup_inside_sub_render_matches_summary`
+/// above, which build the overlap via direct `style_internal` calls over an in-buffer selection.
+///
+/// This is a distinct seam: `markdown_parser::parse_inline` already flattens nested sub/sup tags to
+/// one resolved `vertical_align` per fragment before the buffer ever sees them (see
+/// `test_parse_superscript_nested_in_subscript_innermost_wins` in `markdown_parser_tests.rs`), so
+/// `Buffer::from_formatted_text` never actually emits *overlapping* subscript/superscript markers for
+/// imported markdown — each fragment's single resolved alignment becomes one clean, non-overlapping
+/// marker pair. The buffer-level tie rule in `resolve_vertical_align` is therefore only reachable via
+/// live interactive editing (applying one alignment over a selection that already carries the other),
+/// never via markdown import. This test locks in that import fidelity (the parser's innermost-wins
+/// resolution survives the round-trip to render runs) without claiming to exercise the overlap branch.
+#[test]
+fn test_nested_sub_sup_markdown_import_matches_parser_resolution() {
+    App::test((), |mut app| async move {
+        let markdown = "<sub>a<sup>bcd</sup>e</sub>\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let render = app.read_model(&buffer, |buffer, _| render_run_vertical_aligns(buffer));
+
+        // The parser already resolved this to innermost-wins (Sub, Sup, Sup, Sup, Sub) before the
+        // buffer ever saw it; this just confirms the import path doesn't lose or re-derive that.
+        assert_eq!(
+            render,
+            vec![
+                ('a', true, false),
+                ('b', false, true),
+                ('c', false, true),
+                ('d', false, true),
+                ('e', true, false),
+            ]
+        );
     });
 }
 
