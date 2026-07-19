@@ -538,3 +538,25 @@ fn test_cancelling_command_queues_up_next_command_command() {
             .await;
     });
 }
+
+#[test]
+fn test_cap_in_band_output_leaves_small_output_untouched() {
+    let output = b"a short generator result".to_vec();
+    let capped = cap_in_band_output(output.clone());
+    assert_eq!(capped, output);
+}
+
+#[test]
+fn test_cap_in_band_output_truncates_oversized_output() {
+    let oversized = vec![b'x'; MAX_IN_BAND_COMMAND_OUTPUT_BYTES + 4096];
+    let capped = cap_in_band_output(oversized);
+    assert_eq!(capped.len(), MAX_IN_BAND_COMMAND_OUTPUT_BYTES);
+    assert!(capped.iter().all(|&b| b == b'x'));
+}
+
+#[test]
+fn test_cap_in_band_output_keeps_output_at_exact_limit() {
+    let exact = vec![b'y'; MAX_IN_BAND_COMMAND_OUTPUT_BYTES];
+    let capped = cap_in_band_output(exact);
+    assert_eq!(capped.len(), MAX_IN_BAND_COMMAND_OUTPUT_BYTES);
+}

@@ -23,6 +23,33 @@ use crate::terminal::model::session::command_executor::{
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::SizeInfo;
 
+/// Upper bound on the number of bytes of output retained from a single in-band
+/// generator command.
+///
+/// In-band generators power completions, syntax highlighting, and prompt context
+/// chips, whose results are small. A misbehaving (or simply very chatty) generator
+/// that emits huge output would otherwise have its entire stdout/stderr buffered
+/// into a `CommandOutput` and held alive by the generator's pending future. That
+/// has been observed to retain multiple GB of live heap (the `CurrentPrompt`
+/// context-chip path in particular; see APP-4792). Output beyond this limit is
+/// truncated.
+const MAX_IN_BAND_COMMAND_OUTPUT_BYTES: usize = 1 << 20; // 1 MiB
+
+/// Truncates in-band generator command output to at most
+/// [`MAX_IN_BAND_COMMAND_OUTPUT_BYTES`], releasing the excess capacity so a single
+/// runaway generator cannot retain unbounded heap.
+fn cap_in_band_output(mut output: Vec<u8>) -> Vec<u8> {
+    if output.len() > MAX_IN_BAND_COMMAND_OUTPUT_BYTES {
+        log::warn!(
+            "Truncating in-band generator command output from {} to {MAX_IN_BAND_COMMAND_OUTPUT_BYTES} bytes",
+            output.len()
+        );
+        output.truncate(MAX_IN_BAND_COMMAND_OUTPUT_BYTES);
+        output.shrink_to_fit();
+    }
+    output
+}
+
 #[derive(Clone, Debug)]
 pub struct InBandCommand {
     pub command: String,
@@ -211,7 +238,7 @@ impl InBandCommandExecutor {
                         if !output_tx.is_closed() {
                             let command_output = if event.exit_code == 0 {
                                 CommandOutput {
-                                    stdout: event.output,
+                                    stdout: cap_in_band_output(event.output),
                                     stderr: vec![],
                                     status: CommandExitStatus::Success,
                                     exit_code: Some(ExitCode::from(event.exit_code as i32)),
@@ -219,7 +246,7 @@ impl InBandCommandExecutor {
                             } else {
                                 CommandOutput {
                                     stdout: vec![],
-                                    stderr: event.output,
+                                    stderr: cap_in_band_output(event.output),
                                     status: CommandExitStatus::Failure,
                                     exit_code: Some(ExitCode::from(event.exit_code as i32)),
                                 }
