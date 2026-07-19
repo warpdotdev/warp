@@ -1015,6 +1015,7 @@ impl View for AIBlock {
                         .pending_context_selected_text()
                         .is_some(),
                     attachments: &attachment_name_list,
+                    attachment_chip_handles: &self.state_handles.attachment_chip_handles,
                     find_context: self.find_model.as_ref(app).is_find_bar_open().then_some(
                         FindContext {
                             model: self.find_model.as_ref(app),
