@@ -415,6 +415,18 @@ event is consumed at `app/src/pane_group/pane/notebook_pane.rs:175`, re-emitted 
 (:8489-8494) or opens a new tab/split (:8503-8520). So open, focus, and dedup for the target
 document are live; only the fragment is lost.
 
+> **Dedup needs canonicalization for self-reference (and symlink aliases).** The dedup
+> compares `file_view.path()` against the resolved link path, but an open notebook stores its
+> *canonical* path (recorded on load via `CanonicalizedPath`/`dunce::canonicalize`), while the
+> link resolves to `base_directory.join(relative)` — which keeps `.`/`..` components and, on
+> macOS, the `/tmp` vs `/private/tmp` symlink alias. Without normalization a self-referential
+> link (`./this-doc.md`, the same file that's already open) fails to match its own pane and
+> opens a duplicate. Fix: canonicalize the resolved local target with the *same*
+> `dunce::canonicalize` before the dedup comparison (extracted as
+> `canonicalize_local_path_for_dedup`, unit-tested against the `.`/`..`/symlink-alias shapes).
+> A self-link with a fragment then hits the already-open branch and scrolls immediately; a
+> self-link without one just refocuses. This is invariant 12.
+
 **Why the fragment is lost today.** The path is cleaned by
 `CleanPathResult::with_line_and_column_number` (`crates/warp_util/src/path.rs:158`), whose
 `LINE_AND_COLUMN_REGEX` (:47) strips `:line[:col]`, `[l, c]`, and `#L100`-style suffixes

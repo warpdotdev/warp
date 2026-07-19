@@ -156,7 +156,17 @@ Out of scope (explicit non-goals):
     itself cannot be resolved (does not exist relative to the document), clicking is a
     no-op, matching a broken plain relative link today.
 
-12. Every link-form's behavior is now fully specified — there are no undefined interim
+12. **Self-referential relative links** — a relative link whose target resolves to the
+    *currently-open* document (`this-doc.md`, `./this-doc.md`, with or without a `#fragment`) —
+    keep focus on the same tab rather than opening a duplicate, and a fragment scrolls within
+    it. This reuses the same open/focus dedup a cross-document link uses; the only subtlety is
+    path equality: an open notebook stores its *canonical* path, while the link resolves to
+    `base_directory.join(relative)` (with `.`/`..` components and, on macOS, the `/tmp` vs
+    `/private/tmp` symlink alias), so the resolved target is canonicalized before the dedup
+    comparison. A self-link with a fragment scrolls immediately (the tab is already laid out);
+    a self-link without one just refocuses, no scroll.
+
+13. Every link-form's behavior is now fully specified — there are no undefined interim
     states. Concretely, for a scheme-less relative-looking target:
     - **Bare `file.md` that exists on disk** (no `./`, no `/`) resolves as a local file, not
       a web URL — even though `.md`/`.dev`/`.com` are known public suffixes. This repairs a
