@@ -48,7 +48,7 @@ pub const MCP: StaticCommand = StaticCommand {
 
 pub const VIEW_LOGS: StaticCommand = StaticCommand {
     name: "/view-logs",
-    description: "Bundle your TUI logs into a zip archive",
+    description: "Bundle your logs into a zip archive",
     icon_path: "bundled/svg/download-01.svg",
     availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
