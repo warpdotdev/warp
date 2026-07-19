@@ -6265,6 +6265,7 @@ impl Workspace {
                     LocalOrRemotePath::Local(path.clone()),
                     session,
                     layout,
+                    None,
                     ctx,
                 );
             }
@@ -6375,7 +6376,7 @@ impl Workspace {
                             // Jupyter notebook) instead of always opening remote
                             // files as raw code in the editor.
                             if let FileTarget::MarkdownViewer(layout) = target {
-                                self.open_file_notebook(location.clone(), None, *layout, ctx);
+                                self.open_file_notebook(location.clone(), None, *layout, None, ctx);
                             } else {
                                 self.open_code(
                                     code_source,
@@ -8472,6 +8473,7 @@ impl Workspace {
         path: LocalOrRemotePath,
         session: Option<Arc<Session>>,
         layout: EditorLayout,
+        anchor: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
         let existing_file_pane = {
@@ -8483,18 +8485,25 @@ impl Workspace {
                     !pane_group.as_ref(ctx).is_pane_hidden_for_close(*pane_id)
                         && file_view.as_ref(ctx).path() == Some(&path)
                 })
-                .map(|(pane_id, _)| pane_id)
         };
 
-        if let Some(pane_id) = existing_file_pane {
+        if let Some((pane_id, file_view)) = existing_file_pane {
             self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
                 pane_group.focus_pane_by_id(pane_id, ctx);
             });
+            // The tab is already open and laid out, so a cross-document anchor can scroll
+            // immediately — no deferral needed. A miss is a silent no-op.
+            if let Some(anchor) = anchor {
+                file_view.update(ctx, |view, ctx| {
+                    view.scroll_to_anchor(&anchor, ctx);
+                });
+            }
             return;
         }
         let pane = FilePane::new(
             Some(path),
             session,
+            anchor,
             #[cfg(feature = "local_fs")]
             None,
             ctx,
@@ -16119,11 +16128,21 @@ impl Workspace {
                 );
             }
             #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
-            pane_group::Event::OpenFileInWarp { path, session } => {
+            pane_group::Event::OpenFileInWarp {
+                path,
+                session,
+                anchor,
+            } => {
                 #[cfg(feature = "local_fs")]
                 {
                     let layout = *EditorSettings::as_ref(ctx).open_file_layout.value();
-                    self.open_file_notebook(path.clone(), Some(session.clone()), layout, ctx);
+                    self.open_file_notebook(
+                        path.clone(),
+                        Some(session.clone()),
+                        layout,
+                        anchor.clone(),
+                        ctx,
+                    );
                 }
             }
             pane_group::Event::MoveToSpace {

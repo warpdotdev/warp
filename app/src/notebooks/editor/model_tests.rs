@@ -103,7 +103,7 @@ fn model_from_markdown(
 
     let (window, _) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         let window_id = ctx.window_id();
-        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
+        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::active(window_id), ctx));
         let editor_model = ctx.add_model(|ctx| {
             let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
             NotebooksEditorModel::new(styles, window_id, ctx)
@@ -576,6 +576,48 @@ fn test_find_matching_header_missing_returns_none() {
             assert!(editor.find_matching_header("#nonexistent", ctx).is_none());
             assert!(editor.find_matching_header("#", ctx).is_none());
             assert!(editor.find_matching_header("", ctx).is_none());
+        });
+    })
+}
+
+#[test]
+fn test_pending_anchor_drains_and_scrolls_on_match() {
+    // The deferred cross-document scroll: a pending anchor set before layout is drained once,
+    // resolving through the same slug matcher as the same-document jump. A hyphenated fragment
+    // must land on its spaced heading, and the pending state must clear after draining.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("Intro\n\n## Target Section\nBody", &mut app, true);
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_pending_anchor("target-section".to_owned());
+            assert!(
+                editor.drain_pending_anchor(ctx),
+                "Pending anchor matching a heading should request a scroll"
+            );
+            // Draining is one-shot: a second drain finds nothing pending and reports no scroll.
+            assert!(
+                !editor.drain_pending_anchor(ctx),
+                "Pending anchor should be cleared after the first drain"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_pending_anchor_miss_is_silent_no_op() {
+    // A pending anchor with no matching heading drains without scrolling and without error,
+    // mirroring the same-document miss semantics (product invariant 7).
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("## Target Section\nBody", &mut app, true);
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_pending_anchor("no-such-heading".to_owned());
+            assert!(
+                !editor.drain_pending_anchor(ctx),
+                "A pending anchor with no matching heading must not scroll"
+            );
         });
     })
 }

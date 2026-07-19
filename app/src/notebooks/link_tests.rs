@@ -10,7 +10,7 @@ use url::Url;
 use warp_util::path::LineAndColumnArg;
 use warpui::{App, ModelHandle, SingletonEntity, WindowId};
 
-use super::{LinkTarget, NotebookLinks, ResolveError, SessionSource};
+use super::{split_anchor_fragment, LinkTarget, NotebookLinks, ResolveError, SessionSource};
 use crate::notebooks::file::is_markdown_file;
 use crate::notebooks::link::LinkEvent;
 use crate::terminal::model::session::Session;
@@ -34,6 +34,18 @@ fn local_file(path: impl Into<PathBuf>) -> LinkTarget {
         is_markdown: is_markdown_file(&path),
         path,
         line_and_column: None,
+        anchor: None,
+        session: TEST_SESSION.clone(),
+    }
+}
+
+fn local_file_anchor(path: impl Into<PathBuf>, anchor: &str) -> LinkTarget {
+    let path = path.into();
+    LinkTarget::LocalFile {
+        is_markdown: is_markdown_file(&path),
+        path,
+        line_and_column: None,
+        anchor: Some(anchor.to_owned()),
         session: TEST_SESSION.clone(),
     }
 }
@@ -47,6 +59,7 @@ fn local_file_location(path: impl Into<PathBuf>, line: usize, column: Option<usi
             line_num: line,
             column_num: column,
         }),
+        anchor: None,
         session: TEST_SESSION.clone(),
     }
 }
@@ -69,7 +82,7 @@ fn init_link_model(app: &mut App, base_directory: Option<&Path>) -> ModelHandle<
             base_directory: dir.to_owned(),
         },
         // File links can't be resolved without a session, even if there's no working directory.
-        None => SessionSource::Active(window_id),
+        None => SessionSource::active(window_id),
     };
     app.add_singleton_model(|ctx| {
         let mut session = ActiveSession::default();
@@ -168,6 +181,158 @@ fn test_resolve_bare_url() {
         assert_eq!(
             resolve(&app, &links, "app/src/main.rs").await,
             local_file(base_path.join("app/src/main.rs"))
+        );
+    });
+}
+
+#[test]
+fn test_split_anchor_fragment_pure() {
+    // No fragment.
+    assert_eq!(
+        split_anchor_fragment("other-file.md"),
+        ("other-file.md", None)
+    );
+    // Simple fragment.
+    assert_eq!(
+        split_anchor_fragment("other-file.md#section"),
+        ("other-file.md", Some("section".to_owned()))
+    );
+    // Dot-slash prefix preserved on the path side.
+    assert_eq!(
+        split_anchor_fragment("./other-file.md#section"),
+        ("./other-file.md", Some("section".to_owned()))
+    );
+    // Only the final `#` splits; an earlier `#` stays in the path.
+    assert_eq!(
+        split_anchor_fragment("weird#name.md#frag"),
+        ("weird#name.md", Some("frag".to_owned()))
+    );
+    // Empty fragment yields no anchor.
+    assert_eq!(
+        split_anchor_fragment("other-file.md#"),
+        ("other-file.md", None)
+    );
+    // URL-encoded fragments are decoded.
+    assert_eq!(
+        split_anchor_fragment("doc.md#caf%C3%A9"),
+        ("doc.md", Some("café".to_owned()))
+    );
+    // `#L<digits>` line-number suffixes are NOT peeled as anchors — left for CleanPathResult.
+    assert_eq!(
+        split_anchor_fragment("main.rs#L100"),
+        ("main.rs#L100", None)
+    );
+    assert_eq!(
+        split_anchor_fragment("main.rs#L100:50"),
+        ("main.rs#L100:50", None)
+    );
+    // A fragment that merely starts with `L` but isn't a line number is a real anchor.
+    assert_eq!(
+        split_anchor_fragment("doc.md#License"),
+        ("doc.md", Some("License".to_owned()))
+    );
+    assert_eq!(
+        split_anchor_fragment("doc.md#L10x"),
+        ("doc.md", Some("L10x".to_owned()))
+    );
+}
+
+#[test]
+fn test_bare_markdown_file_prefers_local_file_over_cctld() {
+    // Regression test for the `.md`-is-Moldova ccTLD collision. A bare `README.md` (no `./`
+    // prefix, no slash) is classified as a valid public domain by the bare-domain heuristic
+    // (`.md` has a known suffix and `README` is a root), so before this fix it misrouted to the
+    // browser. When such a target resolves to an existing local file relative to the base
+    // directory, it must be opened as a file, not a URL.
+    App::test((), |mut app| async move {
+        let base = tempdir().unwrap();
+        let base_path = base.path();
+        touch(base_path.join("README.md")).await;
+        touch(base_path.join("notes.md")).await;
+        let links = init_link_model(&mut app, Some(base_path));
+
+        // Bare `file.md` targets that exist on disk resolve as files, not URLs.
+        assert_eq!(
+            resolve(&app, &links, "README.md").await,
+            local_file(base_path.join("README.md"))
+        );
+        assert_eq!(
+            resolve(&app, &links, "notes.md").await,
+            local_file(base_path.join("notes.md"))
+        );
+
+        // A genuine bare domain that does NOT resolve to a local file still opens the browser.
+        assert_eq!(
+            resolve(&app, &links, "warp.dev").await,
+            url("http://warp.dev")
+        );
+        // A bare `.md` target with no matching local file also falls through to the browser,
+        // preserving the domain heuristic where there's nothing to shadow it.
+        assert_eq!(
+            resolve(&app, &links, "nonexistent.md").await,
+            url("http://nonexistent.md")
+        );
+    });
+}
+
+#[test]
+fn test_split_fragment_before_file_resolution() {
+    // A cross-document link `other-file.md#section` must have its `#section` fragment split off
+    // before file resolution, so the file part resolves on disk and the fragment rides along on
+    // the resolved target for a deferred scroll. Before this fix, the literal `#section` was
+    // included in the stat and the file was never found.
+    App::test((), |mut app| async move {
+        let base = tempdir().unwrap();
+        let base_path = base.path();
+        touch(base_path.join("other-file.md")).await;
+        touch(base_path.join("multi#hash.md")).await;
+        let links = init_link_model(&mut app, Some(base_path));
+
+        // Bare `file.md#section` resolves to the file with the anchor attached.
+        assert_eq!(
+            resolve(&app, &links, "other-file.md#section").await,
+            local_file_anchor(base_path.join("other-file.md"), "section")
+        );
+        // `./`-prefixed form (which dodges the ccTLD heuristic) also splits the fragment.
+        assert_eq!(
+            resolve(&app, &links, "./other-file.md#section").await,
+            local_file_anchor(base_path.join("other-file.md"), "section")
+        );
+        // No fragment → no anchor.
+        assert_eq!(
+            resolve(&app, &links, "./other-file.md").await,
+            local_file(base_path.join("other-file.md"))
+        );
+        // Only the final `#…` is treated as the fragment; earlier `#` stays in the path.
+        assert_eq!(
+            resolve(&app, &links, "./multi#hash.md#frag").await,
+            local_file_anchor(base_path.join("multi#hash.md"), "frag")
+        );
+        // A trailing empty fragment (`file.md#`) resolves the file with no anchor.
+        assert_eq!(
+            resolve(&app, &links, "./other-file.md#").await,
+            local_file(base_path.join("other-file.md"))
+        );
+    });
+}
+
+#[test]
+fn test_fragment_split_preserves_line_number_routing() {
+    // The `#L100` line-number suffix must continue to route through the existing line/column
+    // path (handled by `CleanPathResult`), not be peeled as an anchor fragment.
+    App::test((), |mut app| async move {
+        let base = tempdir().unwrap();
+        let base_path = base.path();
+        touch(base_path.join("src/main.rs")).await;
+        let links = init_link_model(&mut app, Some(base_path));
+
+        assert_eq!(
+            resolve(&app, &links, "./src/main.rs#L100").await,
+            local_file_location(base_path.join("src/main.rs"), 100, None)
+        );
+        assert_eq!(
+            resolve(&app, &links, "./src/main.rs#L100:50").await,
+            local_file_location(base_path.join("src/main.rs"), 100, Some(50))
         );
     });
 }
@@ -419,9 +584,9 @@ fn test_open_markdown_file_uses_viewer_when_preferred() {
 
         links
             .update(&mut app, |links, ctx| {
-                // The `./` in the link is important: `.md` is the TLD for Moldova, so this will be
-                // resolved as a web link otherwise.
-                let future = links.resolve_and_open("./README.md", ctx);
+                // With the ccTLD repair, a bare `README.md` that exists on disk resolves as a
+                // file rather than the `.md` Moldova domain, so no `./` prefix is needed here.
+                let future = links.resolve_and_open("README.md", ctx);
                 ctx.await_spawned_future(future.future_id())
             })
             .await;
@@ -429,9 +594,59 @@ fn test_open_markdown_file_uses_viewer_when_preferred() {
         let events = events.lock();
         assert_eq!(events.len(), 1);
         match events.first() {
-            Some(LinkEvent::OpenFileNotebook { path, session }) => {
+            Some(LinkEvent::OpenFileNotebook {
+                path,
+                session,
+                anchor,
+            }) => {
                 assert_eq!(path, &root.join("README.md"));
                 assert!(Arc::ptr_eq(&TEST_SESSION, session));
+                assert_eq!(anchor, &None);
+            }
+            other => panic!("Expected OpenFileNotebook event, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn test_cross_document_fragment_threads_anchor_to_open_event() {
+    // A `file.md#section` cross-document link must carry its `section` anchor all the way to the
+    // emitted `OpenFileNotebook` event, so the destination notebook can perform a deferred
+    // scroll to the heading once it loads.
+    App::test((), |mut app| async move {
+        let base = tempdir().unwrap();
+        let base_path = base.path();
+        touch(base_path.join("other-file.md")).await;
+        let links = init_link_model(&mut app, Some(base_path));
+
+        let events = Arc::new(Mutex::new(vec![]));
+        {
+            let events = events.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&links, move |_, event, _| {
+                    events.lock().push(event.clone());
+                })
+            });
+        }
+
+        links
+            .update(&mut app, |links, ctx| {
+                let future = links.resolve_and_open("other-file.md#target-section", ctx);
+                ctx.await_spawned_future(future.future_id())
+            })
+            .await;
+
+        let events = events.lock();
+        assert_eq!(events.len(), 1);
+        match events.first() {
+            Some(LinkEvent::OpenFileNotebook {
+                path,
+                session,
+                anchor,
+            }) => {
+                assert_eq!(path, &base_path.join("other-file.md"));
+                assert!(Arc::ptr_eq(&TEST_SESSION, session));
+                assert_eq!(anchor.as_deref(), Some("target-section"));
             }
             other => panic!("Expected OpenFileNotebook event, got {other:?}"),
         }

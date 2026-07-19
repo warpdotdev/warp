@@ -106,7 +106,7 @@ fn initialize_editor(
 
     let (window, test_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         let window_id = ctx.window_id();
-        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
+        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::active(window_id), ctx));
         let editor_model = ctx.add_model(|ctx| {
             let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
             NotebooksEditorModel::new(styles, window_id, ctx)

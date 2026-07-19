@@ -174,7 +174,7 @@ impl AIDocumentView {
     ) -> Self {
         let window_id = ctx.window_id();
 
-        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
+        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::active(window_id), ctx));
 
         // Subscribe to document model updates so we can react to agent changes
         ctx.subscribe_to_model(

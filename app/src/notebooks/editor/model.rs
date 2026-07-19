@@ -108,6 +108,13 @@ pub struct NotebooksEditorModel {
     /// Context used to generate clickable file path links for notebooks.
     file_link_resolution_context: Option<FileLinkResolutionContext>,
     default_mermaid_display_mode: MarkdownDisplayMode,
+    /// A `#fragment` anchor to scroll to once the document's layout is first built. Set when a
+    /// cross-document link (`other-file.md#section`) opens this notebook in a new tab: the target
+    /// offset does not exist until the buffer parses and lays out, and there is no on-load
+    /// callback to hang the scroll on, so we stash the fragment and drain it on the first
+    /// `LayoutUpdated`. Draining reuses the same `scroll_to_matching_header` slug resolver as the
+    /// same-document jump; a miss is a silent no-op, consistent with same-document miss semantics.
+    pending_anchor: Option<String>,
 }
 
 #[derive(Clone)]
@@ -258,6 +265,7 @@ impl NotebooksEditorModel {
             resize_tx,
             file_link_resolution_context: None,
             default_mermaid_display_mode: MarkdownDisplayMode::Raw,
+            pending_anchor: None,
         }
     }
 
@@ -381,6 +389,9 @@ impl NotebooksEditorModel {
                 if self.sync_mermaid_render_offsets(ctx) {
                     self.rebuild_layout(ctx);
                 }
+                // Now that the document is laid out, heading offsets exist, so a queued
+                // cross-document anchor can resolve and scroll. Drained once.
+                self.drain_pending_anchor(ctx);
             }
             _ => (),
         }
@@ -1360,6 +1371,29 @@ impl NotebooksEditorModel {
 
     pub fn link_url_at(&self, offset: CharOffset, app: &AppContext) -> Option<String> {
         self.content.as_ref(app).link_url_at_offset(offset)
+    }
+
+    /// Queue a `#fragment` anchor to be scrolled to once this document's layout is first built.
+    ///
+    /// Used for cross-document navigation (`other-file.md#section`) when the notebook is opened in
+    /// a *new* tab: the target offset does not exist until the buffer parses and lays out. The
+    /// pending anchor is drained on the first `LayoutUpdated` (see `handle_render_model_event`).
+    /// If the tab is already open, callers should use `scroll_to_matching_header` directly instead
+    /// — the buffer is already laid out, so no deferral is needed.
+    pub fn set_pending_anchor(&mut self, anchor: String) {
+        self.pending_anchor = Some(anchor);
+    }
+
+    /// Drain a queued cross-document anchor, scrolling to it if it matches a heading. Called once
+    /// the document's layout is ready. A miss (no matching heading) is a silent no-op, matching
+    /// the same-document miss semantics. Returns whether an anchor was drained *and* matched a
+    /// heading (i.e. a scroll was requested) — used in tests; callers on the layout path ignore it.
+    fn drain_pending_anchor(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        let Some(anchor) = self.pending_anchor.take() else {
+            return false;
+        };
+        // `find_matching_header` expects a leading `#`; the stored anchor is the bare fragment.
+        self.scroll_to_matching_header(&format!("#{anchor}"), ctx)
     }
 
     pub fn scroll_to_matching_header(
