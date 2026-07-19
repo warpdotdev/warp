@@ -3004,8 +3004,14 @@ impl CodeReviewView {
         ctx: &mut ViewContext<Self>,
     ) -> Option<CodeReviewEditorState> {
         let repo_path = self.repo_path()?.clone();
-        // Skip editor creation for binary files or files without content (e.g., pure renames)
-        if file.file_diff.is_binary || file.content_at_head.is_none() {
+        // Skip editor creation for binary files, files without content (e.g.,
+        // pure renames), or files whose diff/content is too large to render.
+        // Unrenderable files show a size placeholder (see `render_file_content`)
+        // and never use an editor, so building one only wastes memory.
+        if file.file_diff.is_binary
+            || file.content_at_head.is_none()
+            || matches!(file.file_diff.size, DiffSize::Unrenderable(_))
+        {
             None
         } else if matches!(file.file_diff.status, GitFileStatus::Deleted) {
             // For deleted files, the file doesn't exist on disk anymore, so we can't use
@@ -3109,7 +3115,9 @@ impl CodeReviewView {
     ) -> Option<CodeReviewEditorState> {
         let repo_path = self.repo_path()?.clone();
 
-        if file.file_diff.is_binary {
+        // Skip unrenderable files (too-large diff/content): they render a size
+        // placeholder rather than an editor, so constructing one wastes memory.
+        if file.file_diff.is_binary || matches!(file.file_diff.size, DiffSize::Unrenderable(_)) {
             None
         } else {
             let self_handle = ctx.handle();
