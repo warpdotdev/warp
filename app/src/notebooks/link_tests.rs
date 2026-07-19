@@ -249,9 +249,12 @@ fn test_bare_markdown_file_prefers_local_file_over_cctld() {
         let base_path = base.path();
         touch(base_path.join("README.md")).await;
         touch(base_path.join("notes.md")).await;
+        touch(base_path.join("docs/guide.md")).await;
         let links = init_link_model(&mut app, Some(base_path));
 
-        // Bare `file.md` targets that exist on disk resolve as files, not URLs.
+        // Single-segment `file.md` targets that exist on disk resolve as files, not URLs — the
+        // shape the ccTLD heuristic misroutes (the heuristic takes the substring up to the first
+        // `/`, so only a slash-free name can be mistaken for a domain).
         assert_eq!(
             resolve(&app, &links, "README.md").await,
             local_file(base_path.join("README.md"))
@@ -259,6 +262,18 @@ fn test_bare_markdown_file_prefers_local_file_over_cctld() {
         assert_eq!(
             resolve(&app, &links, "notes.md").await,
             local_file(base_path.join("notes.md"))
+        );
+
+        // Guard: multi-segment `.md` paths were already safe (any `/` makes the pre-`/` substring
+        // a non-suffix string, so the heuristic can't fire) — assert the repair's file-first
+        // ordering doesn't regress them.
+        assert_eq!(
+            resolve(&app, &links, "docs/guide.md").await,
+            local_file(base_path.join("docs/guide.md"))
+        );
+        assert_eq!(
+            resolve(&app, &links, "./docs/guide.md").await,
+            local_file(base_path.join("docs/guide.md"))
         );
 
         // A genuine bare domain that does NOT resolve to a local file still opens the browser.
