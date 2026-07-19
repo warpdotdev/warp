@@ -1976,6 +1976,44 @@ fn test_block_style_strips_vertical_align() {
 }
 
 #[test]
+fn test_unstyle_subscript_leaves_superscript_intact() {
+    // #13734 finding 2: unstyling a single vertical-alignment mask (subscript) must not clear
+    // superscript-only ranges. The strip-all `TextStyles::all()` path (exercised by
+    // `test_block_style_strips_vertical_align`) still clears both, but a targeted
+    // `Unstyle(subscript)` must be a no-op over a superscript run.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(5),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().superscript(), selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><sup_s>test<sup_e>");
+
+            // Unstyle *subscript* over the same range: superscript must survive untouched.
+            let _ = buffer.unstyle_internal(
+                TextStyles::default().subscript(),
+                selection.clone(),
+                ctx,
+            );
+            assert_eq!(buffer.content.debug(), "<text><sup_s>test<sup_e>");
+        });
+    });
+}
+
+#[test]
 fn test_block_style_strips_subscript() {
     // Guard case for `test_block_style_strips_vertical_align`: subscript matches the literal
     // value `TextStyles::all()` carries, so this already passed before the fix, but it's worth

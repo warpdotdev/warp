@@ -3665,12 +3665,15 @@ impl Buffer {
             if is_weight && handled_weight {
                 continue;
             }
-            // `vertical_align` is a single `Option<VerticalAlign>`, so a mask like `TextStyles::all()`
-            // can only ever name one of `Subscript`/`Superscript`. Fall back to `has_any_vertical_align`
-            // for these two variants so a "strip everything" mask clears both markers instead of only
-            // the one it happens to carry.
+            // `vertical_align` is a single `Option<VerticalAlign>`, so the strip-all `TextStyles::all()`
+            // mask can only ever name one of `Subscript`/`Superscript`. For that mask *only* we broaden
+            // to `has_any_vertical_align` so "strip everything" clears both markers. A targeted
+            // single-style mask (e.g. `Unstyle(subscript)`) must NOT broaden — otherwise unstyling
+            // subscript would also emit `UnstyleText(Superscript)` and clear superscript-only ranges.
             let wants_style = match style {
-                BufferTextStyle::Subscript | BufferTextStyle::Superscript => {
+                BufferTextStyle::Subscript | BufferTextStyle::Superscript
+                    if text_style == TextStyles::all() =>
+                {
                     text_style.has_any_vertical_align()
                 }
                 _ => text_style.exact_match_style(&style),
