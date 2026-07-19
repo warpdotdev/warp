@@ -14,9 +14,9 @@ use std::{io, ptr};
 use anyhow::{Context as _, Error, Result};
 use command::blocking::Command;
 use itertools::Itertools;
-use libc::{self, c_int, winsize, TIOCSCTTY};
-use mio::unix::SourceFd;
+use libc::{self, TIOCSCTTY, c_int, winsize};
 use mio::Interest;
+use mio::unix::SourceFd;
 use nix::pty::openpty;
 use nix::sys::termios::{self, InputFlags, SetArg};
 use serde::{Deserialize, Serialize};
@@ -30,17 +30,17 @@ use warpui::{AppContext, SingletonEntity};
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
 use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
 use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
+use crate::ASSETS;
 use crate::terminal::bootstrap::raw_init_shell_script_for_shell;
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
 use crate::terminal::local_tty::docker_sandbox::{
-    DockerSandboxShellStarter, DOCKER_SANDBOX_HOME_DIR,
+    DOCKER_SANDBOX_HOME_DIR, DockerSandboxShellStarter,
 };
 use crate::terminal::local_tty::shell::{
-    extra_path_entries, ssh_socket_dir, DirectShellStarter, ShellStarter,
+    DirectShellStarter, ShellStarter, extra_path_entries, ssh_socket_dir,
 };
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
-use crate::ASSETS;
 
 const BASH_HISTORY_SIZE_SENTINEL: &str = "57265949261";
 
@@ -56,8 +56,13 @@ fn make_pty(size: winsize) -> Result<(RawFd, RawFd)> {
     // across duplicated fds, so when we call `libc::dup2()` below, those fds
     // will _not_ be closed when we exec the shell.
     unsafe {
-        libc::fcntl(ends.master, libc::F_SETFD, libc::FD_CLOEXEC);
-        libc::fcntl(ends.slave, libc::F_SETFD, libc::FD_CLOEXEC);
+        if libc::fcntl(ends.master, libc::F_SETFD, libc::FD_CLOEXEC) == -1 {
+            return Err(io::Error::last_os_error())
+                .context("fcntl FD_CLOEXEC on master pty failed");
+        }
+        if libc::fcntl(ends.slave, libc::F_SETFD, libc::FD_CLOEXEC) == -1 {
+            return Err(io::Error::last_os_error()).context("fcntl FD_CLOEXEC on slave pty failed");
+        }
     }
 
     Ok((ends.master, ends.slave))
@@ -517,9 +522,13 @@ fn spawn_command_in_pty(
             // others define it as a structure.  The only way we can safely
             // initialize it on all platforms is through `libc::sigemptyset()`.
             let mut signals: MaybeUninit<libc::sigset_t> = MaybeUninit::uninit();
-            libc::sigemptyset(signals.as_mut_ptr());
+            cvt(libc::sigemptyset(signals.as_mut_ptr()))?;
             let signals: libc::sigset_t = signals.assume_init();
-            libc::sigprocmask(libc::SIG_SETMASK, &signals, ptr::null_mut());
+            cvt(libc::sigprocmask(
+                libc::SIG_SETMASK,
+                &signals,
+                ptr::null_mut(),
+            ))?;
 
             // Set up stdin/stdout/stderr.
             cvt(libc::dup2(follower, libc::STDIN_FILENO))?;
@@ -616,7 +625,7 @@ impl Pty {
         let fd = unsafe {
             // Maybe this should be done outside of this function so nonblocking
             // isn't forced upon consumers. Although maybe it should be?
-            set_nonblocking(leader_fd);
+            set_nonblocking(leader_fd).context("failed to set leader fd non-blocking")?;
 
             File::from_raw_fd(leader_fd)
         };
@@ -721,7 +730,7 @@ impl EventedPty for Pty {
         let res = unsafe { libc::ioctl(self.fd.as_raw_fd(), libc::TIOCSWINSZ, &win as *const _) };
 
         if res < 0 {
-            panic!("ioctl TIOCSWINSZ failed: {}", io::Error::last_os_error());
+            log::warn!("ioctl TIOCSWINSZ failed: {}", io::Error::last_os_error());
         }
     }
 
@@ -754,11 +763,13 @@ impl ToWinsize for &SizeInfo {
     }
 }
 
-unsafe fn set_nonblocking(fd: c_int) {
-    use libc::{fcntl, F_GETFL, F_SETFL, O_NONBLOCK};
+unsafe fn set_nonblocking(fd: c_int) -> io::Result<()> {
+    use self::utils::cvt;
+    use libc::{F_GETFL, F_SETFL, O_NONBLOCK, fcntl};
 
-    let res = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-    assert_eq!(res, 0);
+    let flags = cvt(fcntl(fd, F_GETFL, 0))?;
+    cvt(fcntl(fd, F_SETFL, flags | O_NONBLOCK))?;
+    Ok(())
 }
 
 /// Spawn the PTY for a Docker sandbox session.
