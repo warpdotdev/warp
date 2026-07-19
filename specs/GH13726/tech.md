@@ -118,9 +118,45 @@ touches the shared `FormattedTable` type. Whichever is chosen:
   machinery (`render/model/mod.rs:1487-1533`) then handles heights/selection.
 - Serialization: `to_internal_format` (`lib.rs:396-411`) must escape an intra-cell break
   (it can't be a literal `\n`); encode it as `<br>` (or an escape marker) within the
-  tab-separated cell, and decode symmetrically in `from_internal_format`. `to_plain_text`
-  (GFM export) likewise encodes the break as `<br>` since GFM has no intra-cell newline.
+  tab-separated cell, and decode symmetrically in `from_internal_format`. This is **this
+  spec's own work, not inherited from #13732/PR #13870** — see the explicit dependency
+  note below for why the two do not overlap on this function.
 - Keep the per-cell offset maps (`table_cell_offset_maps`) correct across the added break.
+
+**Explicit dependency on #13732 (PR #13870), scoped precisely by function —
+verified against that PR's actual (Oz-approved, merge-pending) diff, not assumed:**
+
+- **`FormattedTable::to_plain_text`'s GFM-export encode side is inherited, not
+  reimplemented.** PR #13870 already patches `to_plain_text` (`lib.rs:431` region) so
+  `inline_to_text` replaces any embedded `\n` in a cell's fragment text with literal
+  `<br>` before joining — this is a general fix over *any* cell whose fragment text
+  contains `\n`, not GFM-pipe-table-specific, so it already covers the HTML-table cells
+  this spec produces once cells hold an embedded break (Option A/B above). This spec's
+  own item 2 work must **not** re-patch `to_plain_text`/`inline_to_markdown` — doing so
+  would either duplicate or conflict with #13870's `f.text.replace('\n', "<br>")` change.
+  Treat `to_plain_text` as already correct once #13870 lands; the round-trip test for
+  the HTML-table-to-GFM-export direction (see Testing, below) exercises inherited
+  behavior, not new code.
+- **`to_internal_format`/`from_internal_format` and `parse_table_cell` are NOT touched
+  by #13870 and remain this spec's own responsibility.** #13870's diff (`lib.rs`,
+  `markdown_parser.rs`) adds `<br>` recognition only at the GFM/paragraph inline
+  tokenizer level (`parse_inline_token_br`, `InlineToken::LineBreak` in
+  `markdown_parser.rs`) and only patches the two plain-text-flattening serializers
+  (`to_plain_text`'s `inline_to_text`, and `inline_to_markdown`). It does not modify
+  `crates/markdown_parser/src/html_parser.rs` (the raw-HTML DOM reader this spec's
+  item 2 extends) and does not modify the tab-separated internal round-trip functions
+  (`from_internal_format`/`to_internal_format`, `lib.rs:363-411`) or `parse_table_cell`
+  (`markdown_parser.rs:596-597`) at all — its own round-trip test
+  (`test_br_in_table_cell_round_trips_as_literal_br`) calls `table.to_internal_format()`
+  only to assert that a `\n` *already embedded in a cell's fragment text* (put there by
+  the new GFM inline tokenizer) passes through unmodified; it never demonstrates
+  `from_internal_format` decoding a literal `<br>` token back into a break, because no
+  such decode path exists yet. This spec must implement that decode/encode pair itself
+  in item 1 above.
+- **Sequencing.** Because `to_plain_text`'s encode side is inherited from #13870, this
+  spec's implementation PR gates on #13870 landing first (it is Oz-approved and ahead
+  in the merge queue). If #13870's `to_plain_text` patch changes shape before merge,
+  re-verify this dependency note against the merged diff before relying on it.
 
 ### 2. HTML table reader in `markdown_parser`
 
@@ -346,13 +382,20 @@ boundary. Inline images inside cells resolve through the same asset-source resol
   GFM where it fits (invariant 11).
 - HTML table **with** `<br>` in a cell → round-trips preserving the line break (encoded as
   `<br>` in the internal/GFM forms), not collapsed and not turned into a new row
-  (invariant 11 + 4).
+  (invariant 11 + 4). **This is this spec's own `to_internal_format`/`from_internal_format`
+  decode/encode pair (item 1) — #13732/PR #13870 does not implement this direction; see
+  the explicit dependency note in item 1.**
 - HTML table with a cell containing the **literal text** `<br>` (from an escaped
   `&lt;br&gt;` source) → round-trips to a cell whose serialized form re-escapes it as
   `&lt;br&gt;`, not a raw `<br>` that would misparse as a break on the next read
   (invariant 11 + 4's escape rule).
 - Double-escaped source (`&amp;lt;br&amp;gt;`) → round-trips to the same double-escaped
   serialized form, confirming single-pass decode/re-escape symmetry.
+- HTML table with a `<br>`-bearing cell exported to **GFM plain text**
+  (`to_plain_text`) → the break appears as literal `<br>` in the pipe-table cell. This
+  direction relies on #13870's `inline_to_text` patch (`lib.rs:431` region) and must
+  gate on that PR landing first — do not reimplement the encode here (see item 1's
+  dependency note).
 
 ### Layout / render tests (`crates/editor/src/render/model/mod_tests.rs`)
 
@@ -382,6 +425,11 @@ Markdown file containing an HTML table if exercisable there.
   or Option B (sentinel fragment), this ripples through parser round-trip, editor layout,
   and offset maps. It's the main risk surface; the tests above target each site. If it
   starts to sprawl, that's the signal to split simple-table and `<br>` into two PRs.
+- **Merge-order dependency on PR #13870 (#13732).** This spec's `to_plain_text` GFM-export
+  round-trip inherits its `<br>`-encoding from #13870, which is Oz-approved and ahead in
+  the merge queue but not yet merged as of this writing. If this spec's implementation PR
+  lands first, its GFM-export test for a `<br>`-bearing HTML-table cell will fail until
+  #13870 merges — sequence accordingly (see item 1's explicit dependency note).
 - **`colspan`/`rowspan` is a genuine model change** (non-rectangular grid) and is an
   explicit non-goal here (invariant 7 degrades it). It deserves its own spec/PR — likely
   the largest single piece of the whole #13652 effort — and should be scoped separately
