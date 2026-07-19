@@ -32,6 +32,8 @@ pub struct TabGroup {
     pub draggable_state: DraggableState,
     /// True when this whole group is pinned to the front of the tab list.
     pub pinned: bool,
+    /// Canonical path binding this group to a repo-mode registry entry.
+    pub repo_root: Option<String>,
 }
 
 impl TabGroup {
@@ -44,6 +46,7 @@ impl TabGroup {
             collapsed: false,
             draggable_state: Default::default(),
             pinned: false,
+            repo_root: None,
         }
     }
 }

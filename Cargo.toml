@@ -64,6 +64,7 @@ persistence = { path = "crates/persistence" }
 prevent_sleep = { path = "crates/prevent_sleep" }
 remote_server = { path = "crates/remote_server" }
 repo_metadata = { path = "crates/repo_metadata" }
+repo_mode = { path = "crates/repo_mode" }
 settings = { path = "crates/settings" }
 settings_value = { path = "crates/settings_value", default-features = false }
 settings_value_derive = { path = "crates/settings_value_derive" }

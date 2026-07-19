@@ -11385,6 +11385,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "repo_mode"
+version = "0.0.0"
+dependencies = [
+ "dunce",
+ "tempfile",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15224,6 +15232,7 @@ dependencies = [
  "regex-automata",
  "remote_server",
  "repo_metadata",
+ "repo_mode",
  "reqwest",
  "rmcp",
  "rquickjs",

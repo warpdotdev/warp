@@ -54,6 +54,7 @@ impl ProjectManagementModel {
 
     /// Add a project to the list. If it already exists, update the last_opened_ts.
     pub fn upsert_project(&mut self, path: PathBuf, ctx: &mut ModelContext<Self>) {
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
         let now = Utc::now().naive_utc();
 
         let project = if let Some(existing_project) = self.projects.get_mut(&path) {
@@ -74,6 +75,15 @@ impl ProjectManagementModel {
         ctx.emit(ProjectEvent::Added { path });
     }
 
+    /// Remove a project from the list and persist the deletion.
+    pub fn remove_project(&mut self, path: PathBuf, ctx: &mut ModelContext<Self>) {
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        if self.projects.remove(&path).is_some() {
+            self.delete_project(&path);
+            ctx.emit(ProjectEvent::Removed { path });
+        }
+    }
+
     pub fn all_projects(&self) -> impl Iterator<Item = &Project> {
         self.projects.values()
     }
@@ -84,6 +94,19 @@ impl ProjectManagementModel {
             let event = ModelEvent::UpsertProject { project };
             if let Err(err) = sender.send(event) {
                 report_error!(anyhow::Error::new(err).context("Failed to save project to database"));
+            }
+        }
+    }
+
+    fn delete_project(&self, path: &std::path::Path) {
+        if let Some(sender) = &self.model_event_sender {
+            let event = ModelEvent::DeleteProject {
+                path: path.to_string_lossy().into_owned(),
+            };
+            if let Err(err) = sender.send(event) {
+                report_error!(
+                    anyhow::Error::new(err).context("Failed to delete project from database")
+                );
             }
         }
     }

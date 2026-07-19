@@ -1,0 +1,13 @@
+[package]
+name = "repo_mode"
+edition = "2021"
+authors = ["Warp Team <dev@warp.dev>"]
+description = "Domain types and path rules for Warp repo mode"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+dunce.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

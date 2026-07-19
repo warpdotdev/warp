@@ -13,6 +13,8 @@ pub(crate) mod left_panel;
 pub(crate) mod onboarding;
 pub(crate) mod openwarp_launch_modal;
 pub(crate) mod orchestration_launch_modal;
+mod repo_mode_model;
+mod repo_sidebar;
 pub(crate) mod right_panel;
 mod startup_directory;
 mod tab_grouping;
@@ -1151,6 +1153,8 @@ pub struct Workspace {
     ai_fact_view: ViewHandle<AIFactView>,
     left_panel_open: bool,
     vertical_tabs_panel_open: bool,
+    /// Canonical path of the selected repo-mode entry, or None for "All".
+    selected_repo_root: Option<String>,
     vertical_tabs_panel: VerticalTabsPanelState,
     left_panel_view: ViewHandle<LeftPanelView>,
     left_panel_views: Vec<ToolPanelView>,
@@ -3455,6 +3459,7 @@ impl Workspace {
             ai_fact_view,
             left_panel_open: false,
             vertical_tabs_panel_open: false,
+            selected_repo_root: None,
             vertical_tabs_panel: Default::default(),
             left_panel_view,
             left_panel_views,
@@ -3902,6 +3907,7 @@ impl Workspace {
             } => {
                 let active_tab_index = window_snapshot.active_tab_index;
                 let restored_left_panel_open = window_snapshot.left_panel_open;
+                self.selected_repo_root = window_snapshot.selected_repo_root.clone();
 
                 // Restore groups first so per-tab `group_id` assignments
                 // below can validate membership against a populated map.
@@ -3922,6 +3928,7 @@ impl Workspace {
                                     // Pinned Tabs feature is enabled.
                                     pinned: FeatureFlag::PinnedTabs.is_enabled()
                                         && group_snapshot.pinned,
+                                    repo_root: group_snapshot.repo_root.clone(),
                                 },
                             )
                         })
@@ -3988,6 +3995,21 @@ impl Workspace {
                 }
 
                 self.activate_tab_internal(active_tab_index, ctx);
+
+                // KTD4/U6: if a selection was restored but its bound group was
+                // pruned (no remaining members), recreate an empty group+tab.
+                if Self::repo_mode_enabled() {
+                    if let Some(root) = self.selected_repo_root.clone() {
+                        let has_group = self
+                            .tab_groups
+                            .values()
+                            .any(|g| g.repo_root.as_deref() == Some(root.as_str()));
+                        if !has_group {
+                            self.create_repo_mode_group_with_tab(std::path::Path::new(&root), ctx);
+                        }
+                    }
+                }
+
                 self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::FromTemplate { window_template } => {
@@ -11543,6 +11565,7 @@ impl Workspace {
                     color: group.color,
                     collapsed: group.collapsed,
                     pinned: FeatureFlag::PinnedTabs.is_enabled() && group.pinned,
+                    repo_root: group.repo_root.clone(),
                 })
                 .collect()
         } else {
@@ -11612,6 +11635,7 @@ impl Workspace {
             warp_drive_index_width,
             left_panel_open: self.left_panel_open,
             vertical_tabs_panel_open: self.vertical_tabs_panel_open,
+            selected_repo_root: self.selected_repo_root.clone(),
             left_panel_width,
             right_panel_width,
             agent_management_filters,
@@ -11901,6 +11925,12 @@ impl Workspace {
         let removed_pane_group_id = tab_data.pane_group.id();
         self.tab_mru_order.retain(|id| *id != removed_pane_group_id);
 
+        // Capture before prune so we can auto-reopen when the last tab of a
+        // selected repo-mode group closes (R11).
+        let pruned_repo_root = tab_data
+            .group_id
+            .and_then(|gid| self.tab_groups.get(&gid).and_then(|g| g.repo_root.clone()));
+
         // If the closed tab was a group member, prune the group when it now
         // has no remaining members.
         if let Some(group_id) = tab_data.group_id {
@@ -11933,6 +11963,22 @@ impl Workspace {
                 self.active_tab_index -= 1;
             }
             _ => {}
+        }
+
+        // R11: stay on the selected entry and open a fresh tab at its root when
+        // the last bound-group tab was closed.
+        if Self::repo_mode_enabled() {
+            if let Some(root) = pruned_repo_root {
+                if self.selected_repo_root.as_deref() == Some(root.as_str())
+                    && !self
+                        .tab_groups
+                        .values()
+                        .any(|g| g.repo_root.as_deref() == Some(root.as_str()))
+                {
+                    self.create_repo_mode_group_with_tab(std::path::Path::new(&root), ctx);
+                    return;
+                }
+            }
         }
 
         ctx.dispatch_global_action("workspace:save_app", ());
@@ -12557,6 +12603,20 @@ impl Workspace {
     ///   there is always a way to open a top-level tab even when every tab is
     ///   grouped.
     fn new_tab_index_and_group(&self, ctx: &AppContext) -> (usize, Option<TabGroupId>) {
+        // R6: while a repo-mode entry is selected, new tabs join that entry's
+        // bound group (even with AfterAllTabs / ungrouped active tab).
+        if Self::repo_mode_enabled() {
+            if let Some(group_id) = self.selected_repo_mode_group_id() {
+                let insert_idx = self
+                    .tabs
+                    .iter()
+                    .rposition(|t| t.group_id == Some(group_id))
+                    .map(|i| i + 1)
+                    .unwrap_or_else(|| self.tab_count());
+                return (insert_idx, Some(group_id));
+            }
+        }
+
         let active_group_id = if FeatureFlag::GroupedTabs.is_enabled() {
             self.tabs
                 .get(self.active_tab_index)
@@ -23915,6 +23975,10 @@ impl TypedActionView for Workspace {
                     self.unpin_tab_group(group_id, ctx);
                 }
             }
+            AddLocalRepositoryOrFolder => self.open_folder_picker_for_repo_mode(ctx),
+            RemoveRepoModeEntry(path) => self.remove_repo_mode_entry(path, ctx),
+            SelectRepoModeAll => self.select_repo_mode_all(ctx),
+            SelectRepoModeEntry(path) => self.select_repo_mode_entry(path, ctx),
             AddDefaultTab => {
                 let effective_mode = AISettings::as_ref(ctx).default_session_mode(ctx);
                 match effective_mode {
@@ -27863,8 +27927,14 @@ impl Workspace {
     /// tab/group rendering and insertion index calculations.
     fn tab_bar_slots(&self) -> Vec<TabBarSlot> {
         let grouped_tabs_enabled = FeatureFlag::GroupedTabs.is_enabled();
+        let visible = self.repo_mode_visible_tab_indices();
         let mut slots: Vec<TabBarSlot> = Vec::with_capacity(self.tabs.len());
         for (idx, tab) in self.tabs.iter().enumerate() {
+            if let Some(ref visible) = visible {
+                if !visible.contains(&idx) {
+                    continue;
+                }
+            }
             let group_id = if grouped_tabs_enabled {
                 tab.group_id.filter(|gid| self.tab_groups.contains_key(gid))
             } else {

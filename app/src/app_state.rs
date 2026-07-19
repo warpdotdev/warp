@@ -54,6 +54,8 @@ pub struct WindowSnapshot {
     pub warp_drive_index_width: Option<f32>,
     pub left_panel_open: bool,
     pub vertical_tabs_panel_open: bool,
+    /// Canonical path of the selected repo-mode entry, or None for "All".
+    pub selected_repo_root: Option<String>,
     pub left_panel_width: Option<f32>,
     pub right_panel_width: Option<f32>,
     pub agent_management_filters: Option<PersistedAgentManagementFilters>,
@@ -69,6 +71,8 @@ pub struct TabGroupSnapshot {
     pub color: SelectedTabColor,
     pub collapsed: bool,
     pub pinned: bool,
+    /// Canonical path binding this group to a repo-mode registry entry.
+    pub repo_root: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

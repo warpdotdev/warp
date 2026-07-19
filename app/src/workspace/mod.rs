@@ -970,6 +970,26 @@ pub fn init(app: &mut AppContext) {
     .with_group(bindings::BindingGroup::Settings.as_str())
     .with_context_predicate(id!("Workspace"))]);
 
+    // Repo mode bindings (keyless; gated on `RepoMode`).
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "workspace:add_local_repository_or_folder",
+            "Add Local Repository or Folder...",
+            WorkspaceAction::AddLocalRepositoryOrFolder,
+        )
+        .with_enabled(|| FeatureFlag::RepoMode.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace")),
+        EditableBinding::new(
+            "workspace:select_repo_mode_all",
+            "Show All Repositories",
+            WorkspaceAction::SelectRepoModeAll,
+        )
+        .with_enabled(|| FeatureFlag::RepoMode.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace")),
+    ]);
+
     // Tab grouping bindings (keyless by default; gated on `GroupedTabs`).
     app.register_editable_bindings([
         EditableBinding::new(

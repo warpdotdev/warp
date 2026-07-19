@@ -951,6 +951,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                 warp_drive_index_width: window.warp_drive_index_width,
                 left_panel_open: Some(window.left_panel_open),
                 vertical_tabs_panel_open: Some(window.vertical_tabs_panel_open),
+                selected_repo_root: window.selected_repo_root.clone(),
                 fullscreen_state: window.fullscreen_state as i32,
                 agent_management_filters: window
                     .agent_management_filters
@@ -992,6 +993,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                         },
                         collapsed: group.collapsed,
                         pinned: group.pinned,
+                        repo_root: group.repo_root.clone(),
                     })
                     .collect();
                 diesel::insert_into(schema::tab_groups::dsl::tab_groups)
@@ -2536,6 +2538,7 @@ fn read_sqlite_data(
                             color,
                             collapsed: group.collapsed,
                             pinned: group.pinned,
+                            repo_root: group.repo_root,
                         });
                     }
                     let saved_tabs: Vec<_> = tabs_for_window
@@ -2662,6 +2665,7 @@ fn read_sqlite_data(
                         warp_drive_index_width: window.warp_drive_index_width,
                         left_panel_open: window_left_panel_open,
                         vertical_tabs_panel_open: window.vertical_tabs_panel_open.unwrap_or(false),
+                        selected_repo_root: window.selected_repo_root,
                         fullscreen_state: fullscreen_state_val,
                         left_panel_width,
                         right_panel_width,

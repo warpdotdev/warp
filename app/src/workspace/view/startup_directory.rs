@@ -52,6 +52,14 @@ impl Workspace {
         chosen_shell: Option<&AvailableShell>,
         ctx: &mut ViewContext<Self>,
     ) -> Option<PathBuf> {
+        // R6/KTD8: under an active repo-mode selection, new tabs start at the
+        // entry root rather than inheriting the prior session cwd.
+        if Self::repo_mode_enabled() {
+            if let Some(root) = self.selected_repo_root.as_deref() {
+                return Some(PathBuf::from(root));
+            }
+        }
+
         // Get the Workspace from the window that hosted the previously-active
         // session.
         let active_session_info = match previous_session_window_id {

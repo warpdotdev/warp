@@ -258,6 +258,14 @@ pub enum WorkspaceAction {
     PinActiveTabGroup,
     /// Unpins the active tab's group.
     UnpinActiveTabGroup,
+    /// Repo mode: open folder picker to register a local repository or folder.
+    AddLocalRepositoryOrFolder,
+    /// Repo mode: remove a registry entry (does not close its tabs).
+    RemoveRepoModeEntry(PathBuf),
+    /// Repo mode: select "All" (stock tab set).
+    SelectRepoModeAll,
+    /// Repo mode: select a registered entry by canonical path.
+    SelectRepoModeEntry(PathBuf),
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -971,6 +979,10 @@ impl WorkspaceAction {
             | UnpinTabGroup(_)
             | PinActiveTabGroup
             | UnpinActiveTabGroup
+            | AddLocalRepositoryOrFolder
+            | RemoveRepoModeEntry(_)
+            | SelectRepoModeAll
+            | SelectRepoModeEntry(_)
             | ToggleTabColor { .. }
             | ToggleTabGroupColor { .. }
             | AddDefaultTab

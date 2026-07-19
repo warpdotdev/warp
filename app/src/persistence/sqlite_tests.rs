@@ -362,6 +362,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
         warp_drive_index_width: None,
         left_panel_open: false,
         vertical_tabs_panel_open,
+        selected_repo_root: None,
         left_panel_width: None,
         right_panel_width: None,
         agent_management_filters: None,
@@ -449,6 +450,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
             warp_drive_index_width: None,
             left_panel_open: false,
             vertical_tabs_panel_open: false,
+            selected_repo_root: None,
             left_panel_width: None,
             right_panel_width: None,
             agent_management_filters: None,
@@ -527,6 +529,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
             warp_drive_index_width: None,
             left_panel_open: false,
             vertical_tabs_panel_open: false,
+            selected_repo_root: None,
             left_panel_width: None,
             right_panel_width: None,
             agent_management_filters: None,
@@ -645,6 +648,7 @@ fn test_sqlite_round_trips_tab_groups() {
             warp_drive_index_width: None,
             left_panel_open: false,
             vertical_tabs_panel_open: false,
+            selected_repo_root: None,
             left_panel_width: None,
             right_panel_width: None,
             agent_management_filters: None,
@@ -654,6 +658,7 @@ fn test_sqlite_round_trips_tab_groups() {
                 color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
                 collapsed: true,
                 pinned: false,
+                repo_root: None,
             }],
         }],
         active_window_index: Some(0),
@@ -685,6 +690,68 @@ fn test_sqlite_round_trips_tab_groups() {
     assert_eq!(restored_window.tabs.len(), 2);
     assert_eq!(restored_window.tabs[0].group_id, Some(restored_group.id));
     assert_eq!(restored_window.tabs[1].group_id, None);
+}
+
+/// Verifies repo-mode binding and selection columns round-trip through save/restore.
+#[test]
+fn test_sqlite_round_trips_repo_mode_columns() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let group_id = TabGroupId::new();
+    let mut window = test_terminal_window_snapshot(false);
+    window.selected_repo_root = Some("/tmp/my-repo".to_string());
+    window.tabs[0].group_id = Some(group_id);
+    window.tab_groups = vec![TabGroupSnapshot {
+        id: group_id,
+        name: Some("MyRepo".to_string()),
+        color: SelectedTabColor::default(),
+        collapsed: false,
+        pinned: false,
+        repo_root: Some("/tmp/my-repo".to_string()),
+    }];
+
+    let app_state = AppState {
+        windows: vec![window],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    let restored_window = &restored.windows[0];
+    assert_eq!(
+        restored_window.selected_repo_root.as_deref(),
+        Some("/tmp/my-repo")
+    );
+    assert_eq!(restored_window.tab_groups.len(), 1);
+    assert_eq!(
+        restored_window.tab_groups[0].repo_root.as_deref(),
+        Some("/tmp/my-repo")
+    );
+
+    // NULL selection restores as None ("All").
+    let mut all_window = test_terminal_window_snapshot(true);
+    all_window.selected_repo_root = None;
+    let app_state = AppState {
+        windows: vec![all_window],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+    assert_eq!(restored.windows[0].selected_repo_root, None);
 }
 
 /// Verifies that the `pinned` flag on tabs and tab groups round-trips through
@@ -796,6 +863,7 @@ fn test_sqlite_round_trips_pinned_state() {
             warp_drive_index_width: None,
             left_panel_open: false,
             vertical_tabs_panel_open: false,
+            selected_repo_root: None,
             left_panel_width: None,
             right_panel_width: None,
             agent_management_filters: None,
@@ -806,6 +874,7 @@ fn test_sqlite_round_trips_pinned_state() {
                     color: SelectedTabColor::default(),
                     collapsed: false,
                     pinned: true,
+                    repo_root: None,
                 },
                 TabGroupSnapshot {
                     id: unpinned_group_id,
@@ -813,6 +882,7 @@ fn test_sqlite_round_trips_pinned_state() {
                     color: SelectedTabColor::default(),
                     collapsed: false,
                     pinned: false,
+                    repo_root: None,
                 },
             ],
         }],

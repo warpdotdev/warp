@@ -729,6 +729,7 @@ pub(super) struct VerticalTabsPanelState {
     show_details_on_hover_mouse_state: MouseStateHandle,
     panel_right_click_mouse_state: MouseStateHandle,
     pub(super) show_settings_popup: bool,
+    pub(super) repo_sidebar: super::repo_sidebar::RepoSidebarState,
 }
 
 impl Default for VerticalTabsPanelState {
@@ -767,6 +768,7 @@ impl Default for VerticalTabsPanelState {
             show_details_on_hover_mouse_state: Default::default(),
             panel_right_click_mouse_state: Default::default(),
             show_settings_popup: false,
+            repo_sidebar: Default::default(),
         }
     }
 }
@@ -1677,6 +1679,11 @@ fn render_vertical_tabs_panel(
             &workspace.vertical_tabs_search_input,
             app,
         ))
+        .with_child(super::repo_sidebar::render_repo_sidebar(
+            &state.repo_sidebar,
+            workspace,
+            app,
+        ))
         .with_child(Shrinkable::new(1., scrollable_groups).finish())
         .finish();
 
@@ -1770,11 +1777,17 @@ fn render_groups(
     };
     let uses_outer_group_container = uses_outer_group_container(display_granularity);
     let query = state.search_query.as_str();
+    let repo_filter = workspace.repo_mode_visible_tab_indices();
     let visible_tabs: Vec<(usize, Option<Vec<PaneId>>)> = if query.is_empty() {
         workspace
             .tabs
             .iter()
             .enumerate()
+            .filter(|(tab_index, _)| {
+                repo_filter
+                    .as_ref()
+                    .is_none_or(|visible| visible.contains(tab_index))
+            })
             .map(|(tab_index, _)| (tab_index, None))
             .collect()
     } else {
@@ -1783,6 +1796,11 @@ fn render_groups(
             .tabs
             .iter()
             .enumerate()
+            .filter(|(tab_index, _)| {
+                repo_filter
+                    .as_ref()
+                    .is_none_or(|visible| visible.contains(tab_index))
+            })
             .filter_map(|(tab_index, tab)| {
                 let pane_group = tab.pane_group.as_ref(app);
                 let visible_pane_ids = pane_group.visible_pane_ids();

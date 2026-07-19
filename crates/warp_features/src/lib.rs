@@ -865,6 +865,10 @@ pub enum FeatureFlag {
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
 
+    /// Gates local repo-mode: Repositories section in the vertical tabs panel
+    /// and per-repo tab filtering.
+    RepoMode,
+
     /// Gates the Pinned Tabs feature, which lets users pin individual tabs
     /// and whole tab groups so they stay at the front of the tab list and
     /// are protected from reordering.
