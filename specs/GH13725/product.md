@@ -44,9 +44,11 @@ In scope:
   and clickable exactly like a markdown `[link text](…)` — including external URLs
   (`https://…`) and in-page fragments (`#target`).
 - Parse `<a id="…"></a>` and `<a name="…"></a>` (empty or self-closing, the common
-  hand-authored form) as a named anchor target at that point in the document, with no
-  visible rendering of its own (matches GitHub/browser behavior — an anchor tag with no
-  text renders nothing).
+  hand-authored form) as a named anchor target at that point in the document. **As shipped,
+  the tag itself still renders as visible literal text** (e.g. `<a id="x"></a>` appears
+  inline in the document) rather than rendering nothing the way GitHub/browsers do — see the
+  note under invariant 5 and #13982 for why, and for the deferred follow-up that would hide
+  it.
 - Give every heading (`#`…`######`) an **implicit** anchor slug derived from its rendered
   text, so `[Jump to Target Section](#target-section)` works against ordinary headings with
   zero authoring effort — the common case the issue's test document exercises.
@@ -124,7 +126,22 @@ Out of scope (explicit non-goals):
 
 5. `<a id="target-section"></a>` (or `<a name="target-section"></a>`) placed anywhere in
    the document — most commonly immediately before a heading, as a hand-authored anchor —
-   registers `target-section` as a jump target and renders no visible content itself.
+   registers `target-section` as a jump target.
+
+   **Rendering, as shipped: the tag is visible, not hidden.** GitHub/browsers render a
+   content-less anchor tag as nothing at all; this PR does not replicate that. The phase-1
+   inline parser only recognizes `<a href>` as a token (it requires an `href` attribute to
+   match at all), so a bare `<a id>`/`<a name>` falls through to literal text and appears
+   inline exactly as authored (`<a id="target-section"></a>`). Resolution (this invariant's
+   jump-target behavior) works regardless, because it's a live text scan over that same
+   literal content — see tech spec item 5. Making the tag disappear from the rendered view
+   requires representing it as first-class block metadata that still round-trips through
+   `to_markdown` on save (otherwise editing the document silently deletes the anchor) — a
+   genuine content-model change sized at 70-130+ call sites across the buffer/editor layer,
+   not a rendering tweak. That work is tracked as its own ticket,
+   [#13982](https://github.com/warpdotdev/warp/issues/13982), deliberately deferred so
+   maintainers can weigh the representation trade-offs before it's built, rather than shipping
+   a design nobody reviewed.
 
 6. Explicit `<a id>`/`<a name>` anchors and implicit heading slugs share **one namespace** —
    there is no separate anchor-vs-heading priority tier. If both an explicit `<a id="x">`
@@ -202,6 +219,10 @@ The two capabilities compound in value but are separately shippable:
   — it never matches the `<a href>` delimiter grammar, which requires an `href` attribute —
   resolution can reuse the same zero-cache, live-text-walk pattern phase 1 established for
   headings, with no new content-model field or cached index. See tech spec item 5.
+  **Delivered with a caveat:** the anchor tag itself renders as visible literal text (see
+  invariant 5) rather than being hidden the way GitHub renders it — hiding it requires a
+  first-class, save-round-trippable content-model representation, sized and deferred to
+  [#13982](https://github.com/warpdotdev/warp/issues/13982).
 - **Phase 3 (delivered with phase 1 in this PR):** Cross-document fragment links
   (`other-file.md#section`). Built on phase 1's slug resolver: the file-open, tab-focus, and
   dedup machinery already exists (a fragment-less relative link opens today), so this phase

@@ -104,6 +104,19 @@ normalization inside that one function so a hyphenated fragment matches a spaced
   mechanism. (The original draft below, describing a `styles.anchor_id` fragment marker, is kept
   for context but was **not** implemented — it solved a problem that characterization showed
   doesn't exist for the empty/self-closing anchor form this feature scopes.)
+
+  **Known gap, shipped as-is, deferred separately:** because the tag survives as literal text,
+  it also *renders* as literal text — `<a id="x"></a>` is visible inline, unlike GitHub's
+  content-less-anchor-renders-nothing behavior. Investigating a hiding mechanism (a design
+  requiring the tag to become first-class block metadata that still re-serializes through
+  `to_markdown` on save, or it's silently deleted on the next edit) surfaced a genuine
+  content-model migration — every `BufferBlockStyle` variant and/or every `BufferText::BlockMarker`
+  call site (roughly 70-130 sites across `core.rs`, `edit.rs`, `buffer.rs`, `markdown.rs`,
+  `render/`, and hand-built test fixtures) would need touching, with no clearly-best
+  representation among the candidates. That's out of scope for this PR and tracked as
+  [#13982](https://github.com/warpdotdev/warp/issues/13982) — a design-discussion ticket, not a
+  quick follow-up patch, deliberately left unbuilt until maintainers weigh in on the
+  representation.
 - **(iii) Heading slug matching + fragment click resolution: SMALL.** The click branch, the
   scroll call, and the per-click heading walk all already exist in `find_matching_header`
   (`app/src/notebooks/editor/model.rs:1351`). The only work is:
@@ -290,6 +303,17 @@ same `FormattedText`/`Hyperlink` model as the GUI. This splits the feature clean
   styled text. Call this out so a reviewer doesn't read "shared parser" as "shared behavior."
 
 ### 5. `<a id>`/`<a name>` anchor markers (phase 2)
+
+> **Superseded by what actually shipped.** This section is the pre-implementation design
+> draft and is kept for historical context; it was **not** built. What shipped instead is a
+> live text scan over the buffer (see item (ii) in the Feasibility summary above and item 3's
+> "no anchor index" precedent) — no new fragment field, no zero-width construct. The one
+> design point from this draft that *is* still an open, deferred problem is rendering: this
+> draft's zero-width marker would have rendered nothing, matching GitHub; the shipped
+> live-text-scan approach leaves the tag visible, because hiding it would require the very
+> content-model investment ("no anchor index" i.e. no persisted representation) this section
+> otherwise avoided. That trade-off — and the honest sizing of what a hiding fix would cost —
+> is tracked as [#13982](https://github.com/warpdotdev/warp/issues/13982).
 
 Represent a bare anchor as a new zero-width construct — the cleanest option is a
 `FormattedTextFragment` with empty `text` and a new style/marker field (e.g.
@@ -556,8 +580,13 @@ any remaining useful cases into the committed suite — it should not ship as pr
     reintroducing an ASCII-only filter.
   - First-wins collision behavior is covered by the resolution tests below, not the
     normalizer itself.
-- (Phase 2) `<a id="x"></a>` / `<a name="x"></a>` → zero-width anchor marker, no visible
-  text emitted (invariant 5).
+- (Delivered, revised from the original phase-2 draft) `<a id="x"></a>` / `<a name="x"></a>`
+  → parses as a single literal-text fragment (`FormattedTextFragment::plain_text`), **not** a
+  zero-width marker — characterization confirmed the phase-1 `<a href>` grammar requires
+  `href` to match, so an id-only tag falls through to plain text and stays visible (invariant
+  5's rendering caveat, deferred to #13982). *Landed* as
+  `test_parse_html_anchor_unterminated_falls_back_to_text`'s trailing case in
+  `markdown_parser_tests.rs`.
 - (Phase 2) `<a id="x">text</a>` (both id and content on one tag) — confirm documented
   behavior (out of scope; assert it doesn't panic, even if unspecified which role wins).
 
