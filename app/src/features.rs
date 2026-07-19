@@ -169,8 +169,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::MarkdownMermaid,
         #[cfg(feature = "editable_markdown_mermaid")]
         FeatureFlag::EditableMarkdownMermaid,
-        #[cfg(feature = "image_as_context")]
-        FeatureFlag::ImageAsContext,
         #[cfg(feature = "msys2_shells")]
         FeatureFlag::MSYS2Shells,
         #[cfg(feature = "file_retrieval_tools")]

@@ -68,9 +68,7 @@ impl Input {
 
         let ai_input_model = self.ai_input_model.as_ref(app);
 
-        if FeatureFlag::ImageAsContext.is_enabled()
-            && matches!(ai_input_model.input_type(), InputType::AI)
-        {
+        if matches!(ai_input_model.input_type(), InputType::AI) {
             if let Some(images) = self.render_attachment_chips(appearance) {
                 column.add_child(
                     Container::new(images)
