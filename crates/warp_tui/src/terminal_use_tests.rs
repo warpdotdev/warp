@@ -58,6 +58,17 @@ fn shell_startup_routes_input_by_bootstrap_stage() {
 }
 
 #[test]
+fn submit_policy_blocks_bootstrap_but_allows_ready_prompt() {
+    assert!(
+        !tui_input_target_for_state(false, false, false, false).agent_editor_owns_input(),
+        "bootstrap submission must remain disabled"
+    );
+    assert!(
+        tui_input_target_for_state(false, false, true, false).agent_editor_owns_input(),
+        "the normal prompt must accept submission"
+    );
+}
+#[test]
 fn agent_command_owns_input_only_after_user_takeover() {
     let mut model = TerminalModel::mock(None, None);
     model.simulate_long_running_block("cargo build", "Compiling");
