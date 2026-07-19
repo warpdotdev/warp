@@ -6666,6 +6666,7 @@ fn submit_with_plugin_but_auto_toggle_off_respects_auto_dismiss() {
         // auto_toggle is off, so auto_dismiss closes rich input.
         // Claude uses DelayedEnter, so the close happens after a timer.
         assert_eventually!(
+            100 =>
             terminal.read(&app, |view, ctx| !view
                 .has_active_cli_agent_input_session(ctx)),
             "Rich input should be closed after submit with auto_dismiss"

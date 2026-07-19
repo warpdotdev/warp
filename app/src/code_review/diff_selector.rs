@@ -101,11 +101,21 @@ impl DiffSelector {
         if self.menu_open {
             self.close(ctx);
         } else {
+            self.open(ctx);
+        }
+    }
+
+    /// Opens (and focuses) the dropdown menu. Idempotent: if the menu is
+    /// already open, this just re-focuses it. Used by the editable
+    /// `code_review:open_branch_selector` keybinding, which should always open
+    /// the dropdown rather than toggle it shut.
+    pub fn open(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.menu_open {
             self.menu_open = true;
             self.menu.update(ctx, |menu, ctx| menu.reset(ctx));
-            ctx.focus(&self.menu);
             ctx.notify();
         }
+        ctx.focus(&self.menu);
     }
 
     pub fn close(&mut self, ctx: &mut ViewContext<Self>) {

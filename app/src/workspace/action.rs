@@ -393,6 +393,9 @@ pub enum WorkspaceAction {
     /// Opens the code review panel (right panel) without toggling. If already open,
     /// switches to the target pane's repo. Used by vertical tabs diff stats chip.
     OpenCodeReviewPanel(PaneViewLocator),
+    /// Focuses the active code review panel and opens its branch selector.
+    #[cfg(feature = "local_fs")]
+    OpenCodeReviewBranchSelector,
     /// Toggles the vertical tabs panel. This happens as an explicit action from the user.
     ToggleVerticalTabsPanel,
     OpenVerticalTabsPanel,
@@ -1197,6 +1200,8 @@ impl WorkspaceAction {
             | ShowCloudModeV2EnvironmentCreationModal
             | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane => false,
+            #[cfg(feature = "local_fs")]
+            OpenCodeReviewBranchSelector => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,
             #[cfg(target_family = "wasm")]

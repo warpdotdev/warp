@@ -36,6 +36,9 @@ use crate::terminal::view::TerminalView;
 use crate::terminal::CLIAgent;
 use crate::util::bindings::CustomAction;
 
+#[cfg(feature = "local_fs")]
+pub const OPEN_BRANCH_SELECTOR_BINDING_NAME: &str = "code_review:open_branch_selector";
+
 /// Arguments needed to open or toggle the code review panel.
 /// Bundled into a struct so that events can atomically open the
 /// review and perform follow-up work without relying on event ordering.
@@ -106,6 +109,10 @@ pub fn init(app: &mut AppContext) {
     diff_menu::init(app);
     diff_selector::init(app);
     git_dialog::init(app);
+}
+
+pub(crate) fn is_code_review_text_input_view_name(name: &str) -> bool {
+    matches!(name, "EditorView" | "RichTextEditorView" | "CodeEditorView")
 }
 
 /// Uses heuristics to determine if a file is auto-generated.
@@ -196,3 +203,7 @@ impl SingletonEntity for GlobalCodeReviewModel {}
 impl Entity for GlobalCodeReviewModel {
     type Event = GlobalCodeReviewEvent;
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
