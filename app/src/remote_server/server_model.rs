@@ -3163,6 +3163,7 @@ impl ServerModel {
         );
         let message = msg.message;
         let include_unstaged = msg.include_unstaged;
+        let selected_paths = msg.selected_paths;
         let branch = msg.branch;
         // The create-PR stage AI-generates the title/body only when the client
         // asked for it. Capture the client on the main thread (ctx isn't
@@ -3193,6 +3194,7 @@ impl ServerModel {
                     chain_mode,
                     &message,
                     include_unstaged,
+                    &selected_paths,
                     &branch,
                     ai_client.as_deref(),
                     path_env,

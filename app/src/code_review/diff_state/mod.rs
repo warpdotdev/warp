@@ -750,11 +750,17 @@ impl DiffStateModel {
     }
 
     /// Runs a commit chain (commit, then optionally push/create-PR).
+    ///
+    /// When `selected_paths` is non-empty, only those repo-relative paths are
+    /// committed; when empty, the whole working set is committed per
+    /// `include_unstaged`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn git_commit_chain(
         &self,
         mode: CommitChainMode,
         message: String,
         include_unstaged: bool,
+        selected_paths: Vec<String>,
         branch: String,
         autogenerate_pr_content: bool,
         ctx: &mut ModelContext<Self>,
@@ -765,6 +771,7 @@ impl DiffStateModel {
                     mode,
                     message,
                     include_unstaged,
+                    selected_paths,
                     branch,
                     autogenerate_pr_content,
                     ctx,
@@ -775,6 +782,7 @@ impl DiffStateModel {
                     mode,
                     message,
                     include_unstaged,
+                    selected_paths,
                     branch,
                     autogenerate_pr_content,
                     ctx,

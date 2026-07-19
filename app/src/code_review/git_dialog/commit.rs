@@ -2,6 +2,7 @@
 //! then on confirm runs `run_commit` and optionally chains `run_push` /
 //! `create_pr` per the selected intent.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use warp_core::send_telemetry_from_ctx;
@@ -9,8 +10,10 @@ use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
 use warpui::elements::{
     ChildView, ClippedScrollStateHandle, Container, CornerRadius, CrossAxisAlignment, Element,
-    Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+    Text,
 };
+use warpui::platform::Cursor;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
@@ -18,8 +21,9 @@ use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 use crate::code_review::diff_state::CommitChainMode;
 use crate::code_review::git_dialog::pr::show_pr_created_toast;
 use crate::code_review::git_dialog::{
-    render_branch_section, render_file_changes_box, should_send_git_ops_ai_request, show_toast,
-    user_facing_git_error, GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode,
+    render_branch_section, render_file_changes_box, render_file_checkbox,
+    should_send_git_ops_ai_request, show_toast, user_facing_git_error, FileSelection, GitDialog,
+    GitDialogAction, GitDialogEvent, GitDialogMode,
 };
 use crate::code_review::telemetry_event::{
     CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
@@ -38,6 +42,11 @@ pub enum CommitSubAction {
     SetIntent(CommitChainMode),
     ToggleIncludeUnstaged,
     ToggleChangesExpanded,
+    /// Toggle whether a single changed file (by repo-relative path) is
+    /// included in the commit.
+    ToggleFileSelected(String),
+    /// Select (`true`) or deselect (`false`) every changed file at once.
+    SetAllFilesSelected(bool),
 }
 
 const EDITOR_FONT_SIZE: f32 = 12.;
@@ -58,6 +67,15 @@ pub struct CommitState {
     pub(super) intent: CommitChainMode,
     include_unstaged: bool,
     file_changes: Vec<FileChangeEntry>,
+    /// Repo-relative paths the user has checked for inclusion in the commit.
+    /// Defaults to every changed file (commit-all) and is reset to that
+    /// whenever the file list reloads.
+    selected_paths: HashSet<String>,
+    /// Persistent per-file checkbox hover state, keyed by repo-relative path,
+    /// so hover styling survives re-renders.
+    file_checkbox_states: HashMap<String, MouseStateHandle>,
+    /// Hover state for the "select all" checkbox in the Changes header.
+    select_all_mouse_state: MouseStateHandle,
     changes_expanded: bool,
     switch_state: SwitchStateHandle,
     summary_mouse_state: MouseStateHandle,
@@ -174,7 +192,7 @@ pub(super) fn new_state(
                     return;
                 };
                 match result {
-                    Ok(entries) => state.file_changes = entries,
+                    Ok(entries) => set_file_changes(state, entries),
                     Err(err) => log::warn!("Failed to load file changes: {err}"),
                 }
                 me.refresh_confirm_enabled(ctx);
@@ -187,6 +205,9 @@ pub(super) fn new_state(
         intent,
         include_unstaged,
         file_changes: Vec::new(),
+        selected_paths: HashSet::new(),
+        file_checkbox_states: HashMap::new(),
+        select_all_mouse_state: MouseStateHandle::default(),
         changes_expanded: true,
         switch_state: SwitchStateHandle::default(),
         summary_mouse_state: MouseStateHandle::default(),
@@ -198,6 +219,25 @@ pub(super) fn new_state(
     };
     apply_intent_selector(&state, ctx);
     state
+}
+
+/// Updates the Changes box file list and (re)initializes per-file selection.
+/// Newly loaded files default to all-selected (commit-all), and the per-path
+/// hover-state map is rebuilt, preserving handles for paths that persist
+/// across reloads (e.g. toggling "include unstaged").
+fn set_file_changes(state: &mut CommitState, entries: Vec<FileChangeEntry>) {
+    state.selected_paths = entries.iter().map(|e| e.path.clone()).collect();
+    let mut checkbox_states = HashMap::with_capacity(entries.len());
+    for entry in &entries {
+        let handle = state
+            .file_checkbox_states
+            .get(&entry.path)
+            .cloned()
+            .unwrap_or_default();
+        checkbox_states.insert(entry.path.clone(), handle);
+    }
+    state.file_checkbox_states = checkbox_states;
+    state.file_changes = entries;
 }
 
 pub(super) fn on_focus(state: &CommitState, ctx: &mut ViewContext<GitDialog>) {
@@ -212,24 +252,58 @@ pub(super) fn is_ready_to_confirm(state: &CommitState, app: &AppContext) -> bool
     has_committable_changes(state) && commit_message(state, app).is_some()
 }
 
-/// Whether there's at least one change to commit — the guard that keeps
-/// Confirm disabled when there's nothing to commit.
+/// Whether there's at least one change selected to commit — the guard that
+/// keeps Confirm disabled when there's nothing to commit.
 ///
-/// Gates on `file_changes`, which already reflects the active "include
-/// unstaged" scope: local re-reads the working tree on toggle, while remote
-/// shows the full synced set (it can't re-scope client-side). The daemon-side
-/// `run_commit` is the authoritative backstop that rejects an empty commit —
-/// e.g. "exclude unstaged" with nothing staged — surfacing it as an error
-/// toast rather than a phantom success.
+/// Gates on the selected subset of `file_changes`, which already reflects the
+/// active "include unstaged" scope: local re-reads the working tree on toggle,
+/// while remote shows the full synced set (it can't re-scope client-side). The
+/// daemon-side `run_commit` is the authoritative backstop that rejects an
+/// empty commit, surfacing it as an error toast rather than a phantom success.
 fn has_committable_changes(state: &CommitState) -> bool {
+    state
+        .file_changes
+        .iter()
+        .any(|f| state.selected_paths.contains(&f.path))
+}
+
+/// Whether every changed file is currently selected. Used to decide whether
+/// the commit can stay on the commit-all path and to drive the "select all"
+/// checkbox state.
+fn all_files_selected(state: &CommitState) -> bool {
     !state.file_changes.is_empty()
+        && state
+            .file_changes
+            .iter()
+            .all(|f| state.selected_paths.contains(&f.path))
+}
+
+/// The explicit subset of changed files to commit. Returns an empty vec when
+/// every changed file is selected, so the backend keeps the existing
+/// commit-all behavior governed by `include_unstaged`; otherwise returns just
+/// the selected paths so only those are committed.
+fn selected_paths_for_commit(state: &CommitState) -> Vec<String> {
+    if all_files_selected(state) {
+        return Vec::new();
+    }
+    state
+        .file_changes
+        .iter()
+        .map(|f| &f.path)
+        .filter(|path| state.selected_paths.contains(*path))
+        .cloned()
+        .collect()
 }
 
 /// Returns a tooltip to show on the disabled Confirm button when the
 /// user needs to take action, or `None` when no tooltip is needed.
 pub(super) fn confirm_tooltip(state: &CommitState, app: &AppContext) -> Option<&'static str> {
-    // Only nudge for a missing message; an empty Changes box is self-evident,
-    // and gating a tooltip on it would also flash during the open-time load.
+    // Nudge when the user has deselected every file, then for a missing
+    // message. An entirely empty Changes box is self-evident, and gating a
+    // tooltip on it would also flash during the open-time load.
+    if !state.file_changes.is_empty() && !has_committable_changes(state) {
+        return Some("Select at least one file to commit");
+    }
     if has_committable_changes(state) && commit_message(state, app).is_none() {
         return Some("Enter a commit message");
     }
@@ -313,7 +387,7 @@ pub(super) fn refresh_remote_file_changes(me: &mut GitDialog, ctx: &mut ViewCont
         let GitDialogMode::Commit(state) = me.mode_mut() else {
             return;
         };
-        state.file_changes = entries;
+        set_file_changes(state, entries);
     }
     me.refresh_confirm_enabled(ctx);
     ctx.notify();
@@ -357,6 +431,27 @@ pub(super) fn handle_sub_action(
             }
             ctx.notify();
         }
+        CommitSubAction::ToggleFileSelected(path) => {
+            if let GitDialogMode::Commit(state) = me.mode_mut() {
+                if !state.selected_paths.remove(path) {
+                    state.selected_paths.insert(path.clone());
+                }
+            }
+            me.refresh_confirm_enabled(ctx);
+            ctx.notify();
+        }
+        CommitSubAction::SetAllFilesSelected(select_all) => {
+            if let GitDialogMode::Commit(state) = me.mode_mut() {
+                if *select_all {
+                    state.selected_paths =
+                        state.file_changes.iter().map(|f| f.path.clone()).collect();
+                } else {
+                    state.selected_paths.clear();
+                }
+            }
+            me.refresh_confirm_enabled(ctx);
+            ctx.notify();
+        }
     }
 }
 
@@ -372,6 +467,9 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     };
     let intent = state.intent;
     let include_unstaged = state.include_unstaged;
+    // Empty when every changed file is selected (commit-all, governed by
+    // `include_unstaged`); otherwise the explicit subset the user checked.
+    let selected_paths = selected_paths_for_commit(state);
     let message_editor = state.message_editor.clone();
     let branch_name = me.branch_name().to_string();
     // When the chain includes create-PR, AI-generate the PR title/body when the
@@ -390,6 +488,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
             intent,
             message,
             include_unstaged,
+            selected_paths,
             branch_name,
             autogenerate_pr_content,
             ctx,
@@ -484,7 +583,7 @@ fn reload_file_changes(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>) {
             if let GitDialogMode::Commit(state) = &mut me.mode {
                 match result {
                     Ok(entries) => {
-                        state.file_changes = entries;
+                        set_file_changes(state, entries);
                         me.refresh_confirm_enabled(ctx);
                         ctx.notify();
                     }
@@ -550,6 +649,31 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
     .with_color(main_color)
     .finish();
 
+    // "Select all" checkbox to the left of the label, shown only when there
+    // are files to select. Clicking it selects all when not all are currently
+    // selected, and deselects all otherwise.
+    let all_selected = all_files_selected(state);
+    let mut label_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+    if !state.file_changes.is_empty() {
+        let select_all_checkbox = Hoverable::new(state.select_all_mouse_state.clone(), move |_| {
+            render_file_checkbox(all_selected, appearance)
+        })
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(GitDialogAction::Commit(
+                CommitSubAction::SetAllFilesSelected(!all_selected),
+            ));
+        })
+        .with_cursor(Cursor::PointingHand)
+        .finish();
+        label_row.add_child(
+            Container::new(select_all_checkbox)
+                .with_margin_right(8.)
+                .finish(),
+        );
+    }
+    label_row.add_child(changes_label);
+    let changes_label = label_row.finish();
+
     let include_label = Text::new(
         "Include unstaged",
         appearance.ui_font_family(),
@@ -584,12 +708,17 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
         .with_child(toggle_row)
         .finish();
 
+    let selection = FileSelection {
+        selected_paths: &state.selected_paths,
+        mouse_states: &state.file_checkbox_states,
+    };
     let changes_box = render_file_changes_box(
         &state.file_changes,
         state.changes_expanded,
         &state.summary_mouse_state,
         &state.changes_scroll_state,
         GitDialogAction::Commit(CommitSubAction::ToggleChangesExpanded),
+        Some(&selection),
         appearance,
     );
 

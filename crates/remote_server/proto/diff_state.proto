@@ -352,6 +352,12 @@ message GitCommitChainRequest {
   // daemon (get_diff_for_pr + generate_code_review_content), falling back to
   // `gh pr create --fill`. Ignored for the other modes.
   bool autogenerate_pr_content = 6;
+  // Repo-relative paths to commit when the user selected a subset of changed
+  // files in the commit dialog. When empty, the whole working set is committed
+  // per `include_unstaged`; when non-empty, only these paths are staged and
+  // committed (the rest stay in the working tree) and `include_unstaged` is
+  // ignored.
+  repeated string selected_paths = 7;
 }
 
 // What to run after the commit succeeds.

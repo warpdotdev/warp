@@ -9,6 +9,8 @@
 //! + confirm async, extend `GitDialogMode`, add the per-mode action and
 //! outcome variant, and wire up dispatch.
 
+use std::collections::{HashMap, HashSet};
+
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
@@ -259,17 +261,51 @@ fn render_chevron_icon(expanded: bool, appearance: &Appearance) -> Box<dyn Eleme
     .finish()
 }
 
+/// Per-file selection state for the commit dialog's Changes box. When
+/// supplied, each file row renders a checkbox so the user can commit a subset
+/// of their changes; `mouse_states` holds the persistent per-path hover state
+/// keyed by repo-relative path. The PR and push dialogs pass `None` and render
+/// a read-only file list.
+pub(super) struct FileSelection<'a> {
+    pub selected_paths: &'a HashSet<String>,
+    pub mouse_states: &'a HashMap<String, MouseStateHandle>,
+}
+
+/// Renders a 16x16 checkbox: an empty bordered square when unchecked, the same
+/// square with a check glyph when checked. Used by the commit dialog's
+/// per-file selection rows and "select all" control.
+pub(super) fn render_file_checkbox(selected: bool, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let inner: Box<dyn Element> = if selected {
+        let check_color = theme.main_text_color(theme.surface_1()).into_solid();
+        IconElement::new(<Icon as Into<&'static str>>::into(Icon::Check), check_color).finish()
+    } else {
+        Flex::row().finish()
+    };
+    Container::new(
+        ConstrainedBox::new(Align::new(inner).finish())
+            .with_width(14.)
+            .with_height(14.)
+            .finish(),
+    )
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+    .with_border(Border::all(1.).with_border_fill(theme.surface_3()))
+    .finish()
+}
+
 /// Renders the bordered, collapsible "Changes" box shared by the commit
 /// and create-PR modes: a clickable summary row showing totals (files /
 /// +adds / -dels) with a chevron, and an expandable scrollable file list
 /// below it. The caller supplies the action to dispatch when the summary
-/// is clicked, and stacks their own header above the box.
+/// is clicked, and stacks their own header above the box. When `selection`
+/// is `Some`, each file row renders a selection checkbox (commit mode).
 fn render_file_changes_box(
     file_changes: &[FileChangeEntry],
     expanded: bool,
     summary_mouse_state: &MouseStateHandle,
     scroll_state: &ClippedScrollStateHandle,
     on_toggle: GitDialogAction,
+    selection: Option<&FileSelection>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -348,7 +384,7 @@ fn render_file_changes_box(
         .with_child(summary_container);
 
     if expanded && !file_changes.is_empty() {
-        let file_list = render_file_list(file_changes, appearance);
+        let file_list = render_file_list(file_changes, selection, appearance);
         let scrollable_file_list = ConstrainedBox::new(
             ClippedScrollable::vertical(
                 scroll_state.clone(),
@@ -371,8 +407,14 @@ fn render_file_changes_box(
         .finish()
 }
 
-/// Renders a file list with per-file name, directory, and +/- stats.
-fn render_file_list(files: &[FileChangeEntry], appearance: &Appearance) -> Box<dyn Element> {
+/// Renders a file list with per-file name, directory, and +/- stats. When
+/// `selection` is `Some`, each row is prefixed with a clickable checkbox that
+/// toggles whether the file is included in the commit.
+fn render_file_list(
+    files: &[FileChangeEntry],
+    selection: Option<&FileSelection>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let main_color = theme.main_text_color(theme.surface_1()).into_solid();
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
@@ -382,18 +424,39 @@ fn render_file_list(files: &[FileChangeEntry], appearance: &Appearance) -> Box<d
     for entry in files {
         let (filename, directory) = split_file_path(&entry.path);
 
-        let mut name_row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Text::new(
-                    filename.to_string(),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_color(main_color)
-                .soft_wrap(false)
-                .finish(),
-            );
+        let mut name_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+
+        if let Some(selection) = selection {
+            let path = entry.path.clone();
+            let selected = selection.selected_paths.contains(&entry.path);
+            let mouse_state = selection
+                .mouse_states
+                .get(&entry.path)
+                .cloned()
+                .unwrap_or_default();
+            let checkbox = Hoverable::new(mouse_state, move |_| {
+                render_file_checkbox(selected, appearance)
+            })
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(GitDialogAction::Commit(
+                    CommitSubAction::ToggleFileSelected(path.clone()),
+                ));
+            })
+            .with_cursor(Cursor::PointingHand)
+            .finish();
+            name_row.add_child(Container::new(checkbox).with_margin_right(8.).finish());
+        }
+
+        name_row.add_child(
+            Text::new(
+                filename.to_string(),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(main_color)
+            .soft_wrap(false)
+            .finish(),
+        );
 
         if !directory.is_empty() {
             name_row.add_child(
