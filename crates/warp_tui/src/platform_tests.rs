@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+use std::ffi::OsString;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -34,7 +36,7 @@ fn build_reveal_command_uses_platform_file_manager() {
                 .get_args()
                 .map(|arg| arg.to_owned())
                 .collect::<Vec<_>>(),
-            vec![format!("/select,{}", path.display()).into()]
+            vec![OsString::from(format!("/select,{}", path.display()))]
         );
     }
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
