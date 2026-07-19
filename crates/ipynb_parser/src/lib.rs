@@ -91,7 +91,11 @@ pub fn raw_fallback_formatted_text(content: &str) -> FormattedText {
 }
 
 /// Convert a single notebook cell into its formatted-text lines.
-fn cell_lines(cell: &Cell, language: &str, options: MarkdownParseOptions) -> Vec<FormattedTextLine> {
+fn cell_lines(
+    cell: &Cell,
+    language: &str,
+    options: MarkdownParseOptions,
+) -> Vec<FormattedTextLine> {
     match cell.cell_type.as_str() {
         "markdown" => {
             let source = cell.source.to_text();
