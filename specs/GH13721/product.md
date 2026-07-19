@@ -72,18 +72,40 @@ Out of scope (not changed by this spec):
 
 4. When the tag specifies `width` as an integer number of pixels (`width="640"` or
    `width="640px"`), the image is laid out at that width in pixels, clamped so it never
-   exceeds the available content width of the pane. `height` is treated the same way.
+   exceeds the available content width of the pane (horizontal overflow would force an
+   unpleasant horizontal scroll). A pixel `height` is **not** treated the same way: it
+   is honored verbatim (`height="480"` renders at 480px), because vertical space is free
+   — the document scrolls. A pixel height is subject only to a sanity cap for
+   unreasonable/hostile values (see the tech spec), not to the pane's dimensions. This
+   asymmetry follows the guiding principle *model any reasonable markdown file, not any
+   possible HTML file*: a reasonable author-specified height should be respected.
 
 5. When the tag specifies `width` as a percentage (`width="90%"`), the image is laid
-   out at that percentage of the pane's available content width. `height` as a
-   percentage is likewise relative to the available height budget.
+   out at that percentage of the pane's available content width. A percentage `height`
+   is relative to the image block's **default height** (the fallback size an image with
+   no specified height would render at — `base_line_height × DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`
+   in the tech spec), **not** the pane's visible viewport height. A percentage over
+   100% clamps to that reference (`height="200%"` renders at the full default-height
+   bound), mirroring how `width="200%"` clamps to the pane width.
 
 6. When only one of `width` / `height` is specified, the other dimension is derived
    from the image's intrinsic aspect ratio once it has decoded, so the specified
-   dimension is always honored exactly and the image is never distorted. (See the tech
-   spec for the layout-time mechanism — it re-derives the missing dimension from the
-   decoded image's intrinsic size, the same approach already used for Mermaid diagrams,
-   rather than relying on generic contain-fit scaling.)
+   dimension is always honored exactly and the settled image is not distorted. (See the
+   tech spec for the layout-time mechanism — it re-derives the missing dimension from
+   the decoded image's intrinsic size, the same approach already used for Mermaid
+   diagrams, rather than relying on generic contain-fit scaling.) There is one bounded
+   exception: for a single **transient** layout pass *before the asset has decoded*, the
+   intrinsic ratio is not yet known, so the derived (unspecified) axis falls back to a
+   default and the frame is drawn stretched to fill that box. This means the derived
+   axis — never the author-specified one — may be briefly distorted for that one
+   pre-decode frame; it self-corrects to the aspect-ratio-correct size on the very next
+   layout pass once the asset decodes (the same self-correction Mermaid diagrams rely on
+   today). The trade-off is deliberate: stretching the *derived* axis for one frame is
+   preferable to letting contain-fit shrink the *specified* axis below its requested
+   value, so the one guarantee this invariant makes pre-decode — that the specified
+   dimension is exact in every load state — always holds. See the tech spec's
+   "Why the pre-decode fallback needs `stretch()`" section and its layout-math tests
+   (the `Loading` → `Loaded` transition case) for the precise mechanism.
 
 7. When neither `width` nor `height` is specified, the `<img>` renders at the same
    default size a Markdown `![alt](src)` image renders at today. The presence of the

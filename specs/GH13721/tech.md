@@ -108,7 +108,12 @@ Relevant code:
 - `crates/editor/src/content/text.rs:398-410, 420-500` — `BufferBlockItem::Image`
   definition, `PartialEq`, `as_markdown`, `to_formatted_text_line`.
 - `crates/editor/src/content/edit.rs:721-746` — image layout/sizing (the core change).
-- `crates/editor/src/content/edit.rs:129-131` — `DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`.
+- `crates/editor/src/content/edit.rs:129-131` — `DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`
+  (the *unspecified-height default*, not a maximum) and a new
+  `MAX_EXPLICIT_IMAGE_DIMENSION_PX` const (the sanity cap for an explicit pixel height;
+  see §4 height rule).
+- `crates/warpui_core/src/platform/mod.rs` — `max_texture_dimension_2d()`, the render
+  model's GPU single-texture edge limit that grounds `MAX_EXPLICIT_IMAGE_DIMENSION_PX`.
 - `crates/editor/src/content/mermaid_diagram.rs:54-107` — `mermaid_diagram_config` /
   `mermaid_diagram_size`: the existing precedent for layout-time intrinsic-ratio sizing
   from `AssetCache`, which §4 below reuses verbatim for `<img>` sizing.
@@ -311,14 +316,46 @@ resolution against the new fields:
     negative one, which is invalid and ignored at parse.
   - `None` when the other axis is also `None` → today's default (`available_width`,
     invariant 7; already within bounds, `clamp_to_bound` is a no-op here).
-- Resolve `height` the same way, against the height reference bound `default_height`
-  (`base_line_height * DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`) in place of
-  `available_width` — i.e. `Some(Pixels(px))` → `clamp_to_bound(px, default_height)`;
-  `Some(Percent(p))` → `clamp_to_bound(default_height * p / 100, default_height)`,
-  where `p` is non-negative by construction for the same parse-time reason as width
-  above; `None` with `width` also `None` → `default_height` itself. This is
-  the same shared `clamp_to_bound` function, just parameterized on the height budget
-  instead of the width budget — one clamping rule, two call sites, not two rules.
+- Resolve `height`. **The height and width bounds are deliberately *not* symmetric**,
+  because their spatial semantics differ (guiding principle: *model any reasonable
+  markdown file, not any possible HTML file*):
+  - **Width** is bounded by `available_width` because horizontal space is a hard
+    constraint — a pane has a finite width and horizontal overflow forces an
+    unpleasant horizontal scroll. An explicit pixel width wider than the pane is
+    therefore clamped down to the pane (invariant 4).
+  - **Height** is *not* analogously bounded by `default_height`. `default_height`
+    (`base_line_height * DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`) is the *fallback
+    default size for an unspecified height* — it is **not** a maximum. Vertical space
+    is free (the document scrolls), so an explicit, reasonable pixel height must be
+    **honored verbatim**: `<img height="480">` renders at 480px, not shrunk to
+    ~200px. (An earlier draft clamped pixel height to `default_height` by mechanically
+    mirroring the width rule; that conflated "the default when unspecified" with "the
+    maximum when specified" and is corrected here.)
+  - `Some(Pixels(px))` → `clamp_to_bound(px, MAX_EXPLICIT_IMAGE_DIMENSION_PX)`. The
+    only ceiling on an explicit pixel height is a **sanity cap for hostile/nonsense
+    values** (e.g. `height="99999999"`), not a layout-driven maximum.
+    `MAX_EXPLICIT_IMAGE_DIMENSION_PX` is grounded in the render model: it is the
+    conservative floor of `max_texture_dimension_2d()` (the GPU's maximum single-texture
+    edge; Metal guarantees ≥ 8192px, most report 16384). An image edge larger than that
+    cannot be rasterized as one texture, so honoring a height beyond it is meaningless —
+    that is the principled line between "reasonable" and "hostile." Recommended value:
+    `8192.0` (the guaranteed floor, conservative across GPUs). Every reasonable markdown
+    image — even a tall infographic — sits well under this cap; only pathological input
+    reaches it. The `1px` floor from `clamp_to_bound` still applies.
+  - `Some(Percent(p))` → `clamp_to_bound(default_height * p / 100, default_height)`.
+    A **percentage** is intrinsically relative to a reference, and for height that
+    reference is `default_height` (the height budget) — so `default_height` legitimately
+    *is* both the reference and the cap here: `height="200%"` means "twice the default
+    height" and clamps to the full `default_height` bound exactly as `width="200%"`
+    clamps to `available_width` (invariant 5). Percent height is bounded by design;
+    only absolute pixel height escapes to the sanity cap. `p` is non-negative by
+    construction (parse-time rejection of negatives, invariant 12).
+  - `None` with `width` also `None` → `default_height` itself (the unspecified-height
+    default; invariant 7).
+
+  So `clamp_to_bound` is still the single shared clamp function; what differs per axis
+  is only the *bound argument* — `available_width` for width, `MAX_EXPLICIT_IMAGE_DIMENSION_PX`
+  for an absolute pixel height, and `default_height` for a percent height (its reference).
 - **Aspect ratio when exactly one dimension is set (invariant 6):** resolve the
   specified axis per the rules above (already clamped), then derive the other axis
   from the intrinsic ratio using the Mermaid mechanism verbatim. The invariant that
@@ -326,9 +363,23 @@ resolution against the new fields:
   clamped, is never altered again by fallback or fit logic in any load state** —
   pre-decode and post-decode alike. Only the *derived* (unspecified) axis is ever
   adjusted layout-to-layout.
-  - Call `AssetCache::as_ref(app).load_asset::<ImageType>(asset_source.clone())`
-    (the `asset_source` is already computed at this point via
-    `resolve_asset_source`, `edit.rs:886`, so this requires no new resolution step).
+  - Call `AssetCache::as_ref(app).load_asset::<ImageType>(asset_source.clone())`.
+    **Sequencing (implementable ordering).** This query needs two things at once: an
+    `AppContext` (for `AssetCache::as_ref(app)`) and the resolved `asset_source`. In the
+    pre-existing image path these were split across two phases — `asset_source` was only
+    resolved later, in `LayoutTask::run`/`into_block_item` (`edit.rs:886`), a method
+    with **no `AppContext`**, and *after* `ImageBlockConfig` was already constructed. So
+    the config-construction phase could not have queried the cache the way this section
+    requires. The fix (and the shape the implementation takes) is to **resolve the asset
+    source earlier**: `LayoutTask::from_styled_block` already has `app` in scope (it is
+    where Mermaid's own `mermaid_diagram_layout(&source, layout, spacing, app)` call
+    lives), so `resolve_asset_source(&source, document_path)` is called there, *before*
+    the `ImageBlockConfig` is built, and the resolved `AssetSource` is both (i) fed
+    straight into this cache query for the intrinsic size and (ii) threaded onto the
+    `LayoutTask::Image` variant so `into_block_item` reuses it instead of re-resolving.
+    Net effect: the source is resolved exactly once, in the `AppContext`-bearing layout
+    phase, which is the only phase that can perform this query — no second resolution,
+    no `AppContext`-less call site trying to size the image.
   - **Post-decode — `AssetState::Loaded { data }` with `data.image_size()` returning
     `Some((intrinsic_w, intrinsic_h))` with both `> 0`:** derive the missing axis from
     the specified axis's *resolved* (post-clamp) value — given `width`,
@@ -435,9 +486,17 @@ unaffected by this fix.) Alignment therefore happens **one level up from the
 primitive**, at the block's paint origin, not by fighting `contain()`'s behavior.
 
 **Where the offset is applied.** Add `align: ImageAlign` to `ImageBlockConfig`
-(`render/model/mod.rs:1470-1475`) and to `Positioned<ImageBlockConfig>`'s origin
-computation. Today, `Positioned::image()` (`render/model/positioned.rs:202-204`) builds
-its position via the generic `position_centered`, whose `content_origin()`
+(`render/model/mod.rs:1470-1475`). **Also store the available content width on the
+config** as an `align_available_width: Pixels` field, for the same phase-crossing
+reason as the asset-source sequencing above: `available_width` is computed at layout
+time (`from_styled_block`), but the alignment offset is applied at *paint* time, and
+the paint layer (`RenderableImage::paint`) does not otherwise have access to the layout
+task's `available_width`. Capturing it on the config at construction is what lets paint
+compute `available_width - config.width` without re-deriving a value it cannot see.
+(`config.width` itself is already on the config, so only the available width needs to
+ride along.) Then adjust `Positioned<ImageBlockConfig>`'s origin computation. Today,
+`Positioned::image()` (`render/model/positioned.rs:202-204`) builds its position via the
+generic `position_centered`, whose `content_origin()`
 (`render/model/positioned.rs:62-64` → `bounds::content_origin`,
 `render/model/bounds.rs:20-25`) returns `x = spacing.left_offset()` — a block-type-wide
 constant with no per-instance horizontal offset. This is the gap: no block today can
@@ -446,7 +505,7 @@ positioning an `align`-aware x-origin — either a dedicated `Positioned<ImageBl
 constructor (paralleling `image()`) that adds an alignment offset on top of
 `bounds::content_origin`, or an equivalent adjustment applied where
 `RenderableImage::paint` reads `positioned_image.content_origin()`
-(`render/element/image.rs:66-74`). The offset itself uses the same slack-splitting
+(`render/element/image.rs:66-74`), reading `config.align_available_width` for the slack. The offset itself uses the same slack-splitting
 arithmetic as the align-blocks spec (GH13735; per-line/block offset applied at paint,
 not at the primitive level — the same altitude this fix operates at):
 
@@ -558,7 +617,24 @@ Covers invariants 4–8:
   (invariant 7). See the parser test coverage above; this file does not re-clamp a
   negative percent to `1px`.
 - **`height="150%"`** → clamps to `default_height` (sibling of the width-percent clamp,
-  applied against the height reference bound instead of `available_width`).
+  applied against the height reference bound instead of `available_width`). Percent
+  height is bounded by its reference by design.
+- **Explicit pixel height is honored, NOT clamped to `default_height`** — the
+  reasonable-markdown boundary cases, each of which gets an explicit unit test with a
+  justification comment stating why the boundary sits where it does:
+  - `height="480"` with `default_height` ≈ 200px → resolves to **480** (honored
+    verbatim; the old `default_height` clamp is gone). Justification: 480px is a
+    reasonable image height and vertical space is free (the doc scrolls), so there is
+    no reason to shrink it.
+  - `height="8192"` (== `MAX_EXPLICIT_IMAGE_DIMENSION_PX`) → resolves to **8192**
+    (the sanity cap is inclusive; the largest guaranteed single-texture edge is still
+    a real, renderable height).
+  - `height="99999999"` (hostile) → clamps to `MAX_EXPLICIT_IMAGE_DIMENSION_PX`
+    (**8192**). Justification: beyond the GPU single-texture ceiling the height cannot
+    be rasterized as one texture, so it is the principled "unreasonable/hostile" line —
+    not a layout-driven maximum.
+  - `height="1"` → resolves to **1** (the `clamp_to_bound` `1px` floor; a 1px image is
+    degenerate-but-valid, never a zero box).
 - **Percent width and percent height both given, both `>100%`** → each axis clamps
   independently against its own bound (`available_width` / `default_height`); no ratio
   math applies (both dimensions given).
