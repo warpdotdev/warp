@@ -2003,12 +2003,159 @@ fn test_unstyle_subscript_leaves_superscript_intact() {
             assert_eq!(buffer.content.debug(), "<text><sup_s>test<sup_e>");
 
             // Unstyle *subscript* over the same range: superscript must survive untouched.
-            let _ = buffer.unstyle_internal(
-                TextStyles::default().subscript(),
+            let _ =
+                buffer.unstyle_internal(TextStyles::default().subscript(), selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><sup_s>test<sup_e>");
+        });
+    });
+}
+
+/// Collect one `(char, is_subscript, is_superscript)` triple per rendered character from the
+/// styled-block render runs, so a test can compare the render iterator's view against the
+/// `StyleSummary` view character-by-character.
+fn render_run_vertical_aligns(buffer: &Buffer) -> Vec<(char, bool, bool)> {
+    let blocks = buffer.styled_blocks_in_range(
+        CharOffset::from(1)..buffer.max_charoffset(),
+        StyledBlockBoundaryBehavior::Exclusive,
+    );
+    let mut out = Vec::new();
+    for block in &blocks {
+        if let StyledBufferBlock::Text(text_block) = block {
+            for run in &text_block.block {
+                let sub = run.text_styles.is_subscript();
+                let sup = run.text_styles.is_superscript();
+                for ch in run.run.chars().filter(|c| !c.is_whitespace()) {
+                    out.push((ch, sub, sup));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn test_nested_sub_inside_sup_render_matches_summary() {
+    // #13734 finding 3: subscript and superscript are independent, overlappable markers. When one
+    // is applied inside the other, the render iterator must (a) render the overlap with the same
+    // superscript-wins tie rule `StyleSummary` uses, and (b) *restore* the outer alignment at the
+    // inner end-marker instead of clearing to None. Both views must agree on every character.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "abcde",
+                TextStyles::default(),
                 selection.clone(),
                 ctx,
             );
-            assert_eq!(buffer.content.debug(), "<text><sup_s>test<sup_e>");
+            // Subscript over the whole "abcde", then superscript over the middle "bcd".
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(6),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().subscript(), selection.clone(), ctx);
+            buffer.set_selection(
+                CharOffset::from(2)..CharOffset::from(5),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().superscript(), selection.clone(), ctx);
+            assert_eq!(
+                buffer.content.debug(),
+                "<text><sub_s>a<sup_s>bcd<sup_e>e<sub_e>"
+            );
+
+            // Render-iterator view: a=Sub, bcd=Sup (overlap, sup wins), e=Sub (outer sub restored).
+            let render = render_run_vertical_aligns(buffer);
+            assert_eq!(
+                render,
+                vec![
+                    ('a', true, false),
+                    ('b', false, true),
+                    ('c', false, true),
+                    ('d', false, true),
+                    ('e', true, false),
+                ]
+            );
+
+            // StyleSummary view must agree character-by-character.
+            for (i, (ch, sub, sup)) in render.iter().enumerate() {
+                let offset = CharOffset::from(1 + i);
+                let s = buffer.text_styles_with_metadata_at(offset);
+                assert_eq!(
+                    (*sub, *sup),
+                    (s.is_subscript(), s.is_superscript()),
+                    "render vs StyleSummary disagree at char {ch:?} (offset {offset:?})"
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn test_nested_sup_inside_sub_render_matches_summary() {
+    // Mirror of the above with the outer/inner alignments swapped: superscript outer, subscript
+    // inner. The tie rule is superscript-wins, so the overlap renders Sup and the inner end-marker
+    // restores the outer Sup.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "abcde",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(6),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().superscript(), selection.clone(), ctx);
+            buffer.set_selection(
+                CharOffset::from(2)..CharOffset::from(5),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().subscript(), selection.clone(), ctx);
+            assert_eq!(
+                buffer.content.debug(),
+                "<text><sup_s>a<sub_s>bcd<sub_e>e<sup_e>"
+            );
+
+            // Superscript wins the overlap, so every character with sup active renders Sup.
+            let render = render_run_vertical_aligns(buffer);
+            assert_eq!(
+                render,
+                vec![
+                    ('a', false, true),
+                    ('b', false, true),
+                    ('c', false, true),
+                    ('d', false, true),
+                    ('e', false, true),
+                ]
+            );
+
+            for (i, (ch, sub, sup)) in render.iter().enumerate() {
+                let offset = CharOffset::from(1 + i);
+                let s = buffer.text_styles_with_metadata_at(offset);
+                assert_eq!(
+                    (*sub, *sup),
+                    (s.is_subscript(), s.is_superscript()),
+                    "render vs StyleSummary disagree at char {ch:?} (offset {offset:?})"
+                );
+            }
         });
     });
 }

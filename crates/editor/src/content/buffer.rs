@@ -40,7 +40,7 @@ use super::text::{
     BlockCount, BlockLineBreakBehavior, BlockType, BufferBlockItem, BufferBlockStyle,
     BufferSummary, BufferText, BufferTextStyle, Bytes, CodeBlockType, IndentBehavior, LineCount,
     LinkCount, LinkMarker, MarkerDir, StyleSummary, SyntaxColorId, TextStyles,
-    TextStylesWithMetadata, TextSummary, inline_to_text,
+    TextStylesWithMetadata, TextSummary, inline_to_text, resolve_vertical_align,
 };
 use super::undo::{NonAtomicType, UndoActionType, UndoArg, UndoStack};
 use super::validation::validate_content;
@@ -5603,6 +5603,14 @@ struct ActiveTextBlock {
     /// Whether or not the last run is open for editing, or if it's been completed by a style marker.
     last_run_open: bool,
     current_text_styles: TextStylesWithMetadata,
+    /// Independent subscript/superscript nesting depth for this block. Subscript and superscript are
+    /// separate markers that can overlap (`<sub_s>…<sup_s>…<sup_e>…<sub_e>`), but the collapsed
+    /// `current_text_styles.vertical_align` can only name one. Tracking both depths lets an inner
+    /// end-marker *restore* the still-active outer alignment instead of clearing to `None`, and lets
+    /// the collapse go through the same `resolve_vertical_align` tie rule as `StyleSummary` so the two
+    /// never disagree (issue #13734 finding 3).
+    subscript_depth: i32,
+    superscript_depth: i32,
 }
 
 impl<'a> StyledBufferBlocks<'a> {
@@ -5848,20 +5856,45 @@ impl Iterator for StyledBufferBlocks<'_> {
                 BufferText::Marker { marker_type, dir } => {
                     let text = active_text!(self);
                     self.cursor.next();
-                    text.update_styles(|styles| {
-                        let is_start = match dir {
-                            MarkerDir::Start => true,
-                            MarkerDir::End => false,
-                        };
+                    let is_start = match dir {
+                        MarkerDir::Start => true,
+                        MarkerDir::End => false,
+                    };
 
+                    // Sub/superscript are independent, overlappable markers, so adjust their nesting
+                    // depth on the block and collapse to a single alignment through the shared tie
+                    // rule. This lets an inner end-marker restore the still-active outer alignment
+                    // (e.g. `</sup>` inside `<sub>…</sub>` returns to Sub) rather than clearing to
+                    // None, and keeps the render iterator in lockstep with `StyleSummary` (#13734).
+                    let vertical_marker = matches!(
+                        marker_type,
+                        BufferTextStyle::Subscript | BufferTextStyle::Superscript
+                    );
+                    if vertical_marker {
+                        let delta = if is_start { 1 } else { -1 };
+                        match marker_type {
+                            BufferTextStyle::Subscript => text.subscript_depth += delta,
+                            BufferTextStyle::Superscript => text.superscript_depth += delta,
+                            _ => unreachable!(),
+                        }
+                        debug_assert!(
+                            text.subscript_depth >= 0 && text.superscript_depth >= 0,
+                            "sub/sup end-marker without a matching start"
+                        );
+                    }
+                    let resolved_vertical_align = resolve_vertical_align(
+                        text.subscript_depth > 0,
+                        text.superscript_depth > 0,
+                    );
+
+                    text.update_styles(|styles| {
                         if let Some(bool) = styles.style_mut(marker_type) {
                             *bool = is_start;
                         } else if let Some(custom_weight) = marker_type.custom_weight() {
                             let custom_weight = if is_start { Some(custom_weight) } else { None };
                             styles.set_weight(custom_weight);
-                        } else {
-                            // Sub/superscript live in `vertical_align`, not a bool toggle.
-                            styles.set_vertical_align(marker_type, is_start);
+                        } else if vertical_marker {
+                            styles.set_vertical_align_value(resolved_vertical_align);
                         }
                     });
                 }
@@ -5957,11 +5990,19 @@ impl ActiveStyledBlock {
 
 impl ActiveTextBlock {
     fn new(block_style: BufferBlockStyle, text_styles: TextStylesWithMetadata) -> Self {
+        // Seed the sub/sup depths from the carried-over alignment, mirroring how `StyleSummary` seeds
+        // its counters from `TextStyles` (0 or 1). Styles carry over between text blocks, but the
+        // buffer never splits a block *inside* a nested sub/sup span (those are inline within a line),
+        // so at most one alignment can be active at a block boundary — hence a 0/1 seed is exact.
+        let subscript_depth = text_styles.is_subscript() as i32;
+        let superscript_depth = text_styles.is_superscript() as i32;
         Self {
             block_style,
             current_text_styles: text_styles,
             runs: Vec::new(),
             last_run_open: false,
+            subscript_depth,
+            superscript_depth,
         }
     }
 

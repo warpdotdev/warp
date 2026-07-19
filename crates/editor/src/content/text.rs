@@ -1171,6 +1171,14 @@ impl TextStylesWithMetadata {
         self.vertical_align = active.then_some(align);
     }
 
+    /// Sets the collapsed vertical alignment directly. Used by the render iterator, which tracks
+    /// subscript/superscript nesting depth separately and resolves the overlap through
+    /// [`resolve_vertical_align`] so an inner end-marker can restore the still-active outer alignment
+    /// (issue #13734 finding 3).
+    pub(super) fn set_vertical_align_value(&mut self, vertical_align: Option<VerticalAlign>) {
+        self.vertical_align = vertical_align;
+    }
+
     pub fn colliding_style(&self, style: &BufferTextStyle) -> bool {
         match style {
             BufferTextStyle::Italic => self.italic,
@@ -1708,6 +1716,28 @@ impl AddAssign<&StyleSummary> for StyleSummary {
     }
 }
 
+/// The single tie/nesting rule for overlapping subscript and superscript, shared by every consumer
+/// that has to collapse the two independent markers into one `Option<VerticalAlign>`.
+///
+/// Subscript and superscript are tracked as independent markers (`StyleSummary` keeps a counter for
+/// each; the buffer emits properly-nested `<sub_s>…<sup_s>…<sup_e>…<sub_e>` pairs), so a span can have
+/// BOTH active at once. When that happens the storage can name only one, so **superscript wins the
+/// overlap**. Both the style-summary reconstruction and the render-run iterator MUST route through
+/// this function so they never disagree about which alignment a nested span renders as, or which one
+/// an inner end-marker restores (issue #13734 finding 3).
+pub(super) fn resolve_vertical_align(
+    subscript_active: bool,
+    superscript_active: bool,
+) -> Option<VerticalAlign> {
+    if superscript_active {
+        Some(VerticalAlign::Sup)
+    } else if subscript_active {
+        Some(VerticalAlign::Sub)
+    } else {
+        None
+    }
+}
+
 impl StyleSummary {
     pub(super) fn style_counter(&self, style: &BufferTextStyle) -> i32 {
         match style {
@@ -1752,15 +1782,10 @@ impl StyleSummary {
         } else {
             None
         };
-        // Sub and sup are mutually exclusive, so at most one counter is active; superscript wins the
-        // (unreachable) tie only so the reconstruction is total.
-        let vertical_align = if self.superscript_counter > 0 {
-            Some(VerticalAlign::Sup)
-        } else if self.subscript_counter > 0 {
-            Some(VerticalAlign::Sub)
-        } else {
-            None
-        };
+        // Sub and sup are independent markers and can overlap; `resolve_vertical_align` is the shared
+        // tie rule (superscript wins) that the render iterator also uses, so the two agree.
+        let vertical_align =
+            resolve_vertical_align(self.subscript_counter > 0, self.superscript_counter > 0);
         TextStyles {
             weight,
             italic: self.italic_counter > 0,
