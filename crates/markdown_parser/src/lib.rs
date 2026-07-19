@@ -774,7 +774,10 @@ mod inline_to_markdown_tests {
 
     /// Build a code fragment that also carries an extra style, exercising the composed-style
     /// serialization path that the `inline_code` early-return used to bypass.
-    fn code_with(text: &str, mutate: impl FnOnce(&mut FormattedTextStyles)) -> FormattedTextFragment {
+    fn code_with(
+        text: &str,
+        mutate: impl FnOnce(&mut FormattedTextStyles),
+    ) -> FormattedTextFragment {
         let mut fragment = FormattedTextFragment::inline_code(text);
         mutate(&mut fragment.styles);
         fragment
