@@ -345,8 +345,11 @@ impl Engine {
                         match_location = Some(cursor.start().text.chars);
                     }
                 }
-                BufferText::Marker { .. } | BufferText::Link(_) | BufferText::Color(_) => {
-                    // Inline styling is ignored by search.
+                BufferText::Marker { .. }
+                | BufferText::Link(_)
+                | BufferText::Align(_)
+                | BufferText::Color(_) => {
+                    // Inline styling and zero-width region markers are ignored by search.
                 }
                 BufferText::Placeholder { .. } | BufferText::BlockItem { .. } => {
                     // Non-text / non-interactive items interrupt search. If we've already found a

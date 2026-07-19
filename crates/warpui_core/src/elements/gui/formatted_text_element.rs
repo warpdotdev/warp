@@ -1637,7 +1637,10 @@ impl From<&FormattedTextLine> for LineType {
             FormattedTextLine::LineBreak
             | FormattedTextLine::HorizontalRule
             | FormattedTextLine::Embedded(_)
-            | FormattedTextLine::Image(_) => LineType::LineBreak,
+            | FormattedTextLine::Image(_)
+            // Align-region boundaries are content-less markers; they render no line of their own.
+            | FormattedTextLine::AlignRegionStart(_)
+            | FormattedTextLine::AlignRegionEnd => LineType::LineBreak,
         }
     }
 }
@@ -1717,7 +1720,12 @@ impl Element for FormattedTextElement {
                 FormattedTextLine::LineBreak
                 | FormattedTextLine::HorizontalRule
                 | FormattedTextLine::Embedded(_)
-                | FormattedTextLine::Image(_) => (self.font_size, &res, 0, LineType::LineBreak),
+                | FormattedTextLine::Image(_)
+                // Align-region boundaries render no line of their own in this direct sink.
+                | FormattedTextLine::AlignRegionStart(_)
+                | FormattedTextLine::AlignRegionEnd => {
+                    (self.font_size, &res, 0, LineType::LineBreak)
+                }
             };
 
             // Appends either the number or bullet type in the case of list based on the indent.

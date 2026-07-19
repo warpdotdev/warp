@@ -6,9 +6,11 @@ use pathfinder_color::ColorU;
 use string_offset::CharOffset;
 use sum_tree::{Cursor, Dimension, SeekBias, SumTree};
 
+use markdown_parser::BlockAlignment;
+
 use super::text::{
-    BufferSummary, BufferText, ColorMarker, LinkCount, LinkMarker, SyntaxColorId,
-    TEXT_FRAGMENT_SIZE,
+    AlignCount, AlignMarker, BufferSummary, BufferText, ColorMarker, LinkCount, LinkMarker,
+    SyntaxColorId, TEXT_FRAGMENT_SIZE,
 };
 
 /// Cursor that provides utility function to traverse the buffer tree. Note that
@@ -281,6 +283,11 @@ pub trait BufferSumTree {
     /// Returns the url with the given link count if the link exists.
     fn url_at_link_count(&self, link_count: &LinkCount) -> Option<String>;
 
+    /// Returns the alignment of the align region with the given align count, if a region start
+    /// marker exists at that count. Consumed by the GUI/TUI render layers (GH-13735).
+    #[allow(dead_code)]
+    fn alignment_at_align_count(&self, align_count: &AlignCount) -> Option<BlockAlignment>;
+
     /// Returns the color with the given color count if there is a decorated syntax color.
     fn color_at_color_count(&self, color_count: &SyntaxColorId) -> Option<ColorU>;
 
@@ -331,6 +338,16 @@ impl BufferSumTree for SumTree<BufferText> {
 
         match cursor.item() {
             Some(BufferText::Link(LinkMarker::Start(url))) => Some(url.clone()),
+            _ => None,
+        }
+    }
+
+    fn alignment_at_align_count(&self, align_count: &AlignCount) -> Option<BlockAlignment> {
+        let mut cursor = self.cursor::<AlignCount, ()>();
+        cursor.seek(align_count, SeekBias::Left);
+
+        match cursor.item() {
+            Some(BufferText::Align(AlignMarker::Start(alignment))) => Some(*alignment),
             _ => None,
         }
     }

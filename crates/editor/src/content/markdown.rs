@@ -8,9 +8,9 @@ use html5ever::serialize::{Serialize, Serializer, TraversalScope};
 use html5ever::{QualName, serialize};
 use itertools::Itertools;
 use markdown_parser::{
-    CodeBlockText, FormattedIndentTextInline, FormattedTableAlignment, FormattedTaskList,
-    FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextInline,
-    FormattedTextLine, OrderedFormattedIndentTextInline,
+    BlockAlignment, CodeBlockText, FormattedIndentTextInline, FormattedTableAlignment,
+    FormattedTaskList, FormattedText, FormattedTextFragment, FormattedTextHeader,
+    FormattedTextInline, FormattedTextLine, OrderedFormattedIndentTextInline,
 };
 use markup5ever::ns;
 use string_offset::CharOffset;
@@ -24,7 +24,7 @@ use super::buffer::{
 };
 use super::core::{CoreEditorAction, CoreEditorActionType};
 use super::text::{
-    BlockHeaderSize, BlockType, BufferBlockItem, BufferBlockStyle, FormattedTable,
+    AlignMarker, BlockHeaderSize, BlockType, BufferBlockItem, BufferBlockStyle, FormattedTable,
     TABLE_BLOCK_MARKDOWN_LANG, TextStylesWithMetadata,
 };
 use crate::content::anchor::AnchorSide;
@@ -150,6 +150,20 @@ impl<'a> BufferMarkdownParser<'a> {
                         | BufferBlockStyle::UnorderedList { .. }
                         | BufferBlockStyle::OrderedList { .. }
                         | BufferBlockStyle::TaskList { .. } => (),
+                    }
+                }
+                StyledBufferBlock::AlignBoundary(marker) => {
+                    // Canonically re-serialize the region with a `<div align>` wrapper on its own
+                    // line. Preservation is semantic, not byte-exact.
+                    match marker {
+                        AlignMarker::Start(alignment) => {
+                            let _ = writeln!(
+                                &mut res,
+                                "<div align=\"{}\">",
+                                align_to_html_value(&alignment)
+                            );
+                        }
+                        AlignMarker::End => res.push_str("</div>\n"),
                     }
                 }
             }
@@ -507,6 +521,15 @@ impl<'a> BufferToFormattedText<'a> {
                                     .collect(),
                             )
                         }
+                    });
+                }
+                StyledBufferBlock::AlignBoundary(marker) => {
+                    trailing_new_line = false;
+                    lines.push_back(match marker {
+                        AlignMarker::Start(alignment) => {
+                            FormattedTextLine::AlignRegionStart(alignment)
+                        }
+                        AlignMarker::End => FormattedTextLine::AlignRegionEnd,
                     });
                 }
             }
@@ -1024,6 +1047,20 @@ impl Serialize for ExportedBufferBlocks<'_> {
                         serializer.end_elem(tag_name)?;
                     }
                 }
+                StyledBufferBlock::AlignBoundary(marker) => {
+                    // Emit a `<div align="…">` / `</div>` wrapper so alignment survives HTML export.
+                    let tag_name = QualName::new(None, ns!(html), "div".into());
+                    match marker {
+                        AlignMarker::Start(alignment) => {
+                            let align_attr = QualName::new(None, ns!(), "align".into());
+                            serializer.start_elem(
+                                tag_name,
+                                vec![(&align_attr, align_to_html_value(alignment))].into_iter(),
+                            )?;
+                        }
+                        AlignMarker::End => serializer.end_elem(tag_name)?,
+                    }
+                }
             }
         }
 
@@ -1127,6 +1164,8 @@ fn formatted_text_line_to_block_style(line: &FormattedTextLine) -> Option<Buffer
         FormattedTextLine::Embedded(_) => None,
         // Images are block items, not block styles
         FormattedTextLine::Image(_) => None,
+        // Align-region boundaries are content-less region markers, not block styles.
+        FormattedTextLine::AlignRegionStart(_) | FormattedTextLine::AlignRegionEnd => None,
     }
 }
 
@@ -1135,6 +1174,14 @@ fn alignment_to_html_value(alignment: &FormattedTableAlignment) -> &'static str 
         FormattedTableAlignment::Left => "left",
         FormattedTableAlignment::Center => "center",
         FormattedTableAlignment::Right => "right",
+    }
+}
+
+fn align_to_html_value(alignment: &BlockAlignment) -> &'static str {
+    match alignment {
+        BlockAlignment::Left => "left",
+        BlockAlignment::Center => "center",
+        BlockAlignment::Right => "right",
     }
 }
 

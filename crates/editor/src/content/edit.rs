@@ -851,6 +851,12 @@ impl LayoutTask {
                     Self::Text(text_block)
                 }
             }
+            // Align-region boundaries are zero-length markers filtered out by the caller
+            // (`content_length() == 0`) before they reach block layout; their alignment is
+            // applied to the interior blocks via the `AlignCount` `SumTree` query at render time.
+            StyledBufferBlock::AlignBoundary(_) => {
+                unreachable!("align-region boundary markers are filtered before block layout")
+            }
         }
     }
 

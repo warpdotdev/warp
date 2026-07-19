@@ -1,7 +1,7 @@
 use pathfinder_color::ColorU;
 use sum_tree::SumTree;
 
-use super::text::{BufferBlockStyle, BufferSummary, BufferText, MarkerDir};
+use super::text::{AlignMarker, BufferBlockStyle, BufferSummary, BufferText, MarkerDir};
 use crate::content::cursor::BufferSumTree;
 use crate::content::text::{BlockLineBreakBehavior, BlockType, ColorMarker};
 
@@ -16,6 +16,8 @@ pub fn validate_content(content: &SumTree<BufferText>) {
 
     let mut active_block_style: Option<BlockType> = None;
     let mut active_color: Option<ColorU> = None;
+    // Nesting depth of align regions; must stay non-negative and end balanced at zero.
+    let mut align_depth: i32 = 0;
 
     while let Some(item) = cursor.item() {
         let start_summary = cursor.start();
@@ -119,6 +121,17 @@ pub fn validate_content(content: &SumTree<BufferText>) {
                     content.debug()
                 );
             }
+            BufferText::Align(align_marker) => match align_marker {
+                AlignMarker::Start(_) => align_depth += 1,
+                AlignMarker::End => {
+                    assert!(
+                        align_depth > 0,
+                        "{char_offset}: Found an align end marker with no matching start\nBuffer: {}",
+                        content.debug()
+                    );
+                    align_depth -= 1;
+                }
+            },
         }
 
         assert!(
@@ -135,6 +148,13 @@ pub fn validate_content(content: &SumTree<BufferText>) {
             .clone()
             .is_some_and(|style| style == BlockType::Text(BufferBlockStyle::PlainText)),
         "Buffer ends as {active_block_style:?}, not plain text.\nBuffer: {}",
+        content.debug()
+    );
+
+    // Align regions must be balanced.
+    assert!(
+        align_depth == 0,
+        "Buffer ends with {align_depth} unclosed align region(s).\nBuffer: {}",
         content.debug()
     );
 }

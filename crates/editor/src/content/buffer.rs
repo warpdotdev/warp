@@ -10,7 +10,7 @@ use line_ending::LineEnding;
 use markdown_parser::{
     CodeBlockText, FormattedIndentTextInline, FormattedTable, FormattedTaskList, FormattedText,
     FormattedTextFragment, FormattedTextHeader, FormattedTextLine, FormattedTextStyles,
-    OrderedFormattedIndentTextInline, parse_markdown, parse_markdown_with_gfm_tables,
+    MarkdownParseOptions, OrderedFormattedIndentTextInline, parse_markdown_with_options,
 };
 use num_traits::SaturatingSub;
 use pathfinder_color::ColorU;
@@ -37,7 +37,7 @@ use super::markdown::{
 };
 use super::selection::{Selection, TextStyleBias};
 use super::text::{
-    BlockCount, BlockLineBreakBehavior, BlockType, BufferBlockItem, BufferBlockStyle,
+    AlignMarker, BlockCount, BlockLineBreakBehavior, BlockType, BufferBlockItem, BufferBlockStyle,
     BufferSummary, BufferText, BufferTextStyle, Bytes, CodeBlockType, IndentBehavior, LineCount,
     LinkCount, LinkMarker, MarkerDir, StyleSummary, SyntaxColorId, TextStyles,
     TextStylesWithMetadata, TextSummary, inline_to_text,
@@ -847,12 +847,11 @@ impl Buffer {
         selection_model: ModelHandle<BufferSelectionModel>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let parse_fn = if warp_core::features::FeatureFlag::MarkdownTables.is_enabled() {
-            parse_markdown_with_gfm_tables
-        } else {
-            parse_markdown
+        let options = MarkdownParseOptions {
+            gfm_tables: warp_core::features::FeatureFlag::MarkdownTables.is_enabled(),
+            block_align: warp_core::features::FeatureFlag::MarkdownBlockAlign.is_enabled(),
         };
-        let parsed_formatted_text = match parse_fn(markdown) {
+        let parsed_formatted_text = match parse_markdown_with_options(markdown, options) {
             Ok(parsed) => parsed,
             Err(e) => {
                 safe_error! {
@@ -887,8 +886,11 @@ impl Buffer {
         selection_model: ModelHandle<BufferSelectionModel>,
         ctx: &mut ModelContext<Self>,
     ) -> Result<Self, ipynb_parser::IpynbError> {
-        let gfm_tables = warp_core::features::FeatureFlag::MarkdownTables.is_enabled();
-        let formatted_text = ipynb_parser::ipynb_to_formatted_text(ipynb, gfm_tables)?;
+        let options = MarkdownParseOptions {
+            gfm_tables: warp_core::features::FeatureFlag::MarkdownTables.is_enabled(),
+            block_align: warp_core::features::FeatureFlag::MarkdownBlockAlign.is_enabled(),
+        };
+        let formatted_text = ipynb_parser::ipynb_to_formatted_text(ipynb, options)?;
         Ok(Self::from_formatted_text(
             formatted_text,
             embedded_item_conversion,
@@ -2272,11 +2274,13 @@ impl Buffer {
 
     /// Serialize the buffer as Markdown.
     pub fn to_markdown(&self, style: MarkdownStyle) -> String {
+        // Start at offset 0 (not 1) so a leading zero-width marker — e.g. an align-region start
+        // bracketing the very first block — is included. The initial-block logic in
+        // `StyledBufferBlocks` handles the mandatory leading block marker itself.
         BufferMarkdownParser::new(
             style,
             self.styled_blocks_at(
-                // TODO(ben): does this need the +1?
-                CharOffset::from(1)..self.max_charoffset() + 1,
+                CharOffset::zero()..self.max_charoffset() + 1,
                 StyledBlockBoundaryBehavior::Exclusive,
             ),
         )
@@ -5475,6 +5479,10 @@ pub struct StyledBufferRun {
 pub enum StyledBufferBlock {
     Item(BufferBlockItem),
     Text(StyledTextBlock),
+    /// A content-less align-region boundary marker (`<div align>`/`<p align>` start or end).
+    /// Zero-width; it carries no text and re-serializes into an `AlignRegion*` boundary line so
+    /// alignment survives a round-trip.
+    AlignBoundary(AlignMarker),
 }
 
 impl StyledBufferBlock {
@@ -5484,6 +5492,8 @@ impl StyledBufferBlock {
         match &self {
             Self::Item(item_type) => item_type.as_markdown(MarkdownStyle::Internal).to_string(),
             Self::Text(text_block) => text_block.text(),
+            // Content-less region boundary contributes no text.
+            Self::AlignBoundary(_) => String::new(),
         }
     }
 
@@ -5492,6 +5502,7 @@ impl StyledBufferBlock {
         match &self {
             Self::Item(item_type) => item_type.as_rich_format_text(app).to_string(),
             Self::Text(text_block) => text_block.text(),
+            Self::AlignBoundary(_) => String::new(),
         }
     }
 
@@ -5499,6 +5510,8 @@ impl StyledBufferBlock {
         match &self {
             Self::Item(_) => CharOffset::from(1),
             Self::Text(text_block) => text_block.content_length,
+            // Zero-width marker.
+            Self::AlignBoundary(_) => CharOffset::from(0),
         }
     }
 }
@@ -5574,6 +5587,8 @@ enum ActiveStyledBlock {
         block: ActiveTextBlock,
         start_offset: CharOffset,
     },
+    /// A content-less align-region boundary awaiting emission as a `StyledBufferBlock`.
+    AlignBoundary(AlignMarker),
     Finished,
 }
 
@@ -5648,6 +5663,10 @@ impl<'a> StyledBufferBlocks<'a> {
                 // marker, like we would for text.
                 ActiveStyledBlock::Item(item_type.clone())
             }
+            // A zero-width align-region boundary immediately precedes `range.start` (the seek
+            // stepped past it). Queue it as the initial block so it re-serializes, mirroring the
+            // block-item handling above. The cursor already points at the region's interior.
+            Some(BufferText::Align(marker)) => ActiveStyledBlock::AlignBoundary(marker.clone()),
             _ => {
                 let block_style = match buffer.block_type_at_point(range.start) {
                     BlockType::Text(style) => style,
@@ -5730,11 +5749,13 @@ macro_rules! active_text {
     ($self:ident) => {{
         match &mut $self.active_block {
             ActiveStyledBlock::Text { block, .. } => block,
-            ActiveStyledBlock::Item(_) => {
+            // Block items and align boundaries never accumulate inline text; reaching here with
+            // one active is an invalid state.
+            ActiveStyledBlock::Item(_) | ActiveStyledBlock::AlignBoundary(_) => {
                 if cfg!(debug_assertions) {
-                    panic!("Unexpected block item");
+                    panic!("Unexpected non-text block");
                 }
-                // In release builds, handle the invalid state by yielding the block item and
+                // In release builds, handle the invalid state by yielding the current block and
                 // reverting to plain text.
                 return $self.advance_block(ActiveStyledBlock::Text {
                     block: ActiveTextBlock::new(BufferBlockStyle::PlainText, Default::default()),
@@ -5756,6 +5777,20 @@ impl Iterator for StyledBufferBlocks<'_> {
         // On each call to `next()`, we loop through text fragments until the end of the current
         // block or the maximum character offset, whichever comes first. We then return the
         // parsed block and reset the iterator state for the next one.
+
+        // If a leading align-region boundary was queued as the initial block (the seek stepped
+        // past a zero-width marker at `range.start`), yield it now and start a fresh text block
+        // for the interior content the cursor already points at.
+        if let ActiveStyledBlock::AlignBoundary(_) = &self.active_block {
+            let block_style = match self.cursor.item() {
+                Some(BufferText::BlockMarker { marker_type }) => marker_type.clone(),
+                _ => BufferBlockStyle::PlainText,
+            };
+            return self.advance_block(ActiveStyledBlock::Text {
+                block: ActiveTextBlock::new(block_style, Default::default()),
+                start_offset: self.cursor.offset(),
+            });
+        }
 
         while let Some(fragment) = self.cursor.item() {
             let start = self.cursor.offset();
@@ -5787,7 +5822,10 @@ impl Iterator for StyledBufferBlocks<'_> {
                             block.push_str(self.line_end_mode.as_str());
                             block.current_text_styles.clone()
                         }
-                        ActiveStyledBlock::Item(_) => Default::default(),
+                        // Items and align boundaries carry no inline styles across the boundary.
+                        ActiveStyledBlock::Item(_) | ActiveStyledBlock::AlignBoundary(_) => {
+                            Default::default()
+                        }
                         ActiveStyledBlock::Finished => return None,
                     };
                     self.cursor.next();
@@ -5863,6 +5901,19 @@ impl Iterator for StyledBufferBlocks<'_> {
                         }
                     });
                 }
+                BufferText::Align(marker) => {
+                    // Align-region boundary markers are zero-width and carry no inline style.
+                    // They bracket whole blocks, so — like a block item — finish the current
+                    // block and emit the boundary as its own `StyledBufferBlock` so the region
+                    // survives serialization. (The GUI render layer separately consults the
+                    // `AlignCount` `SumTree` dimension to *paint* the alignment.)
+                    let marker = marker.clone();
+                    self.cursor.next();
+                    if let ActiveStyledBlock::Text { block, .. } = &mut self.active_block {
+                        block.push_str(self.line_end_mode.as_str());
+                    }
+                    return self.advance_block(ActiveStyledBlock::AlignBoundary(marker));
+                }
                 BufferText::Text {
                     fragment,
                     char_count,
@@ -5928,6 +5979,9 @@ impl ActiveStyledBlock {
                 style: block.block_style,
                 content_length: offset.saturating_sub(&start_offset),
             })),
+            ActiveStyledBlock::AlignBoundary(marker) => {
+                Some(StyledBufferBlock::AlignBoundary(marker))
+            }
             ActiveStyledBlock::Finished => None,
         }
     }
