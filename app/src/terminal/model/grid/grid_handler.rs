@@ -30,7 +30,6 @@ use urlocator::{UrlLocation, UrlLocator};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::{SemanticSelection, SMART_SELECT_MATCH_WINDOW_LIMIT};
 use warp_core::{safe_assert, safe_assert_eq};
-use warp_errors::report_error;
 use warp_terminal::model::grid::{CellType, FlatStorage, HyperlinkId, HyperlinkRegistry};
 pub use warp_terminal::model::TermMode;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
@@ -896,9 +895,8 @@ impl GridHandler {
                 let displayed_end =
                     self.maybe_translate_point_from_original_to_displayed(*url.range.end());
                 if displayed_start > displayed_end {
-                    report_error!(
-                        "URL translation to displayed points failed: range start is greater than range end",
-                        extra: { "start" => ?displayed_start, "end" => ?displayed_end }
+                    log::warn!(
+                        "URL translation to displayed points failed: range start is greater than range end (start={displayed_start:?}, end={displayed_end:?})"
                     );
                 } else {
                     url.range = displayed_start..=displayed_end;
@@ -1467,9 +1465,8 @@ impl GridHandler {
                         let displayed_ending_point = self
                             .maybe_translate_point_from_original_to_displayed(ending_point);
                         if displayed_starting_point > displayed_ending_point {
-                            report_error!(
-                                "File path range translation to displayed points failed: range start is greater than range end",
-                                extra: { "start" => ?displayed_starting_point, "end" => ?displayed_ending_point }
+                            log::warn!(
+                                "File path range translation to displayed points failed: range start is greater than range end (start={displayed_starting_point:?}, end={displayed_ending_point:?})"
                             );
                             starting_point..=ending_point
                         } else {
