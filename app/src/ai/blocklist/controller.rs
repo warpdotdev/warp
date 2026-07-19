@@ -1230,8 +1230,7 @@ impl BlocklistAIController {
                 }) {
                     Ok(task_id) => (task_id, Some(running_command)),
                     Err(e) => {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Could not create CLI subagent task optimistically"));
+                        log::warn!("Could not create CLI subagent task optimistically: {e:#}");
                         return false;
                     }
                 }
@@ -1246,9 +1245,8 @@ impl BlocklistAIController {
             } else {
                 let history_model = BlocklistAIHistoryModel::as_ref(ctx);
                 let Some(conversation) = history_model.conversation(&conversation_id) else {
-                    report_error!(
-                        "Tried to send follow-up query for non-existent conversation",
-                        extra: { "conversation_id" => ?conversation_id }
+                    log::warn!(
+                        "Tried to send follow-up query for non-existent conversation: {conversation_id:?}"
                     );
                     return false;
                 };
@@ -1271,8 +1269,7 @@ impl BlocklistAIController {
                         block_id: block_id.to_string(),
                         agent_view_visibility: agent_view_visibility.into(),
                     }) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Error sending UpdateBlockAgentViewVisibility event"));
+                        log::warn!("Error sending UpdateBlockAgentViewVisibility event: {e:#}");
                     }
                 }
             }
@@ -1337,8 +1334,8 @@ impl BlocklistAIController {
             Some(id) => {
                 let Some(conversation) = BlocklistAIHistoryModel::as_ref(ctx).conversation(&id)
                 else {
-                    report_error!(
-                        "Tried to send custom AI input query as follow-up in non-existent conversation"
+                    log::warn!(
+                        "Tried to send custom AI input query as follow-up in non-existent conversation: {id:?}"
                     );
                     return;
                 };
@@ -1495,10 +1492,7 @@ impl BlocklistAIController {
             Some(id) => {
                 let Some(conversation) = BlocklistAIHistoryModel::as_ref(ctx).conversation(&id)
                 else {
-                    report_error!(
-                        "[passive-suggestion-result] conversation not found",
-                        extra: { "id" => ?id }
-                    );
+                    log::warn!("[passive-suggestion-result] conversation not found: {id:?}");
                     return;
                 };
                 WhichTask::Task {
@@ -1986,10 +1980,7 @@ impl BlocklistAIController {
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
-            report_error!(
-                "Tried to resume non-existent conversation",
-                extra: { "conversation_id" => ?conversation_id }
-            );
+            log::warn!("Tried to resume non-existent conversation: {conversation_id:?}");
             return;
         };
         let task_id = {
