@@ -78,10 +78,12 @@ Out of scope (not changed by this spec):
    out at that percentage of the pane's available content width. `height` as a
    percentage is likewise relative to the available height budget.
 
-6. When only one of `width` / `height` is specified, the other dimension is derived to
-   preserve the image's aspect ratio (the renderer already scales by the smaller of the
-   width/height ratios inside its layout box, so specifying one dimension and leaving
-   the other unconstrained yields proportional scaling).
+6. When only one of `width` / `height` is specified, the other dimension is derived
+   from the image's intrinsic aspect ratio once it has decoded, so the specified
+   dimension is always honored exactly and the image is never distorted. (See the tech
+   spec for the layout-time mechanism — it re-derives the missing dimension from the
+   decoded image's intrinsic size, the same approach already used for Mermaid diagrams,
+   rather than relying on generic contain-fit scaling.)
 
 7. When neither `width` nor `height` is specified, the `<img>` renders at the same
    default size a Markdown `![alt](src)` image renders at today. The presence of the
