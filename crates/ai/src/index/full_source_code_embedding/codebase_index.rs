@@ -11,7 +11,7 @@ use futures::stream::AbortHandle;
 use ignore::gitignore::Gitignore;
 use instant::Instant;
 #[cfg(feature = "local_fs")]
-use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy};
+use repo_metadata::entry::{is_file_parsable, BudgetExceededBehavior, IgnoredPathStrategy};
 use repo_metadata::Repository;
 use warp_core::safe_error;
 use warp_errors::report_error;
@@ -2328,6 +2328,29 @@ pub(super) async fn build_fragments_from_metadata(
         .map(|(_, metadata)| metadata.absolute_path.clone())
         .collect::<HashSet<_>>()
     {
+        // Guard against files that have grown beyond the parseable size limit
+        // since indexing. `is_file_parsable` applies the same 3 MB ceiling used
+        // during indexing (repo_metadata::entry::MAX_FILE_SIZE). Without this
+        // check, `async_fs::read_to_string` calls `String::try_reserve_exact`
+        // with the full file-metadata length, which can succeed on macOS even
+        // for tens-of-GiB sparse/virtual files, causing a massive memory spike.
+        match is_file_parsable(&path) {
+            Ok(true) => {}
+            Ok(false) => {
+                log::warn!(
+                    "Skipping oversized file in codebase fragment retrieval: {}",
+                    path.display()
+                );
+                continue;
+            }
+            Err(e) => {
+                log::debug!(
+                    "Failed to stat file for codebase fragment retrieval ({}): {e}",
+                    path.display()
+                );
+                continue;
+            }
+        }
         if let Ok(file_content) = async_fs::read_to_string(&path).await {
             file_contents.insert(path, file_content);
         }
