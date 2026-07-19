@@ -45,6 +45,7 @@ pub const MCP: StaticCommand = StaticCommand {
     auto_enter_ai_mode: false,
     argument: None,
 };
+
 pub const VIEW_LOGS: StaticCommand = StaticCommand {
     name: "/view-logs",
     description: "Bundle your TUI logs into a zip archive",
@@ -601,7 +602,7 @@ impl Default for Registry {
 impl Registry {
     pub fn new() -> Self {
         let mut commands = HashMap::new();
-        for command in all_commands().into_iter() {
+        for command in all_commands(settings::settings_mode()) {
             debug_assert!(
                 !command
                     .availability
@@ -639,11 +640,7 @@ impl Registry {
     }
 }
 
-fn all_commands() -> Vec<StaticCommand> {
-    all_commands_for_mode(settings::settings_mode())
-}
-
-fn all_commands_for_mode(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
+fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
     let mut commands = vec![
         ADD_MCP,
         ADD_PROMPT.clone(),
