@@ -161,6 +161,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::MarkdownTables,
         #[cfg(feature = "jupyter_notebook_rendering")]
         FeatureFlag::JupyterNotebookRendering,
+        #[cfg(feature = "csv_viewer_rendering")]
+        FeatureFlag::CsvViewerRendering,
         #[cfg(feature = "blocklist_markdown_table_rendering")]
         FeatureFlag::BlocklistMarkdownTableRendering,
         #[cfg(feature = "blocklist_markdown_images")]

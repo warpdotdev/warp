@@ -924,8 +924,8 @@ impl Element for Table {
         }
         let total_intrinsic: f32 = intrinsic_widths.iter().sum();
 
-        let mut state = self.state.inner.borrow_mut();
         if uses_expand_to_content {
+            let mut state = self.state.inner.borrow_mut();
             state.scroll_top = RowScrollOffset::default();
             drop(state);
 

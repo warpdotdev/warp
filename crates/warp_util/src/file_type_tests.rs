@@ -116,6 +116,19 @@ fn test_is_jupyter_notebook_file() {
 }
 
 #[test]
+fn test_is_csv_file() {
+    assert!(is_csv_file("data.csv"));
+    assert!(is_csv_file("Data.CSV"));
+    assert!(is_csv_file("/path/to/export.csv"));
+
+    assert!(!is_csv_file("data.tsv"));
+    assert!(!is_csv_file("data.txt"));
+    assert!(!is_csv_file("README"));
+    assert!(!is_csv_file("csv"));
+    assert!(!is_csv_file("data.csv.bak"));
+}
+
+#[test]
 fn test_extensionless_files() {
     assert!(is_extensionless_text_file("README"));
     assert!(is_extensionless_text_file("LICENSE"));

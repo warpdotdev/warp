@@ -34,6 +34,19 @@ pub enum NotebookTelemetryAction {
     ChangeSelectionMode { mode: SelectionMode },
     /// The user navigated between command/code blocks or embedded workflows with the keyboard.
     CommandKeyboardNavigation,
+    /// The user toggled between Rendered and Raw display modes for a file
+    /// rendered in the notebook viewer (markdown, Jupyter notebook, or CSV),
+    /// tagged with the file kind so CSV usage is observable.
+    ToggleMarkdownDisplayMode { file_kind: NotebookFileKind },
+}
+
+/// The kind of file rendered in the notebook viewer, used to tag
+/// [`NotebookTelemetryAction::ToggleMarkdownDisplayMode`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NotebookFileKind {
+    Markdown,
+    JupyterNotebook,
+    Csv,
 }
 
 /// Generic entrypoint information for actions that might be keyboard or mouse driven.
