@@ -107,6 +107,9 @@ async fn get_token_descriptions<'a, T: CompletionContext>(
                     buffer_text,
                     &current_command_span,
                     flag_token.clone(),
+                    // The flag part of a `-...=...` token is an attached-value flag, not a
+                    // bundle of short-hand flags (#9820).
+                    true,
                     completion_context,
                 )
                 .await;
@@ -124,6 +127,7 @@ async fn get_token_descriptions<'a, T: CompletionContext>(
                         buffer_text,
                         &current_command_span,
                         value_token.clone(),
+                        false,
                         completion_context,
                     )
                     .await;
@@ -138,6 +142,7 @@ async fn get_token_descriptions<'a, T: CompletionContext>(
                     buffer_text,
                     &current_command_span,
                     token.clone(),
+                    false,
                     completion_context,
                 )
                 .await;

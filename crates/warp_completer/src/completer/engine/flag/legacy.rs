@@ -18,9 +18,22 @@ fn short_hand_flag_suggestions(
     signature: &SpecSignature,
     partial_without_dashes: &str,
 ) -> impl Iterator<Item = MatchedSuggestion> {
+    // A single-dash token only reads as a bundle of short-hand flags (e.g. `ssh -Xv`) when
+    // every character is a known short flag of the command. Attached-value tokens such as
+    // CMake's `-DWITH_TESTS(=OFF)` are not bundles: without this check, a trailing character
+    // that happened to be a short flag (e.g. CMake's `-S`) exactly-matched the whole token as
+    // that option, coloring some `-D...=...` definitions as flags and leaving others plain
+    // (#9820).
+    let is_plausible_short_flag_bundle = !partial_without_dashes.is_empty()
+        && partial_without_dashes.chars().all(|c| {
+            signature
+                .short_hand_flags()
+                .any(|flag| flag.name.chars().eq([c]))
+        });
+
     signature
         .short_hand_flags()
-        .filter_map(|flag| {
+        .filter_map(move |flag| {
             // Since short hand flags can be written one after the other
             // (e.g. ssh -Xv), we can't just prefix match the flag against partial.
             // Instead, the logic below assumes that a short hand flag can only be used once.
@@ -32,10 +45,11 @@ fn short_hand_flag_suggestions(
             // typed, so we can provide a suggestion for the current short hand flags.
             // This suggestion is used so we have an entry for the current flags in the
             // completions menu, and also in our Describe API.
-            let is_current_flag = partial_without_dashes
-                .chars()
-                .last()
-                .is_some_and(|c| c.to_string() == flag.name);
+            let is_current_flag = is_plausible_short_flag_bundle
+                && partial_without_dashes
+                    .chars()
+                    .last()
+                    .is_some_and(|c| c.to_string() == flag.name);
             let should_include_flag = !is_flag_already_included || is_current_flag;
             should_include_flag.then(|| {
                 let replacement_text = if is_current_flag {

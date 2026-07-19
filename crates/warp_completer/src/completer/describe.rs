@@ -102,8 +102,16 @@ pub async fn describe<T: CompletionContext>(
                 Some(token) => {
                     // For --flag=value tokens, split based on cursor position so hovering the flag
                     // part describes the flag and hovering the value part describes the value.
-                    let token = split_flag_eq_token_at_cursor(token, pos);
-                    describe_given_token(line, &command.span(), token, context).await
+                    let (token, is_flag_with_attached_value) =
+                        split_flag_eq_token_at_cursor(token, pos);
+                    describe_given_token(
+                        line,
+                        &command.span(),
+                        token,
+                        is_flag_with_attached_value,
+                        context,
+                    )
+                    .await
                 }
                 None => None,
             }
@@ -117,10 +125,15 @@ pub async fn describe<T: CompletionContext>(
 /// command_span is the span for the command we're describing.
 /// token is the specific span of the word we're describing.
 /// e.g. line = "git status && cd dir", command_span = "git status", token = "status"
+///
+/// `is_flag_with_attached_value` is `true` when `token` is the flag-name part of an
+/// attached-value token (e.g. `-DWITH_TESTS` from `-DWITH_TESTS=OFF`). Such tokens are not
+/// bundles of short-hand flags, so bundle-style exact matches are ignored (#9820).
 pub async fn describe_given_token<T: CompletionContext>(
     line: &str,
     command_span: &Span,
     token: Spanned<String>,
+    is_flag_with_attached_value: bool,
     context: &T,
 ) -> Option<Description> {
     let path_separators = get_path_separators(context).all;
@@ -184,6 +197,24 @@ pub async fn describe_given_token<T: CompletionContext>(
                 suggestion.suggestion_type(),
             ) {
                 (Some(Match::Exact { .. }), _) => {
+                    // A flag token with an attached value (`-DWITH_TESTS` from
+                    // `-DWITH_TESTS=OFF`) is not a bundle of short-hand flags. Skip
+                    // bundle-style exact matches — Option suggestions whose display (e.g.
+                    // CMake's `-S`) doesn't itself exact-match the token (the exact match
+                    // came from the bundle replacement) — so such tokens aren't
+                    // misdescribed/colored as that option (#9820). The display is compared
+                    // with the suggestion's own matcher so legitimately case-insensitive
+                    // options (`-force` for `-Force`) keep their description.
+                    let display_exactly_matches_token = matches!(
+                        matcher.get_match_type(trimmed_token_item, suggestion.display()),
+                        Some(Match::Exact { .. })
+                    );
+                    if is_flag_with_attached_value
+                        && matches!(suggestion.suggestion_type(), SuggestionType::Option(..))
+                        && !display_exactly_matches_token
+                    {
+                        continue;
+                    }
                     return Some(Description {
                         token: match suggestion.suggestion_type() {
                             // For top-level commands `suggestion.display()` contains the preferred
@@ -219,24 +250,37 @@ pub async fn describe_given_token<T: CompletionContext>(
 /// If the token is a `--flag=value` token, returns a sub-token for the part the
 /// cursor is on: the flag name part if the cursor is on or before the `=`, or the
 /// value part if the cursor is after the `=`.
-fn split_flag_eq_token_at_cursor(token: Spanned<String>, pos: ByteOffset) -> Spanned<String> {
+/// Splits a `--flag=value` token at the cursor position. The second element of the returned
+/// pair is `true` when the returned token is the flag-name part of an attached-value token
+/// (i.e. the piece before `=`), which callers pass to [`describe_given_token`] so the flag
+/// part is not misread as a bundle of short-hand flags (#9820).
+fn split_flag_eq_token_at_cursor(
+    token: Spanned<String>,
+    pos: ByteOffset,
+) -> (Spanned<String>, bool) {
     if !token.item.starts_with('-') {
-        return token;
+        return (token, false);
     }
     let Some(eq_pos) = token.item.find('=') else {
-        return token;
+        return (token, false);
     };
     let eq_byte_pos = token.span.start() + eq_pos;
     if pos.as_usize() <= eq_byte_pos {
         // Cursor is on the flag name part (including '=').
-        token.item[..eq_pos]
-            .to_string()
-            .spanned(Span::new(token.span.start(), eq_byte_pos))
+        (
+            token.item[..eq_pos]
+                .to_string()
+                .spanned(Span::new(token.span.start(), eq_byte_pos)),
+            true,
+        )
     } else {
         // Cursor is on the value part.
-        token.item[eq_pos + 1..]
-            .to_string()
-            .spanned(Span::new(eq_byte_pos + 1, token.span.end()))
+        (
+            token.item[eq_pos + 1..]
+                .to_string()
+                .spanned(Span::new(eq_byte_pos + 1, token.span.end())),
+            false,
+        )
     }
 }
 

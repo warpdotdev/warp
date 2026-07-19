@@ -91,13 +91,29 @@ fn short_hand_flag_suggestions(
             return Box::new(iter::empty());
         };
 
+    // A single-dash token only reads as a bundle of short-hand flags (e.g. `ssh -Xv`) when
+    // every character is a known short flag of the command. Attached-value tokens such as
+    // CMake's `-DWITH_TESTS(=OFF)` are not bundles: without this check, a trailing character
+    // that happened to be a short flag (e.g. CMake's `-S`) exactly-matched the whole token as
+    // that option, coloring some `-D...=...` definitions as flags and leaving others plain
+    // (#9820).
+    let is_plausible_short_flag_bundle = !partial_flag_name.is_empty()
+        && partial_flag_name.chars().all(|c| {
+            command_signature
+                .options
+                .iter()
+                .flat_map(|option| option.name.iter())
+                .filter(|name| is_short_hand_flag_name(name))
+                .any(|name| name[1..].chars().eq([c]))
+        });
+
     Box::new(
         command_signature
             .options
             .iter()
             .flat_map(|option| option.name.iter().map(move |name| (option, name)))
             .filter(|(_, name)| name.starts_with(prefix))
-            .filter_map(|(option, name)| {
+            .filter_map(move |(option, name)| {
                 if is_short_hand_flag_name(name) {
                     // Multiple short-hand flags can be specified in a single token with a leading
                     // '-' (e.g. ssh -Xv). Do not suggest a shorthand flag if it has already been
@@ -105,10 +121,11 @@ fn short_hand_flag_suggestions(
                     // always returns a suggestion if it exactly matches the current token.
                     let name_without_prefix = name.trim_start_matches('-');
                     let is_flag_already_included = partial_flag_name.contains(name_without_prefix);
-                    let is_current_flag = partial_flag_name
-                        .chars()
-                        .last()
-                        .is_some_and(|c| c.to_string() == name_without_prefix);
+                    let is_current_flag = is_plausible_short_flag_bundle
+                        && partial_flag_name
+                            .chars()
+                            .last()
+                            .is_some_and(|c| c.to_string() == name_without_prefix);
                     (!is_flag_already_included || is_current_flag).then(|| {
                         let replacement_text = if is_current_flag {
                             // The replacement text should be exactly the existing flags.
@@ -170,3 +187,7 @@ fn is_short_hand_flag_name(name: &str) -> bool {
 fn is_long_hand_flag_name(name: &str) -> bool {
     name.starts_with('-') && !is_short_hand_flag_name(name)
 }
+
+#[cfg(test)]
+#[path = "v2_tests.rs"]
+mod tests;
