@@ -6,8 +6,8 @@
 //! child views.
 
 use markdown_parser::{
-    CodeBlockText, FormattedImage, FormattedText, FormattedTextFragment, FormattedTextInline,
-    FormattedTextLine, Hyperlink,
+    BlockAlignment, CodeBlockText, FormattedImage, FormattedText, FormattedTextFragment,
+    FormattedTextInline, FormattedTextLine, Hyperlink,
 };
 use unicode_width::UnicodeWidthStr;
 use warpui_core::elements::tui::{
@@ -81,7 +81,22 @@ pub(crate) fn render_formatted_text(
     let mut column = TuiFlex::column();
     let mut code_index = 0;
     let mut list_numbering = ListNumbering::new();
+    // Stack of active align-region alignments. The nearest enclosing region governs an interior
+    // line (innermost wins, per the spec's nested-region rule); an empty stack means unaligned.
+    let mut align_stack: Vec<BlockAlignment> = Vec::new();
     for line in &formatted.lines {
+        // Region boundary lines carry no content; they only push/pop the alignment context.
+        match line {
+            FormattedTextLine::AlignRegionStart(alignment) => {
+                align_stack.push(*alignment);
+                continue;
+            }
+            FormattedTextLine::AlignRegionEnd => {
+                align_stack.pop();
+                continue;
+            }
+            _ => {}
+        }
         let element = match line {
             FormattedTextLine::Heading(header) => {
                 inline_text(&header.text, palette.heading, palette)
@@ -138,13 +153,42 @@ pub(crate) fn render_formatted_text(
                 .finish(),
             FormattedTextLine::LineBreak => blank_row(),
             FormattedTextLine::HorizontalRule => TuiMarkdownRule::new(palette.rule).finish(),
+            // Handled by the boundary `match` above (they `continue`), but the match must be
+            // exhaustive.
+            FormattedTextLine::AlignRegionStart(_) | FormattedTextLine::AlignRegionEnd => continue,
         };
         if !matches!(line, FormattedTextLine::OrderedList(_)) {
             list_numbering.reset();
         }
+        // Apply the nearest enclosing region's alignment (if any) as a best-effort horizontal
+        // position within the pane width; `Left`/no region falls through to the default layout.
+        let element = match align_stack.last() {
+            Some(alignment) => align_row(element, *alignment),
+            None => element,
+        };
         column.add_child(element);
     }
     column.finish()
+}
+
+/// Wrap `element` in a full-width row that positions it horizontally per `alignment`, using flex
+/// spacers to absorb the leftover pane width. `Left` returns the element unwrapped (default
+/// layout); `Center`/`Right` add leading (and, for center, trailing) flex spacers. When the
+/// element is as wide as the pane the spacers collapse to zero, degrading to left-aligned — the
+/// spec's best-effort-within-terminal-width behavior.
+fn align_row(element: Box<dyn TuiElement>, alignment: BlockAlignment) -> Box<dyn TuiElement> {
+    match alignment {
+        BlockAlignment::Left => element,
+        BlockAlignment::Center => TuiFlex::row()
+            .flex_child(blank_row())
+            .child(element)
+            .flex_child(blank_row())
+            .finish(),
+        BlockAlignment::Right => TuiFlex::row()
+            .flex_child(blank_row())
+            .child(element)
+            .finish(),
+    }
 }
 
 fn inline_text(
