@@ -985,7 +985,6 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 ) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
     // We're parsing inline tokens "by hand" instead of using `fold_many0` to allow lookahead.
     let mut state = InlineState::default();
-    let mut ends_with_hard_break = false;
     while !input.is_empty() {
         let (remaining, token) = parse_inline_token(input)?;
         input = remaining;
@@ -993,13 +992,9 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
         match token {
             InlineToken::CodeSpan(text) => {
                 state.push_closed_node(FormattedTextFragment::inline_code(text));
-                ends_with_hard_break = false;
             }
             InlineToken::Text(text) => {
                 state.push_text(text);
-                if !text.chars().all(char::is_whitespace) {
-                    ends_with_hard_break = false;
-                }
             }
             InlineToken::AutoLink(url) => {
                 // Per GFM spec, autolinks can follow whitespace, line beginning, or formatting
@@ -1017,11 +1012,9 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                 } else {
                     state.push_text(url);
                 }
-                ends_with_hard_break = false;
             }
             InlineToken::BackslashEscape(ch) | InlineToken::HtmlEntity(ch) => {
                 state.push_text(ch);
-                ends_with_hard_break = false;
             }
             InlineToken::Delimiter { kind, count } => {
                 let node_index = state.nodes.len();
@@ -1035,20 +1028,16 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                     Delimiter::new(node_index, kind, count, preceding_char, following_char);
                 state.push_closed_node(FormattedTextFragment::plain_text(delimiter.to_text()));
                 state.delimiters.push(delimiter);
-                ends_with_hard_break = false;
             }
             InlineToken::LinkEnd => {
                 input = parse_link(&mut state, remaining);
-                ends_with_hard_break = false;
             }
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
-                ends_with_hard_break = false;
             }
             InlineToken::HardLineBreak => {
                 state.push_text("\n");
                 state.last_node_closed = true;
-                ends_with_hard_break = true;
             }
         }
     }
@@ -1058,9 +1047,7 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     assert!(state.delimiters.is_empty()); // All delimiters should have been processed.
 
     let mut fragments = consolidate_fragments(state.nodes);
-    if ends_with_hard_break {
-        strip_trailing_hard_break(&mut fragments);
-    }
+    strip_trailing_hard_break(&mut fragments);
     Ok((input, fragments))
 }
 
@@ -1072,6 +1059,9 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 /// end-of-line would create an unwanted empty visual row. This removes the
 /// last newline (plus any trailing whitespace after it), while preserving
 /// preceding newlines from additional `<br>` tags.
+///
+/// This is a no-op if the last fragment does not end with a newline from a
+/// hard line break.
 fn strip_trailing_hard_break(fragments: &mut Vec<FormattedTextFragment>) {
     let Some(last) = fragments.last_mut() else {
         return;
@@ -1080,10 +1070,6 @@ fn strip_trailing_hard_break(fragments: &mut Vec<FormattedTextFragment>) {
         .text
         .trim_end_matches(|c: char| c.is_whitespace() && c != '\n');
     if !trimmed_ws.ends_with('\n') {
-        last.text.truncate(trimmed_ws.len());
-        if last.text.is_empty() {
-            fragments.pop();
-        }
         return;
     }
     last.text.truncate(trimmed_ws.len() - 1);

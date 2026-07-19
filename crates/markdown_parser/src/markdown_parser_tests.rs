@@ -3000,3 +3000,16 @@ fn test_parse_br_in_table_cell() {
         panic!("Expected table");
     }
 }
+
+#[test]
+fn test_parse_br_before_closing_markup_at_line_end() {
+    assert_eq!(
+        parse_all("<u>line<br></u>", parse_inline),
+        vec![FormattedTextFragment::underline("line")]
+    );
+
+    assert_eq!(
+        parse_all("<u>line<br><br></u>", parse_inline),
+        vec![FormattedTextFragment::underline("line\n")]
+    );
+}
