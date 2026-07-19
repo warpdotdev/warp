@@ -121,21 +121,31 @@ normalization inside that one function so a hyphenated fragment matches a spaced
     should early-return instead of falling through. Flag this for the implementer to verify
     against invariant 7's "no error dialog" clause.
 
-- **(iv) Cross-document fragment navigation (`other-file.md#section`): MEDIUM.** The
-  file-open, tab-focus, and dedup are free — a fragment-less relative link opens the target
-  in the Markdown viewer today (`resolve_and_open` → `OpenFileNotebook` →
-  `open_file_notebook`, `app/src/workspace/view.rs:8470`). The remaining work is bounded:
-  split the `#section` off before file resolution, thread it to the destination pane
-  (mirroring the code editor's existing `line_and_column` plumbing), and drain it as a
-  **deferred scroll** once the new document parses — the one genuinely new element, since
-  there is no on-load hook to reuse. Sized above SMALL because of that new deferred-scroll
-  state and the multi-hop field plumbing; below LARGE because the targeting, dedup, and
-  scroll primitives all already exist. Full mechanism in **item 6a**.
+- **(iv) Cross-document fragment navigation (`other-file.md#section`): MEDIUM — delivered in
+  this PR.** The file-open, tab-focus, and dedup were *supposed* to be free (a fragment-less
+  relative link opens the target in the Markdown viewer today, `resolve_and_open` →
+  `OpenFileNotebook` → `open_file_notebook`, `app/src/workspace/view.rs:8470`) — but that
+  baseline turned out to be broken in three ways that had to be repaired first (item 6b). The
+  feature work itself is bounded: split the `#section` off before file resolution, thread it to
+  the destination pane (mirroring the code editor's existing `line_and_column` plumbing), and
+  drain it as a **deferred scroll** once the new document parses — the one genuinely new
+  element, since there is no on-load hook to reuse. Full mechanism in **item 6a**; resolution
+  repairs in **item 6b**.
 
 This spec recommends implementing **(i) + (iii)** as phase 1 (matches the product spec's
 phasing — this is the slice that fixes the issue's headline test case and also repairs
 markdown-native `[text](#heading)` links, which get zero benefit from (ii) alone),
-**(ii)** as phase 2, and **(iv)** as phase 3.
+and **(iv)** delivered together with phase 1 in the same PR (see the amendment note below).
+**(ii)** — arbitrary `<a id>`/`<a name>` markers — is deferred to a follow-up.
+
+> **Amendment (cross-document delivered with phase 1).** Item (iv) was originally sequenced
+> as "phase 3, later." Implementation moved it into this PR because verifying the
+> fragment-less baseline it was supposed to build on ("a bare relative link already opens
+> the target today") turned out to be false in three ways — a bare `README.md` link could
+> silently open the browser, and even a `./file.md#frag` link no-op'd. Those three
+> resolution defects (documented in the new **Resolution repairs** section below) had to be
+> fixed for the cross-document feature to work at all, so the feature and its repairs ship
+> together. `<a id>` markers (item ii) remain the follow-up.
 
 ## Proposed changes
 
@@ -331,7 +341,59 @@ riding an existing one — unlike the tables spec, there's no existing "structur
 flag this naturally extends, and gating separately lets phase 1 (headings + `<a href>`) ship
 independently of phase 2 (`<a id>`) if their cost estimates diverge during implementation.
 
-### 6a. Cross-document fragment navigation (phase 3)
+### 6b. Resolution repairs (delivered with cross-document navigation)
+
+Cross-document navigation (item 6a) assumed a fragment-less relative link already opens its
+target today. Implementation found that assumption false in three independent ways, each
+fixed in `app/src/notebooks/link.rs`. All three are in the same code path — `NotebookLinks::resolve`
+— and all three block even the plain `[text](other-file.md)` case, so they are prerequisites,
+not polish.
+
+**Repair 1 — ccTLD misclassification of bare `file.md`.** `resolve` (link.rs:150-169) applies
+a bare-domain heuristic *before* file resolution: it takes the substring up to the first `/`
+and, if `addr::parse_domain_name` reports a known public suffix with a root, treats the whole
+target as `http://…`. Because `.md` is Moldova's ccTLD (and `.dev`, `.com`, … are TLDs), a bare
+`README.md`/`notes.md`/`other-file.md` — no `./`, no `/` — is classified as a domain and opened
+in the browser instead of the viewer. **Verified empirically** with `addr` 0.15.6:
+`README.md`, `file.md`, `other-file.md`, `notes.md`, `warp.dev`, `google.com` all return
+`true` from the heuristic; `./README.md`, `app/src/main.rs`, `index.html` return `false` (the
+`./` prefix and multi-segment paths dodge it, and `.html` is not a known suffix — which is why
+the existing `test_open_markdown_file_uses_viewer_when_preferred` had to spell its link
+`./README.md`). *Fix:* before applying the heuristic, synchronously check whether the
+scheme-less target resolves to an existing file relative to the base directory (reusing
+`absolute_path_if_valid`, which already does a sync `fs::metadata` existence check). If it
+does, resolve as a file; only fall through to the domain heuristic when there is no matching
+local file — so `warp.dev` (no local file) still opens the browser, and a bare `nonexistent.md`
+with nothing on disk also still does. Deterministic and file-existence-gated.
+
+**Repair 2 — literal `#fragment` breaks the file stat.** `CleanPathResult` strips `:line:col`
+and `#L100` suffixes (`crates/warp_util/src/path.rs:47-57`) but **not** a bare `#section`
+fragment, so `other-file.md#section` reaches `resolve_file` as a literal on-disk path, misses,
+and `resolve_and_open`'s closure silently drops the error (link.rs:328-332) — today's no-op.
+*Fix:* a `split_anchor_fragment` helper peels the trailing `#…` off before file resolution,
+returning `(path, Option<anchor>)`. It splits only the final `#` (so `weird#name.md#frag`
+keeps `weird#name.md`), decodes the fragment with `urlencoding`, treats an empty fragment as
+no anchor, and — critically — leaves a `#L<digits>[:<digits>]` suffix attached to the path so
+the existing line-number routing in `CleanPathResult` is not regressed. The split runs *after*
+the explicit-URL branch (so a real `https://…#frag` keeps its fragment) and feeds repair 1's
+file check.
+
+**Repair 3 — standalone viewer tab lacks a base directory.** A cross-document link clicked
+from *within* an open notebook already gets the right base dir: `FileNotebookView::open_local`
+→ `set_context` sets `SessionSource::Target { base_directory: <document parent> }`
+(`app/src/notebooks/file/mod.rs`), so this repair is not needed for the primary in-app click
+path. The gap is a standalone viewer tab opened with no session (`open -a Warp file.md`): with
+no session, `SessionSource::Active` fell back to the window's active-session cwd, which is
+absent, so even `./file.md` resolved to `MissingContext`. *Fix:* `SessionSource::Active` now
+carries an optional `document_dir`; `base_directory()` prefers the active session's local cwd
+and falls back to the document's own parent directory. `open_local`'s no-session branch seeds
+that fallback from the file's parent. The document knows where it lives even when the window
+doesn't. (A truly session-less tab still cannot resolve files that require a `Session` object
+for other reasons; surfacing resolution failures non-silently — `resolve_and_open` swallows
+errors at link.rs:328-332 — is noted as a **follow-up**, since no cheap existing tooltip
+affordance is on this path and the spec forbids building new UI here.)
+
+### 6a. Cross-document fragment navigation (delivered in this PR)
 
 **Size: MEDIUM.** The file-open half is free — a fragment-less relative link
 (`other-file.md`) already opens the target in the Markdown viewer today, including
@@ -505,13 +567,25 @@ These target the matcher directly, since that is where the phase-1 change lives.
   header-outline pass.
 - (Phase 2) Two `<a id="x">` markers with the same id → first occurrence wins, mirroring the
   heading first-wins rule.
-- (Phase 3) Fragment-split in `resolve`: `other-file.md#section` yields cleaned path
-  `other-file.md` + anchor `section`; `other-file.md` (no fragment) yields no anchor;
+- (Cross-doc, delivered) Fragment-split in `resolve`: `other-file.md#section` yields cleaned
+  path `other-file.md` + anchor `section`; `other-file.md` (no fragment) yields no anchor;
   `other-file.md#L10` still routes to the existing line-number path, not the anchor path
-  (guard against regressing the `#L`-suffix handling in `CleanPathResult`).
-- (Phase 3) A resolved `LinkTarget::LocalFile` for a `#section` link carries the anchor
-  through to `OpenFileNotebook` (assert on the emitted event, mirroring the existing
-  `link_tests.rs:432` `OpenFileNotebook` assertion).
+  (guard against regressing the `#L`-suffix handling in `CleanPathResult`). *Landed* as
+  `test_split_fragment_before_file_resolution`, `test_fragment_split_preserves_line_number_routing`,
+  and the pure-function `test_split_anchor_fragment_pure` (covers multiple `#`, empty
+  fragment, URL-decode, `#L` vs `#License`/`#L10x`).
+- (Repair 1, delivered) ccTLD classification matrix: a bare `README.md`/`notes.md` that
+  exists on disk resolves as a file; `warp.dev` and a bare `nonexistent.md` with no local
+  file still resolve as URLs. *Landed* as `test_bare_markdown_file_prefers_local_file_over_cctld`;
+  the existing viewer test was also switched from `./README.md` to bare `README.md` to assert
+  the repair end-to-end.
+- (Cross-doc, delivered) A resolved `LinkTarget::LocalFile` for a `#section` link carries the
+  anchor through to `OpenFileNotebook` (assert on the emitted event). *Landed* as
+  `test_cross_document_fragment_threads_anchor_to_open_event`.
+- (Cross-doc, delivered) Deferred-scroll drain: a `pending_anchor` set before layout resolves
+  through the same slug matcher on drain (hit → scroll, cleared one-shot; miss → silent
+  no-op). *Landed* as `test_pending_anchor_drains_and_scrolls_on_match` and
+  `test_pending_anchor_miss_is_silent_no_op` in the editor-model tests.
 
 ### Integration / manual
 
@@ -519,11 +593,12 @@ Per CONTRIBUTING, before/after screenshots plus a short recording reproducing th
 motivating test document verbatim: the raw-HTML `<a href="#target-section">` jump, the
 markdown-native `[Jump to Target Section](#target-section)` jump (contrast case — today
 resolves as a plain URL), the external `<a href="https://warp.dev">` link, and the `<a
-id="target-section"></a>` marker preceding the heading. (Phase 3) additionally: clicking
-`[text](other-file.md#section)` opens/focuses `other-file.md` and lands on its `section`
-heading after load; re-clicking when the tab is already open focuses and re-scrolls rather
-than opening a duplicate; a `#section` with no matching heading in the opened file shows the
-file unscrolled with no error. Confirm scroll lands the heading in
+id="target-section"></a>` marker preceding the heading. Cross-document (delivered)
+additionally: clicking `[text](other-file.md#section)` opens/focuses `other-file.md` and
+lands on its `section` heading after load; a bare `[text](other-file.md)` link opens the
+target in the viewer (not the browser — the ccTLD repair); re-clicking when the tab is
+already open focuses and re-scrolls rather than opening a duplicate; a `#section` with no
+matching heading in the opened file shows the file unscrolled with no error. Confirm scroll lands the heading in
 view (the existing call uses `AutoScrollMode::PositionOffsetInViewportCenter`, i.e. the target
 is centered rather than top-aligned — sanity-check that this reads well for the anchor-jump
 case, since it is the behavior already shipped for other `#`-fragment jumps and changing it
@@ -551,12 +626,19 @@ would affect them too).
   work automatically once cell inline content is parsed via the same `parse_phrasing_content`
   path the tables spec already plans to reuse — verify once both land, no explicit design
   change anticipated here.
-- **Cross-document fragment links are now specced as phase 3 (item 6a), not just gestured
-  at.** Investigation confirmed a fragment-less relative link already opens/focuses the target
-  Markdown-viewer tab today, so phase 3 is MEDIUM (carry the fragment through + deferred
-  scroll after load), not LARGE. Phase 1's live-resolution approach doesn't paint this into a
-  corner: the cross-document jump resolves against the *destination* document's buffer using
-  the **same** `find_matching_header` slug resolver, invoked after open instead of in place —
-  so nothing in phase 1 forecloses it, and phase 1 landing first is what phase 3 builds on.
-  The one new element phase 3 introduces is deferred-scroll state on the destination editor
-  (there is no on-load hook to reuse); see item 6a and product invariant 11.
+- **Cross-document fragment links are delivered in this PR (item 6a), with three resolution
+  repairs (item 6b).** The original spec assumed a fragment-less relative link already
+  opens/focuses the target Markdown-viewer tab today. That was only partly true: a bare
+  `file.md` (no `./`) misrouted to the browser (ccTLD collision), a `#fragment` broke the file
+  stat, and a standalone viewer tab lacked a base directory. Repairing those was a prerequisite
+  for the feature, so the two ship together. The cross-document jump resolves against the
+  *destination* document's buffer using the **same** `find_matching_header` slug resolver,
+  invoked after open via a `pending_anchor` drained on first `LayoutUpdated`; the dedup case
+  (tab already open) scrolls immediately. See items 6a/6b and product invariant 11.
+- **Non-silent resolution failures (follow-up).** `resolve_and_open` swallows resolution
+  errors (link.rs closure). A genuinely session-less standalone tab still can't resolve files
+  that need a `Session` object, and today that failure is silent. Surfacing it (e.g. a
+  broken-link tooltip) is deferred — no cheap existing affordance is on this path, and the
+  spec forbids building new UI in this slice.
+- **`<a id>`/`<a name>` explicit anchor markers (follow-up, was "phase 2").** Not in this PR.
+  Heading auto-anchors cover the common case; item 5's design stands for the follow-up.

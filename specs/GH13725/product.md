@@ -59,8 +59,11 @@ In scope:
   focuses) that file's Markdown-viewer tab and scrolls it to the matching anchor once the
   document has loaded. A relative file link *without* a fragment already opens the target
   today; this in-scope item is specifically the fragment half — carrying the `#section`
-  through the file-open flow and scrolling after load. Deferred to phase 3 (see phasing),
-  because it builds on the same-document slug resolver rather than replacing it.
+  through the file-open flow and scrolling after load. **Delivered in this PR** alongside
+  phase 1 (see phasing), because it builds on the same-document slug resolver rather than
+  replacing it, and because implementation surfaced three latent resolution defects
+  (documented in the tech spec) that had to be repaired for even a fragment-less bare
+  `README.md` link to open reliably.
 - A `#fragment` link with no matching anchor in the document degrades gracefully: it
   remains a normally-styled, clickable-looking link, but clicking it is a no-op (no
   navigation, no error, no crash) rather than attempting to open `#fragment` as a URL.
@@ -144,7 +147,7 @@ Out of scope (explicit non-goals):
     value) degrade to literal text for that tag, without swallowing the rest of the
     paragraph or document and without panicking.
 
-11. (Phase 3) Clicking `[text](other-file.md#section)` opens `other-file.md` in the
+11. Clicking `[text](other-file.md#section)` opens `other-file.md` in the
     Markdown viewer (or focuses its tab if already open — the same open/focus behavior a
     plain `other-file.md` link has today) and, once that document has loaded, scrolls it to
     the `section` anchor using the same slug resolution as a same-document jump. If
@@ -152,6 +155,22 @@ Out of scope (explicit non-goals):
     same-document miss (invariant 7): the file is shown, unscrolled, no error. If the file
     itself cannot be resolved (does not exist relative to the document), clicking is a
     no-op, matching a broken plain relative link today.
+
+12. Every link-form's behavior is now fully specified — there are no undefined interim
+    states. Concretely, for a scheme-less relative-looking target:
+    - **Bare `file.md` that exists on disk** (no `./`, no `/`) resolves as a local file, not
+      a web URL — even though `.md`/`.dev`/`.com` are known public suffixes. This repairs a
+      latent collision: the pre-existing bare-domain heuristic classified `README.md`,
+      `notes.md`, etc. as domains (`.md` is Moldova's ccTLD) and opened them in the browser.
+    - **`./file.md`** always resolves as a file (the `./` prefix never parses as a domain);
+      unchanged.
+    - **`file.md#section`** splits the `#section` fragment off before file resolution, so the
+      file opens and the fragment drives the cross-document scroll. A trailing `#L100`
+      line-number suffix is *not* an anchor and continues to route through line-number
+      handling.
+    - **Bare `nonexistent.md` with no matching local file** falls through to the browser,
+      preserving the genuine bare-domain behavior (`warp.dev` still opens the browser).
+    - **A fragment or file miss** is inert per invariant 7 — no scroll, no error.
 
 ## Suggested phasing
 
@@ -165,11 +184,17 @@ The two capabilities compound in value but are separately shippable:
 - **Phase 2:** Arbitrary `<a id>`/`<a name>` targets (anchors not attached to a heading).
   Lower value on its own — most real documents anchor at headings — but completes the
   issue's hand-built-table-of-contents use case for authors who anchor mid-paragraph.
-- **Phase 3:** Cross-document fragment links (`other-file.md#section`). Independent of
-  phases 1–2 in spirit but built on phase 1's slug resolver: the file-open, tab-focus, and
+- **Phase 3 (delivered with phase 1 in this PR):** Cross-document fragment links
+  (`other-file.md#section`). Built on phase 1's slug resolver: the file-open, tab-focus, and
   dedup machinery already exists (a fragment-less relative link opens today), so this phase
-  adds only fragment carry-through plus a deferred scroll after the target document loads.
-  Sequenced last because it reuses — rather than reshapes — the same-document resolver, so
-  it gains from phase 1 landing first.
-
-The tech spec should confirm or revise this split based on actual implementation cost.
+  adds fragment carry-through plus a deferred scroll after the target document loads. It was
+  pulled forward into this PR because implementation revealed that "a fragment-less relative
+  link opens today" was only *partly* true — three latent resolution defects (ccTLD
+  misclassification of bare `file.md`, literal `#fragment` breaking file stats, and a
+  standalone viewer tab lacking a base directory) meant a bare `README.md` link could
+  silently open the browser or no-op. Delivering the fragment feature required repairing
+  those, so the whole cross-document path ships together. See tech spec item 6a and the
+  resolution-repairs section.
+- **Deferred to a follow-up PR:** arbitrary `<a id>`/`<a name>` explicit anchor markers
+  (the old "phase 2"). Heading auto-anchors cover the common case; explicit mid-paragraph
+  anchors are lower value and independently shippable.
