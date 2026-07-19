@@ -2384,6 +2384,65 @@ fn calculate_cursor_origin(
         )
 }
 
+/// The geometry of a rendered terminal cursor.
+struct CursorGeometry {
+    /// The cursor's bounding rect in window coordinates (baseline-adjusted origin, character-cell size).
+    rect: RectF,
+    /// The un-baseline-adjusted top of the cell row. Needed by the `Underline` cursor shape,
+    /// which draws from the raw cell top rather than the adjusted cursor origin.
+    line_top_origin: Vector2F,
+}
+
+/// Computes the cursor's geometry in window coordinates from grid-space inputs.
+fn compute_cursor_rect(
+    grid_render_params: &GridRenderParams,
+    cursor_point: Point,
+    is_cursor_on_wide_char: bool,
+    padding_x: Pixels,
+    grid_origin: Vector2F,
+    ctx: &mut PaintContext,
+) -> CursorGeometry {
+    let line_top_origin = grid_origin
+        + vec2f(padding_x.as_f32(), 0.)
+        + grid_render_params.cell_size * vec2f(cursor_point.col as f32, cursor_point.row as f32);
+    let cursor_top_origin = calculate_cursor_origin(grid_render_params, line_top_origin, ctx);
+    let cell_width = if is_cursor_on_wide_char {
+        grid_render_params.cell_size.x() * 2.
+    } else {
+        grid_render_params.cell_size.x()
+    };
+    let cursor_block_size = vec2f(
+        cell_width,
+        grid_render_params.font_size * DEFAULT_UI_LINE_HEIGHT_RATIO,
+    );
+    CursorGeometry {
+        rect: RectF::new(cursor_top_origin, cursor_block_size),
+        line_top_origin,
+    }
+}
+
+/// Updates the position cache with the terminal cursor's location in window coordinates.
+pub(super) fn cache_cursor_position(
+    grid_render_params: &GridRenderParams,
+    cursor_point: Point,
+    is_cursor_on_wide_char: bool,
+    padding_x: Pixels,
+    grid_origin: Vector2F,
+    ctx: &mut PaintContext,
+    terminal_view_id: EntityId,
+) {
+    let CursorGeometry { rect, .. } = compute_cursor_rect(
+        grid_render_params,
+        cursor_point,
+        is_cursor_on_wide_char,
+        padding_x,
+        grid_origin,
+        ctx,
+    );
+    ctx.position_cache
+        .cache_position_indefinitely(format!("terminal_view:cursor_{terminal_view_id}"), rect);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_cursor(
     grid_render_params: &GridRenderParams,
@@ -2398,25 +2457,24 @@ pub fn render_cursor(
     hint_text: Option<&mut Box<dyn Element>>,
     app: &AppContext,
 ) {
-    let line_top_origin = grid_origin
-        + vec2f(padding_x.as_f32(), 0.)
-        + grid_render_params.cell_size * vec2f(cursor_point.col as f32, cursor_point.row as f32);
-
-    let cursor_top_origin = calculate_cursor_origin(grid_render_params, line_top_origin, ctx);
-    let cell_width = if is_cursor_on_wide_char {
-        grid_render_params.cell_size.x() * 2.
-    } else {
-        grid_render_params.cell_size.x()
-    };
-    let cursor_block_size = vec2f(
-        cell_width,
-        grid_render_params.font_size * DEFAULT_UI_LINE_HEIGHT_RATIO,
+    let CursorGeometry {
+        rect: cursor_rect,
+        line_top_origin,
+    } = compute_cursor_rect(
+        grid_render_params,
+        cursor_point,
+        is_cursor_on_wide_char,
+        padding_x,
+        grid_origin,
+        ctx,
     );
-
     ctx.position_cache.cache_position_indefinitely(
         format!("terminal_view:cursor_{terminal_view_id}"),
-        RectF::new(cursor_top_origin, cursor_block_size),
+        cursor_rect,
     );
+
+    let cursor_top_origin = cursor_rect.origin();
+    let cursor_block_size = cursor_rect.size();
 
     let thickness =
         CURSOR_THICKNESS_SCALE_FACTOR * grid_render_params.cell_size.x().round().max(1.);
@@ -2431,7 +2489,7 @@ pub fn render_cursor(
             ctx.scene
                 .draw_rect_with_hit_recording(RectF::new(
                     line_top_origin + vec2f(0., height - thickness),
-                    vec2f(cell_width, thickness),
+                    vec2f(cursor_block_size.x(), thickness),
                 ))
                 .with_background(Fill::Solid(color));
         }
