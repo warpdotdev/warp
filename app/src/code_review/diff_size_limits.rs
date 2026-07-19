@@ -14,6 +14,33 @@ use super::diff_state::{DiffHunk, DiffLineType};
 pub const MAX_DIFF_SIZE: usize = 4_375_000; // 4.375MB in decimal
 
 /**
+ * Maximum number of files whose full diff (parsed hunks) plus base content the
+ * local diff-state will materialize and retain in a single load.
+ *
+ * `MAX_DIFF_SIZE` bounds any *single* file, but a repository with a very large
+ * untracked tree (e.g. a non-gitignored `node_modules`) can still have tens of
+ * thousands of changed files. Materializing every one of them into in-memory
+ * `DiffHunk`/`DiffLine` structs plus a code-review editor buffer has caused
+ * multi-GB heap spikes / OOMs. This caps the number of files we fully
+ * materialize; the (cheap) aggregate metadata path still counts every file.
+ */
+pub const MAX_TOTAL_DIFF_FILES: usize = 2_000;
+
+/**
+ * Maximum cumulative in-memory footprint (parsed hunk text + retained base file
+ * content) the local diff-state will materialize in a single load. Once this is
+ * exceeded, remaining files are skipped to bound memory. Sized to comfortably
+ * fit any realistic code review while preventing pathological repos from
+ * retaining gigabytes of diff/editor state.
+ */
+pub const MAX_TOTAL_DIFF_BYTES: usize = 256 * 1024 * 1024; // 256MB
+
+// The cumulative byte budget must comfortably exceed the per-file limit so
+// realistic multi-file reviews are never truncated by the aggregate guard.
+const _: () = assert!(MAX_TOTAL_DIFF_BYTES > MAX_DIFF_SIZE);
+const _: () = assert!(MAX_TOTAL_DIFF_FILES > 0);
+
+/**
  * Reasonable limit for diff size. Diffs bigger than this _could_ be displayed
  * but it might cause some slowness.
  */
@@ -68,6 +95,19 @@ impl fmt::Display for UnrenderableReason {
     }
 }
 
+/// Approximate in-memory byte footprint of a single parsed file diff: the sum
+/// of every hunk line's text plus the base file content retained for rendering.
+/// Used to bound the *cumulative* memory of a full diff load (see
+/// [`MAX_TOTAL_DIFF_BYTES`]).
+pub fn approx_file_diff_bytes(hunks: &[DiffHunk], content_at_head: Option<&str>) -> usize {
+    let hunk_bytes: usize = hunks
+        .iter()
+        .flat_map(|hunk| &hunk.lines)
+        .map(|line| line.text.len())
+        .sum();
+    hunk_bytes + content_at_head.map_or(0, str::len)
+}
+
 /// Determines if a diff size exceeds the maximum renderable limit
 fn is_diff_unrenderable(buffer_length: usize) -> bool {
     buffer_length > MAX_DIFF_SIZE
@@ -118,3 +158,7 @@ pub fn compute_diff_size(diffs: &[DiffHunk], diff_size: usize) -> DiffSize {
 
     DiffSize::Normal
 }
+
+#[cfg(test)]
+#[path = "diff_size_limits_tests.rs"]
+mod tests;
