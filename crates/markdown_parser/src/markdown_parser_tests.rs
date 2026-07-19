@@ -1982,6 +1982,112 @@ fn test_parse_empty_underline() {
 }
 
 #[test]
+fn test_parse_html_anchor_external_href() {
+    // Invariant 1: `<a href>` produces a Hyperlink::Url identical in shape to a markdown link.
+    assert_eq!(
+        parse_all("<a href=\"https://warp.dev\">Visit Warp</a>", parse_inline),
+        vec![FormattedTextFragment::hyperlink(
+            "Visit Warp",
+            "https://warp.dev"
+        )]
+    );
+    // The markdown-native equivalent produces the same fragment.
+    assert_eq!(
+        parse_all("<a href=\"https://warp.dev\">Visit Warp</a>", parse_inline),
+        parse_all("[Visit Warp](https://warp.dev)", parse_inline),
+    );
+}
+
+#[test]
+fn test_parse_html_anchor_fragment_href() {
+    // Invariant 2: an in-page `#fragment` href parses as Hyperlink::Url("#…"); resolution is
+    // tested separately in the editor model.
+    assert_eq!(
+        parse_all(
+            "<a href=\"#target-section\">Jump to Target Section</a>",
+            parse_inline
+        ),
+        vec![FormattedTextFragment::hyperlink(
+            "Jump to Target Section",
+            "#target-section"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_html_anchor_single_quotes() {
+    assert_eq!(
+        parse_all("<a href='https://warp.dev'>Warp</a>", parse_inline),
+        vec![FormattedTextFragment::hyperlink("Warp", "https://warp.dev")]
+    );
+}
+
+#[test]
+fn test_parse_html_anchor_ignores_other_attributes() {
+    // Invariant 8: attributes beyond `href` are parsed-but-ignored — no effect on output.
+    assert_eq!(
+        parse_all(
+            "<a href=\"https://warp.dev\" title=\"Home\" target=\"_blank\" class=\"x\">Warp</a>",
+            parse_inline
+        ),
+        vec![FormattedTextFragment::hyperlink("Warp", "https://warp.dev")]
+    );
+    // `href` need not be the first attribute.
+    assert_eq!(
+        parse_all(
+            "<a target=\"_blank\" href=\"https://warp.dev\">Warp</a>",
+            parse_inline
+        ),
+        vec![FormattedTextFragment::hyperlink("Warp", "https://warp.dev")]
+    );
+}
+
+#[test]
+fn test_parse_html_anchor_inline_styling_in_body() {
+    // Invariant 9: inline styling inside the anchor body is preserved, and each styled fragment
+    // still carries the hyperlink.
+    let link = |text: &str| FormattedTextFragment {
+        text: text.to_string(),
+        styles: FormattedTextStyles {
+            hyperlink: Some(Hyperlink::Url("https://warp.dev".to_string())),
+            ..Default::default()
+        },
+    };
+    let mut bold_link = link("bold");
+    bold_link.styles.weight = Some(CustomWeight::Bold);
+    assert_eq!(
+        parse_all(
+            "<a href=\"https://warp.dev\">a **bold** link</a>",
+            parse_inline
+        ),
+        vec![link("a "), bold_link, link(" link")]
+    );
+}
+
+#[test]
+fn test_parse_html_anchor_unterminated_falls_back_to_text() {
+    // Invariant 10: a missing closing `</a>` degrades to literal text without swallowing the
+    // rest of the paragraph.
+    assert_eq!(
+        parse_all("<a href=\"https://warp.dev\">no close", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<a href=\"https://warp.dev\">no close"
+        )]
+    );
+    // A stray closing tag with no opener is literal text too.
+    assert_eq!(
+        parse_all("just </a> here", parse_inline),
+        vec![FormattedTextFragment::plain_text("just </a> here")]
+    );
+    // An `<a>` with no href at all is not a phase-1 hyperlink — it stays literal (its `<a id>`
+    // handling is a phase-2 concern).
+    assert_eq!(
+        parse_all("<a id=\"x\"></a>", parse_inline),
+        vec![FormattedTextFragment::plain_text("<a id=\"x\"></a>")]
+    );
+}
+
+#[test]
 fn test_unordered_list_indentation_level_relative() {
     // Test that both 2-space and 4-space relative indentation produce the same structure
     let source_2space = "- top level\n  - sublevel\n    - subsublevel";
