@@ -29,7 +29,10 @@ use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::conversation_details_panel::ConversationDetailsData;
 use crate::ai::AIRequestUsageModel;
 use crate::pane_group::TerminalViewResources;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
+    CLIAgentSessionStatus, CLIAgentSessionsModel,
+};
 use crate::terminal::view::rich_content::{RichContentInsertionPosition, RichContentMetadata};
 use crate::terminal::view::{
     ConversationDetailsPanelAutoOpenPolicy, Event as TerminalViewEvent, TerminalView,
@@ -337,6 +340,10 @@ impl TerminalView {
                 // Once we know which harness we're using from the server, try and enter the agent
                 // view if we haven't already.
                 self.sync_agent_view_for_shared_third_party_viewer(ctx);
+                // Ensure rich input is open for live 3p harness viewers. Byte-sharing without
+                // rich input has roundtrip lag. If the sharer's CLIAgentSessionState::Active
+                // hasn't arrived yet (e.g. plugin not started), open it proactively here.
+                self.maybe_open_rich_input_for_third_party_harness_viewer(ctx);
                 self.update_pane_configuration(ctx);
                 ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
@@ -607,6 +614,64 @@ impl TerminalView {
         }
 
         Some(vehicle_conversation_id)
+    }
+
+    /// For live 3p harness viewers, opens rich input if it isn't already open and no CLI
+    /// agent session exists yet. Called from `ViewerHarnessResolved` so the composer
+    /// appears immediately on join even when the sharer's `CLIAgentSessionState::Active`
+    /// hasn't arrived yet (e.g. the plugin started after the session-sharing snapshot
+    /// was captured, or the plugin is not installed).
+    fn maybe_open_rich_input_for_third_party_harness_viewer(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.is_shared_ambient_agent_session() {
+            return;
+        }
+        if !self.model.lock().shared_session_status().is_active_viewer() {
+            return;
+        }
+        if self.has_active_cli_agent_input_session(ctx) {
+            return;
+        }
+        // Only proceed if no CLI session exists yet — if it does, `apply_cli_agent_state_update`
+        // already handled or will handle the rich input lifecycle.
+        if CLIAgentSessionsModel::as_ref(ctx)
+            .session(self.view_id)
+            .is_some()
+        {
+            return;
+        }
+        let Some(cli_agent) = self
+            .ambient_agent_view_model
+            .as_ref()
+            .and_then(|m| m.as_ref(ctx).selected_third_party_cli_agent())
+        else {
+            return;
+        };
+        let view_id = self.view_id;
+        CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
+            sessions_model.set_session(
+                view_id,
+                CLIAgentSession {
+                    agent: cli_agent,
+                    status: CLIAgentSessionStatus::InProgress,
+                    session_context: CLIAgentSessionContext::default(),
+                    input_state: CLIAgentInputState::Closed,
+                    // Viewer manages its own rich input via the sync protocol.
+                    should_auto_toggle_input: false,
+                    listener: None,
+                    plugin_version: None,
+                    remote_host: None,
+                    draft_text: None,
+                    custom_command_prefix: None,
+                    received_rich_notification: false,
+                },
+                ctx,
+            );
+        });
+        self.apply_cli_agent_footer_visibility(true, ctx);
+        self.open_cli_agent_rich_input(CLIAgentInputEntrypoint::SharedSessionSync, ctx);
     }
 
     /// Returns `true` when the block's command is the CLI for the run's configured

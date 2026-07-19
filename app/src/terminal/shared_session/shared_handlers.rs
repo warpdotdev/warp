@@ -419,7 +419,13 @@ pub(crate) fn apply_cli_agent_state_update(
 
             // Update the rich input state.
             let currently_open = CLIAgentSessionsModel::as_ref(ctx).is_input_open(view_id);
-            if currently_open != effective_rich_input_open {
+            // For ambient viewers where the session already existed, preserve the
+            // viewer's own rich input state. The viewer may have opened it via
+            // ViewerHarnessResolved before the sharer's CLIAgentSessionState::Active
+            // arrived; don't let the sharer's is_rich_input_open=false close it.
+            let should_update_rich_input =
+                !(already_exists && view.as_ref(ctx).is_shared_ambient_agent_session());
+            if should_update_rich_input && currently_open != effective_rich_input_open {
                 view.update(ctx, |view, ctx| {
                     if effective_rich_input_open {
                         view.open_cli_agent_rich_input(
