@@ -967,6 +967,24 @@ fn query_for_rewind_prefill(inputs: &[AIAgentInput]) -> Option<String> {
     inputs.iter().find_map(AIAgentInput::display_query)
 }
 
+/// Canonicalize a local file target so it compares equal to an open notebook's stored path
+/// during dedup. Open notebooks record their *canonical* path on load (via `CanonicalizedPath`,
+/// i.e. `dunce::canonicalize`), while a clicked link resolves to `base_directory.join(relative)`
+/// — which keeps `.`/`..` components and, on macOS, the `/tmp` vs `/private/tmp` symlink alias.
+/// Canonicalizing with the same function lets a self-referential link (`./this-doc.md`) and any
+/// other spelling of the same file dedup to the already-open pane instead of opening a duplicate.
+/// Remote paths and paths that can't be canonicalized (e.g. the file vanished between resolve and
+/// open) are returned unchanged.
+#[cfg(feature = "local_fs")]
+fn canonicalize_local_path_for_dedup(path: LocalOrRemotePath) -> LocalOrRemotePath {
+    match &path {
+        LocalOrRemotePath::Local(local) => dunce::canonicalize(local)
+            .map(LocalOrRemotePath::Local)
+            .unwrap_or(path),
+        LocalOrRemotePath::Remote(_) => path,
+    }
+}
+
 /// Snapshot of a tab used to move it between workspaces or into a new window.
 /// Built by `Workspace::tab_transfer_info_at_index` and consumed by
 /// `insert_transferred_tab_at_index`. Captures the pane group handle, visual
@@ -8476,6 +8494,14 @@ impl Workspace {
         anchor: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Canonicalize a local target before the dedup lookup. An open notebook stores its
+        // *canonical* path (recorded on load via `CanonicalizedPath`), but a link resolves to
+        // `base_directory.join(relative)`, which keeps `.`/`..` components and, on macOS, the
+        // `/tmp` vs `/private/tmp` symlink alias. Without canonicalizing, a self-referential
+        // link (`./this-doc.md`) wouldn't match its own open tab and would open a duplicate.
+        // Matching to canonical form makes self-reference — and any two spellings of the same
+        // file — dedup to the same pane.
+        let path = canonicalize_local_path_for_dedup(path);
         let existing_file_pane = {
             let pane_group = self.active_tab_pane_group();
             pane_group
