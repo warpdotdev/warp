@@ -47,17 +47,32 @@ pub async fn complete(
 
     let command_suggestions = sorted_top_level_commands(parsed_token.as_str(), matcher, context);
 
-    // If `cd`ing into a directory without entering `cd` is enabled, also suggest directories.
-    // Note that the directories will be listed _after_ the top level commands.
-    if context.shell_supports_autocd().unwrap_or(false) {
-        if let Some(path_completion_context) = context.path_completion_context() {
+    if let Some(path_completion_context) = context.path_completion_context() {
+        let directory_suggestions =
+            sorted_directories_relative_to(parsed_token, matcher, path_completion_context).await;
+
+        // If `cd`ing into a directory without entering `cd` is enabled, also suggest all
+        // directories. Note that the directories will be listed _after_ the top level commands.
+        //
+        // Otherwise, still include directories whose replacements require shell escaping. This
+        // allows command-position path prefixes like `test` and `test\ ` to complete to
+        // `test\ 1/` without making ordinary directory names appear when autocd is disabled.
+        let directory_suggestions = if context.shell_supports_autocd().unwrap_or(false) {
+            directory_suggestions
+        } else {
+            directory_suggestions
+                .into_iter()
+                .filter(|matched_suggestion| {
+                    matched_suggestion.suggestion.replacement
+                        != matched_suggestion.suggestion.display
+                })
+                .collect()
+        };
+
+        if !directory_suggestions.is_empty() {
             return command_suggestions
                 .into_iter()
-                .chain(
-                    sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
-                        .await
-                        .into_iter(),
-                )
+                .chain(directory_suggestions.into_iter())
                 .collect();
         }
     }

@@ -1523,6 +1523,29 @@ pub fn test_autocd() {
     assert_eq!(complete_at_end_of_line("c", &ctx), vec!["cargo", "cd",]);
     assert!(complete_at_end_of_line("ce", &ctx).is_empty());
 }
+#[test]
+pub fn test_command_completions_include_escaped_directories_without_autocd() {
+    let path_ctx = MockPathCompletionContext::default().with_entries_in_pwd([
+        EngineDirEntry::test_dir("plain"),
+        EngineDirEntry::test_dir("test 1"),
+        EngineDirEntry::test_dir("test 2"),
+        EngineDirEntry::test_dir("test 3"),
+    ]);
+    let ctx = FakeCompletionContext::new(create_test_command_registry([]))
+        .with_path_completion_context(path_ctx)
+        .with_top_level_commands(["test"])
+        .with_supports_autocd(false);
+
+    assert_eq!(
+        complete_at_end_of_line("test", &ctx),
+        vec!["test", "test 1/", "test 2/", "test 3/"]
+    );
+    assert_eq!(
+        complete_at_end_of_line(r"test\ ", &ctx),
+        vec!["test 1/", "test 2/", "test 3/"]
+    );
+    assert!(complete_at_end_of_line("pl", &ctx).is_empty());
+}
 
 #[cfg(not(feature = "v2"))]
 #[test]
