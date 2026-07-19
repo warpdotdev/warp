@@ -126,10 +126,13 @@ Out of scope (explicit non-goals):
    the document — most commonly immediately before a heading, as a hand-authored anchor —
    registers `target-section` as a jump target and renders no visible content itself.
 
-6. If both an explicit `<a id="x">` and a heading whose implicit slug is also `x` exist,
-   the explicit `<a id>` is the effective target for `#x` (explicit authoring intent wins
-   over the derived default) — the tech spec should confirm this is achievable without
-   extra complexity; if not, document the fallback order chosen instead.
+6. Explicit `<a id>`/`<a name>` anchors and implicit heading slugs share **one namespace** —
+   there is no separate anchor-vs-heading priority tier. If both an explicit `<a id="x">`
+   and a heading whose implicit slug is also `x` exist, `#x` resolves to **whichever occurs
+   first in document order**, matching GitHub's single shared id space. This is the same
+   "first wins" rule invariant 4's heading-collision case already uses, just extended to
+   cover anchors and headings together rather than headings only. See tech spec item 5 for
+   the resolution mechanism.
 
 7. A `#fragment` link that matches nothing in the document remains a normal-looking,
    clickable link. Clicking it does nothing observable (no scroll, no error dialog, no
@@ -191,9 +194,14 @@ The two capabilities compound in value but are separately shippable:
   alone delivers the issue's headline case — an inline HTML link or a markdown
   `[text](#heading)` link jumping to a heading — and is the highest-value slice because it
   fixes markdown-native fragment links too, not just the new HTML tag.
-- **Phase 2:** Arbitrary `<a id>`/`<a name>` targets (anchors not attached to a heading).
-  Lower value on its own — most real documents anchor at headings — but completes the
-  issue's hand-built-table-of-contents use case for authors who anchor mid-paragraph.
+- **Phase 2 (delivered with phase 1 in this PR):** Arbitrary `<a id>`/`<a name>` anchor
+  targets (anchors not attached to a heading). Completes the issue's
+  hand-built-table-of-contents use case for authors who anchor mid-paragraph. Pulled forward
+  from a deferred follow-up: since the phase-1 parser already leaves a bare `<a id>`/`<a
+  name>` tag's raw markup (including the id/name value) intact in the buffer as literal text
+  — it never matches the `<a href>` delimiter grammar, which requires an `href` attribute —
+  resolution can reuse the same zero-cache, live-text-walk pattern phase 1 established for
+  headings, with no new content-model field or cached index. See tech spec item 5.
 - **Phase 3 (delivered with phase 1 in this PR):** Cross-document fragment links
   (`other-file.md#section`). Built on phase 1's slug resolver: the file-open, tab-focus, and
   dedup machinery already exists (a fragment-less relative link opens today), so this phase
@@ -205,6 +213,3 @@ The two capabilities compound in value but are separately shippable:
   silently open the browser or no-op. Delivering the fragment feature required repairing
   those, so the whole cross-document path ships together. See tech spec item 6a and the
   resolution-repairs section.
-- **Deferred to a follow-up PR:** arbitrary `<a id>`/`<a name>` explicit anchor markers
-  (the old "phase 2"). Heading auto-anchors cover the common case; explicit mid-paragraph
-  anchors are lower value and independently shippable.

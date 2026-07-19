@@ -87,16 +87,23 @@ normalization inside that one function so a hyphenated fragment matches a spaced
 - **(i) `<a href>` inline parsing → `Hyperlink::Url`: SMALL.** New `InlineToken` variant(s)
   (or extend delimiter handling, mirroring `<u>`) plus an attribute-extraction step for
   `href`. Reuses 100% of the existing link styling/click/render path once the token exists.
-- **(ii) `<a id>`/`<a name>` as an invisible anchor token: SMALL–MEDIUM.** Needs a new
-  concept — a zero-width marker attached to a document position — since nothing in
-  `FormattedTextFragment`/`FormattedTextLine` represents "renders nothing, but is
-  addressable here." Smaller than (iii) because it's purely additive (a new fragment/marker
-  kind), not a change to an existing shared struct.
-  - **The `<a id>` half of this feature genuinely doesn't fit the current content model in
-    ANY existing type**, unlike table `<br>` (`specs/GH13652/tables/tech.md` item 1), which
-    at least had an existing multi-line cell rendering path to extend. This is closer to net
-    new plumbing: an anchor is not text, not a delimiter, not a link — it's an id-to-position
-    binding that must survive from parse time through to click-resolution time.
+- **(ii) `<a id>`/`<a name>` anchor targets: SMALL — delivered in this PR.** The zero-width
+  marker concept described in the original draft below turned out to be unnecessary.
+  Characterization of the phase-1 parser (`markdown_parser::parse_inline_token_html_anchor_start`,
+  `crates/markdown_parser/src/markdown_parser.rs:1750`) confirmed it only recognizes `<a href>`
+  as a delimiter pair — it *requires* an `href` attribute to match at all (:1776-1779: no `href`
+  → `Err`), so a bare `<a id="x">`/`<a name="x">` with no `href` never becomes that token. It
+  falls through the inline `alt` chain to plain `text`, and the tag's raw markup — including the
+  id/name value — survives **verbatim, as visible literal text**, in the buffer. This is already
+  a committed, passing assertion: `markdown_parser_tests::test_parse_html_anchor_unterminated_falls_back_to_text`
+  asserts `<a id="x"></a>` parses to `FormattedTextFragment::plain_text("<a id=\"x\"></a>")`.
+  Because the id survives verbatim in the buffer, resolution doesn't need a new content-model
+  field or a parse-time anchor concept at all — it reuses the exact same live-text-walk pattern
+  `find_matching_header` already established for headings (item iii), just scanning for anchor
+  tags in the whole-buffer text instead of outline-block heading text. See item 5 for the
+  mechanism. (The original draft below, describing a `styles.anchor_id` fragment marker, is kept
+  for context but was **not** implemented — it solved a problem that characterization showed
+  doesn't exist for the empty/self-closing anchor form this feature scopes.)
 - **(iii) Heading slug matching + fragment click resolution: SMALL.** The click branch, the
   scroll call, and the per-click heading walk all already exist in `find_matching_header`
   (`app/src/notebooks/editor/model.rs:1351`). The only work is:
