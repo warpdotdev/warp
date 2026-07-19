@@ -37,8 +37,9 @@ pub(super) enum TerminalUseInterruptAction {
 pub(super) enum TuiInputTarget {
     /// No editable destination is ready, such as while Warp injects its
     /// bootstrap script or waits for the first post-bootstrap prompt. The
-    /// session view keeps focus for reserved bindings, but hides the agent
-    /// editor and does not forward ordinary input to the PTY.
+    /// session view renders the editor with a `Starting shell...` indicator,
+    /// but submission is disabled and ordinary input is not forwarded to the
+    /// PTY.
     Disabled,
     /// The foreground terminal process owns input during shell startup
     /// scripts, alt-screen applications, or user-controlled long-running
