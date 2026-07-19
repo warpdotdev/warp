@@ -832,6 +832,7 @@ impl BlocklistAIContextModel {
         AIAgentContext::Repository {
             name: repository_info.name.clone(),
             owner: repository_info.owner.clone(),
+            host: repository_info.host.clone(),
         }
     }
 
@@ -846,6 +847,7 @@ impl BlocklistAIContextModel {
             state: pr_info.state.clone(),
             draft: pr_info.draft,
             base_branch: pr_info.base_branch.clone(),
+            url: pr_info.url.clone(),
         })
     }
 

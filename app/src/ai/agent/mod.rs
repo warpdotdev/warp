@@ -2261,6 +2261,8 @@ pub enum AIAgentContext {
         name: String,
         /// The repository owner/organization (e.g. "warpdotdev"), if determinable from the remote URL.
         owner: Option<String>,
+        /// The repository host (e.g. "github.com"), if determinable from the remote URL.
+        host: Option<String>,
     },
 
     /// Information about the GitHub pull request associated with the current branch.
@@ -2277,6 +2279,9 @@ pub enum AIAgentContext {
         /// The pull request's base branch.
         #[serde(default)]
         base_branch: String,
+        /// The full URL of the pull request (e.g. "https://github.com/owner/repo/pull/123").
+        #[serde(default)]
+        url: String,
     },
 
     /// List of available skills is provided to the agent during initialization
