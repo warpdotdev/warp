@@ -7826,14 +7826,18 @@ impl TerminalView {
                             self.sessions.as_ref(ctx).get(active_session_id)
                         })
                         .and_then(|active_session| {
-                            active_session
-                                .launch_data()
-                                .and_then(|data| data.maybe_convert_absolute_path(cwd))
+                            active_session.launch_data().and_then(|data| {
+                                data.maybe_convert_absolute_path(cwd)
+                                    .filter(|cwd| match data {
+                                        // Use Path::is_dir() to validate the path is still valid,
+                                        // e.g. hasn't been deleted, but skip this check in WSL
+                                        // because the WSL filesystem bridge is too slow.
+                                        ShellLaunchData::WSL { .. } => true,
+                                        _ => cwd.is_dir(),
+                                    })
+                            })
                         })
                 })
-                // Checking if the pwd from the active session actually exists
-                // and if not (ie. directory was removed) - return None.
-                .filter(|path| path.is_dir())
         } else {
             None
         }
