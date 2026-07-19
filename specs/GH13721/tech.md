@@ -382,11 +382,49 @@ resolution against the new fields:
     no `AppContext`-less call site trying to size the image.
   - **Post-decode — `AssetState::Loaded { data }` with `data.image_size()` returning
     `Some((intrinsic_w, intrinsic_h))` with both `> 0`:** derive the missing axis from
-    the specified axis's *resolved* (post-clamp) value — given `width`,
-    `height = width * intrinsic_h / intrinsic_w`; given `height`,
-    `width = min(height * intrinsic_w / intrinsic_h, available_width)`. The specified
-    axis itself is not recomputed or reclamped at this point; it keeps the value
-    resolved above.
+    the specified axis's *resolved* (post-clamp) value.
+    - **Given `width`:** `height = width * intrinsic_h / intrinsic_w`. The derived
+      *height* has no pane bound (vertical space is free — the document scrolls), and
+      `width` is already ≤ `available_width` by construction, so this case cannot
+      overflow the pane. The specified width keeps its resolved value.
+    - **Given `height`:** `derived_width = height * intrinsic_w / intrinsic_h`. **When
+      the derived width exceeds `available_width`, the box must scale down as a whole —
+      it is NOT enough to clamp the width alone.** Clamping only the derived width
+      (`min(derived_width, available_width)`) while leaving the specified height fixed
+      would make the box `available_width × height`, which is *no longer
+      aspect-ratio-correct* — a distortion. The **precedence is aspect ratio >
+      pane-width bound > specified dimension**:
+      - if `derived_width ≤ available_width` → honor the specified height exactly:
+        `(derived_width, height)`.
+      - else → **scale the whole box down uniformly** so it fits the pane:
+        `width = available_width`, `effective_height = available_width * intrinsic_h /
+        intrinsic_w`. The aspect ratio is preserved exactly (`width / effective_height
+        == intrinsic_w / intrinsic_h`), the pane is never overflowed horizontally, and
+        the *effective height is proportionally reduced below the specified value* —
+        the specified height yields to the pane bound, which yields to the aspect ratio.
+      This **mirrors the width side with the opposite trigger**: a too-wide specified
+      *width* already clamps to `available_width` and derives the height *down* from
+      there (same uniform-scale principle — the box is always the largest
+      aspect-correct rectangle that fits the pane); the height-only overflow case is the
+      same rule reached from the other axis. The derived height is intentionally not
+      re-floored to `1px` in the extreme-ratio case, because that floor guards
+      *author-specified* dimensions and re-applying it here would re-break the aspect
+      ratio the scale-down exists to preserve.
+
+      **Deliberate divergence from browsers.** A browser given `<img height="400">` on
+      a narrow viewport lets the image overflow horizontally (and the page scrolls
+      sideways). The Markdown-viewer pane model treats horizontal space as a **hard
+      constraint** (per the width/height asymmetry rationale in the height-resolution
+      rules above — horizontal overflow forces an unpleasant horizontal scroll, whereas
+      vertical space is free), so it scales the box down instead of overflowing. This is
+      the same "model any reasonable markdown file, not any possible HTML file"
+      principle: a reasonable author height is honored right up to the point where it
+      would break the pane, and past that the pane wins over the specified height rather
+      than the layout breaking.
+
+    The specified axis is otherwise not recomputed or reclamped at this point; it keeps
+    the value resolved above (the height-only overflow case is the single exception,
+    where the pane bound legitimately reduces it).
   - **Pre-decode — `AssetState::Loading | FailedToLoad(_) | Evicted`, or `Loaded` with
     a zero/unreadable intrinsic size:** this is the state that needs its own explicit
     contract, because a naive "derived axis gets a plain default box" description
@@ -435,8 +473,11 @@ resolution against the new fields:
 - **Percentage height with intrinsic ratio (sibling case):** symmetric — if `height` is
   `Percent` and `width` is unspecified, the percent resolves (and clamps) against
   `default_height` first, then the derived `width` uses that resolved pixel height in
-  the ratio formula, clamped to `available_width` exactly as the plain height-only case
-  is (§4's `width = min(height * intrinsic_w / intrinsic_h, available_width)`).
+  the ratio formula, subject to the **same overflow precedence as the pixel height-only
+  case above**: if the derived width exceeds `available_width`, the box scales down
+  uniformly (`width = available_width`, `effective_height = available_width *
+  intrinsic_h / intrinsic_w`) rather than clamping only the width. The resolved-percent
+  height is the "specified height" that yields to the pane bound in that case.
 - **Zero/near-zero `available_width` (sibling case — narrow pane or deeply nested
   constrained container):** `clamp_to_bound`'s `1.0` floor means a percent or pixel
   width never resolves to `0` or negative regardless of how small `available_width` is;
@@ -648,8 +689,19 @@ Covers invariants 4–8:
   `width * intrinsic_h / intrinsic_w` (mirror the existing
   `mermaid_diagram_size` test coverage in `mermaid_diagram_tests.rs`, same formula,
   different block type).
-- **Height-only + `AssetState::Loaded` intrinsic size** → `width` equals
-  `height * intrinsic_w / intrinsic_h`, clamped to `available_width`.
+- **Height-only + `AssetState::Loaded`, derived width fits the pane** → height honored
+  exactly; `width` equals `height * intrinsic_w / intrinsic_h` (≤ `available_width`).
+  A justification-commented boundary test asserts the specified height is unchanged.
+- **Height-only + `AssetState::Loaded`, derived width would overflow (the Oz round-3
+  precedence corner case)** → the box scales down uniformly: `width == available_width`
+  and `effective_height == available_width * intrinsic_h / intrinsic_w` (below the
+  specified height). A boundary test (justification-commented, on the 3:1 wide shape)
+  asserts: `width == available_width`, aspect ratio preserved (`width / height ==
+  intrinsic_w / intrinsic_h`), and the effective height is strictly less than the
+  specified height. A second test at the exact boundary (`derived_width ==
+  available_width`) asserts the height is honored (the `<=` branch, not scale-down).
+- **Percent height-only + derived width would overflow** → same uniform scale-down
+  applies to the resolved-percent height (neighbor test).
 - **Width-only + `AssetState::Loading`** (asset not yet decoded) → `height` falls back
   to the plain default (`default_height`), not a placeholder cap; re-running layout
   after the asset transitions to `Loaded` produces the ratio-derived height (regression

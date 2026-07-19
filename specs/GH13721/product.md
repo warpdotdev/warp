@@ -78,7 +78,11 @@ Out of scope (not changed by this spec):
    — the document scrolls. A pixel height is subject only to a sanity cap for
    unreasonable/hostile values (see the tech spec), not to the pane's dimensions. This
    asymmetry follows the guiding principle *model any reasonable markdown file, not any
-   possible HTML file*: a reasonable author-specified height should be respected.
+   possible HTML file*: a reasonable author-specified height should be respected. (The
+   one case where a specified height yields is when the image has no specified width and
+   its aspect-derived width would overflow the pane — see invariant 6; horizontal space
+   remains the hard constraint, so the box scales down uniformly rather than distorting
+   or overflowing.)
 
 5. When the tag specifies `width` as a percentage (`width="90%"`), the image is laid
    out at that percentage of the pane's available content width. A percentage `height`
@@ -90,20 +94,35 @@ Out of scope (not changed by this spec):
 
 6. When only one of `width` / `height` is specified, the other dimension is derived
    from the image's intrinsic aspect ratio once it has decoded, so the specified
-   dimension is always honored exactly and the settled image is not distorted. (See the
-   tech spec for the layout-time mechanism — it re-derives the missing dimension from
-   the decoded image's intrinsic size, the same approach already used for Mermaid
-   diagrams, rather than relying on generic contain-fit scaling.) There is one bounded
-   exception: for a single **transient** layout pass *before the asset has decoded*, the
-   intrinsic ratio is not yet known, so the derived (unspecified) axis falls back to a
-   default and the frame is drawn stretched to fill that box. This means the derived
-   axis — never the author-specified one — may be briefly distorted for that one
-   pre-decode frame; it self-corrects to the aspect-ratio-correct size on the very next
-   layout pass once the asset decodes (the same self-correction Mermaid diagrams rely on
-   today). The trade-off is deliberate: stretching the *derived* axis for one frame is
-   preferable to letting contain-fit shrink the *specified* axis below its requested
-   value, so the one guarantee this invariant makes pre-decode — that the specified
-   dimension is exact in every load state — always holds. See the tech spec's
+   dimension is honored exactly and the settled image is not distorted — with one
+   pane-fit exception below. (See the tech spec for the layout-time mechanism — it
+   re-derives the missing dimension from the decoded image's intrinsic size, the same
+   approach already used for Mermaid diagrams, rather than relying on generic
+   contain-fit scaling.)
+
+   **Pane-fit exception (specified `height`, no `width`).** If the aspect-derived width
+   would exceed the pane's available content width, the box scales down *uniformly* so
+   the width equals the pane and the effective height is proportionally reduced below
+   the specified value. The precedence is **aspect ratio > pane-width bound > specified
+   dimension**: the image is never distorted (the ratio always wins) and never overflows
+   the pane horizontally (the pane bound outranks the specified height), so in this one
+   case the specified height is not honored exactly. This mirrors the width side — a
+   too-wide specified `width` already clamps to the pane and derives its height down —
+   reached from the opposite axis. It deliberately diverges from browsers, which let the
+   image overflow horizontally; the pane model treats horizontal space as a hard
+   constraint (invariant 4). A specified `width` with a derived height has no analogous
+   case, because the derived height is unbounded (vertical space is free), so a
+   specified width is always honored exactly.
+
+   **Transient pre-decode exception.** For a single **transient** layout pass *before
+   the asset has decoded*, the intrinsic ratio is not yet known, so the derived
+   (unspecified) axis falls back to a default and the frame is drawn stretched to fill
+   that box. This means the derived axis — never the author-specified one — may be
+   briefly distorted for that one pre-decode frame; it self-corrects to the
+   aspect-ratio-correct size on the very next layout pass once the asset decodes (the
+   same self-correction Mermaid diagrams rely on today). The trade-off is deliberate:
+   stretching the *derived* axis for one frame is preferable to letting contain-fit
+   shrink the *specified* axis below its requested value. See the tech spec's
    "Why the pre-decode fallback needs `stretch()`" section and its layout-math tests
    (the `Loading` → `Loaded` transition case) for the precise mechanism.
 
