@@ -279,6 +279,25 @@ layer's `repaint_after_load`), the image block re-queries `AssetCache` and gets 
 better answer once decoded data exists. `<img>` sizing adopts this identical pattern
 rather than inventing a new one.
 
+**What a load *failure* looks like (`FailedToLoad` / `Evicted`), as opposed to
+sizing.** The paragraph above is about how these states affect *sizing* (they fall back
+to the default box). Their *visual* result is inherited unchanged from the pre-existing
+Markdown-image path and is deliberately not modified by this spec: the block occupies a
+box at its resolved size, but the `warpui_core` `Image` primitive paints **nothing**
+into it when the load has failed and no backup element is registered
+(`elements/gui/image.rs`: the `FailedToLoad` arm paints a `failed_to_load` element only
+if one is set, the `Evicted` arm a `before_load` element only if one is set, and
+`RenderableImage` — `render/element/image.rs` — registers neither). The user therefore
+sees an **empty box at the configured size**: no placeholder graphic, no broken-image
+icon, no alt text, no collapse to zero height, and no panic. It does *not* fall back to
+literal `<img …>` text (that is only for a *parse*-invalid tag, invariant 10, a distinct
+path). A raw-HTML `<img src="missing.png">` and a Markdown `![alt](missing.png)` behave
+identically here, because both flow through the same `RenderableImage`. (This is also
+distinct from the oversized-`data:`-URI guard, which replaces the image with the literal
+text "Image too large to display" at the content level before layout — `core.rs:32-38`.)
+Improving this to a real broken-image affordance (placeholder or alt text) is a possible
+follow-up that would touch the shared Markdown-image path, out of scope here.
+
 (Note: `Image::layout_using_paint_bounds()` in
 `crates/warpui_core/src/elements/gui/image.rs:153-161` looks like a shortcut but is
 not — it only affects the paint element's own internal `size`, never wired into
@@ -583,8 +602,12 @@ round-trips to the Markdown form (regression guard).
 
 The parser is an **attribute allowlist**: only `src`, `alt`, `title`, `width`,
 `height`, `align` are read; every other attribute (`onerror`, `onload`, `style`,
-`srcset`, `usemap`, …) is parsed-and-discarded (invariant 13). No attribute value is
-ever executed or used to navigate. `src` is resolved exclusively through the existing
+`usemap`, …) is parsed-and-discarded (invariant 13). No attribute value is
+ever executed or used to navigate. (`srcset` is likewise not read, but that is a
+*feature deferral* to `<picture>`/`<source>` (#13736), not a security exclusion like the
+event-handler attributes — see the responsive-image non-goal in product.md. Mechanically
+it is discarded by the same allowlist, but it does not belong in the same conceptual
+bucket as `onerror`/`onload`.) `src` is resolved exclusively through the existing
 `resolve_asset_source_relative_to_directory`
 (`crates/editor/src/content/edit.rs:77-127`), which already handles `data:` / `http(s)`
 / absolute / relative sources — this change introduces no new source-resolution path,

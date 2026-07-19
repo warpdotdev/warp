@@ -5,12 +5,17 @@ Issue: https://github.com/warpdotdev/warp/issues/13721
 ## Summary
 
 Warp's Markdown Viewer renders Markdown image syntax (`![alt](src)`) but silently
-drops raw inline HTML, including the `<img>` tag. This is the single highest-priority
-tag in the issue's prioritized list, and the one that directly motivated the request:
-authors who embed locally-generated SVG dashboards in Markdown notes have no way to
-control the rendered size, because the Markdown-image renderer draws every image at a
-fixed default size that ignores the image's intrinsic dimensions, and the HTML `width`
-attribute — the only author-controllable sizing signal — is dropped entirely.
+drops raw inline HTML, so a raw-HTML `<img>` tag does not load or render **at all** —
+it disappears into literal, unrendered text. This is the single highest-priority tag in
+the issue's prioritized list, and the one that directly motivated the request. Making
+the tag render is the core fix; honoring its presentational attributes is the rest.
+Authors reach for HTML `<img>` over `![alt](src)` precisely *because* of those
+attributes — chiefly sizing: the Markdown-image renderer draws every image at a fixed
+default size that ignores the image's intrinsic dimensions, and the HTML `width`
+attribute — the only author-controllable sizing signal — is dropped along with the rest
+of the tag. So the motivating example (embedding a locally-generated SVG dashboard at a
+controlled width) needs both halves: the tag must render, and its `width`/`height`/`align`
+must be honored.
 
 This spec covers a narrow, self-contained slice split out of the original bulk
 raw-HTML-subset request (#13652): teach the Markdown viewer to recognize a
@@ -47,6 +52,12 @@ Out of scope (not changed by this spec):
 - All other HTML tags from the issue's list: `<a href/id>`, `<table>`/`<tr>`/`<td>`,
   `<details>`/`<summary>`, `<br>`, `<kbd>`, `<sub>`/`<sup>`, `<p align>`/`<div align>`,
   `<picture>`/`<source>`.
+- Responsive-image source selection via `srcset` (density/width candidate lists such as
+  `1x`/`2x`/`480w`). This is a refinement deferred to the `<picture>`/`<source>` feature
+  (#13736), which owns responsive selection; on a bare `<img>`, `srcset` is ignored and
+  only `src` is read — matching the `src`-fallback behavior of a `srcset`-unaware
+  browser. This is a **feature deferral, not a security exclusion** (contrast the
+  `onerror`/`onload`/`style` drops in invariant 13, which are security-motivated).
 - Honoring the intrinsic `width`/`height` of an SVG when **no** HTML sizing attribute
   is present. This spec makes author-specified sizing work; changing the no-attribute
   default sizing behavior is a separate follow-up.
@@ -61,7 +72,13 @@ Out of scope (not changed by this spec):
    surrounded by leading/trailing whitespace) renders as an image in the Markdown
    viewer, using the tag's `src` attribute as the image source, resolved with the
    same rules as a Markdown `![alt](src)` image (data URIs, `http(s)://` URLs,
-   absolute paths, and paths relative to the document's directory).
+   absolute paths, and paths relative to the document's directory). If that source
+   *fails to load* (missing file, unreadable, or a decode failure), the tag behaves
+   exactly as a Markdown `![alt](missing.png)` does today — it stays an image block at
+   its configured size but renders as an empty box (no placeholder, broken-image icon,
+   or alt text), never a panic and never a fallback to literal text. This load-failure
+   visual is inherited from the existing image pipeline and unchanged by this spec; see
+   the tech spec's failure-state note for the mechanism.
 
 2. The tag's `alt` attribute, when present, is used as the image's alt text (the same
    role `alt` plays for a Markdown image). When `alt` is absent, alt text is empty.
@@ -155,9 +172,11 @@ Out of scope (not changed by this spec):
 
 13. Malicious or unexpected attribute values do not cause code execution or navigation.
     Only `src`, `alt`, `title`, `width`, `height`, and `align` are read from the tag;
-    all other attributes (including `onerror`, `onload`, `style`, `srcset`, etc.) are
-    ignored. `src` values are resolved through the same asset-source resolver used for
-    Markdown images and are never executed.
+    all other attributes (including `onerror`, `onload`, `style`, etc.) are ignored.
+    `src` values are resolved through the same asset-source resolver used for Markdown
+    images and are never executed. (`srcset` is also not read, but for a different
+    reason — it is a deferred *feature*, not a security drop; see the responsive-image
+    non-goal above.)
 
 14. Copy / export round-trips of a document containing a sized `<img>` preserve enough
     information to reproduce the rendered image. (The exact serialized form — whether the
