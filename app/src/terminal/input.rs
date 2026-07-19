@@ -3009,6 +3009,11 @@ impl Input {
                             context.set.insert(flags::CLI_AGENT_RICH_INPUT_OPEN);
                         }
                     })),
+                    // The terminal input editor provides its own right-click
+                    // context menu at the parent level (see `render_input_box`
+                    // and `render_cli_agent_input`), so opt out of the built-in
+                    // EditorView context menu to avoid replacing it.
+                    disable_builtin_context_menu: true,
                     ..Default::default()
                 };
                 EditorView::new(options, ctx)
