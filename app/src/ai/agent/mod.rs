@@ -1211,7 +1211,7 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                         "\n```bash\n{command}\n```\n\n**Current Output:**\n```\n{grid_contents}\n```"
                     )
                 }
-                RequestCommandOutputResult::CancelledBeforeExecution => {
+                RequestCommandOutputResult::CancelledBeforeExecution { .. } => {
                     write!(f, "\n_Command cancelled_")
                 }
                 RequestCommandOutputResult::Denylisted { command } => {
@@ -1428,7 +1428,7 @@ impl AIAgentActionResult {
             self.result,
             AIAgentActionResultType::RequestFileEdits(RequestFileEditsResult::Cancelled)
                 | AIAgentActionResultType::RequestCommandOutput(
-                    RequestCommandOutputResult::CancelledBeforeExecution
+                    RequestCommandOutputResult::CancelledBeforeExecution { .. }
                 )
                 | AIAgentActionResultType::ReadFiles(ReadFilesResult::Cancelled)
                 | AIAgentActionResultType::UploadArtifact(UploadArtifactResult::Cancelled)

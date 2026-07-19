@@ -56,7 +56,7 @@ pub mod text {
                     RequestCommandOutputResult::LongRunningCommandSnapshot { command, .. } => {
                         writeln!(w, "`{command}` is still running...")
                     }
-                    RequestCommandOutputResult::CancelledBeforeExecution => {
+                    RequestCommandOutputResult::CancelledBeforeExecution { .. } => {
                         writeln!(w, "{CANCELLED_MESSAGE}")
                     }
                     RequestCommandOutputResult::Denylisted { .. } => {
@@ -824,7 +824,7 @@ pub mod json {
                             JsonRunCommandResult::Running,
                         )))
                     }
-                    RequestCommandOutputResult::CancelledBeforeExecution => {
+                    RequestCommandOutputResult::CancelledBeforeExecution { .. } => {
                         Some(JsonMessage::ToolCanceled)
                     }
                     RequestCommandOutputResult::Denylisted { .. } => Some(JsonMessage::ToolError {

@@ -663,13 +663,15 @@ impl BlocklistAIActionModel {
                     let result_id = result.id.clone();
                     let mut result_to_insert = result.clone();
                     if let AIAgentActionResultType::RequestCommandOutput(
-                        RequestCommandOutputResult::LongRunningCommandSnapshot { .. },
+                        RequestCommandOutputResult::LongRunningCommandSnapshot { command, .. },
                     ) = &result.result
                     {
                         // On restoration we set long running command snapshot results to cancelled,
                         // since this means the command was incomplete when the app was closed.
                         result_to_insert.result = AIAgentActionResultType::RequestCommandOutput(
-                            RequestCommandOutputResult::CancelledBeforeExecution,
+                            RequestCommandOutputResult::CancelledBeforeExecution {
+                                command: command.clone(),
+                            },
                         );
                     }
                     self.past_action_results
