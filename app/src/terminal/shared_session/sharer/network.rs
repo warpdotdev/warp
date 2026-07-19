@@ -39,7 +39,6 @@ use session_sharing_protocol::sharer::{
     UpstreamMessage,
 };
 use warp_core::features::FeatureFlag;
-use warp_errors::report_error;
 use warp_server_client::iap::IapManager;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
@@ -864,7 +863,7 @@ impl Network {
                         },
                     });
                     if let Err(e) = network.ws_proxy_tx.try_send(message) {
-                        sharer_error!(network, "Sharer failed to send initialization message: {e}");
+                        sharer_warn!(network, "Sharer failed to send initialization message: {e}");
                         network.handle_startup_failure(StartupFailure::InitializeSend, ctx);
                         return;
                     }
@@ -1031,11 +1030,6 @@ impl Network {
         self.close_startup_transport();
         self.startup_config = None;
 
-        #[cfg(not(any(test, feature = "integration_tests")))]
-        if let Some(cause) = cause.as_ref() {
-            report_error!(&**cause);
-        }
-
         ctx.emit(NetworkEvent::FailedToCreateSharedSession {
             reason: failure.failed_reason(),
             cause,
@@ -1133,7 +1127,7 @@ impl Network {
                             },
                         });
                         if let Err(e) = network.ws_proxy_tx.try_send(message) {
-                            sharer_error!(network, "Sharer failed to send reconnect message: {e}");
+                            sharer_warn!(network, "Sharer failed to send reconnect message: {e}");
                             return;
                         }
 
@@ -1192,7 +1186,7 @@ impl Network {
                     }) {
                         return;
                     }
-                    sharer_error!(
+                    sharer_warn!(
                         network,
                         "Got error from shared session sharer websocket: {e}"
                     );
@@ -1262,8 +1256,7 @@ impl Network {
                 }
                 log::info!("Closing websocket to session sharing server as sharer");
                 if let Err(e) = sink.close().await {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Failed to close session sharing websocket as sharer"));
+                    log::warn!("Failed to close session sharing websocket as sharer: {e}");
                 }
                 startup_send_failed
             },

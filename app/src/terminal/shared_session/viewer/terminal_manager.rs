@@ -13,7 +13,6 @@ use session_sharing_protocol::common::{
 use session_sharing_protocol::sharer::SessionSourceType;
 use session_sharing_protocol::viewer::SessionEndedReason;
 use settings::Setting as _;
-use warp_errors::report_error;
 use warpui::{
     AppContext, ModelContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle,
     WeakViewHandle, WindowId,
@@ -1433,9 +1432,9 @@ impl TerminalManager {
                         });
                     }
                     Err(e) => {
-                        report_error!(anyhow::Error::new(e).context(
-                            "Failed to deserialize prompt snapshot from shared session server"
-                        ))
+                        log::warn!(
+                            "Failed to deserialize prompt snapshot from shared session server: {e}"
+                        )
                     }
                 }
             }

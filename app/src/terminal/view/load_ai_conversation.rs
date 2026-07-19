@@ -1110,7 +1110,7 @@ impl TerminalView {
                 .not()
                 .then_some(content.plain_text))
         else {
-            report_error!("Clipboard contents are not a conversation debug link");
+            log::warn!("Clipboard contents are not a conversation debug link");
             return;
         };
 
@@ -1131,7 +1131,7 @@ impl TerminalView {
 
             url
         } else {
-            report_error!(
+            log::warn!(
                 "Invalid debug link format. Expected format: http://host/debug/maa/conversation-id"
             );
             return;

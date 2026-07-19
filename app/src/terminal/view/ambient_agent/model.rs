@@ -5,7 +5,6 @@ use session_sharing_protocol::common::SessionId;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warp_errors::report_error;
 use warp_terminal::model::BlockId;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
@@ -1380,10 +1379,7 @@ impl AmbientAgentViewModel {
                     ctx.spawn(
                         async move {
                             if let Err(e) = ai_client.cancel_ambient_agent_task(&task_id).await {
-                                report_error!(
-                                    e.context("Failed to cancel ambient agent task"),
-                                    extra: { "task_id" => %task_id }
-                                );
+                                log::warn!("Failed to cancel ambient agent task {task_id}: {e:#}");
                             }
                         },
                         |_, _, _| {},
@@ -1790,7 +1786,7 @@ impl AmbientAgentViewModel {
                 async move { ai_client.cancel_ambient_agent_task(&task_id).await },
                 |_me, result, _ctx| {
                     if let Err(err) = result {
-                        report_error!(err.context("Failed to cancel ambient agent task"));
+                        log::warn!("Failed to cancel ambient agent task: {err:#}");
                     }
                 },
             );

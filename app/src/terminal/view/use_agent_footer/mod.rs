@@ -789,9 +789,9 @@ impl TerminalView {
                         match base64::engine::general_purpose::STANDARD.decode(&image.data) {
                             Ok(bytes) => bytes,
                             Err(_) => {
-                                report_error!(
-                                    "Failed to decode base64 image data",
-                                    extra: { "file_name" => %image.file_name }
+                                log::warn!(
+                                    "Failed to decode base64 image data for {}",
+                                    image.file_name
                                 );
                                 continue;
                             }
@@ -877,10 +877,7 @@ impl TerminalView {
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            report_error!(
-                                anyhow::Error::new(e).context("Failed to stat dropped image"),
-                                extra: { "path" => %path_str }
-                            );
+                            log::warn!("Failed to stat dropped image {path_str}: {e}");
                             continue;
                         }
                     }
@@ -888,10 +885,7 @@ impl TerminalView {
                     let bytes = match async_fs::read(&path_str).await {
                         Ok(b) => b,
                         Err(e) => {
-                            report_error!(
-                                anyhow::Error::new(e).context("Failed to read dropped image"),
-                                extra: { "path" => %path_str }
-                            );
+                            log::warn!("Failed to read dropped image {path_str}: {e}");
                             continue;
                         }
                     };

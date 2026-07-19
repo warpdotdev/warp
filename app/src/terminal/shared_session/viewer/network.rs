@@ -324,8 +324,7 @@ impl Network {
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Got error from shared session viewer websocket"));
+                    log::warn!("Got error from shared session viewer websocket: {e}");
                 }
             },
             |network, ctx| {
@@ -358,9 +357,7 @@ impl Network {
             }
             log::info!("Closing websocket to session sharing server as viewer");
             if let Err(e) = sink.close().await {
-                report_error!(
-                    anyhow::Error::new(e).context("Failed to close session sharing websocket")
-                );
+                log::warn!("Failed to close session sharing websocket: {e}");
             }
         }, |_, _, _| {});
     }
@@ -401,8 +398,7 @@ impl Network {
                         },
                     });
                     if let Err(e) = network.ws_proxy_tx.try_send(initialize_message) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Failed to send initialize message for viewer"));
+                        log::warn!("Failed to send initialize message for viewer: {e}");
                         return;
                     }
 
@@ -412,11 +408,8 @@ impl Network {
                     IapManager::handle(ctx).update(ctx, |manager, ctx| {
                         manager.check_ws_connect_error(&e, ctx);
                     });
-                    report_error!(
-                        e.context(
-                            "viewer Network::start_websocket: WS connect failed; emitting FailedToJoin (no automatic retry)"
-                        ),
-                        extra: { "session_id" => %session_id }
+                    log::warn!(
+                        "viewer Network::start_websocket: WS connect failed; emitting FailedToJoin (no automatic retry); session_id={session_id}: {e:#}"
                     );
                     ctx.emit(NetworkEvent::FailedToJoin {
                         reason: FailedToJoinReason::FailedToConnectToServer,
@@ -486,8 +479,9 @@ impl Network {
                     let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
                     network.ws_proxy_tx = ws_proxy_tx;
                     if let Err(e) = network.ws_proxy_tx.try_send(initialize_message) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Failed to send initialize message for viewer when reconnecting"));
+                        log::warn!(
+                            "Failed to send initialize message for viewer when reconnecting: {e}"
+                        );
                         return;
                     }
 

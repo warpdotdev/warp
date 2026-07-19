@@ -11,6 +11,7 @@ use lazy_static::lazy_static;
 use num_traits::Float as _;
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
+#[cfg(debug_assertions)]
 use warp_errors::report_error;
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui::color::ColorU;
@@ -1121,6 +1122,7 @@ fn render_grid_with_ligatures<'a>(
             AttributedStringBuilder::new(font_family, font_family, grid.columns());
 
         let Some(row) = grid.row(row_idx) else {
+            #[cfg(debug_assertions)]
             report_error!("grid_renderer should not try to render an out-of-bounds row");
             continue;
         };

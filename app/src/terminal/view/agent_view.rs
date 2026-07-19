@@ -271,8 +271,7 @@ impl TerminalView {
                         block_id: block_id.to_string(),
                         agent_view_visibility: agent_view_visibility.into(),
                     }) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Error sending UpdateBlockAgentViewVisibility event"));
+                        log::warn!("Error sending UpdateBlockAgentViewVisibility event: {e}");
                     }
                 }
             }

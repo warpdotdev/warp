@@ -7,8 +7,6 @@ use std::sync::mpsc::SyncSender;
 
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
-#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
-use warp_errors::report_error;
 #[cfg(feature = "local_tty")]
 use warpui::geometry::vector::Vector2F;
 #[cfg(not(target_family = "wasm"))]
@@ -175,7 +173,7 @@ impl TerminalView {
             let sbx_future = resolve_sbx_path_from_user_shell(ctx);
             ctx.spawn(sbx_future, move |me, sbx_path, ctx| {
                 let Some(sbx_path) = sbx_path else {
-                    report_error!("sbx binary not found; cannot create Docker sandbox");
+                    log::warn!("sbx binary not found; cannot create Docker sandbox");
                     return;
                 };
                 me.create_and_push_docker_sandbox_with_sbx(sbx_path, ctx);
@@ -270,7 +268,7 @@ impl TerminalView {
                     .map_err(|_| "view dropped")?;
 
                 if let Err(e) = bootstrap_future.await {
-                    report_error!(anyhow::Error::new(e).context("Docker sandbox bootstrap failed"));
+                    log::warn!("Docker sandbox bootstrap failed: {e}");
                     return Err("terminal bootstrap failed");
                 }
 
@@ -304,8 +302,7 @@ impl TerminalView {
                     .map_err(|_| "view dropped")?;
 
                 prepare_future.await.map_err(|e| {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Docker sandbox environment preparation failed"));
+                    log::warn!("Docker sandbox environment preparation failed: {e}");
                     "environment preparation failed"
                 })?;
 
@@ -322,10 +319,7 @@ impl TerminalView {
                     log::info!("Prepared Docker Sandbox environment");
                 }
                 Err(err) => {
-                    report_error!(
-                        "Docker Sandbox environment setup failed",
-                        extra: { "error" => %err }
-                    );
+                    log::warn!("Docker Sandbox environment setup failed: {err}");
                 }
             },
         );
