@@ -5,7 +5,6 @@ use async_channel::Sender;
 pub use cloud_object_client::ObjectUpdateMessage;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
-use warp_errors::report_error;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, ModelHandle, RequestState, SingletonEntity};
 
@@ -368,7 +367,7 @@ impl Listener {
                         log::warn!("CloudObjects::Listener: websocket connection failed to connect or finished with an error; trying again: {e:#}");
                     }
                     RequestState::RequestFailed(e) => {
-                        report_error!(e.context("CloudObjects::Listener websocket connection failed"));
+                        log::warn!("CloudObjects::Listener websocket connection failed: {e:#}");
                     }
                 }
             },

@@ -14,7 +14,6 @@ use cloud_object_client::{
 pub use cloud_object_client::{GuestIdentifier, ObjectClient};
 use cloud_object_models::JsonSerializer;
 use cynic::{MutationBuilder, QueryBuilder, SubscriptionBuilder};
-use warp_errors::report_error;
 use warp_graphql::error::UserFacingErrorInterface;
 use warp_graphql::generic_string_object::GenericStringObjectInput;
 use warp_graphql::mutations::add_object_guests::{
@@ -1411,6 +1410,6 @@ fn parse_server_gso<T, S>(
         Ok(object) => {
             map.entry(format).or_default().push(Box::new(object));
         }
-        Err(err) => report_error!(err.context(format!("Failed to convert {format:?} {uid}"))),
+        Err(err) => log::warn!("Failed to convert {format:?} {uid}: {err:#}"),
     }
 }

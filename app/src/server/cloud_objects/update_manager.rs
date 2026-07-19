@@ -1116,9 +1116,7 @@ impl UpdateManager {
         let task_id = match task_id.parse::<AmbientAgentTaskId>() {
             Ok(task_id) => task_id,
             Err(err) => {
-                report_error!(anyhow::Error::from(err).context(format!(
-                    "AmbientTaskUpdated has unparseable task_id: {task_id}"
-                )));
+                log::warn!("AmbientTaskUpdated has unparseable task_id {task_id}: {err:#}");
                 return;
             }
         };
@@ -1551,7 +1549,7 @@ impl UpdateManager {
                         ctx,
                     );
                 }
-                Err(err) => report_error!(err.context("error getting cloud object")),
+                Err(err) => log::warn!("error getting cloud object: {err:#}"),
             },
         );
 

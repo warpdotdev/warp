@@ -890,7 +890,7 @@ impl<'de> serde::Deserialize<'de> for ListRunsResponse {
                 Ok(task) => runs.push(task),
                 Err(e) => {
                     // Log the error and skip this task instead of failing the entire request
-                    report_error!(anyhow!("Failed to deserialize ambient agent task: {}", e));
+                    log::warn!("Failed to deserialize ambient agent task: {e}");
                 }
             }
         }

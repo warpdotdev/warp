@@ -38,7 +38,7 @@ use team::TeamClient;
 use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent;
-use warp_errors::{register_error, report_error, AnyhowErrorExt, ErrorExt};
+use warp_errors::{register_error, AnyhowErrorExt, ErrorExt};
 use warp_managed_secrets::client::ManagedSecretsClient;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
@@ -868,14 +868,11 @@ impl ServerApi {
 
                 let response = request.send().await;
                 if let Err(err) = response {
-                    report_error!(anyhow::Error::new(err)
-                        .context("Failed to send POST request to /client/login"));
+                    log::warn!("Failed to send POST request to /client/login: {err:#}");
                 }
             }
             Err(err) => {
-                report_error!(
-                    err.context("Could not retrieve access token for notifying user login")
-                );
+                log::warn!("Could not retrieve access token for notifying user login: {err:#}");
             }
         }
     }
