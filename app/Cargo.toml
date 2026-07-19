@@ -626,7 +626,6 @@ default = [
     "sync_ambient_plans",
     "conversation_artifacts",
     "agent_view",
-    "agent_view_block_context",
     "agent_view_conversation_list_view",
     "inline_slash_commands",
     "inline_history_menu",
@@ -960,7 +959,6 @@ file_and_diff_set_comments = []
 revert_to_checkpoints = []
 rewind_slash_command = []
 agent_view = []
-agent_view_block_context = ["agent_view"]
 warp_managed_secrets = []
 v4a_file_diffs = []
 agent_tips = []

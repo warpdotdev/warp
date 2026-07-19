@@ -946,7 +946,6 @@ impl View for AIBlock {
                         .attached_blocks_chip_state_handle,
                     overflow_menu_mouse_state: &self.state_handles.overflow_menu_handle,
                     rewind_button: &self.rewind_button,
-                    num_attached_context_blocks: self.num_attached_context_blocks,
                     has_attached_context_selected_text: self.has_attached_context_selected_text,
                     directory_context: &self.directory_context,
                     view_id: &self.view_id,

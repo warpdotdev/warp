@@ -978,9 +978,6 @@ pub struct AIBlock {
     time_to_first_token: OnceCell<Duration>,
     time_to_last_token: Option<Duration>,
 
-    /// The number of blocks that were attached as context to this AI block's query.
-    num_attached_context_blocks: usize,
-
     /// Whether selected text was attached as context to this AI block's query.
     has_attached_context_selected_text: bool,
 
@@ -1123,7 +1120,6 @@ impl AIBlock {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let user_avatar_info = user_avatar_info_for_ai_block(model.as_ref(), ctx);
-        let num_attached_context_blocks = num_attached_context_blocks(model.inputs_to_render(ctx));
         let has_attached_context_selected_text =
             has_attached_context_selected_text(model.inputs_to_render(ctx));
 
@@ -1484,7 +1480,6 @@ impl AIBlock {
             state_handles: Default::default(),
             time_to_first_token: OnceCell::new(),
             time_to_last_token: None,
-            num_attached_context_blocks,
             has_attached_context_selected_text,
             finish_reason: None,
             directory_context: DirectoryContext { pwd, home_dir },
@@ -5943,20 +5938,6 @@ fn set_imported_comment_button_disabled(
             button.set_tooltip(None::<String>, ctx);
         }
     });
-}
-
-fn num_attached_context_blocks(inputs: &[AIAgentInput]) -> usize {
-    inputs.iter().fold(0, |count, input| {
-        if let Some(context) = input.context() {
-            count
-                + context
-                    .iter()
-                    .filter(|context| matches!(context, AIAgentContext::Block { .. }))
-                    .count()
-        } else {
-            count
-        }
-    })
 }
 
 fn has_attached_context_selected_text(inputs: &[AIAgentInput]) -> bool {

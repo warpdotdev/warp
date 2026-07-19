@@ -22,7 +22,7 @@ pub struct BlockContext {
     pub command: String,
     pub output: String,
     pub exit_code: ExitCode,
-    /// Whether this block was auto-attached (via AgentViewBlockContext feature)
+    /// Whether this block was auto-attached (in agent view)
     /// rather than manually attached by the user.
     #[serde(default)]
     pub is_auto_attached: bool,

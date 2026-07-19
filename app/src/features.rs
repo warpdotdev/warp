@@ -331,8 +331,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentManagementDetailsView,
         #[cfg(feature = "agent_view")]
         FeatureFlag::AgentView,
-        #[cfg(feature = "agent_view_block_context")]
-        FeatureFlag::AgentViewBlockContext,
         #[cfg(feature = "warp_managed_secrets")]
         FeatureFlag::WarpManagedSecrets,
         #[cfg(feature = "v4a_file_diffs")]
