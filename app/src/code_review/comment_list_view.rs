@@ -58,6 +58,13 @@ use crate::view_components::action_button::{
 };
 use crate::workspace::view::right_panel::ReviewDestination;
 
+/// Maximum number of comment view cards to instantiate simultaneously.
+/// Each `CommentViewCard` creates a full `RichTextEditorView` (and optionally a `CodeEditorView`
+/// for diff content), both of which carry significant per-instance memory overhead. Capping the
+/// total number prevents out-of-memory conditions when reviewing PRs with many comments.
+/// See APP-4843 for the root-cause analysis.
+const MAX_INSTANTIATED_COMMENT_CARDS: usize = 100;
+
 /// Header text for the outdated section when there is exactly one outdated comment.
 const OUTDATED_SECTION_HEADER_SINGULAR: &str = "1 comment will be omitted because it is outdated.";
 /// Header text format for the outdated section when there are multiple outdated comments.
@@ -192,6 +199,9 @@ pub struct CommentListView {
     pending_scroll_to_comment: Option<CommentId>,
     comments_button: ViewHandle<ActionButton>,
     send_button: ViewHandle<ActionButton>,
+    /// Number of comments skipped because instantiating their view cards would exceed
+    /// `MAX_INSTANTIATED_COMMENT_CARDS`. Displayed as a notice in the panel when non-zero.
+    truncated_comment_count: usize,
 }
 
 impl CommentListView {
@@ -254,6 +264,7 @@ impl CommentListView {
             pending_scroll_to_comment: None,
             comments_button,
             send_button,
+            truncated_comment_count: 0,
         }
     }
 
@@ -379,17 +390,20 @@ impl CommentListView {
         comments: Vec<AttachedReviewComment>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let mut new_comments_by_id = IndexMap::with_capacity(comments.len());
+        let mut new_comments_by_id =
+            IndexMap::with_capacity(comments.len().min(MAX_INSTANTIATED_COMMENT_CARDS));
+        let mut truncated_count = 0usize;
 
         for comment in comments {
             let id = comment.id;
 
             let entry = if let Some(mut existing) = self.comments_by_id.shift_remove(&id) {
+                // Always keep already-instantiated cards — they already own their memory.
                 existing
                     .card
                     .update_source(comment, self.repo_path.as_ref(), ctx);
                 existing
-            } else {
+            } else if new_comments_by_id.len() < MAX_INSTANTIATED_COMMENT_CARDS {
                 let card = CommentViewCard::new(
                     comment,
                     false, /* always_use_static_diff */
@@ -424,11 +438,24 @@ impl CommentListView {
                     icon_button: action_button,
                     mouse_state: Default::default(),
                 }
+            } else {
+                // Instantiating another CommentViewCard would exceed MAX_INSTANTIATED_COMMENT_CARDS.
+                // Each card allocates a full RichTextEditorView + optional CodeEditorView, which
+                // together can consume hundreds of MB per instance. Skip this comment to prevent
+                // memory exhaustion on PRs with very many comments. See APP-4843.
+                truncated_count += 1;
+                log::warn!(
+                    "comment_list_view: skipping card creation for comment {id} \
+                     (would exceed {MAX_INSTANTIATED_COMMENT_CARDS} simultaneous cards); \
+                     truncated_count={truncated_count}"
+                );
+                continue;
             };
 
             new_comments_by_id.insert(id, entry);
         }
 
+        self.truncated_comment_count = truncated_count;
         self.comments_by_id = new_comments_by_id;
 
         if self
@@ -594,6 +621,28 @@ impl CommentListView {
                     .with_margin_bottom(12.)
                     .finish(),
             );
+        }
+
+        if self.truncated_comment_count > 0 {
+            let theme = appearance.theme();
+            let count = self.truncated_comment_count;
+            let notice_text = format!(
+                "{count} additional comment{} not shown — this PR has too many comments to \
+                 display all at once.",
+                if count == 1 { " is" } else { "s are" },
+            );
+            let notice = Container::new(
+                Text::new(
+                    notice_text,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(text_sub(theme, neutral_1(theme)))
+                .finish(),
+            )
+            .with_uniform_padding(8.)
+            .finish();
+            comments_column.add_child(notice);
         }
 
         let scrollable_content = NewScrollable::vertical(
