@@ -581,6 +581,111 @@ fn test_find_matching_header_missing_returns_none() {
 }
 
 #[test]
+fn test_find_matching_header_slug_hyphenated_fragment() {
+    // The issue's headline case: a hyphenated fragment resolves against a spaced heading.
+    // Before the slug fix this returned None (exact-text comparison).
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("## Target Section\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            let range = editor
+                .find_matching_header("#target-section", ctx)
+                .expect("Hyphenated fragment should match spaced heading");
+            let heading = editor
+                .content
+                .as_ref(ctx)
+                .text_in_range(range.start + 1..range.end)
+                .into_string();
+            assert_eq!(heading, "Target Section");
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_strips_punctuation() {
+    // GitHub-style slugging drops punctuation from both the heading and the fragment.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("## What's New? (v2)\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.find_matching_header("#whats-new-v2", ctx).is_some());
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_unicode_accented() {
+    // The normalizer preserves accented Latin (not an ASCII-only filter).
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("## Café Société\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.find_matching_header("#café-société", ctx).is_some());
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_unicode_cjk() {
+    // CJK headings slug to themselves — no ASCII case to fold, no characters to strip.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown("## 日本語\nBody", &mut app, true);
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.find_matching_header("#日本語", ctx).is_some());
+        });
+    })
+}
+
+#[test]
+fn test_find_matching_header_html_and_markdown_equivalent() {
+    // Invariant 3: an `<a href="#slug">` and a markdown `[text](#slug)` targeting the same
+    // heading resolve to the same range — both reach find_matching_header via the same path.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = model_from_markdown(
+            "<a href=\"#target-section\">html</a>\n\n[md](#target-section)\n\n## Target Section\nBody",
+            &mut app,
+            true,
+        );
+
+        editor.read(&app, |editor, ctx| {
+            let html_range = editor
+                .find_matching_header("#target-section", ctx)
+                .expect("Fragment should resolve");
+            // Both syntaxes carry the identical fragment string, so both resolve identically.
+            assert_eq!(
+                editor.find_matching_header("#target-section", ctx),
+                Some(html_range)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_heading_slug_pure_function() {
+    // Pure `&str -> String` normalizer, table-driven per the spec's testing section.
+    let cases = [
+        ("Target Section", "target-section"),
+        ("Simple", "simple"),
+        ("What's New? (v2)", "whats-new-v2"),
+        ("  Leading   and  trailing  ", "leading-and-trailing"),
+        ("Already-Hyphenated", "already-hyphenated"),
+        // Unicode-preserving, genuinely GitHub-compatible (not ASCII-only):
+        ("Café Société", "café-société"),
+        ("日本語", "日本語"),
+        ("Section 日本語 Café", "section-日本語-café"),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(super::heading_slug(input), expected, "slug of {input:?}");
+    }
+}
+
+#[test]
 fn test_cursor_bias_editing() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);

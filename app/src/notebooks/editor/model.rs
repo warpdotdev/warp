@@ -149,6 +149,36 @@ fn render_mermaid_clipboard_html(source: &str) -> Option<String> {
     Some(mermaid_image_html(&svg))
 }
 
+/// Normalize heading text (or a `#fragment` link target) into a GitHub-compatible anchor slug.
+///
+/// This mirrors GitHub's `gfm-auto-identifiers` rule set, which is deliberately **not**
+/// ASCII-only: it lowercases (Unicode-aware), drops punctuation and symbols, converts whitespace
+/// runs to single hyphens, and **preserves every other Unicode letter/digit/mark** (accented
+/// Latin, CJK, Cyrillic, …). So `"Café Société"` slugs to `café-société` and `"日本語"` is
+/// unchanged — an ASCII-only `[a-z0-9 -]` filter would silently break every non-English anchor.
+///
+/// Applying the same function to both the heading text and the incoming fragment makes a
+/// hyphenated `#target-section` resolve against a spaced heading "Target Section".
+fn heading_slug(text: &str) -> String {
+    let mut slug = String::with_capacity(text.len());
+    let mut pending_hyphen = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            // Collapse runs of whitespace; only emit the hyphen once a kept character follows.
+            pending_hyphen = !slug.is_empty();
+        } else if ch == '-' || ch.is_alphanumeric() {
+            // Preserve existing hyphens and any Unicode alphanumeric character.
+            if pending_hyphen {
+                slug.push('-');
+                pending_hyphen = false;
+            }
+            slug.extend(ch.to_lowercase());
+        }
+        // Everything else (ASCII punctuation, symbols) is dropped.
+    }
+    slug
+}
+
 impl NotebooksEditorModel {
     fn editable_markdown_mermaid_enabled() -> bool {
         FeatureFlag::MarkdownMermaid.is_enabled()
@@ -1354,7 +1384,7 @@ impl NotebooksEditorModel {
             return None;
         }
         let target = urlencoding::decode(target).ok()?;
-        let target = target.trim().to_lowercase();
+        let target = heading_slug(&target);
         if target.is_empty() {
             return None;
         }
@@ -1371,7 +1401,10 @@ impl NotebooksEditorModel {
             let heading = content
                 .text_in_range(outline.start + 1..outline.end)
                 .into_string();
-            if heading.trim().to_lowercase() == target {
+            // Both the incoming fragment and the heading text run through the same normalizer, so
+            // a hyphenated fragment (`#target-section`) matches a spaced heading ("Target
+            // Section"). First match wins, satisfying the spec's "first wins" collision stance.
+            if heading_slug(&heading) == target {
                 return Some(outline.start..outline.end);
             }
         }
