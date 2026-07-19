@@ -17,6 +17,9 @@ use crate::windowing::winit::app::CustomEvent;
 const COLOR_SCHEME_SETTINGS_NAMESPACE: &str = "org.freedesktop.appearance";
 const COLOR_SCHEME_SETTINGS_KEY: &str = "color-scheme";
 
+const GNOME_INTERFACE_SETTINGS_NAMESPACE: &str = "org.gnome.desktop.interface";
+const CURSOR_SIZE_SETTINGS_KEY: &str = "cursor-size";
+
 /// Values used by the desktop environment to encode the user's
 /// system color scheme preference.
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize, zbus::zvariant::Type, PartialEq)]
@@ -184,4 +187,48 @@ async fn query_system_theme_from_dbus() -> Result<SystemTheme, zbus::Error> {
         .read(COLOR_SCHEME_SETTINGS_NAMESPACE, COLOR_SCHEME_SETTINGS_KEY)
         .await?;
     Ok(SystemColorScheme::from(&owned_val).into())
+}
+
+/// Retrieves the desktop's configured cursor size in logical pixels,
+/// blocking for up to 200ms to get the value via dbus.
+///
+/// The `cursor-size` key is exposed by the settings portal on GNOME; on
+/// other desktop environments this returns an error.
+pub fn get_system_cursor_size() -> Result<u32, zbus::Error> {
+    block_on(async {
+        query_system_cursor_size_from_dbus()
+            .with_timeout(Duration::from_millis(200))
+            .await
+            .unwrap_or_else(|_| {
+                Err(zbus::Error::from(zbus::fdo::Error::TimedOut(
+                    "Failed to get a response within 200ms".to_owned(),
+                )))
+            })
+    })
+}
+
+/// Queries the current D-Bus session bus to get the desktop's cursor size.
+async fn query_system_cursor_size_from_dbus() -> Result<u32, zbus::Error> {
+    let client_conn = zbus::Connection::session().await?;
+    let settings_proxy = DesktopSettingsProxy::new(&client_conn).await?;
+    let owned_val = settings_proxy
+        .read(GNOME_INTERFACE_SETTINGS_NAMESPACE, CURSOR_SIZE_SETTINGS_KEY)
+        .await?;
+    cursor_size_from_value(&owned_val).ok_or_else(|| {
+        zbus::Error::Failure(format!(
+            "cursor-size setting could not be converted to a positive integer: {owned_val:?}"
+        ))
+    })
+}
+
+/// Extracts a positive cursor size from the D-Bus value returned by the
+/// settings portal. The portal wraps values in (possibly nested) variants,
+/// and the underlying GSettings key is a signed integer.
+fn cursor_size_from_value(value: &zvariant::Value) -> Option<u32> {
+    match value {
+        zvariant::Value::I32(size) => u32::try_from(*size).ok().filter(|size| *size > 0),
+        zvariant::Value::U32(size) => Some(*size).filter(|size| *size > 0),
+        zvariant::Value::Value(boxed_value) => cursor_size_from_value(boxed_value),
+        _ => None,
+    }
 }

@@ -185,6 +185,7 @@ impl App {
             if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 super::linux::maybe_register_xlib_error_hook(&event_loop);
                 super::linux::ensure_cursor_theme();
+                super::linux::ensure_cursor_size();
             } else if #[cfg(target_family = "wasm")] {
                 crate::platform::wasm::add_paste_listener(event_loop.create_proxy());
                 if callbacks.on_internet_reachability_changed.is_some() {
