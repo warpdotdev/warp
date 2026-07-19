@@ -119,6 +119,22 @@ fn test_push_rows_with_color() {
 }
 
 #[test]
+fn test_push_rows_dense_single_width_row_does_not_panic() {
+    let num_cols = 12;
+    let rows = "hello world\n".to_rows(num_cols);
+
+    let mut storage = FlatStorage::new(num_cols, None, Some(2));
+    storage.push_rows(&rows);
+
+    let flat_rows = storage
+        .rows_from(0)
+        .map(|row| row.as_ref().clone())
+        .collect_vec();
+
+    assert_rows_equal(&flat_rows, &rows);
+}
+
+#[test]
 fn test_push_rows_with_color_and_multibyte_chars() {
     let mut storage = FlatStorage::new(5, None, Some(2));
 
@@ -277,6 +293,69 @@ fn test_clear_after_truncate_front_then_resize_and_push_does_not_panic() {
 }
 
 #[test]
+fn content_offset_at_point_or_before_clamps_empty_row_columns() {
+    let storage = FlatStorage::from_content_using_rows("abc\n\ndef\n", 5, Some(3));
+
+    assert!(storage.content_offset_at_point(Point::new(1, 4)).is_err());
+    assert_eq!(
+        storage.content_offset_at_point_or_before(Point::new(1, 4)),
+        storage
+            .content_offset_at_point(Point::new(1, 0))
+            .expect("empty row start should map to a content offset")
+    );
+}
+
+#[test]
+fn has_cursor_cell_materializes_empty_cells_before_it() {
+    let mut cursor_cell = Cell::default();
+    cursor_cell.flags.insert(Flags::HAS_CURSOR);
+
+    let row = Row::from_vec(
+        vec![
+            Cell::default(),
+            Cell::default(),
+            Cell::default(),
+            Cell::default(),
+            cursor_cell,
+        ],
+        5,
+    );
+
+    let mut storage = FlatStorage::new(5, None, Some(1));
+    storage.push_rows([&row]);
+
+    assert!(storage.content_offset_at_point(Point::new(0, 4)).is_ok());
+}
+
+#[test]
+fn has_cursor_cell_does_not_extend_contentful_row_blank_tail() {
+    let mut cursor_cell = Cell::default();
+    cursor_cell.flags.insert(Flags::HAS_CURSOR);
+
+    let row = Row::from_vec(
+        vec![
+            Cell::from('d'),
+            Cell::from('e'),
+            Cell::from('f'),
+            Cell::default(),
+            cursor_cell,
+        ],
+        5,
+    );
+
+    let mut storage = FlatStorage::new(5, None, Some(1));
+    storage.push_rows([&row]);
+
+    assert!(storage.content_offset_at_point(Point::new(0, 4)).is_err());
+    assert_eq!(
+        storage.content_offset_at_point_or_before(Point::new(0, 4)),
+        storage
+            .content_offset_at_point(Point::new(0, 2))
+            .expect("last content cell should map to a content offset")
+    );
+}
+
+#[test]
 fn test_wide_char_hyperlink_spacer_survives_roundtrip() {
     use crate::model::ansi::control_sequence_parameters::Hyperlink;
     use crate::model::grid::HyperlinkRegistry;
@@ -351,4 +430,36 @@ fn test_blank_cells_before_hyperlink_are_not_clickable() {
     assert_eq!(flat[1].hyperlink_id(), None);
     assert_eq!(flat[2].c, 'a');
     assert_eq!(flat[2].hyperlink_id(), Some(id));
+}
+
+#[test]
+fn test_hyperlinks_survive_resize() {
+    use crate::model::ansi::control_sequence_parameters::Hyperlink;
+    use crate::model::grid::HyperlinkRegistry;
+
+    let mut registry = HyperlinkRegistry::new();
+    let id = registry
+        .intern(Hyperlink {
+            id: None,
+            uri: "https://example.com".to_string(),
+        })
+        .expect("registry should have capacity for one hyperlink");
+
+    let mut linked = Cell::from('b');
+    linked.set_hyperlink_id(Some(id));
+    let row = Row::from_vec(
+        vec![Cell::from('a'), linked.clone(), linked, Cell::from('c')],
+        4,
+    );
+
+    let mut storage = FlatStorage::new(4, None, Some(2));
+    storage.push_rows([&row]);
+    storage.set_columns(2);
+
+    let rows: Vec<_> = storage.rows_from(0).collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0][0].hyperlink_id(), None);
+    assert_eq!(rows[0][1].hyperlink_id(), Some(id));
+    assert_eq!(rows[1][0].hyperlink_id(), Some(id));
+    assert_eq!(rows[1][1].hyperlink_id(), None);
 }

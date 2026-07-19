@@ -10110,50 +10110,61 @@ impl Input {
                 let mut check_alias_expansion = false;
                 let mut should_open_ai_context_menu = false;
 
-                let cursor_position = self.editor.read(ctx, |editor, editor_ctx| {
-                    editor.start_byte_index_of_last_selection(editor_ctx)
-                });
-
                 let is_alias_expansion_enabled = self.should_expand_aliases(ctx);
                 let session_context = self.completion_session_context(ctx);
-
-                self.editor.read(ctx, |editor, editor_ctx| {
-                    let last_action = editor.get_last_action(editor_ctx);
-                    if Some(PlainTextEditorViewAction::Space) == last_action
-                        && *edit_origin == EditOrigin::UserTyped
-                    {
-                        check_alias_expansion = true;
-                    }
-
-                    // Check if "@" was just typed in a valid context
-                    if FeatureFlag::AIContextMenuEnabled.is_enabled()
-                        && (is_ai_input_enabled || FeatureFlag::AtMenuOutsideOfAIMode.is_enabled())
-                        && Some(PlainTextEditorViewAction::InsertChar) == last_action
-                        && *edit_origin == EditOrigin::UserTyped
-                    {
-                        let buffer_text = editor.buffer_text(ctx);
-                        let should_enable = self.should_enable_ai_context(
-                            &buffer_text,
-                            cursor_position.as_usize(),
-                            is_alias_expansion_enabled,
-                            session_context.as_ref(),
+                let (cursor_position, last_action, shell_family) =
+                    self.editor.read(ctx, |editor, editor_ctx| {
+                        (
+                            editor.start_byte_index_of_last_selection(editor_ctx),
+                            editor.get_last_action(editor_ctx),
                             editor.shell_family().unwrap_or(ShellFamily::Posix),
-                            ctx,
-                        );
-                        if should_enable {
-                            should_open_ai_context_menu = true;
-                        }
-                    }
+                        )
+                    });
 
-                    if SHORT_CIRCUIT_HIGHLIGHTING_ACTIONS.contains(&last_action) {
-                        short_circuit_highlighting = true;
+                let should_check_ai_context = FeatureFlag::AIContextMenuEnabled.is_enabled()
+                    && (is_ai_input_enabled || FeatureFlag::AtMenuOutsideOfAIMode.is_enabled())
+                    && Some(PlainTextEditorViewAction::InsertChar) == last_action
+                    && *edit_origin == EditOrigin::UserTyped;
+                let should_check_attachment_patterns =
+                    AISettings::as_ref(ctx).is_any_ai_enabled(ctx) && edit_origin.is_user();
+                let needs_buffer_text = should_check_ai_context || should_check_attachment_patterns;
+                let buffer_text =
+                    needs_buffer_text.then(|| self.editor.as_ref(ctx).buffer_text(ctx));
+
+                if Some(PlainTextEditorViewAction::Space) == last_action
+                    && *edit_origin == EditOrigin::UserTyped
+                {
+                    check_alias_expansion = true;
+                }
+
+                // Check if "@" was just typed in a valid context
+                if should_check_ai_context {
+                    let Some(buffer_text) = buffer_text.as_deref() else {
+                        unreachable!("buffer text should be available for AI context checks");
+                    };
+                    let should_enable = self.should_enable_ai_context(
+                        buffer_text,
+                        cursor_position.as_usize(),
+                        is_alias_expansion_enabled,
+                        session_context.as_ref(),
+                        shell_family,
+                        ctx,
+                    );
+                    if should_enable {
+                        should_open_ai_context_menu = true;
                     }
-                });
+                }
+
+                if SHORT_CIRCUIT_HIGHLIGHTING_ACTIONS.contains(&last_action) {
+                    short_circuit_highlighting = true;
+                }
 
                 // Force AI mode if buffer contains any attachment patterns (blocks, drive objects, diffs)
-                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) && edit_origin.is_user() {
-                    let buffer_text = self.buffer_text(ctx);
-                    if Self::buffer_contains_attachment_patterns(&buffer_text) {
+                if should_check_attachment_patterns {
+                    let Some(buffer_text) = buffer_text.as_deref() else {
+                        unreachable!("buffer text should be available for attachment checks");
+                    };
+                    if Self::buffer_contains_attachment_patterns(buffer_text) {
                         self.ensure_agent_mode_for_ai_features(
                             false,
                             Some(InputTypeAutoDetectionSource::AttachmentForcedAi),
@@ -10163,15 +10174,12 @@ impl Input {
                 }
 
                 if should_open_ai_context_menu {
-                    let cursor_pos = self.editor.read(ctx, |editor, ctx| {
-                        editor.start_byte_index_of_last_selection(ctx)
-                    });
                     self.suggestions_mode_model.update(ctx, |m, ctx| {
                         m.set_mode(
                             InputSuggestionsMode::AIContextMenu {
                                 filter_text: "".to_string(),
                                 // -1 since cursor is after the @ symbol
-                                at_symbol_position: cursor_pos.as_usize().saturating_sub(1),
+                                at_symbol_position: cursor_position.as_usize().saturating_sub(1),
                             },
                             ctx,
                         );
@@ -11935,18 +11943,19 @@ impl Input {
             return false;
         }
 
-        if buffer_text.chars().nth(cursor_position.saturating_sub(1)) != Some('@') {
+        let Some(before_cursor) = buffer_text.get(..cursor_position) else {
+            return false;
+        };
+        let mut chars = before_cursor.chars().rev();
+
+        if chars.next() != Some('@') {
             return false;
         }
 
         // Check if '@' is at beginning of line or after non-alphanumeric
-        let is_valid_context = if cursor_position == 1 {
-            true // '@' is the first character
-        } else {
-            buffer_text
-                .chars()
-                .nth(cursor_position.saturating_sub(2))
-                .is_some_and(|c| !c.is_alphanumeric())
+        let is_valid_context = match chars.next() {
+            None => true,
+            Some(c) => !c.is_alphanumeric(),
         };
 
         if !is_valid_context {

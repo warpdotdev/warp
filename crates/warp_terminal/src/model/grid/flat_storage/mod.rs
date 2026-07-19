@@ -33,11 +33,15 @@ use content::Content;
 use get_size::GetSize;
 use grapheme::Grapheme;
 use hyperlink::HyperlinkIdMap;
+#[cfg(not(feature = "test-util"))]
 use index::Index;
+#[cfg(feature = "test-util")]
+pub use index::{GraphemeInfo, Index};
 use itertools::Itertools;
 use string_offset::ByteOffset;
 use style::BgAndStyle;
 
+use super::cell::LineLength as _;
 use super::row::Row;
 use super::{cell, CellType};
 use crate::model::grid::HyperlinkId;
@@ -204,6 +208,18 @@ impl FlatStorage {
             let start_offset = ByteOffset::from(self.content().end_offset());
             let mut entry_builder = self.index.start_row();
 
+            if self.try_push_dense_single_width_row(
+                row,
+                start_offset,
+                &mut entry_builder,
+                &mut fg_color,
+                &mut bg_and_style,
+                &mut hyperlink_id,
+            ) {
+                continue;
+            }
+
+            let row_has_content = row.line_length() > 0;
             let mut last_cell: isize = -1;
 
             // Use an empty but pre-allocated buffer to collect characters from
@@ -231,6 +247,9 @@ impl FlatStorage {
                 }
 
                 let mut needs_processing = !cell.is_empty();
+                if row_has_content && Self::is_only_cursor_marker(cell) {
+                    needs_processing = false;
+                }
                 if cell.fg != fg_color {
                     needs_processing = true;
                     fg_color = cell.fg;
@@ -286,6 +305,81 @@ impl FlatStorage {
 
             entry_builder.append_to_index(&mut self.index);
         }
+    }
+
+    fn try_push_dense_single_width_row(
+        &mut self,
+        row: &Row,
+        start_offset: ByteOffset,
+        entry_builder: &mut index::EntryBuilder,
+        fg_color: &mut ansi::Color,
+        bg_and_style: &mut BgAndStyle,
+        hyperlink_id: &mut Option<HyperlinkId>,
+    ) -> bool {
+        if row.occ != row.len() {
+            return false;
+        }
+
+        if row.dirty_cells().iter().any(|cell| {
+            cell.flags().intersects(
+                cell::Flags::WIDE_CHAR
+                    | cell::Flags::WIDE_CHAR_SPACER
+                    | cell::Flags::LEADING_WIDE_CHAR_SPACER
+                    | cell::Flags::HAS_CURSOR,
+            )
+        }) {
+            return false;
+        }
+
+        let mut offset = start_offset;
+        for cell in row.dirty_cells() {
+            if cell.fg != *fg_color {
+                *fg_color = cell.fg;
+                self.fg_color_map.push_attribute_change(offset.., *fg_color);
+            }
+            if *bg_and_style != cell {
+                *bg_and_style = cell.into();
+                self.bg_and_style_map
+                    .push_attribute_change(offset.., *bg_and_style);
+            }
+            if *hyperlink_id != cell.hyperlink_id() {
+                *hyperlink_id = cell.hyperlink_id();
+                self.hyperlink_id_map
+                    .push_attribute_change(offset.., *hyperlink_id);
+            }
+            if let Some(marker) = cell.end_of_prompt_marker() {
+                self.end_of_prompt_marker = Some(EndOfPromptMarker {
+                    offset,
+                    has_extra_trailing_newline: marker.has_extra_trailing_newline,
+                });
+            }
+
+            let grapheme = Grapheme::new_from_cell(cell);
+            entry_builder.process_grapheme_info_unchecked(grapheme.sizing_info());
+            self.content.push_grapheme(&grapheme);
+            offset += grapheme.len().as_usize();
+        }
+
+        let row_soft_wraps = row.occ == self.columns
+            && row[self.columns - 1]
+                .flags()
+                .intersects(cell::Flags::WRAPLINE);
+        if !row_soft_wraps {
+            entry_builder.add_trailing_newline();
+            self.content.push_grapheme(&Grapheme::NEWLINE);
+        }
+
+        entry_builder.flush_to_index(&mut self.index);
+
+        true
+    }
+
+    fn is_only_cursor_marker(cell: &cell::Cell) -> bool {
+        cell.c == cell::DEFAULT_CHAR
+            && cell.fg == DEFAULT_FG_COLOR
+            && cell.bg == ansi::Color::Named(ansi::NamedColor::Background)
+            && *cell.flags() == cell::Flags::HAS_CURSOR
+            && cell.end_of_prompt_marker().is_none()
     }
 
     /// Clears out the contents of flat storage.
@@ -351,6 +445,28 @@ impl FlatStorage {
         point: Point,
     ) -> Result<ByteOffset, index::ContentOffsetToPointError> {
         self.index.content_offset_at_point(point)
+    }
+
+    /// Returns the content offset for a point, clamping points in the blank
+    /// tail of a row to the row's last contentful cell.
+    pub fn content_offset_at_point_or_before(&self, point: Point) -> ByteOffset {
+        match self.content_offset_at_point(point) {
+            Ok(content_offset) => content_offset,
+            Err(index::ContentOffsetToPointError::NonZeroColumnInEmptyRow { row, .. }) => self
+                .content_offset_at_point(Point::new(row, 0))
+                .expect("empty row start should have a content offset"),
+            Err(index::ContentOffsetToPointError::ColumnExceedsContent { row, .. }) => {
+                let fallback_col = self
+                    .rows_from(row)
+                    .next()
+                    .map(|row| row.line_length())
+                    .unwrap_or_default()
+                    .saturating_sub(1);
+                self.content_offset_at_point(Point::new(row, fallback_col))
+                    .expect("fallback point should have a content offset")
+            }
+            Err(err) => panic!("unexpected cursor resize conversion failure: {err}"),
+        }
     }
 
     /// Returns the grid [`Point`] where the content at a given offset is

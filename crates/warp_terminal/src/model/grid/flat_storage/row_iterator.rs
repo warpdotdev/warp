@@ -48,17 +48,15 @@ impl Iterator for RowIterator<'_> {
         let mut fg_color_iter = self.storage.fg_color_map.iter_from(start_offset);
         let mut bg_and_style_iter = self.storage.bg_and_style_map.iter_from(start_offset);
         let mut hyperlink_id_iter = self.storage.hyperlink_id_map.iter_from(start_offset);
+        let mut content_cursor = self.storage.content().cursor_at(start_offset);
 
         let row = Rc::make_mut(&mut self.row);
         row.reset(&self.template);
 
         let mut current_offset = start_offset;
         for grapheme_info in self.storage.index.grapheme_infos_for_row(self.row_index)? {
-            let content = {
-                let start = current_offset;
-                let end = start + grapheme_info.utf8_bytes.get() as usize;
-                &self.storage.content()[start..end]
-            };
+            let grapheme_len = grapheme_info.utf8_bytes.get() as usize;
+            let content = content_cursor.next_slice(grapheme_len);
             let grapheme = Grapheme::new_from_str_and_info(content, grapheme_info);
 
             if grapheme.starts_new_row() {

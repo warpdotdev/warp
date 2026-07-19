@@ -719,6 +719,7 @@ pub struct BlockListElement {
 
     /// Child Elements to use for rich content inserted into the block list
     rich_content_elements: HashMap<EntityId, Box<dyn Element>>,
+    laid_out_rich_content_items: HashSet<EntityId>,
     rich_content_metadata: HashMap<EntityId, RichContentMetadata>,
 
     shared_session_banner_state: SharedSessionBanners,
@@ -734,6 +735,7 @@ pub struct BlockListElement {
     input_size_at_last_frame: Vector2F,
 
     block_footer_elements: HashMap<BlockIndex, Box<dyn Element>>,
+    laid_out_cli_subagent_views: HashSet<BlockId>,
 
     find_model: ModelHandle<TerminalFindModel>,
 
@@ -961,6 +963,7 @@ impl BlockListElement {
             active_filter_editor_block_index: None,
             filtered_blocks: None,
             rich_content_elements: HashMap::new(),
+            laid_out_rich_content_items: HashSet::new(),
             rich_content_metadata: HashMap::new(),
             shared_session_banner_state: shared_session_banners,
             presence_manager: None,
@@ -970,6 +973,7 @@ impl BlockListElement {
             ai_render_context: terminal_view_render_context.ai_render_context,
             input_size_at_last_frame,
             block_footer_elements: HashMap::new(),
+            laid_out_cli_subagent_views: HashSet::new(),
             cursor_hint_text_element,
             cli_subagent_views,
             inline_menu_positioner,
@@ -3158,6 +3162,8 @@ impl Element for BlockListElement {
         let mut block_indices_with_label_elements = vec![];
         let mut visible_block_indices = vec![];
         let mut updated_rich_content_heights = HashMap::new();
+        let mut laid_out_rich_content_items = HashSet::new();
+        let mut laid_out_cli_subagent_views = HashSet::new();
 
         // First, remeasure any rich content items whose heights may be out of date.
         // We track these in the BlockList via a dirty set keyed by view ID to
@@ -3176,6 +3182,7 @@ impl Element for BlockListElement {
                     let height_px = current_size.y();
 
                     updated_rich_content_heights.insert(*view_id, height_px as f64);
+                    laid_out_rich_content_items.insert(*view_id);
                 }
             }
         }
@@ -3266,6 +3273,7 @@ impl Element for BlockListElement {
                     app,
                 );
                 let height_px = current_size.y() as f64;
+                laid_out_rich_content_items.insert(view_id);
 
                 // If the new laid out height is different from the value currently in the
                 // BlockList, then we flag the block for updating once we're done laying out.
@@ -3363,6 +3371,7 @@ impl Element for BlockListElement {
                                     ctx,
                                     app,
                                 );
+                                laid_out_cli_subagent_views.insert(block.id().clone());
                             }
                         }
 
@@ -3481,12 +3490,16 @@ impl Element for BlockListElement {
                     let height_px = if let Some(h) = updated_rich_content_heights.get(&view_id) {
                         *h
                     } else {
-                        if let Some(rich_content) = self.rich_content_elements.get_mut(&view_id) {
-                            let _ = rich_content.layout(
-                                SizeConstraint::tight_on_cross_axis(Axis::Vertical, constraint),
-                                ctx,
-                                app,
-                            );
+                        if !laid_out_rich_content_items.contains(&view_id) {
+                            if let Some(rich_content) = self.rich_content_elements.get_mut(&view_id)
+                            {
+                                let _ = rich_content.layout(
+                                    SizeConstraint::tight_on_cross_axis(Axis::Vertical, constraint),
+                                    ctx,
+                                    app,
+                                );
+                                laid_out_rich_content_items.insert(view_id);
+                            }
                         }
                         height.as_f64() * cell_size.y() as f64
                     };
@@ -3651,6 +3664,8 @@ impl Element for BlockListElement {
             ),
         };
         self.size = Some(size);
+        self.laid_out_rich_content_items = laid_out_rich_content_items;
+        self.laid_out_cli_subagent_views = laid_out_cli_subagent_views;
         size
     }
 
@@ -3658,20 +3673,16 @@ impl Element for BlockListElement {
     fn after_layout(&mut self, ctx: &mut AfterLayoutContext, app: &AppContext) {
         // Rich Content is arbitrary, so we want to make sure to call after_layout on each of
         // those elements that were actually laid out
-        for rich_content in self
-            .rich_content_elements
-            .values_mut()
-            .filter(|e| e.size().is_some())
-        {
-            rich_content.after_layout(ctx, app);
+        for view_id in &self.laid_out_rich_content_items {
+            if let Some(rich_content) = self.rich_content_elements.get_mut(view_id) {
+                rich_content.after_layout(ctx, app);
+            }
         }
 
-        for cli_subagent_view in self
-            .cli_subagent_views
-            .values_mut()
-            .filter(|e| e.size().is_some())
-        {
-            cli_subagent_view.after_layout(ctx, app);
+        for block_id in &self.laid_out_cli_subagent_views {
+            if let Some(cli_subagent_view) = self.cli_subagent_views.get_mut(block_id) {
+                cli_subagent_view.after_layout(ctx, app);
+            }
         }
 
         let model = self.model.lock();

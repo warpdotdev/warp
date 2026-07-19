@@ -513,6 +513,9 @@ impl GlobalSearch {
         if byte_start > line_text.len() || !line_text.is_char_boundary(byte_start) {
             return None;
         }
+        if line_text.is_ascii() {
+            return Some(byte_start + 1);
+        }
         Some(line_text[..byte_start].chars().count() + 1)
     }
 
