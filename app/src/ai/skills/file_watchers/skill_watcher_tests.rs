@@ -18,7 +18,8 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::super::subscribers::SkillRepositoryMessage;
-use super::{parse_project_skill_contents, SkillWatcher};
+use super::{parse_project_skill_contents, read_local_project_skill_contents, SkillWatcher};
+use crate::ai::remote_context_files::REMOTE_CONTEXT_MAX_BATCH_BYTES;
 use crate::ai::skills::skill_manager::SkillWatcherEvent;
 
 /// Helper function for creating a single skill file
@@ -118,6 +119,50 @@ fn parse_project_skill_contents_classifies_foreign_encoded_provider_path() {
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].path, path);
     assert_eq!(skills[0].provider, SkillProvider::Codex);
+}
+
+#[test]
+fn read_local_project_skill_contents_skips_oversized_files() {
+    let temp_dir = TempDir::new().unwrap();
+    let small_path = temp_dir.path().join("small.md");
+    fs::write(&small_path, "small skill").unwrap();
+    // 2 MiB, over the 1 MiB per-file cap.
+    let big_path = temp_dir.path().join("big.md");
+    fs::write(&big_path, vec![b'a'; 2 * 1024 * 1024]).unwrap();
+
+    let contents = read_local_project_skill_contents(vec![
+        LocalOrRemotePath::Local(small_path.clone()),
+        LocalOrRemotePath::Local(big_path),
+    ]);
+
+    assert_eq!(contents.len(), 1);
+    assert_eq!(contents[0].0, LocalOrRemotePath::Local(small_path));
+    assert_eq!(contents[0].1, "small skill");
+}
+
+#[test]
+fn read_local_project_skill_contents_enforces_batch_limit() {
+    let temp_dir = TempDir::new().unwrap();
+    // Each file is ~900 KiB (< 1 MiB per-file cap); 8 files = ~7 MiB total, which
+    // exceeds the 5 MiB batch cap, so not all of them should be read.
+    let chunk = vec![b'a'; 900 * 1024];
+    let paths: Vec<LocalOrRemotePath> = (0..8)
+        .map(|i| {
+            let path = temp_dir.path().join(format!("skill_{i}.md"));
+            fs::write(&path, &chunk).unwrap();
+            LocalOrRemotePath::Local(path)
+        })
+        .collect();
+
+    let contents = read_local_project_skill_contents(paths);
+
+    let total: u64 = contents.iter().map(|(_, c)| c.len() as u64).sum();
+    assert!(
+        contents.len() < 8,
+        "expected batch cap to truncate reads, got {} files",
+        contents.len()
+    );
+    assert!(total <= u64::from(REMOTE_CONTEXT_MAX_BATCH_BYTES));
 }
 
 // ============================================================================
