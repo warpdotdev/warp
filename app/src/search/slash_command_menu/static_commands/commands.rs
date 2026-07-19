@@ -37,12 +37,21 @@ pub const ADD_MCP: StaticCommand = StaticCommand {
     argument: None,
 };
 
-pub const PR_COMMENTS: StaticCommand = StaticCommand {
-    name: "/pr-comments",
-    description: "Pull GitHub PR review comments",
-    icon_path: "bundled/svg/github.svg",
-    availability: Availability::REPOSITORY.union(Availability::AI_ENABLED),
-    auto_enter_ai_mode: true,
+pub const MCP: StaticCommand = StaticCommand {
+    name: "/mcp",
+    description: "View and manage MCP servers",
+    icon_path: "bundled/svg/dataflow.svg",
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const EXIT: StaticCommand = StaticCommand {
+    name: "/exit",
+    description: "Exit Warp",
+    icon_path: "bundled/svg/log-out-01.svg",
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
     argument: None,
 };
 
@@ -649,6 +658,10 @@ fn all_commands() -> Vec<StaticCommand> {
     if FeatureFlag::LocalDockerSandbox.is_enabled() {
         commands.push(CREATE_DOCKER_SANDBOX);
     }
+    if settings::settings_mode() == settings::SettingsMode::Tui {
+        commands.push(MCP);
+        commands.push(EXIT);
+    }
 
     if FeatureFlag::CreatingSharedSessions.is_enabled()
         && FeatureFlag::HOARemoteControl.is_enabled()
@@ -702,12 +715,6 @@ fn all_commands() -> Vec<StaticCommand> {
     if FeatureFlag::ListSkills.is_enabled() && !cfg!(target_family = "wasm") {
         commands.push(EDIT_SKILL.clone());
         commands.push(INVOKE_SKILL.clone());
-    }
-
-    if FeatureFlag::PRCommentsSlashCommand.is_enabled()
-        && !FeatureFlag::PRCommentsSkill.is_enabled()
-    {
-        commands.push(PR_COMMENTS);
     }
 
     if FeatureFlag::CloudMode.is_enabled() && FeatureFlag::CloudModeFromLocalSession.is_enabled() {

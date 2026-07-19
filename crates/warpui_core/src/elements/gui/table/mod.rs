@@ -1212,6 +1212,7 @@ impl Element for Table {
         // Start clipping layer for body content
         ctx.scene
             .start_layer(ClipBounds::BoundedByActiveLayerAnd(body_clip_rect));
+        ctx.scene.set_active_layer_click_through();
 
         // In scrolling mode, paint header INSIDE the clip so it gets clipped at table bounds
         if !uses_fixed_header && header_visible {

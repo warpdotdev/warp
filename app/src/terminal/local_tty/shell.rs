@@ -2,11 +2,13 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::{io, process};
 
+use anyhow::Context as _;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use typed_path::UnixPathBuf;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::session_id::SessionId;
+use warp_errors::report_error;
 use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
 
 use crate::terminal::available_shells::AvailableShell;
@@ -186,14 +188,15 @@ impl ShellStarter {
     fn compute_fallback_shell() -> Option<ShellStarterSource> {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
-                let pw_shell_path = nix::unistd::User::from_uid(nix::unistd::getuid())
-                    .expect("should not fail to read user information")
-                    .expect("current user should exist")
-                    .shell
-                    .display()
-                    .to_string();
+                let pw_shell_path = super::unix::resolve_current_user().map(|user| user.shell);
+                if pw_shell_path.is_none() {
+                    report_error!(
+                        "could not resolve the current user (getpwuid, getent, and /etc/passwd all failed)",
+                        extra: { "uid" => %nix::unistd::getuid().as_raw() }
+                    );
+                }
                 if let Some((resolved_pw_shell_path, shell_type)) =
-                    supported_shell_path_and_type(&pw_shell_path)
+                    pw_shell_path.as_deref().and_then(supported_shell_path_and_type)
                 {
                     let session_id = generate_session_id();
                     let args = arguments_for_session_spawning_command(
@@ -208,7 +211,7 @@ impl ShellStarter {
                         session_id,
                     }));
                 }
-                let unsupported_shell = Some(pw_shell_path);
+                let unsupported_shell = pw_shell_path;
 
                 let (resolved_default_shell_path, shell_type) = if let Some(shell_path_and_type) =
                     supported_shell_path_and_type(ZSH_SHELL_PATH)
@@ -585,7 +588,8 @@ impl WslShellStarter {
             &home_dir.to_typed_path(),
             &self.distribution,
         )
-        .inspect_err(|err| log::error!("error conversion WSL home dir for host: {err:#}"))
+        .context("error conversion WSL home dir for host")
+        .inspect_err(|err| report_error!(err))
         .ok()
     }
 }
@@ -774,44 +778,45 @@ pub fn ssh_socket_dir() -> String {
 /// Take the output of a wsl.exe subcommand and try to decode it while reporting errors.
 /// NOTE: The empty string Some("") may be returned.
 fn decode_wsl_path_result(result: io::Result<process::Output>) -> Option<UnixPathBuf> {
-    match result {
+    let output = match result.context("error finding wsl.exe") {
+        Ok(output) => output,
         Err(err) => {
-            log::error!("error finding wsl.exe: {err:#}");
-            None
+            report_error!(err);
+            return None;
         }
-        Ok(output) => {
-            if !output.status.success() {
-                // Errors with wsl.exe usage itself outputs error messages in UTF-16.
-                cfg_if::cfg_if! {
-                    // WSL is Windows only, but most of the WSL code isn't cfg-guarded. This
-                    // snipped does need to be guarded.
-                    if #[cfg(windows)] {
-                        use std::os::windows::ffi::OsStringExt as _;
-                        let wsl_err_msg = OsString::from_wide(bytemuck::cast_slice(&output.stdout));
-                    } else {
-                        let wsl_err_msg = "";
-                    }
-                }
-                // If wsl.exe was correctly invoked but the Linux command had an error, that will
-                // be UTF-8.
-                if wsl_err_msg.is_empty() {
-                    if let Ok(inner_err_msg) = String::from_utf8(output.stderr) {
-                        log::error!("Error from WSL command: {inner_err_msg}");
-                    }
-                } else {
-                    log::error!("Error invoking wsl.exe: {wsl_err_msg:?}");
-                }
-                return None;
+    };
+    if !output.status.success() {
+        // Errors with wsl.exe usage itself outputs error messages in UTF-16.
+        cfg_if::cfg_if! {
+            // WSL is Windows only, but most of the WSL code isn't cfg-guarded. This
+            // snipped does need to be guarded.
+            if #[cfg(windows)] {
+                use std::os::windows::ffi::OsStringExt as _;
+                let wsl_err_msg = OsString::from_wide(bytemuck::cast_slice(&output.stdout));
+            } else {
+                let wsl_err_msg = "";
             }
-
-            Some(UnixPathBuf::from(
-                take_until_utf16_crlf(output.stdout)
-                    .into_iter()
-                    .take_while(|b| *b != b'\n')
-                    .collect_vec(),
-            ))
         }
+        // If wsl.exe was correctly invoked but the Linux command had an error, that will
+        // be UTF-8.
+        if wsl_err_msg.is_empty() {
+            if let Ok(inner_err_msg) = String::from_utf8(output.stderr) {
+                log::error!("Error from WSL command: {inner_err_msg}");
+                report_error!("Error from WSL command");
+            }
+        } else {
+            log::error!("Error invoking wsl.exe: {wsl_err_msg:?}");
+            report_error!("Error invoking wsl.exe");
+        }
+        return None;
     }
+
+    Some(UnixPathBuf::from(
+        take_until_utf16_crlf(output.stdout)
+            .into_iter()
+            .take_while(|b| *b != b'\n')
+            .collect_vec(),
+    ))
 }
 
 /// Takes bytes until [13, 0, 10, 0] is found in the byte sequence, dropping the rest.

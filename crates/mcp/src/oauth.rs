@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
+use warp_errors::report_error;
 use warpui_extras::secure_storage::AppContextExt as _;
+mod loopback;
 
 pub const TEMPLATABLE_MCP_CREDENTIALS_KEY: &str = "TemplatableMcpCredentials";
 pub const FILE_BASED_MCP_CREDENTIALS_KEY: &str = "FileBasedMcpCredentials";
@@ -53,6 +55,60 @@ pub type RequiresAuthenticationCallback =
     Box<dyn Fn(Uuid, String, String) -> BoxFuture<'static, anyhow::Result<()>> + Send>;
 pub type AuthenticatedCallback =
     Box<dyn Fn(String) -> BoxFuture<'static, anyhow::Result<()>> + Send>;
+
+pub enum OAuthCallbackMode {
+    CustomScheme {
+        redirect_uri: String,
+        result_rx: async_channel::Receiver<CallbackResult>,
+    },
+    Loopback,
+}
+
+enum OAuthCallbackReceiver {
+    CustomScheme(async_channel::Receiver<CallbackResult>),
+    Loopback(loopback::LoopbackOAuthReceiver),
+}
+
+struct PreparedOAuthCallback {
+    redirect_uri: String,
+    receiver: OAuthCallbackReceiver,
+    uses_loopback: bool,
+}
+
+impl OAuthCallbackMode {
+    async fn prepare(self) -> Result<PreparedOAuthCallback, AuthError> {
+        match self {
+            Self::CustomScheme {
+                redirect_uri,
+                result_rx,
+            } => Ok(PreparedOAuthCallback {
+                redirect_uri,
+                receiver: OAuthCallbackReceiver::CustomScheme(result_rx),
+                uses_loopback: false,
+            }),
+            Self::Loopback => {
+                let receiver = loopback::LoopbackOAuthReceiver::bind().await?;
+                Ok(PreparedOAuthCallback {
+                    redirect_uri: receiver.redirect_uri().to_string(),
+                    receiver: OAuthCallbackReceiver::Loopback(receiver),
+                    uses_loopback: true,
+                })
+            }
+        }
+    }
+}
+
+impl OAuthCallbackReceiver {
+    async fn receive(self, expected_state: &str) -> Result<CallbackResult, AuthError> {
+        match self {
+            Self::CustomScheme(receiver) => receiver
+                .recv()
+                .await
+                .map_err(|err| AuthError::InternalError(err.to_string())),
+            Self::Loopback(receiver) => receiver.receive(expected_state).await,
+        }
+    }
+}
 
 /// A credential store that wraps [`InMemoryCredentialStore`] and persists token
 /// updates to Warp's secure storage via a channel.
@@ -177,7 +233,7 @@ async fn install_persisting_credential_store(
 
 /// Context for OAuth authentication flows.
 pub struct AuthContext {
-    pub oauth_result_rx: async_channel::Receiver<CallbackResult>,
+    pub callback_mode: OAuthCallbackMode,
     pub uuid: Uuid,
     pub persisted_credentials: Option<PersistedCredentials>,
     /// Whether the client is running in headless/CLI mode.
@@ -205,10 +261,11 @@ pub enum CallbackResult {
 /// re-authenticate (e.g. re-log in).
 pub async fn make_authenticated_client(
     resource_url: &str,
+    http_client: reqwest::Client,
     auth_context: AuthContext,
 ) -> Result<(AuthClient<reqwest::Client>, bool), AuthError> {
     let AuthContext {
-        oauth_result_rx,
+        callback_mode,
         uuid,
         persisted_credentials,
         is_headless,
@@ -218,11 +275,11 @@ pub async fn make_authenticated_client(
         ..
     } = auth_context;
 
-    // Build the redirect URI using the channel's URL scheme.
-    // Routing data (the server UUID) is passed via the OAuth `state` parameter instead
-    // of the redirect URI so that the URI exactly matches what is registered during
-    // Dynamic Client Registration, satisfying RFC 6749 §3.1.2.2 exact-match validation.
-    let redirect_uri = format!("{}://mcp/oauth2callback", ChannelState::url_scheme());
+    let PreparedOAuthCallback {
+        redirect_uri,
+        receiver: callback_receiver,
+        uses_loopback,
+    } = callback_mode.prepare().await?;
 
     // Create the auth manager and initialize it with a backing credential store that persists
     // new credentials to secure storage.
@@ -252,7 +309,7 @@ pub async fn make_authenticated_client(
                     .with_client_secret(client_secret),
             )?;
         }
-        return Ok((AuthClient::new(reqwest::Client::new(), auth_manager), false));
+        return Ok((AuthClient::new(http_client, auth_manager), false));
     }
 
     // If we're in headless mode and we reach here, it means we either have no credentials
@@ -280,6 +337,19 @@ pub async fn make_authenticated_client(
         .as_deref()
         .and_then(ChannelState::mcp_oauth_provider_by_issuer)
     {
+        let (client_id, client_secret) = if uses_loopback {
+            let loopback_client = provider.loopback_client.ok_or_else(|| {
+                AuthError::AuthorizationFailed(
+                    "This OAuth provider uses a pre-registered client that is not configured for \
+                     loopback callbacks. A separate loopback-capable client registration is \
+                     required."
+                        .to_string(),
+                )
+            })?;
+            (loopback_client.client_id, loopback_client.client_secret)
+        } else {
+            (provider.client_id, Some(provider.client_secret))
+        };
         // Configure the auth manager based on the static MCP configuration for this
         // issuer.
         auth_manager.set_metadata(metadata);
@@ -292,11 +362,12 @@ pub async fn make_authenticated_client(
         } else {
             vec![]
         };
-        auth_manager.configure_client(
-            OAuthClientConfig::new(provider.client_id, redirect_uri.clone())
-                .with_client_secret(provider.client_secret)
-                .with_scopes(scopes),
-        )?;
+        let mut client_config =
+            OAuthClientConfig::new(client_id, redirect_uri.clone()).with_scopes(scopes);
+        if let Some(client_secret) = client_secret {
+            client_config = client_config.with_client_secret(client_secret);
+        }
+        auth_manager.configure_client(client_config)?;
 
         // We do a scope "upgrade" with no additional scopes here as it's the easiest way
         // to construct an auth URL.
@@ -330,15 +401,12 @@ pub async fn make_authenticated_client(
         })
         .unwrap_or_default();
 
-    if let Err(err) = requires_authentication(uuid, csrf_state, auth_url).await {
+    if let Err(err) = requires_authentication(uuid, csrf_state.clone(), auth_url).await {
         log::warn!("Failed to emit RequiresAuthentication state: {err:?}");
     }
 
     // Wait for the authorization code from the OAuth callback channel.
-    let oauth_result = oauth_result_rx
-        .recv()
-        .await
-        .map_err(|e| AuthError::InternalError(e.to_string()))?;
+    let oauth_result = callback_receiver.receive(&csrf_state).await?;
 
     let (code, csrf_token) = match &oauth_result {
         CallbackResult::Success { code, csrf_token } => (code, csrf_token),
@@ -356,7 +424,7 @@ pub async fn make_authenticated_client(
         AuthError::InternalError("Failed to create authorization manager".to_string())
     })?;
 
-    Ok((AuthClient::new(reqwest::Client::new(), auth_manager), true))
+    Ok((AuthClient::new(http_client, auth_manager), true))
 }
 
 /// Loads credentials from secure storage at the provided key.
@@ -384,15 +452,14 @@ pub fn write_to_secure_storage<T: Serialize>(
 ) {
     match serde_json::to_string(credentials) {
         Ok(json) => {
-            app.secure_storage()
-                .write_value(key, &json)
-                .inspect_err(|err| {
-                    log::error!("Failed to write MCP credentials to secure storage: {err:#}")
-                })
-                .ok();
+            if let Err(err) = app.secure_storage().write_value(key, &json) {
+                report_error!(anyhow::Error::new(err)
+                    .context("Failed to write MCP credentials to secure storage"));
+            }
         }
         Err(err) => {
-            log::error!("Failed to serialize MCP credentials for secure storage: {err:#}");
+            report_error!(anyhow::Error::new(err)
+                .context("Failed to serialize MCP credentials for secure storage"));
         }
     }
 }

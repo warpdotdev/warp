@@ -299,6 +299,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_code_review_scroll_preserved_deleted_range);
     register_test!(test_code_review_scroll_preserved_header_range);
     register_test!(test_code_review_scroll_preserved_footer_range);
+    register_test!(test_code_review_double_click_fully_expands_hidden_section);
     register_test!(test_alt_screen_context_menu_with_sgr_with_mouse_reporting);
     register_test!(test_alt_screen_context_menu_with_sgr_without_mouse_reporting);
     register_test!(test_alt_screen_context_menu_without_sgr_with_mouse_reporting);
@@ -347,6 +348,13 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_alt_screen_secret_detection);
     register_test!(test_secret_case_sensitivity);
     register_test!(test_secrets_are_always_redacted_in_ai_inputs);
+
+    // OSC 8 hyperlink tests (GH6393)
+    register_test!(test_osc8_open_close_renders_visible_text);
+    register_test!(test_osc8_copy_block_yields_visible_text_only);
+    register_test!(test_osc8_open_link_action_opens_url);
+    register_test!(test_osc8_file_scheme_opens_url);
+    register_test!(test_osc8_no_regression_on_url_autodetect);
 
     register_test!(test_context_chips_prompt_at_bootstrap);
 
@@ -449,6 +457,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_file_tree_keyboard_navigation);
     register_test!(test_file_tree_non_openable_files);
     register_test!(test_file_tree_nested_file_opening);
+
+    // Copy current path command-palette action
+    register_test!(test_copy_current_path_copies_terminal_pwd);
 
     // Go to Line tests
     register_test!(test_goto_line_dialog_open_close);

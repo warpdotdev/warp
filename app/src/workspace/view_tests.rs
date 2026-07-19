@@ -89,24 +89,6 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     experiments, workspace, AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions,
 };
-#[test]
-fn query_for_rewind_prefill_uses_custom_display_query_inputs() {
-    let context: std::sync::Arc<[crate::ai::agent::AIAgentContext]> = Vec::new().into();
-    let input = crate::ai::agent::AIAgentInput::FetchReviewComments {
-        repo_path: "/repo".to_string(),
-        context,
-    };
-
-    assert_eq!(
-        query_for_rewind_prefill(&[input]),
-        Some(
-            crate::search::slash_command_menu::static_commands::commands::PR_COMMENTS
-                .name
-                .to_string()
-        )
-    );
-}
-
 pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 
@@ -208,10 +190,11 @@ pub(crate) fn initialize_app(app: &mut App) {
         warp_server_client::iap::IapManager::new(
             None,
             Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+            None,
             ctx,
         )
     });
-    app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
+    app.add_singleton_model(|_| RestoredAgentConversations::new_seeded(vec![]));
     app.add_singleton_model(|ctx| {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
     });
@@ -432,6 +415,93 @@ fn test_tools_panel_does_not_suppress_vertical_tab_bar_traffic_light_padding() {
         assert_vertical_tabs_tools_panel_preserves_padding(config);
     }
 }
+/// Regression test for the handoff model carry-over: the copy must preserve
+/// the source pane's explicit selection M even when M equals the destination
+/// pane's current profile default — the case where re-normalizing the resolved
+/// id against the destination's default (instead of copying the raw override)
+/// would drop the override and let the source profile's default D win.
+#[test]
+fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default() {
+    use warpui::EntityId;
+
+    use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, ModelsByFeature};
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let m = LLMId::from("auto-genius");
+        let d = LLMId::from("auto");
+
+        let source_id = EntityId::new();
+        let new_id = EntityId::new();
+
+        app.update(|ctx| {
+            // Catalog containing both slugs so profile/override ids resolve.
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                let models = ModelsByFeature {
+                    agent_mode: AvailableLLMs::new(
+                        "auto".into(),
+                        vec![
+                            LLMInfo::new_for_test("auto"),
+                            LLMInfo::new_for_test("auto-genius"),
+                        ],
+                        None,
+                    )
+                    .expect("valid available llms"),
+                    ..Default::default()
+                };
+                prefs.update_feature_model_choices(Ok(models), ctx);
+            });
+
+            // Default profile default = M (the destination pane's current profile).
+            // Source uses a second profile whose default = D.
+            let profiles = AIExecutionProfilesModel::handle(ctx);
+            let default_profile_id = profiles.read(ctx, |p, _| p.default_profile_id());
+            profiles.update(ctx, |p, ctx| {
+                p.set_base_model(default_profile_id, Some(m.clone()), ctx);
+                let source_profile_id = p.create_profile(ctx).expect("create source profile");
+                p.set_base_model(source_profile_id, Some(d.clone()), ctx);
+                p.set_active_profile(source_id, source_profile_id, ctx);
+            });
+
+            // Source's explicit selection = M (differs from its profile default D).
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                prefs.update_preferred_agent_mode_llm(&m, source_id, ctx);
+            });
+        });
+
+        // Preconditions: source resolves to M; destination's current default is M.
+        app.update(|ctx| {
+            let prefs = LLMPreferences::as_ref(ctx);
+            assert_eq!(
+                prefs.get_active_base_model(ctx, Some(source_id)).id,
+                m,
+                "source pane should resolve to its explicit selection"
+            );
+            assert_eq!(
+                prefs.get_active_base_model(ctx, Some(new_id)).id,
+                m,
+                "destination pane's current profile default should be M"
+            );
+        });
+
+        // Carry source -> new via the production helper.
+        app.update(|ctx| {
+            Workspace::copy_model_and_profile_to_terminal_view(source_id, new_id, ctx);
+        });
+
+        app.update(|ctx| {
+            assert_eq!(
+                LLMPreferences::as_ref(ctx)
+                    .get_active_base_model(ctx, Some(new_id))
+                    .id,
+                m,
+                "destination pane must retain the source's explicit selection, not the source profile default"
+            );
+        });
+    });
+}
+
 #[cfg(feature = "local_fs")]
 fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
     workspace.update(app, |workspace, ctx| {
@@ -3008,6 +3078,47 @@ fn test_pointer_opened_tab_configs_menu_does_not_select_top_item() {
 }
 
 #[test]
+fn test_new_session_menu_is_capped_to_window_height() {
+    let _tab_configs_guard = FeatureFlag::TabConfigs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let window_height = ctx
+                .windows()
+                .platform_window(ctx.window_id())
+                .expect("expected workspace window")
+                .size()
+                .y();
+
+            workspace.open_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+
+            let expected_height =
+                (window_height - NEW_SESSION_MENU_WINDOW_MARGIN - NEW_SESSION_MENU_CHROME_HEIGHT)
+                    .max(NEW_SESSION_MENU_MIN_HEIGHT);
+            let menu_height = workspace.new_session_menu_max_height(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+
+            assert!((menu_height - expected_height).abs() < f32::EPSILON);
+
+            workspace.open_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+            assert!(workspace.show_new_session_dropdown_menu.is_some());
+        });
+    });
+}
+
+#[test]
 fn test_open_tab_config_with_params_does_not_use_worktree_branch_as_implicit_title() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -4252,6 +4363,95 @@ fn test_pin_tab_on_grouped_tab_extracts_then_pins() {
             assert_eq!(workspace.tabs[2].pane_group.id(), id2);
             assert!(workspace.tabs[2].group_id.is_none());
             assert!(!workspace.tabs[2].pinned);
+        });
+    });
+}
+
+/// Regression for the tools-panel tab visibility toggles surfaced in the
+/// Appearance settings page: toggling a tab's backing setting must add/remove
+/// that tab from the tools panel live, and re-enabling Warp Drive must make it
+/// selectable again (the original report was that Warp Drive could vanish from
+/// the tools panel with no way back).
+#[test]
+fn test_tools_panel_warp_drive_toggle_updates_available_views() {
+    // Force the non-anonymous path so `is_warp_drive_enabled` follows the
+    // `enable_warp_drive` setting rather than the auth state.
+    let _skip_anon_guard = FeatureFlag::SkipFirebaseAnonymousUser.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        // Warp Drive is enabled by default, so it is an available tools-panel
+        // tab and can be made the active view.
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Warp Drive should be an available tools-panel tab by default"
+            );
+            workspace.left_panel_view.update(ctx, |lp, ctx| {
+                lp.handle_action_with_force_open(&LeftPanelAction::WarpDrive, false, ctx);
+            });
+            assert_eq!(
+                workspace.left_panel_view.as_ref(ctx).active_view(),
+                ToolPanelView::WarpDrive,
+                "Warp Drive should be selectable as the active view"
+            );
+        });
+
+        // Turning the toggle off (via its backing setting) removes Warp Drive
+        // from the tools panel; if other tabs remain the active view falls back
+        // to one of them.
+        app.update(|ctx| {
+            WarpDriveSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .enable_warp_drive
+                    .set_value(false, ctx)
+                    .expect("disable warp drive");
+            });
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                !workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Disabling the setting should remove Warp Drive from the tools panel"
+            );
+            if !workspace.left_panel_views.is_empty() {
+                assert_ne!(
+                    workspace.left_panel_view.as_ref(ctx).active_view(),
+                    ToolPanelView::WarpDrive,
+                    "Active view should fall back to a remaining tab when Warp Drive is removed"
+                );
+            }
+        });
+
+        // Re-enabling restores Warp Drive as a selectable tab.
+        app.update(|ctx| {
+            WarpDriveSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .enable_warp_drive
+                    .set_value(true, ctx)
+                    .expect("re-enable warp drive");
+            });
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Re-enabling the setting should restore Warp Drive to the tools panel"
+            );
+            workspace.left_panel_view.update(ctx, |lp, ctx| {
+                lp.handle_action_with_force_open(&LeftPanelAction::WarpDrive, false, ctx);
+            });
+            assert_eq!(
+                workspace.left_panel_view.as_ref(ctx).active_view(),
+                ToolPanelView::WarpDrive,
+                "Warp Drive should be selectable again after re-enabling"
+            );
         });
     });
 }

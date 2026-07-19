@@ -12,6 +12,7 @@ use std::sync::Arc;
 use ai::agent::action::{
     RequestComputerUseRequest, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
+use ai::agent::document_action_presentation::DocumentActionPresentation;
 use ai::agent::file_locations::group_file_contexts_for_display;
 use ai::skills::{ParsedSkill, SkillReference};
 use indexmap::IndexMap;
@@ -22,6 +23,7 @@ use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
 use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
@@ -53,16 +55,16 @@ use super::{
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
+use crate::ai::agent::conversation::{RecordingSpanInfo, RecordingSpanStatus};
 use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome,
-    CreateDocumentsResult, EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult,
-    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult, SubagentCall,
-    SubagentType, SuggestNewConversationResult, SummarizationType, TodoOperation,
-    UploadArtifactResult,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome, MessageId,
+    ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult, SearchCodebaseFailureReason,
+    SearchCodebaseResult, StartRecordingResult, StopRecordingResult, SubagentCall, SubagentType,
+    SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -136,6 +138,10 @@ pub(crate) struct Props<'a> {
     pub(super) state_handles: &'a AIBlockStateHandles,
     pub(super) action_buttons: &'a HashMap<AIAgentActionId, ActionButtons>,
     pub(super) view_screenshot_buttons: &'a HashMap<AIAgentActionId, ui_components::button::Button>,
+    pub(super) open_recording_buttons: &'a HashMap<AIAgentActionId, ui_components::button::Button>,
+    /// Whether this block's output contains recording-related actions, so
+    /// rendering can skip deriving recording spans for unrelated blocks.
+    pub(super) has_recording_related_actions: bool,
     pub(crate) action_model: &'a ModelHandle<BlocklistAIActionModel>,
     pub(crate) active_session: &'a ModelHandle<ActiveSession>,
     pub(super) editor_views: &'a [EmbeddedCodeEditorView],
@@ -200,6 +206,17 @@ pub(crate) struct Props<'a> {
     pub(super) is_cloud_agent_pre_first_exchange: bool,
 }
 
+/// A `UseComputer` call whose actions are all no-ops (typically a single
+/// zero-duration wait alongside screenshot params) is a screenshot-only
+/// capture rather than a user-visible interaction, so it shouldn't be labeled
+/// as captured in a recording.
+fn should_decorate_recorded_use_computer(request: &UseComputerRequest) -> bool {
+    request
+        .actions
+        .iter()
+        .any(|action| !action.action.is_no_op())
+}
+
 pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
     let mut output_items = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
     let appearance = Appearance::as_ref(app);
@@ -237,6 +254,22 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
         | AIBlockOutputStatus::Failed { .. } => {
             if let Some(output) = status.output_to_render() {
                 let output = output.get();
+                // TODO(vkodithala): Blocks with recording-related actions still
+                // recompute this conversation-wide map on every render. Cache
+                // spans on BlocklistAIActionModel keyed by conversation and
+                // refresh on action/result mutations instead.
+                let recording_spans_by_action_id = if props.has_recording_related_actions {
+                    props
+                        .model
+                        .conversation(app)
+                        .map(|conversation| {
+                            conversation
+                                .recording_spans_by_action_id(Some(props.action_model.as_ref(app)))
+                        })
+                        .unwrap_or_default()
+                } else {
+                    HashMap::new()
+                };
                 let is_complete = matches!(status, AIBlockOutputStatus::Complete { .. });
                 let is_output_for_static_prompt_suggestions =
                     props.model.contains_static_prompt_suggestion_input(app);
@@ -713,26 +746,15 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             }
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
-                            action: AIAgentActionType::CreateDocuments { .. },
+                            action:
+                                action @ (AIAgentActionType::CreateDocuments(_)
+                                | AIAgentActionType::EditDocuments(_)),
                             id,
                             ..
                         }) => {
                             should_render_footer = false;
-                            if let Some(create_document) =
-                                maybe_render_create_document(props, id, app)
-                            {
-                                output_items.add_child(create_document);
-                            }
-                        }
-                        AIAgentOutputMessageType::Action(AIAgentAction {
-                            action: AIAgentActionType::EditDocuments { .. },
-                            id,
-                            ..
-                        }) => {
-                            should_render_footer = false;
-                            if let Some(edit_document) = maybe_render_edit_document(props, id, app)
-                            {
-                                output_items.add_child(edit_document);
+                            if let Some(document) = maybe_render_document(props, id, action, app) {
+                                output_items.add_child(document);
                             }
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
@@ -741,7 +763,34 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             ..
                         }) => {
                             should_render_footer = false;
-                            output_items.add_child(render_use_computer(props, id, request, app));
+                            output_items.add_child(render_use_computer(
+                                props,
+                                id,
+                                request,
+                                recording_spans_by_action_id.get(id),
+                                app,
+                            ));
+                        }
+                        AIAgentOutputMessageType::Action(AIAgentAction {
+                            action: AIAgentActionType::StartRecording { summary, .. },
+                            id,
+                            ..
+                        }) => {
+                            should_render_footer = false;
+                            output_items.add_child(render_start_recording(
+                                props,
+                                id,
+                                summary.as_deref(),
+                                app,
+                            ));
+                        }
+                        AIAgentOutputMessageType::Action(AIAgentAction {
+                            action: AIAgentActionType::StopRecording { .. },
+                            id,
+                            ..
+                        }) => {
+                            should_render_footer = false;
+                            output_items.add_child(render_stop_recording(props, id, app));
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
                             action: AIAgentActionType::ReadSkill(request),
@@ -1182,6 +1231,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             invalid_api_key_button_handle: &props
                                 .state_handles
                                 .invalid_api_key_button_handle,
+                            subscribe_button_handle: &props.state_handles.subscribe_button_handle,
                             aws_bedrock_credentials_error_view: props
                                 .aws_bedrock_credentials_error_view,
                             icon_right_margin: 16.,
@@ -1777,7 +1827,7 @@ fn read_skill_display_text(
 ) -> String {
     skill
         .map(|s| format!("/{}", s.name))
-        .unwrap_or_else(|| skill_reference.to_string())
+        .unwrap_or_else(|| skill_reference.display_label())
 }
 
 fn render_read_skill(
@@ -1829,6 +1879,28 @@ fn render_read_skill(
     }
 
     renderable_action.render(app).finish()
+}
+
+/// Renders the small secondary button placed on the trailing edge of a
+/// [`RenderableAction`] row (e.g. "View screenshot", "Open recording").
+fn render_inline_action_secondary_button(
+    appearance: &Appearance,
+    button: &ui_components::button::Button,
+    label: &'static str,
+    on_click: ui_components::MouseEventHandler,
+) -> Box<dyn Element> {
+    button.render(
+        appearance,
+        button::Params {
+            content: button::Content::Label(label.into()),
+            theme: &button::themes::Secondary,
+            options: button::Options {
+                size: button::Size::Small,
+                on_click: Some(on_click),
+                ..button::Options::default(appearance)
+            },
+        },
+    )
 }
 
 fn render_read_files(
@@ -1951,9 +2023,10 @@ fn parsed_skill_for_common_locations(
         .flatten()
 }
 
-fn maybe_render_edit_document(
+fn maybe_render_document(
     props: Props,
     id: &AIAgentActionId,
+    action: &AIAgentActionType,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
     let status = props.action_model.as_ref(app).get_action_status(id);
@@ -1963,64 +2036,16 @@ fn maybe_render_edit_document(
         todo!("Implement granular permissions for AI documents.");
     }
 
-    let agent_action_results = props
+    let result = props
         .action_model
         .as_ref(app)
         .get_action_result(id)
-        .map(|action_result| action_result.as_ref());
-
-    let Some(AIAgentActionResult {
-        result:
-            AIAgentActionResultType::EditDocuments(EditDocumentsResult::Success { updated_documents }),
-        ..
-    }) = agent_action_results
-    else {
-        return None;
-    };
-
-    let document = updated_documents.first()?;
+        .map(|result| &result.result);
+    let presentation = DocumentActionPresentation::resolve(action, result)?;
+    let document = presentation.documents.first()?;
     let action = CreateOrEditDocumentAction::new(
-        document.document_id,
-        document.document_version,
-        props.state_handles.ai_document_handle.clone(),
-        app,
-    )?;
-    Some(action.render(app))
-}
-
-fn maybe_render_create_document(
-    props: Props,
-    id: &AIAgentActionId,
-    app: &AppContext,
-) -> Option<Box<dyn Element>> {
-    let status = props.action_model.as_ref(app).get_action_status(id);
-
-    // Document operations are always auto-executed for now
-    if status.as_ref().is_some_and(|status| status.is_blocked()) {
-        todo!("Implement granular permissions for AI documents.");
-    }
-
-    let agent_action_results = props
-        .action_model
-        .as_ref(app)
-        .get_action_result(id)
-        .map(|action_result| action_result.as_ref());
-
-    let Some(AIAgentActionResult {
-        result:
-            AIAgentActionResultType::CreateDocuments(CreateDocumentsResult::Success {
-                created_documents,
-            }),
-        ..
-    }) = agent_action_results
-    else {
-        return None;
-    };
-
-    let document = created_documents.first()?;
-    let action = CreateOrEditDocumentAction::new(
-        document.document_id,
-        document.document_version,
+        document.document_id?,
+        document.document_version?,
         props.state_handles.ai_document_handle.clone(),
         app,
     )?;
@@ -2318,9 +2343,9 @@ fn render_suggest_new_conversation(
     let theme = appearance.theme();
     if let AIActionStatus::Finished(result) = status {
         let AIAgentActionResultType::SuggestNewConversation(result) = &result.result else {
-            log::error!(
-                "Unexpected action result type for suggest new conversation action: {:?}",
-                result.result
+            report_error!(
+                "Unexpected action result type for suggest new conversation action",
+                extra: { "result_type" => ?result.result }
             );
             return None;
         };
@@ -2861,16 +2886,224 @@ fn render_upload_artifact(
     renderable_action.render(app).finish()
 }
 
+fn recording_summary(props: Props, agent_summary: Option<&str>, app: &AppContext) -> String {
+    let title = props
+        .model
+        .conversation(app)
+        .and_then(|conversation| conversation.title());
+    agent_summary
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| title.as_deref().map(str::trim).filter(|s| !s.is_empty()))
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "Recording computer-use session".to_string())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RecordingCardText {
+    primary: String,
+    subtext: Option<String>,
+}
+
+fn start_recording_card_text(
+    description: &str,
+    result: Option<&StartRecordingResult>,
+) -> RecordingCardText {
+    match result {
+        Some(StartRecordingResult::Success(_)) => RecordingCardText {
+            primary: "Recording started".to_string(),
+            subtext: Some(description.to_string()),
+        },
+        Some(StartRecordingResult::Error(error)) => RecordingCardText {
+            primary: "Recording failed to start".to_string(),
+            subtext: Some(error.clone()),
+        },
+        Some(StartRecordingResult::Cancelled) => RecordingCardText {
+            primary: "Recording cancelled".to_string(),
+            subtext: None,
+        },
+        None => RecordingCardText {
+            primary: "Starting recording".to_string(),
+            subtext: Some(description.to_string()),
+        },
+    }
+}
+
+fn stop_recording_card_text(result: Option<&StopRecordingResult>) -> RecordingCardText {
+    match result {
+        Some(StopRecordingResult::Success(stopped)) => {
+            let duration = format_video_duration(stopped.duration);
+            let subtext = if matches!(
+                stopped.completion_status,
+                computer_use::RecordingCompletionStatus::Completed
+            ) {
+                duration
+            } else {
+                // TODO(vkodithala): Switch to typed, user-facing termination copy once finalization emits structured reasons.
+                format!("Partial recording • {duration}")
+            };
+            RecordingCardText {
+                primary: "Recording saved".to_string(),
+                subtext: Some(subtext),
+            }
+        }
+        Some(StopRecordingResult::Error(_)) | Some(StopRecordingResult::Cancelled) => {
+            RecordingCardText {
+                primary: "Recording could not be saved".to_string(),
+                subtext: None,
+            }
+        }
+        None => RecordingCardText {
+            primary: "Saving recording".to_string(),
+            subtext: None,
+        },
+    }
+}
+
+fn format_video_duration(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn recording_icon(app: &AppContext) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let color = appearance.theme().ansi_fg_red();
+    ConstrainedBox::new(Icon::CircleFilled.to_warpui_icon(color.into()).finish())
+        .with_width(icon_size(app))
+        .with_height(icon_size(app))
+        .finish()
+}
+
+fn recording_card(
+    text: RecordingCardText,
+    action_button: Option<Box<dyn Element>>,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let primary = Text::new(
+        text.primary,
+        appearance.ui_font_family(),
+        appearance.monospace_font_size(),
+    )
+    .with_color(blended_colors::text_main(theme, theme.background()))
+    .finish();
+    let mut body = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+    body.add_child(primary);
+    if let Some(subtext) = text.subtext.filter(|subtext| !subtext.trim().is_empty()) {
+        body.add_child(
+            Text::new(
+                subtext,
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(blended_colors::text_disabled(theme, theme.surface_2()))
+            .finish(),
+        );
+    }
+
+    let mut action =
+        RenderableAction::new_with_element(body.finish(), app).with_icon(recording_icon(app));
+    if let Some(action_button) = action_button {
+        action = action.with_action_button(action_button);
+    }
+    action.render(app).finish()
+}
+
+fn render_start_recording(
+    props: Props,
+    action_id: &AIAgentActionId,
+    agent_summary: Option<&str>,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let result = props
+        .action_model
+        .as_ref(app)
+        .get_action_result(action_id)
+        .and_then(|result| match &result.result {
+            AIAgentActionResultType::StartRecording(result) => Some(result),
+            _ => None,
+        });
+    let text = start_recording_card_text(&recording_summary(props, agent_summary, app), result);
+    recording_card(text, None, app)
+}
+
+fn render_recording_footer(status: RecordingSpanStatus, app: &AppContext) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let icon_offset =
+        icon_size(app) + crate::ai::blocklist::inline_action::inline_action_header::ICON_MARGIN;
+    let text = match status {
+        RecordingSpanStatus::Active => "Recording active",
+        RecordingSpanStatus::Captured => "Captured in recording",
+    };
+    Container::new(
+        Text::new(
+            text.to_string(),
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(theme.sub_text_color(theme.surface_1()).into())
+        .finish(),
+    )
+    .with_margin_left(icon_offset)
+    .finish()
+}
+
+fn render_stop_recording(
+    props: Props,
+    action_id: &AIAgentActionId,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::handle(app).as_ref(app);
+    let result = props
+        .action_model
+        .as_ref(app)
+        .get_action_result(action_id)
+        .and_then(|result| match &result.result {
+            AIAgentActionResultType::StopRecording(result) => Some(result),
+            _ => None,
+        });
+    let mut action_button = None;
+    if let Some(StopRecordingResult::Success(stopped)) = result {
+        if !stopped.artifact_uid.trim().is_empty() {
+            let artifact_uid = stopped.artifact_uid.clone();
+            action_button = props.open_recording_buttons.get(action_id).map(|btn| {
+                render_inline_action_secondary_button(
+                    appearance,
+                    btn,
+                    "Open recording",
+                    Box::new(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(AIBlockAction::OpenRecordingArtifact {
+                            artifact_uid: artifact_uid.clone(),
+                        });
+                    }),
+                )
+            });
+        }
+    }
+
+    recording_card(stop_recording_card_text(result), action_button, app)
+}
+
 fn render_use_computer(
     props: Props,
     action_id: &AIAgentActionId,
     request: &UseComputerRequest,
+    recording_span: Option<&RecordingSpanInfo>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::handle(app).as_ref(app);
 
     let mut renderable_action = RenderableAction::new(&request.action_summary, app)
         .with_icon(action_icon(action_id, props.action_model, props.model, app).finish());
+
+    if should_decorate_recorded_use_computer(request) {
+        if let Some(recording_span) = recording_span {
+            renderable_action =
+                renderable_action.with_footer(render_recording_footer(recording_span.status, app));
+        }
+    }
 
     // Add a "View screenshot" button if the action result contains a screenshot.
     let has_screenshot = props
@@ -2889,21 +3122,15 @@ fn render_use_computer(
     if has_screenshot {
         let action_id_clone = action_id.clone();
         let view_screenshot_button = props.view_screenshot_buttons.get(action_id).map(|btn| {
-            btn.render(
+            render_inline_action_secondary_button(
                 appearance,
-                button::Params {
-                    content: button::Content::Label("View screenshot".into()),
-                    theme: &button::themes::Secondary,
-                    options: button::Options {
-                        size: button::Size::Small,
-                        on_click: Some(Box::new(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(AIBlockAction::ViewScreenshot {
-                                action_id: action_id_clone.clone(),
-                            });
-                        })),
-                        ..button::Options::default(appearance)
-                    },
-                },
+                btn,
+                "View screenshot",
+                Box::new(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AIBlockAction::ViewScreenshot {
+                        action_id: action_id_clone.clone(),
+                    });
+                }),
             )
         });
 

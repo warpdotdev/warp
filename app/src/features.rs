@@ -159,6 +159,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::McpDebuggingIds,
         #[cfg(feature = "markdown_tables")]
         FeatureFlag::MarkdownTables,
+        #[cfg(feature = "jupyter_notebook_rendering")]
+        FeatureFlag::JupyterNotebookRendering,
         #[cfg(feature = "blocklist_markdown_table_rendering")]
         FeatureFlag::BlocklistMarkdownTableRendering,
         #[cfg(feature = "blocklist_markdown_images")]
@@ -241,8 +243,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::Projects,
         #[cfg(feature = "drive_objects_as_context")]
         FeatureFlag::DriveObjectsAsContext,
-        #[cfg(feature = "pr_comments_slash_command")]
-        FeatureFlag::PRCommentsSlashCommand,
         #[cfg(feature = "pr_comments_v2")]
         FeatureFlag::PRCommentsV2,
         #[cfg(feature = "pr_comments_skill")]
@@ -417,12 +417,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationsAsContext,
         #[cfg(feature = "incremental_auto_reload")]
         FeatureFlag::IncrementalAutoReload,
-        #[cfg(feature = "run_agents_tool")]
-        FeatureFlag::RunAgentsTool,
-        #[cfg(feature = "orchestration_viewer_streamer")]
-        FeatureFlag::OrchestrationViewerStreamer,
-        #[cfg(feature = "owner_orchestration_ancestor_streamer")]
-        FeatureFlag::OwnerOrchestrationAncestorStreamer,
         #[cfg(feature = "wait_for_events_parent_registration")]
         FeatureFlag::WaitForEventsParentRegistration,
         #[cfg(feature = "pending_user_query_indicator")]
@@ -507,8 +501,14 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SuperGrok,
         #[cfg(feature = "gemini_enterprise")]
         FeatureFlag::GeminiEnterprise,
+        #[cfg(feature = "nld_prompt_history_match")]
+        FeatureFlag::NldPromptHistoryMatch,
         #[cfg(feature = "prompt_cache_expiry_warning")]
         FeatureFlag::PromptCacheExpiryWarning,
+        #[cfg(feature = "osc_hyperlinks")]
+        FeatureFlag::OscHyperlinks,
+        #[cfg(feature = "terminal_lifecycle_recovery")]
+        FeatureFlag::TerminalLifecycleRecovery,
     ]);
 
     flags

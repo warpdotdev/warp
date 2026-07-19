@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 pub mod home_watcher;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures::channel::oneshot;
 pub use home_watcher::{HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
 use notify_debouncer_full::notify::event::{ModifyKind, RenameMode};
@@ -17,6 +17,7 @@ use notify_debouncer_full::{
     new_debouncer_opt, DebounceEventHandler, DebounceEventResult, DebouncedEvent, Debouncer,
     NoCache,
 };
+use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext};
 
 #[derive(Debug)]
@@ -157,15 +158,15 @@ impl BulkFilesystemWatcher {
                         // `unregister_path` calls will get `SendError` and
                         // log a warning — the app continues without file
                         // watching.
-                        log::error!(
-                            "Failed to create filesystem watcher, \
-                             file watching will be disabled: {e:?}"
-                        );
+                        report_error!(e.context(
+                            "Failed to create filesystem watcher, file watching will be disabled"
+                        ));
                     }
                 }
             })
+            .context("Failed to spawn thread for background file watcher")
         {
-            log::error!("Failed to spawn thread for background file watcher {e:?}");
+            report_error!(e);
         }
         ctx.spawn_stream_local(rx, Self::handle_watcher_event, |_, _| {});
 

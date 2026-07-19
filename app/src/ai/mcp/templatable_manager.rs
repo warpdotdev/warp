@@ -81,6 +81,9 @@ pub struct TemplatableMCPServerManager {
     /// is received or the spawn task terminates.
     #[cfg(not(target_family = "wasm"))]
     pending_oauth_csrf: HashMap<String, Uuid>,
+    /// Short-lived authorization URLs for interactive OAuth flows.
+    #[cfg(not(target_family = "wasm"))]
+    authorization_urls: HashMap<Uuid, String>,
     /// UUIDs of MCP servers started via the Oz CLI. We track these so they can be distinguished from
     /// file-based ephemeral MCP servers, which are directory-scoped.
     cli_spawned_server_uuids: HashSet<Uuid>,
@@ -209,6 +212,26 @@ impl TemplatableMCPServerManager {
             .unwrap_or_default()
     }
 
+    #[cfg(feature = "tui")]
+    pub fn resources_for_server(&self, uuid: Uuid) -> Vec<rmcp::model::Resource> {
+        self.active_servers
+            .get(&uuid)
+            .map(|server| server.resources().clone())
+            .unwrap_or_default()
+    }
+    #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+    pub fn authorization_url(&self, uuid: Uuid) -> Option<&str> {
+        self.authorization_urls.get(&uuid).map(String::as_str)
+    }
+    #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+    pub fn has_credentials(&self, installation_uuid: Uuid, app: &warpui::AppContext) -> bool {
+        if let Some(hash) = FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) {
+            return self.file_based_server_credentials.contains_key(&hash);
+        }
+        self.get_template_uuid(installation_uuid)
+            .is_some_and(|uuid| self.server_credentials.contains_key(&uuid))
+    }
+
     /// Returns the JSON Schema `input_schema` for a named tool across active MCP servers.
     ///
     /// If `installation_id` is `Some`, only that server is considered; otherwise, the
@@ -290,6 +313,18 @@ pub enum TemplatableMCPServerManagerEvent {
     StateChanged {
         uuid: Uuid,
         state: MCPServerState,
+    },
+    /// A server managed by this shared runtime needs interactive OAuth.
+    /// Frontends choose how to present and receive the authorization flow.
+    AuthenticationRequired {
+        #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+        uuid: Uuid,
+    },
+    /// The shared secure credential cache changed for an installation.
+    /// Frontends can refresh any authentication controls or status they expose.
+    CredentialsChanged {
+        #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+        uuid: Uuid,
     },
     // TODO(aeybel) Right now most of the app doesn't use these events to communicate
     // We should change them so this manager is source of truth and all communication goes through here

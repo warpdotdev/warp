@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use session_sharing_protocol::common::SessionId;
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext};
 
 use super::{apply_hidden_child_agent_task_context, HiddenChildAgentTaskContext};
@@ -123,7 +124,7 @@ impl PaneGroup {
                         history_model.resolved_parent_conversation_id_for_conversation(conversation)
                     })
                     .or_else(|| {
-                        RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
+                        RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
                             store.get_conversation(&child_conversation_id).and_then(
                                 |conversation| {
                                     history_model.resolved_parent_conversation_id_for_conversation(
@@ -202,9 +203,10 @@ impl PaneGroup {
                 .attach_child_pane_off_tree(Box::new(pane_data), ctx)
                 .is_none()
             {
-                log::error!(
+                report_error!(
                     "create_hidden_child_agent_pane: failed to attach loading placeholder for \
-                     viewer-side child {child_id:?}"
+                     viewer-side child",
+                    extra: { "child_id" => ?child_id }
                 );
                 return;
             }
@@ -289,7 +291,10 @@ impl PaneGroup {
 
             self.child_agent_panes.insert(child_id, new_pane_id.into());
         } else {
-            log::error!("Failed to get terminal view for child agent pane {child_id:?}");
+            report_error!(
+                "Failed to get terminal view for child agent pane",
+                extra: { "child_id" => ?child_id }
+            );
             self.discard_pane(new_pane_id.into(), ctx);
         }
     }
@@ -351,7 +356,7 @@ impl PaneGroup {
             resources,
             view_size,
             false, // enable_orchestration_polling
-            false, // is_cloud_mode
+            false, // is_ambient_agent
             ctx,
         );
 
@@ -367,8 +372,9 @@ impl PaneGroup {
             .attach_child_pane_off_tree(Box::new(pane_data), ctx)
             .is_none()
         {
-            log::error!(
-                "ensure_shared_session_viewer_child_pane: failed to attach pane for conv={child_conversation_id:?}"
+            report_error!(
+                "ensure_shared_session_viewer_child_pane: failed to attach pane",
+                extra: { "child_conversation_id" => ?child_conversation_id }
             );
             return;
         }

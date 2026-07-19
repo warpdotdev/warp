@@ -12,6 +12,7 @@ use remote_server::proto::RipgrepSearchSuccess;
 use remote_server::protocol::RequestId;
 use remote_server::HostId;
 use string_offset::ByteOffset;
+use warp_errors::report_error;
 use warp_ripgrep::search::{Match as RipgrepMatch, Submatch};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -238,8 +239,8 @@ impl GlobalSearch {
                         capped: false,
                     }),
                     Err(err) => {
-                        log::error!(
-                            "GlobalSearch: warp_ripgrep CLI search failed or aborted: {err}"
+                        report_error!(
+                            err.context("GlobalSearch: warp_ripgrep CLI search failed or aborted")
                         );
                         None
                     }

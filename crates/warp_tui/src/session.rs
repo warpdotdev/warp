@@ -2,38 +2,46 @@
 //!
 //! [`run`] boots the real headless Warp app via [`warp::run_tui`]. Once shared
 //! initialization is done, the mount built here starts the TUI driver and
-//! defers creating the transcript-capable terminal session until login.
+//! defers creating the first terminal session until login.
 
-use std::collections::HashMap;
-use std::ffi::OsString;
-
-use anyhow::Result;
-use pathfinder_geometry::vector::Vector2F;
-use warp::tui_export::{
-    dark_theme, Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
-    TerminalManagerTrait, TerminalSurfaceResult,
-};
-use warp::{TuiLoginModel, TuiLoginPhase};
-use warpui::SingletonEntity;
+use anyhow::{Context, Result};
+use clap::error::ErrorKind;
+use clap::Parser;
+use warp::tui_export::{Appearance, ServerConversationToken};
+use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
+use warp_core::telemetry::TelemetryEvent as _;
+use warp_errors::report_error;
+use warpui::SingletonEntity as _;
 use warpui_core::platform::{TerminationMode, WindowStyle};
-use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
-use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, ViewHandle};
+use warpui_core::runtime::spawn_tui_driver;
+use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
 
+use crate::orchestration_model::TuiOrchestrationModel;
+use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
-use crate::terminal_session_view::TuiTerminalSessionView;
+use crate::session_registry::{TuiSessions, TuiSessionsEvent};
+use crate::telemetry::TuiStartupTelemetryEvent;
+use crate::terminal_background::probe_and_select_theme;
+use crate::terminal_session_view::{TuiConversationRestoreOrigin, TuiConversationRestoreTarget};
 
-/// Holds the live TUI driver and, after login, the terminal manager.
-struct TuiSession {
-    #[expect(dead_code, reason = "keeps the TUI driver alive for the TUI session")]
-    driver: TuiDriverHandle,
-    manager: Option<ModelHandle<Box<dyn TerminalManagerTrait>>>,
+#[derive(Parser)]
+#[command(name = "warp")]
+struct TuiArgs {
+    /// Resume an Oz/Warp conversation by server token.
+    #[arg(long)]
+    resume: Option<String>,
+
+    /// API key for non-interactive authentication.
+    #[arg(long, env = "WARP_API_KEY")]
+    api_key: Option<String>,
 }
 
-impl Entity for TuiSession {
-    type Event = ();
+/// Validates and wraps a server conversation token from the command line.
+fn parse_resume_token(token: String) -> Result<ServerConversationToken> {
+    uuid::Uuid::parse_str(&token)
+        .with_context(|| format!("invalid server conversation token: {token}"))?;
+    Ok(ServerConversationToken::new(token))
 }
-
-impl SingletonEntity for TuiSession {}
 
 /// Boots the headless Warp app and mounts the transcript-capable TUI session.
 pub fn run() -> Result<()> {
@@ -43,11 +51,43 @@ pub fn run() -> Result<()> {
     if let Some(result) = warp::run_tui_worker_if_requested() {
         return result;
     }
-    warp::run_tui(Box::new(init))
+    let args = match TuiArgs::try_parse() {
+        Ok(args) => args,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            error.print()?;
+            return Ok(());
+        }
+        Err(error) => return Err(anyhow::Error::new(error)),
+    };
+    let resume_token = args.resume.map(parse_resume_token).transpose()?;
+    let exit_summary = TuiExitSummaryHandle::default();
+    let exit_summary_for_app = exit_summary.clone();
+    let result = warp::run_tui(
+        args.api_key,
+        Box::new(move |ctx| init(resume_token, exit_summary_for_app, ctx)),
+    );
+    if result.is_ok() {
+        if let Some(token) = exit_summary.token() {
+            let token = token.as_str();
+            println!("To continue this conversation, run:");
+            println!("warp --resume {token}");
+        }
+    }
+    result
 }
 
-/// Creates the login-gated TUI root and starts the headless draw + input driver.
-fn init(ctx: &mut AppContext) {
+/// Creates the login-gated root and starts the headless draw and input driver.
+fn init(
+    resume_token: Option<ServerConversationToken>,
+    exit_summary: TuiExitSummaryHandle,
+    ctx: &mut AppContext,
+) {
+    warp_core::send_telemetry_from_app_ctx!(TuiStartupTelemetryEvent, ctx);
     // Register the TUI views' keybindings (and, in debug builds, the
     // cross-surface binding validators) before any input can be dispatched.
     crate::keybindings::init(ctx);
@@ -57,14 +97,14 @@ fn init(ctx: &mut AppContext) {
     // `autoupdate` module docs).
     crate::autoupdate::TuiAutoupdater::register(ctx);
 
-    // The current TUI transcript design is dark-mode-only. Keep this scoped to
+    // Theme the transcript to match the host terminal. Keep this scoped to
     // the TUI process by overriding the already-initialized Appearance theme at
     // mount time, without changing normal GUI theme selection or font settings.
+    let theme = probe_and_select_theme();
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
-        appearance.set_theme(dark_theme(), ctx);
+        appearance.set_theme(theme, ctx);
     });
 
-    let banner = ctx.add_model(|_| BannerState::default());
     let (window_id, root) = ctx.add_tui_window(
         AddWindowOptions {
             window_style: WindowStyle::NotStealFocus,
@@ -74,78 +114,72 @@ fn init(ctx: &mut AppContext) {
     );
     match spawn_tui_driver(ctx, window_id, root.clone()) {
         Ok(driver) => {
-            let session = ctx.add_singleton_model(|_| TuiSession {
-                driver,
-                manager: None,
+            let sessions =
+                ctx.add_singleton_model(|_| TuiSessions::new(driver, exit_summary, resume_token));
+            root.update(ctx, |_, ctx| {
+                ctx.subscribe_to_model(&sessions, |_, _, event, ctx| match event {
+                    TuiSessionsEvent::SessionRemoved(_) => ctx.notify(),
+                    TuiSessionsEvent::FocusChanged(_) => ctx.notify(),
+                });
             });
+            let orchestration = TuiOrchestrationModel::register(ctx);
+            TuiSessions::wire_orchestration(&sessions, &orchestration, ctx);
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
-                // Already authenticated at mount: create the session now.
-                create_terminal_session_after_login(&session, &root, &banner, ctx);
+                // Already authenticated at mount: create the first session now.
+                create_terminal_session_after_login(&sessions, &root, ctx);
             } else {
                 // Otherwise wait for login to complete and create it then.
-                let session_for_login = session.clone();
+                let sessions_for_login = sessions.clone();
                 let root_for_login = root.clone();
-                let banner_for_login = banner.clone();
                 let login_model = TuiLoginModel::handle(ctx);
-                ctx.subscribe_to_model(&login_model, move |_, _, ctx| {
-                    if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
-                        create_terminal_session_after_login(
-                            &session_for_login,
-                            &root_for_login,
-                            &banner_for_login,
-                            ctx,
-                        );
-                    }
+                ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
+                    TuiLoginEvent::LoggedIn => create_terminal_session_after_login(
+                        &sessions_for_login,
+                        &root_for_login,
+                        ctx,
+                    ),
                 });
             }
         }
         Err(error) => {
-            log::error!("failed to start transcript TUI: {error}");
-            ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error.into())));
+            let error = anyhow::Error::new(error);
+            report_error!(&error);
+            ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
         }
     }
 }
 
-/// Creates and retains the terminal manager after login.
+/// Creates the focused bootstrap session and restores the requested conversation.
 fn create_terminal_session_after_login(
-    session: &ModelHandle<TuiSession>,
+    sessions: &ModelHandle<TuiSessions>,
     root: &ViewHandle<RootTuiView>,
-    banner: &ModelHandle<BannerState>,
     ctx: &mut AppContext,
 ) {
-    if session.read(ctx, |session, _| session.manager.is_some()) {
+    if sessions.read(ctx, |sessions, _| !sessions.is_empty()) {
         return;
     }
 
-    let root = root.clone();
-    let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(
+    let resume_token = sessions.update(ctx, |sessions, _| sessions.take_resume_token());
+    let window_id = root.window_id(ctx);
+    let (_, surface) = TuiSessions::create_local_terminal_session(
+        sessions,
+        window_id,
+        true,
         std::env::current_dir().ok(),
-        HashMap::<OsString, OsString>::from_iter(std::env::vars_os()),
-        IsSharedSessionCreator::No,
-        None,
-        banner.clone(),
-        Vector2F::new(120., 24.),
-        None,
-        None,
         ctx,
-        move |surface_init, ctx| {
-            let surface = root.update(ctx, |root, ctx| {
-                let surface = root.create_terminal_session(surface_init, ctx);
-                // Re-render the root so it swaps the login placeholder for the session.
-                ctx.notify();
-                surface
-            });
-            TerminalSurfaceResult {
-                surface,
-                post_wire: |_manager: &mut LocalTtyTerminalManager<TuiTerminalSessionView>,
-                            _surface: &ViewHandle<TuiTerminalSessionView>,
-                            _ctx: &mut AppContext| {},
-            }
-        },
     );
-
-    session.update(ctx, |session, ctx| {
-        session.manager = Some(manager.manager);
-        ctx.notify();
-    });
+    if let Some(token) = resume_token {
+        surface.update(ctx, |view, ctx| {
+            view.restore_conversation(
+                TuiConversationRestoreTarget::Server(token),
+                TuiConversationRestoreOrigin::Startup,
+                ctx,
+            );
+        });
+    }
+    root.update(ctx, |root, ctx| root.show_terminal(ctx));
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;

@@ -482,7 +482,7 @@ where
                 if !child_exited {
                     let res = self.pty.kill();
                     if let Err(err) = res {
-                        log::error!("Failed to kill PTY process {err:?}");
+                        log::warn!("Failed to kill PTY process: {err:#}");
                     }
                 }
                 // Notify the terminal model that the PTY process has exited.

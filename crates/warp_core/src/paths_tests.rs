@@ -62,6 +62,18 @@ fn test_warp_home_skills_and_mcp_paths() {
         Some(config_dir.join(".mcp.json"))
     );
 }
+
+#[test]
+fn test_tui_mcp_config_path_is_separate_from_gui() {
+    let tui_mcp_path = tui_mcp_config_file_path();
+
+    assert_eq!(tui_mcp_path, tui_config_local_dir().join(".mcp.json"));
+    assert_ne!(
+        Some(tui_mcp_path),
+        warp_home_mcp_config_file_path(),
+        "GUI and TUI MCP configuration must remain isolated"
+    );
+}
 #[test]
 fn test_cache_dir_path() {
     let home_dir = home_dir().expect("Should be able to compute home directory");
@@ -94,6 +106,19 @@ fn test_state_dir_path() {
             unimplemented!("Need to update tests for current platform!");
         }
     }
+}
+
+#[test]
+fn test_tui_state_dir_is_tui_subdir_of_gui_state_base() {
+    let tui_dir = tui_state_dir();
+    assert_eq!(tui_dir.file_name(), Some(std::ffi::OsStr::new("tui")));
+
+    // The TUI state dir must be a direct `tui` child of the same base
+    // directory that holds the GUI's SQLite database (the secure state dir
+    // when available, otherwise the plain state dir), so the two front-ends
+    // keep sibling — never shared — databases.
+    let gui_state_base = secure_state_dir().unwrap_or_else(state_dir);
+    assert_eq!(tui_dir.parent(), Some(gui_state_base.as_path()));
 }
 
 #[test]

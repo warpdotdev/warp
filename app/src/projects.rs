@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
 
 use chrono::Utc;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::persistence::model::Project;
@@ -82,7 +83,7 @@ impl ProjectManagementModel {
         if let Some(sender) = &self.model_event_sender {
             let event = ModelEvent::UpsertProject { project };
             if let Err(err) = sender.send(event) {
-                log::error!("Failed to save project to database: {err}");
+                report_error!(anyhow::Error::new(err).context("Failed to save project to database"));
             }
         }
     }

@@ -762,7 +762,7 @@ fn read_file(decoded_payload: Vec<u8>, is_temp: bool) -> Result<Vec<u8>, Invalid
 fn safe_delete_temp_file(path: &str) {
     if is_path_in_temp_dir(path) && path.contains("tty-graphics-protocol") {
         if let Err(err) = fs::remove_file(path) {
-            log::error!("Failed to delete kitty temporary file (path = {path}): {err}");
+            log::warn!("Failed to delete kitty temporary file (path = {path}): {err:#}");
         }
     }
 }

@@ -4,28 +4,16 @@ use std::rc::Rc;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::TuiFlex;
+use crate::elements::tui::test_support::{render_to_lines, with_event_context, with_paint_surface};
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiEventHandler, TuiLayoutContext, TuiParentElement, TuiPresentationContext, TuiRect, TuiSize,
-    TuiText,
+    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventHandler,
+    TuiLayoutContext, TuiParentElement, TuiPresentationContext, TuiRect, TuiScreenPosition,
+    TuiSize, TuiText,
 };
+use crate::elements::CrossAxisAlignment;
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::{App, EntityId, EntityIdMap};
-
-fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
-    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
-    let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    element.render(
-        TuiRect::new(0, 0, size.width, size.height),
-        &mut buffer,
-        &mut ctx,
-    );
-    buffer.to_lines()
-}
 
 /// Lays `element` out at a loose `size` constraint, returning the size it
 /// claimed. Layout must run before render so `child_sizes` is populated.
@@ -35,6 +23,22 @@ fn layout_at(element: &mut dyn TuiElement, size: TuiSize, app_ctx: &crate::AppCo
         rendered_views: &mut rendered_views,
     };
     element.layout(TuiConstraint::loose(size), &mut ctx, app_ctx)
+}
+
+#[test]
+fn row_inserts_configured_spacing_between_children() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let mut row = TuiFlex::row()
+                .with_spacing(2)
+                .child(TuiText::new("AA").truncate().finish())
+                .child(TuiText::new("BB").truncate().finish());
+
+            let size = layout_at(&mut row, TuiSize::new(10, 1), app_ctx);
+            assert_eq!(size, TuiSize::new(6, 1));
+            assert_eq!(render_to_lines(row, TuiSize::new(6, 1)), vec!["AA  BB"]);
+        });
+    });
 }
 
 // -- column-axis tests --
@@ -50,7 +54,7 @@ fn column_stacks_two_children_top_to_bottom() {
             let size = layout_at(&mut column, TuiSize::new(2, 10), app_ctx);
             assert_eq!(size, TuiSize::new(2, 2));
             assert_eq!(
-                render_to_lines(&column, TuiSize::new(2, 2)),
+                render_to_lines(column, TuiSize::new(2, 2)),
                 vec!["AA", "BB"]
             );
         });
@@ -70,7 +74,7 @@ fn column_sums_multi_row_children_at_the_correct_offsets() {
             let size = layout_at(&mut column, TuiSize::new(2, 4), app_ctx);
             assert_eq!(size, TuiSize::new(2, 4));
             assert_eq!(
-                render_to_lines(&column, TuiSize::new(2, 4)),
+                render_to_lines(column, TuiSize::new(2, 4)),
                 vec!["A ", "BB", "CC", "D "],
             );
         });
@@ -91,7 +95,7 @@ fn column_clamps_total_height_to_the_constraint_and_clips_overflow() {
 
             // Only the first three rows fit; the final child is clipped away.
             assert_eq!(
-                render_to_lines(&column, TuiSize::new(2, 3)),
+                render_to_lines(column, TuiSize::new(2, 3)),
                 vec!["A ", "BB", "CC"],
             );
         });
@@ -115,7 +119,7 @@ fn column_flex_child_fills_leftover_and_docks_fixed_child_at_bottom() {
             // The flex spacer occupies the top three rows; the fixed input row
             // lands on the last row.
             assert_eq!(
-                render_to_lines(&column, TuiSize::new(2, 4)),
+                render_to_lines(column, TuiSize::new(2, 4)),
                 vec!["  ", "  ", "  ", "IN"],
             );
         });
@@ -135,7 +139,7 @@ fn row_packs_two_children_left_to_right() {
             let size = layout_at(&mut row, TuiSize::new(10, 1), app_ctx);
             // Without flex children the row hugs its content horizontally.
             assert_eq!(size, TuiSize::new(4, 1));
-            assert_eq!(render_to_lines(&row, TuiSize::new(4, 1)), vec!["AABB"]);
+            assert_eq!(render_to_lines(row, TuiSize::new(4, 1)), vec!["AABB"]);
         });
     });
 }
@@ -152,7 +156,7 @@ fn row_flex_spacer_pushes_trailing_children_to_the_right_edge() {
             let size = layout_at(&mut row, TuiSize::new(8, 1), app_ctx);
             // With a flex child present, the row fills the offered width.
             assert_eq!(size, TuiSize::new(8, 1));
-            assert_eq!(render_to_lines(&row, TuiSize::new(8, 1)), vec!["L     RR"]);
+            assert_eq!(render_to_lines(row, TuiSize::new(8, 1)), vec!["L     RR"]);
         });
     });
 }
@@ -171,7 +175,7 @@ fn row_splits_leftover_evenly_across_flex_children() {
             let size = layout_at(&mut row, TuiSize::new(10, 1), app_ctx);
             assert_eq!(size, TuiSize::new(10, 1));
             assert_eq!(
-                render_to_lines(&row, TuiSize::new(10, 1)),
+                render_to_lines(row, TuiSize::new(10, 1)),
                 vec!["    MID   "]
             );
         });
@@ -189,21 +193,107 @@ fn row_clips_children_past_the_available_width() {
             let size = layout_at(&mut row, TuiSize::new(6, 1), app_ctx);
             assert_eq!(size, TuiSize::new(6, 1));
             // The second child only has two columns left and is clipped.
-            assert_eq!(render_to_lines(&row, TuiSize::new(6, 1)), vec!["AAAABB"]);
+            assert_eq!(render_to_lines(row, TuiSize::new(6, 1)), vec!["AAAABB"]);
         });
     });
 }
 
 #[test]
-fn row_fills_the_offered_cross_axis_height() {
+fn row_sizes_cross_axis_to_its_tallest_child() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            // Like a column spans the offered width, a row spans the offered
-            // height; cap it with a TuiConstrainedBox where a thinner bar is
-            // needed.
+            // The cross axis is content-sized (like the GUI Flex): a row of
+            // one-row children is one row tall, not the offered three rows.
             let mut row = TuiFlex::row().child(TuiText::new("A").truncate().finish());
             let size = layout_at(&mut row, TuiSize::new(4, 3), app_ctx);
-            assert_eq!(size, TuiSize::new(1, 3));
+            assert_eq!(size, TuiSize::new(1, 1));
+        });
+    });
+}
+
+#[test]
+fn tight_cross_axis_constraint_forces_fill() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            // A tight constraint's min clamps the content-sized cross axis
+            // (and main axis) up to the offered extent.
+            let mut row = TuiFlex::row().child(TuiText::new("A").truncate().finish());
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = row.layout(TuiConstraint::tight(TuiSize::new(4, 3)), &mut ctx, app_ctx);
+            assert_eq!(size, TuiSize::new(4, 3));
+        });
+    });
+}
+
+// -- cross-axis alignment --
+
+#[test]
+fn stretch_fills_offered_cross_extent_and_tightens_children() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            // A stretched column fills the offered width, and its children get
+            // a tight cross constraint: the nested (unstretched) column is
+            // forced to width 4 even though its content is one column wide.
+            let mut column = TuiFlex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .child(
+                    TuiFlex::column()
+                        .child(TuiText::new("A").truncate().finish())
+                        .finish(),
+                );
+            let size = layout_at(&mut column, TuiSize::new(4, 3), app_ctx);
+            assert_eq!(size, TuiSize::new(4, 1));
+        });
+    });
+}
+
+#[test]
+fn center_positions_child_along_cross_axis() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            // A one-row child centered in a three-row row lands on the middle
+            // row.
+            let mut row = TuiFlex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .child(TuiText::new("A").truncate().finish());
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = row.layout(TuiConstraint::tight(TuiSize::new(5, 3)), &mut ctx, app_ctx);
+            assert_eq!(size, TuiSize::new(5, 3));
+            let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 5, 3));
+            with_paint_surface(&mut buffer, |surface, ctx| {
+                row.render(TuiScreenPosition::new(0, 0), surface, ctx)
+            });
+            assert_eq!(buffer.to_lines(), vec!["     ", "A    ", "     "],);
+        });
+    });
+}
+
+#[test]
+fn end_positions_child_along_cross_axis() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            // End-aligned column: the one-column child lands at the right edge
+            // of the five-column cross extent.
+            let mut column = TuiFlex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::End)
+                .child(TuiText::new("A").truncate().finish());
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = column.layout(TuiConstraint::tight(TuiSize::new(5, 1)), &mut ctx, app_ctx);
+            assert_eq!(size, TuiSize::new(5, 1));
+            let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 5, 1));
+            with_paint_surface(&mut buffer, |surface, ctx| {
+                column.render(TuiScreenPosition::new(0, 0), surface, ctx)
+            });
+            assert_eq!(buffer.to_lines(), vec!["    A"]);
         });
     });
 }
@@ -222,11 +312,9 @@ fn row_children_keep_their_own_styles() {
             layout_at(&mut row, TuiSize::new(4, 1), app_ctx);
 
             let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 4, 1));
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            row.render(TuiRect::new(0, 0, 4, 1), &mut buffer, &mut ctx);
+            with_paint_surface(&mut buffer, |surface, ctx| {
+                row.render(TuiScreenPosition::new(0, 0), surface, ctx)
+            });
 
             let left_cell = &buffer[(0, 0)];
             assert_eq!(left_cell.symbol(), "a");
@@ -278,7 +366,7 @@ fn key_event(key: &str) -> TuiEvent {
 }
 
 #[test]
-fn dispatch_event_offers_children_in_order_and_stops_when_handled() {
+fn dispatch_event_broadcasts_to_all_children() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let first_hits = Rc::new(Cell::new(0u32));
@@ -301,28 +389,13 @@ fn dispatch_event_offers_children_in_order_and_stops_when_handled() {
                         }),
                 ));
 
-            // Layout must run before dispatch so TuiFlex.child_sizes is populated.
-            let mut event_ctx = TuiEventContext::default();
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            column.layout(TuiConstraint::loose(TuiSize::new(10, 5)), &mut ctx, app_ctx);
-            let handled = column.dispatch_event(
-                &key_event("x"),
-                TuiRect::new(0, 0, 10, 5),
-                &mut event_ctx,
-                &mut ctx,
-                app_ctx,
-            );
+            let handled = with_event_context(|event_ctx| {
+                column.dispatch_event(&key_event("x"), event_ctx, app_ctx)
+            });
 
             assert!(handled);
             assert_eq!(first_hits.get(), 1);
-            assert_eq!(
-                second_hits.get(),
-                0,
-                "dispatch must stop at the first child that handles the event"
-            );
+            assert_eq!(second_hits.get(), 1);
         });
     });
 }

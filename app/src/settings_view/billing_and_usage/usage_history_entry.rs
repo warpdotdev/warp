@@ -1,5 +1,6 @@
 use chrono::Local;
 use warp_core::ui::appearance::Appearance;
+use warp_errors::report_error;
 use warp_graphql::queries::get_conversation_usage::ConversationUsage;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
@@ -82,7 +83,7 @@ impl UsageHistoryEntry {
         };
         let Some(mouse_state) = &self.mouse_state else {
             // If there is a provided entry, there should always be a mouse state as well.
-            log::error!("Mouse state is required to render usage history entry header");
+            report_error!("Mouse state is required to render usage history entry header");
             return Empty::new().finish();
         };
 

@@ -14,11 +14,15 @@
 
 mod execute;
 mod preprocess;
+pub(crate) mod recording_controller;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod recording_finalize;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use chrono::Local;
 pub(crate) use execute::{
     apply_edits, coerce_integer_args, FileReadResult, MalformedFinalLineProxyEvent,
@@ -26,12 +30,13 @@ pub(crate) use execute::{
 #[cfg(test)]
 pub(crate) use execute::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
 pub use execute::{
-    read_local_file_context, EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent,
-    EditResolvedEvent, EditStats, NewConversationDecision, PromptSuggestionExecutor,
-    ReadFileContextResult, RequestFileEditsExecutor, RequestFileEditsFormatKind,
-    RequestFileEditsTelemetryEvent, RunAgentsExecutor, RunAgentsExecutorEvent,
-    RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
-    StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
+    read_local_file_context, AskUserQuestionExecutor, EditAcceptAndContinueClickedEvent,
+    EditAcceptClickedEvent, EditResolvedEvent, EditStats, NewConversationDecision,
+    PromptSuggestionExecutor, ReadFileContextResult, RequestFileEditsExecutor,
+    RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent, RunAgentsExecutor,
+    RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
+    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    StartAgentRequest, StartAgentRequestId,
 };
 use futures::future::{join_all, BoxFuture};
 use itertools::Itertools;
@@ -39,12 +44,13 @@ use parking_lot::FairMutex;
 use preprocess::{PendingPreprocessedActions, PreprocessId};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use self::execute::ask_user_question::AskUserQuestionExecutor;
 use self::execute::search_codebase::SearchCodebaseExecutor;
 use self::execute::{
     BlocklistAIActionExecutor, BlocklistAIActionExecutorEvent, NotExecutedReason,
     RunningActionPhase, TryExecuteResult,
 };
+#[cfg(not(target_family = "wasm"))]
+use self::recording_finalize::{finalize_recording_for_conversation, FinalizeReason};
 use super::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{
@@ -53,7 +59,6 @@ use crate::ai::agent::{
     CancellationOutcome, CancellationReason, CreateDocumentsResult, EditDocumentsResult,
     RequestCommandOutputResult,
 };
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
@@ -451,6 +456,11 @@ impl BlocklistAIActionModel {
                 entry.insert(RunningActions::new(phase, action_id));
             }
         }
+    }
+
+    /// Clears action results restored from a previous conversation transcript.
+    pub fn clear_restored_action_results(&mut self) {
+        self.past_action_results.clear();
     }
 
     fn try_to_execute_available_actions(
@@ -1023,7 +1033,9 @@ impl BlocklistAIActionModel {
         self.handle_action_result(conversation_id, Arc::new(action_result), None, ctx);
     }
 
-    pub(super) fn cancel_action_with_id(
+    /// Cancels a running or pending action by id with the given reason.
+    /// Public because both frontends' permission cards route Reject here.
+    pub fn cancel_action_with_id(
         &mut self,
         conversation_id: AIConversationId,
         action_id: &AIAgentActionId,
@@ -1096,6 +1108,27 @@ impl BlocklistAIActionModel {
         self.executor.update(ctx, |executor, ctx| {
             executor.cancel_all_running_async_actions_for_conversation(conversation_id, reason, ctx)
         });
+        #[cfg(not(target_family = "wasm"))]
+        {
+            // Cancelling a conversation kills the running ffmpeg process
+            // without uploading the partial recording, so pass
+            // `should_upload = false`.
+            if let Some(finalization) = finalize_recording_for_conversation(
+                conversation_id,
+                FinalizeReason::Cancelled,
+                false,
+                ctx,
+            ) {
+                ctx.spawn(
+                    async move { finalization.resolve().await },
+                    |_model, result, _ctx| {
+                        log::info!(
+                            "Recording finalization after conversation cancellation completed: {result:?}"
+                        );
+                    },
+                );
+            }
+        }
 
         let Some(actions_to_cancel) = self.pending_actions.get_mut(&conversation_id) else {
             return;
@@ -1257,6 +1290,13 @@ impl BlocklistAIActionModel {
         }
 
         let action_id = action_result.id.clone();
+
+        // Every terminal outcome (success, failure, cancellation — from any
+        // path) funnels through here, so this is the one place executor-held
+        // per-action state is released.
+        self.executor.update(ctx, |executor, ctx| {
+            executor.discard_action_state(&action_id, ctx);
+        });
 
         // If a command action entered long-running mode (returned a snapshot), cancel all other
         // pending RequestCommandOutput actions. Only one command can be active at a time, and the

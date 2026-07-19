@@ -373,7 +373,9 @@ mod full_text_searcher {
 
         fn build_index(&mut self) {
             if self.rebuild_search_index().is_err() {
-                log::error!("Failed to create search index writer for new session options");
+                warp_errors::report_error!(
+                    "Failed to create search index writer for new session options"
+                );
                 self.clear_search_index();
             }
         }
@@ -409,7 +411,9 @@ mod full_text_searcher {
                 .build_index_async(max_match_documents)
                 .is_err()
             {
-                log::error!("Failed to build search index for base text of new session search");
+                warp_errors::report_error!(
+                    "Failed to build search index for base text of new session search"
+                );
                 if max_match_searcher.clear_search_index_async().is_err() {
                     max_match_searcher = BASE_TEXT_SEARCH_SCHEMA
                         .create_async_searcher(MIN_MEMORY_BUDGET, background_executor.clone())

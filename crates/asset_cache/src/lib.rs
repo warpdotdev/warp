@@ -174,16 +174,21 @@ fn get_file_path_for_asset(url: &Url, cache_dir: &Path) -> PathBuf {
 
 #[cfg(not(target_family = "wasm"))]
 async fn persist_bytes(bytes: &Bytes, file: &Path) {
+    use anyhow::Context;
     use async_fs::{OpenOptions, create_dir_all};
     use futures::AsyncWriteExt;
+    use warp_errors::report_error;
 
     let Some(parent_folder) = file.parent() else {
-        log::error!("attempted to write cache file in filesystem root");
+        report_error!("attempted to write cache file in filesystem root");
         return;
     };
 
-    if let Err(e) = create_dir_all(parent_folder).await {
-        log::error!("Error creating directory for cache files: {e:#}");
+    if let Err(e) = create_dir_all(parent_folder)
+        .await
+        .context("Error creating directory for cache files")
+    {
+        report_error!(e);
     }
 
     let mut file = match OpenOptions::new()
@@ -192,20 +197,21 @@ async fn persist_bytes(bytes: &Bytes, file: &Path) {
         .truncate(true)
         .open(file)
         .await
+        .context("Error opening file")
     {
         Ok(file) => file,
         Err(e) => {
-            log::error!("Error opening file: {e:#}");
+            report_error!(e);
             return;
         }
     };
 
-    if let Err(e) = file.write_all(bytes).await {
-        log::error!("Error writing to file: {e:#}");
+    if let Err(e) = file.write_all(bytes).await.context("Error writing to file") {
+        report_error!(e);
     }
 
-    if let Err(e) = file.flush().await {
-        log::error!("Error flushing file: {e:#}");
+    if let Err(e) = file.flush().await.context("Error flushing file") {
+        report_error!(e);
     };
 }
 

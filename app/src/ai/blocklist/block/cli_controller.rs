@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use instant::Instant;
 use parking_lot::FairMutex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -25,10 +26,15 @@ use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::TerminalModel;
 use crate::BlocklistAIHistoryModel;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum UserTakeOverReason {
     Manual,
-    Stop,
+    /// The user interrupted the command and took control. `should_auto_resume` is `true` for a
+    /// live interrupt (e.g. Ctrl-C) that keeps the conversation alive so it resumes once the
+    /// command completes, and `false` for teardown flows (stop/rewind) that have cancelled it.
+    Stop {
+        should_auto_resume: bool,
+    },
     /// The agent explicitly transferred control to the user via the
     /// TransferShellCommandControlToUser tool call.
     TransferFromAgent {
@@ -37,19 +43,89 @@ pub enum UserTakeOverReason {
     },
 }
 
+impl<'de> Deserialize<'de> for UserTakeOverReason {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // `Current` mirrors the derived shape so serde can parse it without recursing back into
+        // this impl. `LegacyStop` accepts the bare `"Stop"` persisted before `should_auto_resume`
+        // existed: an externally tagged enum can't accept `Stop` as both a unit (legacy) and a
+        // struct (current) variant, and `#[serde(default)]` can't bridge the two, so the forms are
+        // unioned as `untagged`.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Current(Current),
+            LegacyStop(LegacyStop),
+        }
+
+        #[derive(Deserialize)]
+        enum Current {
+            Manual,
+            Stop { should_auto_resume: bool },
+            TransferFromAgent { reason: String },
+        }
+
+        #[derive(Deserialize)]
+        enum LegacyStop {
+            Stop,
+        }
+
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Current(Current::Manual) => Self::Manual,
+            Wire::Current(Current::Stop { should_auto_resume }) => {
+                Self::Stop { should_auto_resume }
+            }
+            Wire::Current(Current::TransferFromAgent { reason }) => {
+                Self::TransferFromAgent { reason }
+            }
+            Wire::LegacyStop(LegacyStop::Stop) => Self::Stop {
+                should_auto_resume: false,
+            },
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct ActiveCLISubagentState {
     task_id: Option<TaskId>,
     last_snapshot_at: Option<Instant>,
+    latest_instruction: Option<String>,
+}
+/// Read-only identity and control state for a terminal command currently
+/// associated with a CLI subagent.
+///
+/// The terminal block remains the canonical owner of this state. Front-ends
+/// use this snapshot to keep rendering and input routing in agreement without
+/// exposing mutable block internals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CLISubagentTarget {
+    pub block_id: BlockId,
+    pub task_id: TaskId,
+    pub conversation_id: AIConversationId,
+    pub requested_command_action_id: Option<AIAgentActionId>,
+    pub control_state: LongRunningCommandControlState,
+    pub last_snapshot_at: Option<Instant>,
+    pub latest_instruction: Option<String>,
 }
 
 impl UserTakeOverReason {
     pub fn is_stop(&self) -> bool {
-        matches!(self, Self::Stop)
+        matches!(self, Self::Stop { .. })
     }
 
     pub fn is_transfer_from_agent(&self) -> bool {
         matches!(self, Self::TransferFromAgent { .. })
+    }
+
+    /// Returns `true` if the conversation should resume once the user-controlled command
+    /// completes. Only a teardown `Stop` opts out.
+    pub fn should_auto_resume(&self) -> bool {
+        match self {
+            Self::Manual | Self::TransferFromAgent { .. } => true,
+            Self::Stop { should_auto_resume } => *should_auto_resume,
+        }
     }
 
     pub fn transfer_reason(&self) -> Option<&str> {
@@ -93,6 +169,14 @@ impl LongRunningCommandControlState {
 
     pub fn is_user_in_control(&self) -> bool {
         matches!(self, Self::User { .. })
+    }
+
+    /// Returns `true` if a completing user-controlled command should auto-resume the conversation.
+    pub fn should_auto_resume(&self) -> bool {
+        match self {
+            Self::Agent { .. } => false,
+            Self::User { reason } => reason.should_auto_resume(),
+        }
     }
 
     pub fn should_hide_responses(&self) -> bool {
@@ -294,6 +378,69 @@ impl CLISubagentController {
             .and_then(|state| state.last_snapshot_at)
     }
 
+    pub fn set_latest_instruction(
+        &mut self,
+        block_id: BlockId,
+        instruction: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<String> {
+        let previous = self
+            .active_subagents_by_block
+            .entry(block_id.clone())
+            .or_default()
+            .latest_instruction
+            .replace(instruction);
+        ctx.emit(CLISubagentEvent::UpdatedInstruction { block_id });
+        previous
+    }
+
+    pub fn restore_latest_instruction(
+        &mut self,
+        block_id: BlockId,
+        instruction: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(state) = self.active_subagents_by_block.get_mut(&block_id) {
+            state.latest_instruction = instruction;
+            ctx.emit(CLISubagentEvent::UpdatedInstruction { block_id });
+        }
+    }
+    /// Returns the CLI subagent associated with the active command block.
+    pub fn active_target(&self) -> Option<CLISubagentTarget> {
+        let terminal_model = self.terminal_model.lock();
+        let block = terminal_model.block_list().active_block();
+        if !block.is_active_and_long_running() {
+            return None;
+        }
+        self.target_for_block_in_model(block.id(), &terminal_model)
+    }
+
+    /// Returns the CLI subagent associated with `block_id`.
+    pub fn target_for_block(&self, block_id: &BlockId) -> Option<CLISubagentTarget> {
+        let terminal_model = self.terminal_model.lock();
+        self.target_for_block_in_model(block_id, &terminal_model)
+    }
+
+    fn target_for_block_in_model(
+        &self,
+        block_id: &BlockId,
+        terminal_model: &TerminalModel,
+    ) -> Option<CLISubagentTarget> {
+        let block = terminal_model.block_list().block_with_id(block_id)?;
+        Some(CLISubagentTarget {
+            block_id: block.id().clone(),
+            task_id: block.cli_subagent_task_id()?.clone(),
+            conversation_id: block.ai_conversation_id()?,
+            requested_command_action_id: block.requested_command_action_id().cloned(),
+            control_state: block.long_running_control_state()?.clone(),
+            last_snapshot_at: self.last_snapshot_at(block_id),
+            latest_instruction: self
+                .active_subagents_by_block
+                .get(block_id)
+                .and_then(|state| state.latest_instruction.clone()),
+        })
+    }
+
     /// Force the currently in-flight poll for the given long-running command block to
     /// resolve immediately with a fresh snapshot, bypassing the agent-set timeout.
     /// Backs the `Check now` affordance surfaced next to the `Last seen by agent ...`
@@ -315,10 +462,14 @@ impl CLISubagentController {
         let interaction_mode_debug = format!("{:?}", active_block.interaction_mode());
         let lrc_state_debug = format!("{:?}", active_block.long_running_control_state());
         if let Err(e) = active_block.take_over_control_for_user(reason.clone()) {
-            log::error!(
-                "Failed to take control for user: {e:?}, reason={reason:?}, \
-                 block_id={block_id:?}, interaction_mode={interaction_mode_debug}, \
-                 lrc_state={lrc_state_debug}"
+            report_error!(
+                anyhow::Error::new(e).context("Failed to take control for user"),
+                extra: {
+                    "reason" => ?reason,
+                    "block_id" => ?block_id,
+                    "interaction_mode" => %interaction_mode_debug,
+                    "lrc_state" => %lrc_state_debug
+                }
             );
             return;
         }
@@ -378,9 +529,9 @@ impl CLISubagentController {
             .and_then(|state| state.user_take_over_reason())
             .is_some_and(|reason| reason.is_transfer_from_agent());
         if let Err(e) = active_block.handoff_control_to_agent() {
-            log::error!(
-                "Failed to handoff control to agent: {e:?}, \
-                 block_id={block_id:?}, lrc_state={lrc_state_debug}"
+            report_error!(
+                anyhow::Error::new(e).context("Failed to handoff control to agent"),
+                extra: { "block_id" => ?block_id, "lrc_state" => %lrc_state_debug }
             );
             return;
         }
@@ -399,7 +550,8 @@ impl CLISubagentController {
                         AgentViewEntryOrigin::LongRunningCommand,
                         ctx,
                     ) {
-                        log::error!("Failed to enter inline agent view for LRC handoff: {e}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Failed to enter inline agent view for LRC handoff"));
                     }
                 }
             });
@@ -516,7 +668,8 @@ impl CLISubagentController {
                     task_id,
                     *conversation_id,
                 ) {
-                    log::error!("Could not update interaction mode to agent-monitored: {e:?}",);
+                    report_error!(anyhow::Error::new(e)
+                        .context("Could not update interaction mode to agent-monitored"));
                     return;
                 };
 
@@ -569,9 +722,9 @@ impl CLISubagentController {
                                 }
                             }
                             Err(e) => {
-                                log::error!(
-                                    "Tried to upgrade CLISubagent task ID for non-existent block: {e:?}"
-                                );
+                                report_error!(e.context(
+                                    "Tried to upgrade CLISubagent task ID for non-existent block"
+                                ));
                             }
                         }
                     }
@@ -607,11 +760,28 @@ pub enum CLISubagentEvent {
         requested_command_action_id: Option<AIAgentActionId>,
         agent_has_control: bool,
     },
+    UpdatedInstruction {
+        block_id: BlockId,
+    },
     UpdatedLastSnapshot,
     ToggledHideResponses,
     /// Emitted when the user hands control back to the agent after a
     /// TransferShellCommandControlToUser action.
     ControlHandedBackAfterTransfer,
+}
+
+impl CLISubagentEvent {
+    pub fn block_id(&self) -> Option<&BlockId> {
+        match self {
+            Self::SpawnedSubagent { block_id, .. }
+            | Self::FinishedSubagent { block_id, .. }
+            | Self::UpdatedControl { block_id, .. }
+            | Self::UpdatedInstruction { block_id } => Some(block_id),
+            Self::UpdatedLastSnapshot
+            | Self::ToggledHideResponses
+            | Self::ControlHandedBackAfterTransfer => None,
+        }
+    }
 }
 
 impl Entity for CLISubagentController {
@@ -636,3 +806,7 @@ fn snapshot_block_id_for_action_result(result: &AIAgentActionResultType) -> Opti
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "cli_controller_tests.rs"]
+mod tests;

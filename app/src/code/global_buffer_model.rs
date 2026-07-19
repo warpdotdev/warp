@@ -2,6 +2,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bimap::BiMap;
@@ -269,7 +270,7 @@ pub enum GlobalBufferModelEvent {
     },
     FailedToSave {
         file_id: FileId,
-        error: Rc<FileSaveError>,
+        error: Arc<FileSaveError>,
     },
     /// A remote buffer update conflicted with local edits.
     /// The UI should present a resolution dialog.
@@ -850,7 +851,7 @@ impl GlobalBufferModel {
                             log::warn!("Remote save failed: {error}");
                             ctx.emit(GlobalBufferModelEvent::FailedToSave {
                                 file_id,
-                                error: Rc::new(FileSaveError::RemoteError(error.to_string())),
+                                error: Arc::new(FileSaveError::RemoteError(error.to_string())),
                             });
                         }
                     },
@@ -859,9 +860,12 @@ impl GlobalBufferModel {
             }
         }
 
-        FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.save(file_id, content, version, ctx)
-        })
+        // Completion is observed via `FileModelEvent`s; drop the save future.
+        FileModel::handle(ctx)
+            .update(ctx, |file_model, ctx| {
+                file_model.save(file_id, content, version, ctx)
+            })
+            .map(drop)
     }
 
     /// Rename a file and save its content via FileModel.
@@ -874,9 +878,12 @@ impl GlobalBufferModel {
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), FileSaveError> {
-        FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.rename_and_save(file_id, new_path, content, version, ctx)
-        })
+        // Completion is observed via `FileModelEvent`s; drop the save future.
+        FileModel::handle(ctx)
+            .update(ctx, |file_model, ctx| {
+                file_model.rename_and_save(file_id, new_path, content, version, ctx)
+            })
+            .map(drop)
     }
 
     /// Delete a file via FileModel.
@@ -887,9 +894,12 @@ impl GlobalBufferModel {
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), FileSaveError> {
-        FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.delete(file_id, version, ctx)
-        })
+        // Completion is observed via `FileModelEvent`s; drop the delete future.
+        FileModel::handle(ctx)
+            .update(ctx, |file_model, ctx| {
+                file_model.delete(file_id, version, ctx)
+            })
+            .map(drop)
     }
 
     /// Remove a tracked buffer, cleaning up FileModel and LSP state.
@@ -1977,9 +1987,12 @@ impl GlobalBufferModel {
         };
         let content = buffer.as_ref(ctx).text().into_string();
         let version = buffer.as_ref(ctx).version();
-        FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.save(file_id, content, version, ctx)
-        })
+        // Completion is observed via `FileModelEvent`s; drop the save future.
+        FileModel::handle(ctx)
+            .update(ctx, |file_model, ctx| {
+                file_model.save(file_id, content, version, ctx)
+            })
+            .map(drop)
     }
 
     /// Resolve a conflict by accepting the client's content.
@@ -2023,9 +2036,12 @@ impl GlobalBufferModel {
         let content = client_content.to_string();
         let save_version = ContentVersion::new();
         state.set_base_content_version(save_version);
-        FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.save(file_id, content, save_version, ctx)
-        })
+        // Completion is observed via `FileModelEvent`s; drop the save future.
+        FileModel::handle(ctx)
+            .update(ctx, |file_model, ctx| {
+                file_model.save(file_id, content, save_version, ctx)
+            })
+            .map(drop)
     }
 
     // ── Public accessors ──────────────────────────────────────────────

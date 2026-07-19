@@ -1,4 +1,12 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use axum::extract::{Json, State};
+use axum::routing::{get, post};
+use axum::Router;
 use rmcp::transport::auth::OAuthTokenResponse;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::TcpStream;
 
 use super::*;
 
@@ -13,6 +21,241 @@ fn make_test_token_response(refresh_token: Option<&str>) -> OAuthTokenResponse {
         json["refresh_token"] = serde_json::Value::String(rt.to_string());
     }
     serde_json::from_value(json).expect("OAuthTokenResponse deserialization")
+}
+
+async fn send_loopback_callback(redirect_uri: &str, query: &str) -> String {
+    let url = Url::parse(redirect_uri).expect("redirect URI should parse");
+    let address = format!(
+        "{}:{}",
+        url.host_str().expect("redirect should have a host"),
+        url.port().expect("redirect should have a port")
+    );
+    let mut stream = TcpStream::connect(address)
+        .await
+        .expect("loopback callback should connect");
+    let target = format!("{}?{query}", url.path());
+    stream
+        .write_all(
+            format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .expect("callback request should write");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("callback response should read");
+    response
+}
+
+#[tokio::test]
+async fn loopback_callback_accepts_matching_state() {
+    let receiver = loopback::LoopbackOAuthReceiver::bind()
+        .await
+        .expect("loopback receiver should bind");
+    let redirect_uri = receiver.redirect_uri().to_string();
+    let callback = tokio::spawn(async move {
+        send_loopback_callback(&redirect_uri, "code=test-code&state=test-state").await
+    });
+
+    let result = receiver
+        .receive("test-state")
+        .await
+        .expect("matching callback should succeed");
+    match result {
+        CallbackResult::Success { code, csrf_token } => {
+            assert_eq!(code, "test-code");
+            assert_eq!(csrf_token, "test-state");
+        }
+        CallbackResult::Error { error } => panic!("unexpected callback error: {error:?}"),
+    }
+    assert!(callback
+        .await
+        .expect("callback task should join")
+        .contains("200 OK"));
+}
+
+#[tokio::test]
+async fn loopback_callback_rejects_mismatched_state() {
+    let receiver = loopback::LoopbackOAuthReceiver::bind()
+        .await
+        .expect("loopback receiver should bind");
+    let redirect_uri = receiver.redirect_uri().to_string();
+    let callback = tokio::spawn(async move {
+        send_loopback_callback(&redirect_uri, "code=test-code&state=wrong-state").await
+    });
+
+    let error = receiver
+        .receive("expected-state")
+        .await
+        .expect_err("mismatched callback should fail");
+    assert!(error.to_string().contains("state did not match"));
+    assert!(callback
+        .await
+        .expect("callback task should join")
+        .contains("400 Bad Request"));
+}
+
+#[derive(Clone, Default)]
+struct FakeOAuthState {
+    origin: String,
+    registered_redirect_uri: Arc<Mutex<Option<String>>>,
+}
+
+async fn protected_resource_metadata(
+    State(state): State<FakeOAuthState>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "authorization_servers": [state.origin],
+        "scopes_supported": ["mcp"]
+    }))
+}
+
+async fn authorization_server_metadata(
+    State(state): State<FakeOAuthState>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "issuer": state.origin,
+        "authorization_endpoint": format!("{}/authorize", state.origin),
+        "token_endpoint": format!("{}/token", state.origin),
+        "registration_endpoint": format!("{}/register", state.origin),
+        "response_types_supported": ["code"],
+        "code_challenge_methods_supported": ["S256"],
+        "scopes_supported": ["mcp"]
+    }))
+}
+
+async fn register_client(
+    State(state): State<FakeOAuthState>,
+    Json(request): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let redirect_uri = request["redirect_uris"][0]
+        .as_str()
+        .expect("DCR request should contain a redirect URI")
+        .to_string();
+    *state
+        .registered_redirect_uri
+        .lock()
+        .expect("redirect state should lock") = Some(redirect_uri.clone());
+    Json(serde_json::json!({
+        "client_id": "test-public-client",
+        "redirect_uris": [redirect_uri],
+        "token_endpoint_auth_method": "none"
+    }))
+}
+
+async fn exchange_token() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "access_token": "test-loopback-access-token",
+        "token_type": "bearer",
+        "expires_in": 3600,
+        "refresh_token": "test-loopback-refresh-token"
+    }))
+}
+
+#[tokio::test]
+async fn loopback_oauth_completes_dcr_and_code_exchange() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("fake OAuth server should bind");
+    let origin = format!(
+        "http://{}",
+        listener
+            .local_addr()
+            .expect("fake OAuth address should resolve")
+    );
+    let state = FakeOAuthState {
+        origin: origin.clone(),
+        ..Default::default()
+    };
+    let registered_redirect_uri = state.registered_redirect_uri.clone();
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource/mcp",
+            get(protected_resource_metadata),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(protected_resource_metadata),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(authorization_server_metadata),
+        )
+        .route("/register", post(register_client))
+        .route("/token", post(exchange_token))
+        .with_state(state);
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("fake OAuth server should run");
+    });
+
+    let (persisted_tx, persisted_rx) = async_channel::bounded(1);
+    let context = AuthContext {
+        callback_mode: OAuthCallbackMode::Loopback,
+        uuid: Uuid::new_v4(),
+        persisted_credentials: None,
+        is_headless: false,
+        is_file_based: true,
+        persist_credentials: Box::new(move |_, credentials| {
+            let persisted_tx = persisted_tx.clone();
+            Box::pin(async move {
+                persisted_tx
+                    .send(credentials)
+                    .await
+                    .map_err(anyhow::Error::new)
+            })
+        }),
+        requires_authentication: Box::new(move |_, state, auth_url| {
+            Box::pin(async move {
+                let auth_url = Url::parse(&auth_url)?;
+                let params: HashMap<_, _> = auth_url.query_pairs().into_owned().collect();
+                let redirect_uri = params
+                    .get("redirect_uri")
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("authorization URL missing redirect_uri"))?;
+                assert!(redirect_uri.starts_with("http://127.0.0.1:"));
+                tokio::spawn(async move {
+                    let callback_url = format!("{redirect_uri}?code=test-code&state={state}");
+                    reqwest::get(callback_url)
+                        .await
+                        .expect("loopback callback should complete");
+                });
+                Ok(())
+            })
+        }),
+        authenticated: None,
+    };
+
+    let (client, did_require_login) =
+        make_authenticated_client(&format!("{origin}/mcp"), reqwest::Client::new(), context)
+            .await
+            .expect("DCR loopback OAuth should succeed");
+    assert!(did_require_login);
+    assert_eq!(
+        client
+            .get_access_token()
+            .await
+            .expect("access token should be available"),
+        "test-loopback-access-token"
+    );
+
+    let persisted = persisted_rx
+        .recv()
+        .await
+        .expect("credentials should be persisted");
+    assert_eq!(persisted.credentials.client_id, "test-public-client");
+    let redirect_uri = registered_redirect_uri
+        .lock()
+        .expect("redirect state should lock")
+        .clone()
+        .expect("DCR redirect should be recorded");
+    assert!(redirect_uri.starts_with("http://127.0.0.1:"));
+    assert!(redirect_uri.ends_with("/mcp/oauth2callback"));
+
+    server.abort();
 }
 
 /// Constructs a fresh `PersistingCredentialStore` plus the receiver side of its

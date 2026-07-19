@@ -14,6 +14,8 @@ use remote_server::manager::RemoteServerManager;
 use repo_metadata::repositories::DetectedRepositories;
 use warp_core::SessionId;
 #[cfg(feature = "local_fs")]
+use warp_errors::report_error;
+#[cfg(feature = "local_fs")]
 use warp_util::remote_path::RemotePath;
 #[cfg(feature = "local_fs")]
 use warpui::{AppContext, SingletonEntity as _};
@@ -949,9 +951,9 @@ impl WorkingDirectoriesModel {
                 code_review_view.expand_comment_list(ctx);
             })
         } else {
-            log::error!(
-                "WorkingDirectoriesModel did not find CodeReviewView for repo path {:?}",
-                repo_path
+            report_error!(
+                "WorkingDirectoriesModel did not find CodeReviewView for repo path",
+                extra: { "repo_path" => ?repo_path }
             );
         }
 

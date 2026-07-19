@@ -20,6 +20,7 @@ use tab_stops::TabStops;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_terminal::model::ansi::CharsetIndex;
 use warp_terminal::model::grid::cell;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
@@ -156,7 +157,11 @@ enum ResetGridChecks {
 
 impl ansi::Handler for GridHandler {
     fn set_title(&mut self, _: Option<String>) {
-        log::error!("Handler method GridHandler::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::set_title should never be called. This should be handled by TerminalModel.");
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        self.active_hyperlink_id = hyperlink.and_then(|h| self.hyperlink_registry.intern(h));
     }
 
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
@@ -848,10 +853,13 @@ impl ansi::Handler for GridHandler {
             ansi::ClearMode::All => {
                 if self.ansi_handler_state.is_alt_screen {
                     self.grid.region_mut(..).each(|cell| *cell = bg.into());
-                } else if self.full_grid_clear_behavior == FullGridClearBehavior::Clear {
-                    self.clear_visible_rows_in_place(bg);
                 } else {
-                    self.clear_viewport();
+                    if self.full_grid_clear_behavior == FullGridClearBehavior::Clear {
+                        self.clear_visible_rows_in_place(bg);
+                    } else {
+                        self.clear_viewport();
+                    }
+                    self.active_hyperlink_id = None;
                 }
             }
             ansi::ClearMode::Saved if self.history_size() > 0 => {
@@ -868,6 +876,7 @@ impl ansi::Handler for GridHandler {
                 // grid has been cleared.
                 self.clear_secrets();
                 self.clear_displayed_rows_and_filter_matches();
+                self.active_hyperlink_id = None;
 
                 // The row with the cursor still exists, though, so mark it as
                 // dirty and re-compute state accordingly.
@@ -898,6 +907,8 @@ impl ansi::Handler for GridHandler {
         self.flat_storage.clear();
 
         self.clear_secrets();
+
+        self.active_hyperlink_id = None;
 
         self.ansi_handler_state.active_charset = Default::default();
         self.ansi_handler_state.cursor_style = CursorStyle::default();
@@ -1139,15 +1150,15 @@ impl ansi::Handler for GridHandler {
     }
 
     fn set_color(&mut self, _: usize, _: warpui::color::ColorU) {
-        log::error!("Handler method GridHandler::set_color should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::set_color should never be called. This should be handled by TerminalModel.");
     }
 
     fn dynamic_color_sequence<W: std::io::Write>(&mut self, _: &mut W, _: u8, _: usize, _: &str) {
-        log::error!("Handler method GridHandler::dynamic_color_sequence should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::dynamic_color_sequence should never be called. This should be handled by TerminalModel.");
     }
 
     fn reset_color(&mut self, _: usize) {
-        log::error!("Handler method GridHandler::reset_color should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::reset_color should never be called. This should be handled by TerminalModel.");
     }
 
     fn clipboard_store(&mut self, clipboard: u8, base64: &[u8]) {
@@ -1196,11 +1207,11 @@ impl ansi::Handler for GridHandler {
     }
 
     fn push_title(&mut self) {
-        log::error!("Handler method GridHandler::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::push_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn pop_title(&mut self) {
-        log::error!("Handler method GridHandler::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::pop_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn text_area_size_pixels<W: std::io::Write>(&mut self, writer: &mut W) {
@@ -1588,6 +1599,7 @@ impl GridHandler {
         let fg = self.grid.cursor().template.fg;
         let bg = self.grid.cursor().template.bg;
         let flags = self.grid.cursor().template.flags;
+        let hyperlink_id = self.active_hyperlink_id;
 
         let cursor_cell = self.grid.cursor_cell();
 
@@ -1597,6 +1609,7 @@ impl GridHandler {
         cursor_cell.fg = fg;
         cursor_cell.bg = bg;
         cursor_cell.flags = flags;
+        cursor_cell.set_hyperlink_id(hyperlink_id);
 
         cursor_cell
     }

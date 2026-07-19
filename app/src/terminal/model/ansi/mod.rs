@@ -27,6 +27,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::debug;
 use vte::{Params, Parser as VteParser, Perform as VtePerform};
+use warp_errors::report_error;
 pub use warp_terminal::model::ansi::control_sequence_parameters::*;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::color::ColorU;
@@ -39,7 +40,7 @@ use crate::terminal::model::completions::{
 use crate::terminal::model::escape_sequences::C0;
 use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::parse_iterm_image_metadata;
-use crate::{safe_debug, safe_error};
+use crate::{safe_debug, safe_error, safe_warn};
 
 /// Marks an OSC as one that is sent by Warp logic registered in the shell.
 ///
@@ -164,7 +165,12 @@ fn parse_osc_7_cwd(payload: &[u8]) -> Option<String> {
         return None;
     }
 
-    percent_decode_utf8(encoded_path)
+    let decoded = percent_decode_utf8(encoded_path)?;
+
+    #[cfg(windows)]
+    let decoded = warp_util::path::file_uri_drive_path_to_windows(&decoded).into_owned();
+
+    Some(decoded)
 }
 
 fn osc_7_host_is_local(host: &str) -> bool {
@@ -606,7 +612,7 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
                 // shell without hex encoding. The RC file snippet given to
                 // users is not hex-encoded for the sake of transparency and
                 // debugability.
-                log::error!("Received hex-encoded SourcedRcFileForWarp escape sequence.");
+                report_error!("Received hex-encoded SourcedRcFileForWarp escape sequence.");
             }
             Ok(DProtoHook::FinishUpdate { value }) => self.handler.finish_update(value),
             Ok(DProtoHook::ExitShell { value }) => self.handler.exit_shell(value),
@@ -640,7 +646,7 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
                 self.handler.sourced_rc_file(value);
             }
             Ok(_) => {
-                log::error!("Received non hex-encoded hook that is not SourcedRcFileForWarp");
+                report_error!("Received non hex-encoded hook that is not SourcedRcFileForWarp");
             }
             Err(err) => {
                 log::warn!("Received malformed SourcedRcFileForWarp hook {err:#}");
@@ -675,7 +681,7 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
         match params.get(2) {
             Some(&WARP_KV_START_BYTE) => {
                 let Some(hook) = params.get(3).map(|data| String::from_utf8_lossy(data)) else {
-                    log::error!("Start pending hook OSC did not contain shell hook");
+                    log::warn!("Start pending hook OSC did not contain shell hook");
                     return;
                 };
                 self.handler.start_receiving_hook(hook.into());
@@ -699,7 +705,7 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
             }
             Some(&WARP_KV_ENTRY_BYTE) => {
                 let Some(key) = params.get(3) else {
-                    log::error!("Pending hook update OSC did not contain key");
+                    log::warn!("Pending hook update OSC did not contain key");
                     return;
                 };
                 let key = String::from_utf8_lossy(key);
@@ -713,8 +719,9 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
                 self.handler.update_hook(key.to_string(), value);
             }
             invalid_marker => {
-                log::error!(
-                    "Invalid marker {invalid_marker:?} received for pending shell hook OSC"
+                safe_warn!(
+                    safe: ("Invalid marker received for pending shell hook OSC"),
+                    full: ("Invalid marker received for pending shell hook OSC: marker={:?}", invalid_marker)
                 );
             }
         }
@@ -862,6 +869,23 @@ where
                     }
                 }
                 unhandled(params);
+            }
+
+            // OSC 8: Hyperlink (terminal anchor) sequences.
+            // Format: OSC 8 ; params ; URI ST. An empty URI closes the active
+            // hyperlink.
+            // Reference: https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
+            b"8" if FeatureFlag::OscHyperlinks.is_enabled() => {
+                match Hyperlink::parse_osc_params(&params[1..]) {
+                    Ok(hyperlink) => self.handler.set_hyperlink(hyperlink),
+                    // A malformed, non-UTF-8, or over-length sequence closes any
+                    // active hyperlink so later unrelated output can't inherit a
+                    // stale URI.
+                    Err(_) => {
+                        self.handler.set_hyperlink(None);
+                        unhandled(params);
+                    }
+                }
             }
 
             // OSC 9: Desktop notification (iTerm2/xterm style)
@@ -1094,7 +1118,7 @@ where
                     .map(|json_marker_bytes| String::from_utf8_lossy(json_marker_bytes))
                     .and_then(|json_marker_str| json_marker_str.chars().next())
                 else {
-                    log::error!("Could not retrieve OSC JSON marker");
+                    log::warn!("Could not retrieve OSC JSON marker");
                     return;
                 };
 
@@ -1105,7 +1129,7 @@ where
                             .get(2)
                             .map(|osc_data| String::from_utf8_lossy(osc_data))
                         else {
-                            log::error!("Warp OSC marker did not contain payload");
+                            log::warn!("Warp OSC marker did not contain payload");
                             return;
                         };
                         safe_debug!(
@@ -1121,7 +1145,7 @@ where
                             .get(2)
                             .map(|osc_data| String::from_utf8_lossy(osc_data))
                         else {
-                            log::error!("Warp OSC marker did not contain payload");
+                            log::warn!("Warp OSC marker did not contain payload");
                             return;
                         };
                         safe_debug!(
@@ -1133,7 +1157,10 @@ where
                     }
                     UNENCODED_KV_MARKER => self.handle_kv_marker(params),
                     _ => {
-                        log::error!("Invalid OSC JSON marker found: {json_marker_char}");
+                        safe_warn!(
+                            safe: ("Invalid OSC JSON marker found"),
+                            full: ("Invalid OSC JSON marker found: marker={}", json_marker_char)
+                        );
                     }
                 }
             }
@@ -1219,9 +1246,9 @@ where
 
             // This is a totally random OSC identifier to test how often we parse unexpected OSCs.
             b"781378" => {
-                log::error!(
-                    "Received unexpected OSC identifier (781378) with parameters: [{}]",
-                    format_params(params)
+                report_error!(
+                    "Received unexpected OSC identifier (781378)",
+                    extra: { "parameters" => %format_params(params) }
                 );
             }
 

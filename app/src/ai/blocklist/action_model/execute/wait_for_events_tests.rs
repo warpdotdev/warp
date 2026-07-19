@@ -84,14 +84,16 @@ fn watchdog_timeout_preserves_large_stamped_value() {
 #[test]
 fn execute_invokes_parent_registration_and_honors_child_short_circuit() {
     // `execute()` must route into the orchestration streamer behind the flag.
-    // For a child conversation (has_parent_agent), the streamer short-circuits
-    // without a server fetch (asserted via the mock's times(0) expectation),
-    // and the wait still flips the conversation into WaitingForEvents.
+    // For a child conversation (is_child_agent_conversation), the streamer
+    // short-circuits without a server fetch (asserted via the mock's times(0)
+    // expectation), and the wait still flips the conversation into
+    // WaitingForEvents.
     App::test((), |mut app| async move {
         let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
 
         let terminal_view_id = EntityId::new();
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // A streamer whose server fetch must never be called: the child
         // short-circuit precedes any `get_ambient_agent_task` call.

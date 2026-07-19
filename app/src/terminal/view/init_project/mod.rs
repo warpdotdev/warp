@@ -9,6 +9,8 @@ use lsp_server_selector::{create_lsp_server_selector, LSPServerInfo};
 pub use model::{InitProjectModel, InitProjectModelEvent, InitStepKind};
 use model::{InitStepData, InitStepStatus};
 use warp_core::ui::theme::Fill;
+#[cfg(feature = "local_fs")]
+use warp_errors::report_error;
 use warpui::elements::{
     Border, ChildView, Container, CrossAxisAlignment, Empty, Flex, MouseStateHandle, ParentElement,
     Text,
@@ -1199,7 +1201,8 @@ impl TypedActionView for InitStepBlock {
                         async move { Self::create_symlink_to_agents_md(&path_clone, &root_path).await },
                         |_me, result, _ctx| {
                             if let Err(e) = result {
-                                log::error!("Failed to create symlink to AGENTS.md: {e}");
+                                report_error!(anyhow::Error::new(e)
+                                    .context("Failed to create symlink to AGENTS.md"));
                             }
                         },
                     );

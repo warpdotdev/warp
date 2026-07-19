@@ -16,8 +16,8 @@ use session_sharing_protocol::common::{
 use session_sharing_protocol::sharer::SessionSourceType;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
 use warp_core::semantic_selection::SemanticSelection;
+use warp_errors::report_error;
 pub use warp_terminal::model::BlockIndex;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::assets::asset_cache::Asset;
@@ -1421,6 +1421,24 @@ impl TerminalModel {
             .and_then(|s| s.parse().ok())
     }
 
+    /// Model-only portion of the "is this a cloud agent conversation?" check used for display
+    /// purposes (e.g. the cloud agent icon). Callers holding a [`TerminalView`] should use
+    /// [`TerminalView::is_cloud_agent_session`], which also accounts for the ambient agent view
+    /// model.
+    ///
+    /// This intentionally keys off cloud-execution (ambient agent) semantics — a shared
+    /// *ambient* session or viewing an ambient conversation — NOT the mere presence of an
+    /// orchestrator task id. A manually shared *local* (`User`) session carries a
+    /// `source_task_id` sidecar but is not a cloud agent conversation, so it must fall through
+    /// here (see QUALITY-726).
+    pub fn is_cloud_agent_conversation(&self) -> bool {
+        self.is_shared_ambient_agent_session()
+            || matches!(
+                self.conversation_transcript_viewer_status.as_ref(),
+                Some(ConversationTranscriptViewerStatus::ViewingAmbientConversation(_))
+            )
+    }
+
     /// Loads the provided scrollback into the model.
     // TODO: we should be doing this in the constructor of the
     // terminal model for the viewers so that we're guaranteed that
@@ -1913,6 +1931,24 @@ impl TerminalModel {
                 .block_list
                 .url_at_point(inner_point)
                 .map(WithinModel::BlockList),
+        }
+    }
+
+    /// OSC 8 hyperlink span at `point`, paired with its URI. Routes to alt
+    /// screen or block list depending on which surface the point lives on.
+    pub fn hyperlink_at_point(
+        &self,
+        point: &WithinModel<Point>,
+    ) -> Option<(WithinModel<Link>, String)> {
+        match point {
+            WithinModel::AltScreen(inner_point) => {
+                let (link, uri) = self.alt_screen.hyperlink_at_point(inner_point)?;
+                Some((WithinModel::AltScreen(link), uri))
+            }
+            WithinModel::BlockList(inner_point) => {
+                let (link, uri) = self.block_list.hyperlink_at_point(inner_point)?;
+                Some((WithinModel::BlockList(link), uri))
+            }
         }
     }
 
@@ -2536,6 +2572,10 @@ impl ansi::Handler for TerminalModel {
         delegate!(self.set_cursor_shape(shape));
     }
 
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        delegate!(self.set_hyperlink(hyperlink));
+    }
+
     fn input(&mut self, c: char) {
         // TODO: we should figure out what it means to be simultaneously expecting
         // in-band command output and completions data, which is technically possible
@@ -2976,7 +3016,7 @@ impl ansi::Handler for TerminalModel {
                 // Not being able to read the value should not cause a full-app crash. Instead,
                 // bootstrapping should fail in the same way that it would if the DCS message
                 // were otherwise corrupted.
-                log::error!("Received bootstrap message with no pending session info.");
+                report_error!("Received bootstrap message with no pending session info.");
                 return;
             }
         };
@@ -3122,9 +3162,9 @@ impl ansi::Handler for TerminalModel {
                         uname: data.uname,
                     }))
             }
-            None => log::error!(
-                "Received invalid shell name in init_subshell: {}",
-                data.shell
+            None => report_error!(
+                "Received invalid shell name in init_subshell",
+                extra: { "shell" => %data.shell }
             ),
         }
     }
@@ -3146,9 +3186,9 @@ impl ansi::Handler for TerminalModel {
                         ))
                 }
                 None => {
-                    log::error!(
-                        "Received invalid shell name in SourcedRCFileForWarpValue: {}",
-                        data.shell
+                    report_error!(
+                        "Received invalid shell name in SourcedRCFileForWarpValue",
+                        extra: { "shell" => %data.shell }
                     );
                 }
             }

@@ -157,6 +157,14 @@ pub fn tui_config_local_dir() -> PathBuf {
     }
 }
 
+/// Returns the path to the TUI front-end's global MCP configuration file.
+///
+/// This is intentionally distinct from [`warp_home_mcp_config_file_path`] so
+/// the GUI and TUI can run different MCP configurations and versions without
+/// reading or modifying each other's files.
+pub fn tui_mcp_config_file_path() -> PathBuf {
+    tui_config_local_dir().join(".mcp.json")
+}
 /// Returns the base directory for general config files. Useful for accessing the config files for
 /// other programs.
 pub fn base_config_dir() -> PathBuf {
@@ -206,6 +214,19 @@ pub fn secure_state_dir() -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Returns the path to the directory where non-portable application state
+/// data for the TUI front-end (`warp-tui`) should be stored.
+///
+/// This is intentionally distinct from the GUI's state directory (see
+/// [`state_dir`] / [`secure_state_dir`]) so the two front-ends never share a
+/// SQLite database: they can be on different versions with different
+/// persistence schemas, and whichever binary is newer would otherwise migrate
+/// the shared database out from under the older one. Like other on-disk
+/// names, the `tui` directory name must not be changed once established.
+pub fn tui_state_dir() -> PathBuf {
+    secure_state_dir().unwrap_or_else(state_dir).join("tui")
 }
 
 /// Returns the path to the directory containing the user's custom themes.

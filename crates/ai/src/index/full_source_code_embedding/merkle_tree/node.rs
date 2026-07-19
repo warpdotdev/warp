@@ -10,6 +10,7 @@ use repo_metadata::entry::is_file_parsable;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use string_offset::ByteOffset;
+use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 
 use super::hash::MerkleHash;
@@ -269,7 +270,7 @@ impl MerkleNode {
                 self.hash = MerkleHash::from_hashes(self.children.iter().map(|child| &child.hash));
             }
             NodeId::Fragment { .. } => {
-                log::error!("Shouldn't need to recompute hash for fragments");
+                report_error!("Shouldn't need to recompute hash for fragments");
             }
         }
     }
@@ -342,7 +343,7 @@ impl MerkleNode {
                 }
 
                 if !updated_idx.is_empty() {
-                    log::error!("Updated index should be empty after an upsert request!");
+                    report_error!("Updated index should be empty after an upsert request!");
                 }
 
                 // Otherwise, update the cache.
@@ -537,7 +538,7 @@ impl MerkleNode {
                 }
 
                 if !updated_idx.is_empty() {
-                    log::error!("Updated index should be empty after an upsert request!");
+                    report_error!("Updated index should be empty after an upsert request!");
                 }
                 self.recompute_hash();
                 UpdateFileResult::Updated

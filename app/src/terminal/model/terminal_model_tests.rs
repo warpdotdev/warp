@@ -120,6 +120,48 @@ fn generic_shared_session_viewer_model_starts_view_pending() {
     assert!(model.shared_session_status().is_viewer());
 }
 
+#[test]
+fn is_cloud_agent_conversation_only_true_for_genuine_ambient_sessions() {
+    use std::str::FromStr;
+
+    let make_model = || {
+        TerminalModel::new_for_shared_session_viewer(
+            block_size(),
+            color::List::from(&color::Colors::default()),
+            ChannelEventListener::new_for_test(),
+            Arc::new(Background::default()),
+            false,
+            false,
+            false,
+            ObfuscateSecrets::No,
+        )
+    };
+    let task_id = "123e4567-e89b-12d3-a456-426614174000";
+
+    // Baseline: no shared session source and not viewing a transcript.
+    let mut model = make_model();
+    assert!(!model.is_cloud_agent_conversation());
+
+    // A manually shared *local* (`User`) session carries an orchestrator task id on its
+    // `source_task_id` sidecar (QUALITY-726) but is NOT a cloud agent conversation. This is the
+    // regression: before the fix, this task id leaked into the cloud agent icon check.
+    model.set_shared_session_source(SharedSessionSource::user(Some(task_id.to_owned())));
+    assert!(!model.is_cloud_agent_conversation());
+
+    // A shared *ambient* (cloud) session is a cloud agent conversation.
+    model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(task_id.to_owned())));
+    assert!(model.is_cloud_agent_conversation());
+
+    // Viewing an ambient conversation transcript is a cloud agent conversation.
+    let mut model = make_model();
+    model.set_conversation_transcript_viewer_status(Some(
+        ConversationTranscriptViewerStatus::ViewingAmbientConversation(
+            AmbientAgentTaskId::from_str(task_id).expect("valid task id"),
+        ),
+    ));
+    assert!(model.is_cloud_agent_conversation());
+}
+
 fn iterm_file_osc(name: &str, inline: bool, payload: &[u8]) -> String {
     let inline = if inline { "1" } else { "0" };
     format!(

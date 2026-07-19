@@ -7,6 +7,7 @@ use ai::api_keys::{
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::r#async::Timer;
@@ -136,7 +137,6 @@ pub(crate) fn refresh_geap_credentials(
     refresh_geap_credentials_with_options(manager, false, ctx);
 }
 
-#[allow(dead_code)]
 pub(crate) fn force_refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
@@ -162,6 +162,7 @@ pub(crate) fn refresh_geap_credentials_if_needed(
             ..
         } => *minted_for != binding || credentials.needs_refresh(),
         GeapCredentialsState::Missing
+        | GeapCredentialsState::Unconfigured
         | GeapCredentialsState::Disabled
         | GeapCredentialsState::Failed { .. } => true,
     };
@@ -183,7 +184,7 @@ fn refresh_geap_credentials_with_options(
             return;
         }
         GeapPolicy::Unconfigured => {
-            manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
@@ -260,7 +261,7 @@ fn apply_geap_mint_result(
         }
         GeapPolicy::Unconfigured => {
             log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
-            manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
@@ -316,7 +317,7 @@ fn apply_geap_mint_result(
             schedule_geap_token_refresh(manager, ctx);
         }
         Err(err) => {
-            log::error!("GEAP: credential mint failed: {err:?}");
+            report_error!("GEAP: credential mint failed", extra: { "error" => ?err });
             match previous {
                 // A failed background re-mint keeps the previous token — even
                 // near/past expiry (Google remains the authority on validity;

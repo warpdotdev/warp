@@ -30,23 +30,31 @@ use std::time::Duration;
 use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event as CrosstermEvent, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
-use crate::elements::tui::{TuiEvent, TuiEventContext, TuiLayoutContext, TuiRect, TuiSize};
+use crate::elements::tui::{TuiEvent, TuiEventContext, TuiPoint, TuiRect, TuiSize};
+use crate::event::ModifiersState;
 use crate::presenter::tui::TuiPresenter;
-use crate::r#async::block_on;
 use crate::r#async::executor::ForegroundTask;
+use crate::r#async::{block_on, Timer};
 use crate::{App, AppContext, TuiView, ViewHandle, WindowId};
 
 mod event_conversion;
 mod renderer;
+mod terminal_probe;
 
 pub use event_conversion::crossterm_event_to_tui_event;
 use event_conversion::ClickTracker;
 pub use renderer::TuiFrameRenderer;
+pub use terminal_probe::{
+    probe_terminal_colors, BackgroundLuminance, ProbedRgb, ProbedTerminalColors,
+};
+use warp_errors::report_error;
 
 /// The host terminal the runtime draws to and reads input from. Abstracted so
 /// the draw + event loop is testable against an in-memory target.
@@ -75,6 +83,10 @@ struct TuiScreen<T, R: TuiTerminal> {
     /// Synthesizes multi-click counts for left mouse presses, which crossterm
     /// does not report.
     click_tracker: ClickTracker,
+    /// The pointer position from the most recent positional event, replayed as
+    /// a synthetic `MouseMoved` after each draw so hover state tracks elements
+    /// that move under a stationary pointer.
+    last_mouse_position: Option<TuiPoint>,
 }
 
 impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
@@ -86,6 +98,7 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             renderer: TuiFrameRenderer::new(),
             terminal,
             click_tracker: ClickTracker::default(),
+            last_mouse_position: None,
         }
     }
 
@@ -94,18 +107,60 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
     }
 
     /// Lays out and paints the root view through the presenter, then flushes the
-    /// frame to the terminal. Draining this window's invalidations keeps the
-    /// manual + autotracking sets from accumulating (the frame is repainted in
-    /// full regardless).
-    fn draw(&mut self, ctx: &mut AppContext) -> io::Result<()> {
+    /// final frame to the terminal. Draining this window's invalidations keeps
+    /// the manual + autotracking sets from accumulating (the frame is repainted
+    /// in full regardless). After each presentation, the last pointer position
+    /// is replayed as a synthetic `MouseMoved`; resulting invalidations rebuild
+    /// the frame within this call, capped at three iterations like the GUI. Only
+    /// the final reconciled frame is flushed, matching the GUI's presentation.
+    ///
+    /// Returns the final frame's earliest requested repaint deadline so the
+    /// caller can schedule a timed redraw.
+    fn draw(&mut self, ctx: &mut AppContext) -> io::Result<Option<Instant>> {
         let size = self.terminal.size()?;
         let area = TuiRect::new(0, 0, size.width, size.height);
-        let invalidation = ctx.take_all_invalidations_for_window(self.window_id);
-        self.presenter
-            .invalidate(&invalidation, ctx, self.window_id);
-        let frame = self.presenter.present(ctx, &self.root_view, area);
+
+        // Mirrors the GUI's `build_scene` loop: pointer replay can invalidate
+        // hover-dependent layout, requiring another presentation and replay.
+        // The first iteration always presents; later ones only run if the
+        // replay invalidated something. Cap at three total presentations so a
+        // hover/layout feedback loop cannot hang the redraw.
+        let mut frame = None;
+        for _ in 0..3 {
+            let invalidation = ctx.take_all_invalidations_for_window(self.window_id);
+            if frame.is_some() && invalidation.updated.is_empty() && !invalidation.redraw_requested
+            {
+                break;
+            }
+            self.presenter
+                .invalidate(&invalidation, ctx, self.window_id);
+            frame = Some(self.presenter.present(ctx, &self.root_view, area));
+            self.replay_mouse_position(ctx);
+        }
+        let frame = frame.expect("loop always presents at least once");
+
         let mut writer = self.terminal.writer();
-        self.renderer.draw(&mut writer, &frame.buffer, frame.cursor)
+        self.renderer
+            .draw(&mut writer, &frame.buffer, frame.cursor)?;
+        Ok(frame.repaint_at)
+    }
+
+    /// Redispatches the last known pointer position as a synthetic
+    /// `MouseMoved` through the freshly rendered tree, so hover state tracks
+    /// elements that moved under a stationary pointer (e.g. a collapsible
+    /// expanding and pushing its header out from under the mouse). A state
+    /// change invalidates the notified views, which `draw`'s loop picks up to
+    /// rebuild the frame within the same call.
+    fn replay_mouse_position(&mut self, ctx: &mut AppContext) {
+        let Some(position) = self.last_mouse_position else {
+            return;
+        };
+        let event = TuiEvent::MouseMoved {
+            position,
+            modifiers: ModifiersState::default(),
+            is_synthetic: true,
+        };
+        self.dispatch_event(ctx, &event);
     }
 
     /// Converts a raw crossterm event into the TUI vocabulary, annotating left
@@ -122,6 +177,10 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
     /// presenter (the same tree that was painted), with a `TuiLayoutContext` so
     /// `TuiChildView` can resolve its child from `rendered_views`.
     fn dispatch_event(&mut self, ctx: &mut AppContext, event: &TuiEvent) -> bool {
+        if let Some(position) = event.position() {
+            self.last_mouse_position = Some(position);
+        }
+
         // Keymap pass (GUI parity): offer a keystroke to the focused view's
         // responder chain first, exactly like the GUI window event path.
         if let Some((keystroke, is_composing)) = event.key_down() {
@@ -130,24 +189,22 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             {
                 Ok(true) => return true,
                 Ok(false) => {}
-                Err(error) => log::error!("error dispatching keystroke: {error}"),
+                Err(error) => report_error!(error.context("error dispatching keystroke")),
             }
         }
 
         // Element-tree pass: walk the last rendered+laid-out element tree.
         // Access the two presenter fields directly so Rust sees disjoint borrows.
-        let Some(element) = self.presenter.last_element.as_mut() else {
+        let (Some(element), Some(scene)) = (
+            self.presenter.last_element.as_mut(),
+            self.presenter.last_scene.clone(),
+        ) else {
             return false; // no draw has happened yet
         };
-        let size = self.terminal.size().unwrap_or_default();
-        let area = TuiRect::new(0, 0, size.width, size.height);
         let root_view_id = self.root_view.id();
-        let mut event_ctx = TuiEventContext::default();
+        let mut event_ctx = TuiEventContext::new(scene, &mut self.presenter.rendered_views);
         event_ctx.set_origin_view(Some(root_view_id));
-        let mut layout_ctx = TuiLayoutContext {
-            rendered_views: &mut self.presenter.rendered_views,
-        };
-        let handled = element.dispatch_event(event, area, &mut event_ctx, &mut layout_ctx, ctx);
+        let handled = element.dispatch_event(event, &mut event_ctx, ctx);
 
         let notified = event_ctx.take_notified();
         for view_id in notified {
@@ -182,6 +239,9 @@ where
     screen: TuiScreen<T, R>,
     dirty: Rc<Cell<bool>>,
     last_size: Option<TuiSize>,
+    /// The earliest element-requested repaint deadline from the last draw; the
+    /// loop marks itself dirty once it passes.
+    pending_repaint: Option<Instant>,
     /// Restores the terminal when the runtime is dropped (the `enter` path).
     /// Held only for its `Drop`.
     _terminal_guard: Option<TuiTerminalGuard>,
@@ -222,6 +282,7 @@ where
             screen: TuiScreen::new(window_id, root_view, terminal),
             dirty,
             last_size: None,
+            pending_repaint: None,
             _terminal_guard: None,
         }
     }
@@ -238,8 +299,22 @@ where
             // 250 ms is a standard event-poll heartbeat: short enough to feel
             // responsive to resize, long enough to avoid busy-waiting. A timeout
             // is not an error — `poll_event` returns `Ok(None)`, making the loop
-            // iteration a no-op before the next draw-if-dirty check.
-            self.poll_and_dispatch(app, Duration::from_millis(250))?;
+            // iteration a no-op before the next draw-if-dirty check. A pending
+            // element-requested repaint shortens the wait so the redraw lands
+            // on time.
+            let heartbeat = Duration::from_millis(250);
+            let timeout = match self.pending_repaint {
+                Some(deadline) => {
+                    let now = Instant::now();
+                    if deadline > now {
+                        (deadline - now).min(heartbeat)
+                    } else {
+                        Duration::ZERO
+                    }
+                }
+                None => heartbeat,
+            };
+            self.poll_and_dispatch(app, timeout)?;
         }
         Ok(())
     }
@@ -255,11 +330,18 @@ where
         if self.last_size != Some(size) {
             self.dirty.set(true);
         }
+        if self
+            .pending_repaint
+            .is_some_and(|deadline| deadline <= Instant::now())
+        {
+            self.pending_repaint = None;
+            self.dirty.set(true);
+        }
         if !self.dirty.replace(false) {
             return Ok(());
         }
         let screen = &mut self.screen;
-        app.update(|ctx| screen.draw(ctx))?;
+        self.pending_repaint = app.update(|ctx| screen.draw(ctx))?;
         self.last_size = Some(size);
         Ok(())
     }
@@ -332,13 +414,28 @@ impl TuiTerminal for CrosstermTerminal {
 /// restoring the terminal on drop. Held by [`TuiRuntime::enter`] (so the
 /// `run_until` path restores when the runtime drops) or by a [`TuiDriverHandle`]
 /// (so a headless app restores deterministically when its session is dropped).
-pub struct TuiTerminalGuard(RawModeGuard<CrosstermModeControl>);
+pub struct TuiTerminalGuard {
+    _guard: RawModeGuard<CrosstermModeControl>,
+    keyboard_enhancement_supported: bool,
+}
 
 impl TuiTerminalGuard {
     /// Enables raw mode and switches to the alternate screen, restoring both
     /// when the guard is dropped.
     pub fn enter() -> io::Result<Self> {
-        Ok(Self(RawModeGuard::enter(CrosstermModeControl)?))
+        let keyboard_enhancement_supported =
+            matches!(terminal::supports_keyboard_enhancement(), Ok(true));
+        Ok(Self {
+            _guard: RawModeGuard::enter(CrosstermModeControl {
+                keyboard_enhancement_supported,
+            })?,
+            keyboard_enhancement_supported,
+        })
+    }
+
+    /// Whether the host terminal supports the Kitty keyboard-enhancement protocol.
+    pub fn keyboard_enhancement_supported(&self) -> bool {
+        self.keyboard_enhancement_supported
     }
 }
 
@@ -357,8 +454,18 @@ impl TuiTerminalGuard {
 /// - `_guard`: restores raw mode + the alternate screen on drop.
 pub struct TuiDriverHandle {
     _task: ForegroundTask,
+    /// The pending element-requested repaint timer, if any (see
+    /// [`draw_and_schedule_repaint`]). Dropping it cancels the timer.
+    _repaint_timer: Rc<RefCell<Option<ForegroundTask>>>,
     _reader: thread::JoinHandle<()>,
     _guard: TuiTerminalGuard,
+}
+
+impl TuiDriverHandle {
+    /// Whether the host terminal supports the Kitty keyboard-enhancement protocol.
+    pub fn keyboard_enhancement_supported(&self) -> bool {
+        self._guard.keyboard_enhancement_supported()
+    }
 }
 
 /// Starts a headless TUI session that draws `root_view` and feeds terminal input
@@ -394,15 +501,22 @@ pub fn spawn_tui_driver<T: TuiView>(
         CrosstermTerminal::new(),
     )));
 
+    // Repaint scheduling: at most one pending timer, held in this slot. Every
+    // draw reports the earliest element-requested repaint deadline for the
+    // whole frame, so each draw replaces (cancelling) the previous timer with
+    // one for its own deadline — or clears it when nothing is animating.
+    let repaint_timer: Rc<RefCell<Option<ForegroundTask>>> = Rc::default();
+
     // Redraw whenever the window is invalidated. `update_windows` invokes this at
     // the end of every `flush_effects`, so any `notify()` repaints. (The callback
     // is removed from the registry while it runs, so a draw that itself
     // invalidates can't re-enter it.)
     {
         let screen = screen.clone();
+        let repaint_timer = repaint_timer.clone();
         ctx.on_window_invalidated(window_id, move |_, ctx| {
-            if let Err(error) = screen.borrow_mut().draw(ctx) {
-                log::error!("failed to draw a TUI frame: {error}");
+            if let Err(error) = draw_and_schedule_repaint(&screen, &repaint_timer, ctx) {
+                report_error!(anyhow::Error::new(error).context("failed to draw a TUI frame"));
             }
         });
     }
@@ -414,7 +528,7 @@ pub fn spawn_tui_driver<T: TuiView>(
     // returning `Err` here drops `guard` (restoring the terminal) and lets the
     // caller surface the error, rather than leaving a live raw-mode session with
     // no usable frame.
-    screen.borrow_mut().draw(ctx)?;
+    draw_and_schedule_repaint(&screen, &repaint_timer, ctx)?;
 
     let weak_app = ctx.weak_app();
     let (sender, receiver) = async_channel::unbounded::<CrosstermEvent>();
@@ -434,7 +548,7 @@ pub fn spawn_tui_driver<T: TuiView>(
                     }
                 }
                 Err(error) => {
-                    log::error!("failed to read a terminal event: {error}");
+                    report_error!("failed to read a terminal event", extra: { "error" => %error });
                     break;
                 }
             }
@@ -465,9 +579,53 @@ pub fn spawn_tui_driver<T: TuiView>(
 
     Ok(TuiDriverHandle {
         _task: task,
+        _repaint_timer: repaint_timer,
         _reader: reader,
         _guard: guard,
     })
+}
+
+/// Draws a frame and schedules a timer for its element-requested repaint
+/// deadline, if any.
+///
+/// Paint traverses the full tree, so each frame's reported deadline is the
+/// authoritative next repaint: the new timer replaces — and thereby cancels —
+/// any previously pending one, and a frame with no deadline clears the slot.
+/// The timer redraws through this same function, so the cycle is
+/// self-sustaining while elements animate and fully idle otherwise.
+fn draw_and_schedule_repaint<T: TuiView, R: TuiTerminal + 'static>(
+    screen: &Rc<RefCell<TuiScreen<T, R>>>,
+    timer_slot: &Rc<RefCell<Option<ForegroundTask>>>,
+    ctx: &mut AppContext,
+) -> io::Result<()> {
+    let deadline = screen.borrow_mut().draw(ctx)?;
+    let timer = deadline.map(|deadline| {
+        let screen = screen.clone();
+        // Weak, or the slot (held by the task) and the task (held by the slot)
+        // would keep each other alive.
+        let weak_slot = Rc::downgrade(timer_slot);
+        let weak_app = ctx.weak_app();
+        ctx.foreground_executor().spawn(async move {
+            let now = Instant::now();
+            if deadline > now {
+                Timer::after(deadline - now).await;
+            }
+            let (Some(mut app), Some(timer_slot)) = (weak_app.upgrade(), weak_slot.upgrade())
+            else {
+                return;
+            };
+            app.update(move |ctx| {
+                // The draw below replaces the slot, dropping this task's own
+                // handle; `async_task` defers destruction, so this in-flight
+                // poll completes normally.
+                if let Err(error) = draw_and_schedule_repaint(&screen, &timer_slot, ctx) {
+                    report_error!("failed to draw a TUI frame", extra: { "error" => %error });
+                }
+            });
+        })
+    });
+    *timer_slot.borrow_mut() = timer;
+    Ok(())
 }
 
 /// The alternate-screen + raw-mode operations a [`RawModeGuard`] toggles.
@@ -478,13 +636,59 @@ trait TerminalModeControl {
     fn leave(&mut self);
 }
 
-struct CrosstermModeControl;
+struct CrosstermModeControl {
+    keyboard_enhancement_supported: bool,
+}
+
+fn enter_terminal_screen(
+    out: &mut impl Write,
+    keyboard_enhancement_supported: bool,
+) -> io::Result<()> {
+    execute!(
+        out,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste,
+        Hide
+    )?;
+
+    // Opt into the Kitty keyboard protocol so protocol-aware terminals (Ghostty,
+    // kitty, foot, WezTerm) report modified keys distinctly. This only affects
+    // the TUI's own host terminal — the GUI never enters raw mode / the alt
+    // screen and never runs this. The capability query happens before the input
+    // reader starts because crossterm's query cannot run concurrently with
+    // event polling.
+    if keyboard_enhancement_supported {
+        let _ = execute!(
+            out,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
+    Ok(())
+}
+
+fn leave_terminal_screen(
+    out: &mut impl Write,
+    keyboard_enhancement_supported: bool,
+) -> io::Result<()> {
+    if keyboard_enhancement_supported {
+        let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
+    execute!(
+        out,
+        Show,
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )
+}
 
 impl TerminalModeControl for CrosstermModeControl {
     fn enter(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut out = stdout();
-        if let Err(error) = execute!(out, EnterAlternateScreen, EnableMouseCapture, Hide) {
+        if let Err(error) = enter_terminal_screen(&mut out, self.keyboard_enhancement_supported) {
+            let _ = leave_terminal_screen(&mut out, self.keyboard_enhancement_supported);
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
@@ -493,7 +697,7 @@ impl TerminalModeControl for CrosstermModeControl {
 
     fn leave(&mut self) {
         let mut out = stdout();
-        let _ = execute!(out, Show, DisableMouseCapture, LeaveAlternateScreen);
+        let _ = leave_terminal_screen(&mut out, self.keyboard_enhancement_supported);
         let _ = terminal::disable_raw_mode();
     }
 }

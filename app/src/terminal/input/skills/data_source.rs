@@ -1,5 +1,5 @@
 use ai::skills::{SkillProvider, SkillReference, SkillScope};
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::Fill;
@@ -15,19 +15,19 @@ use warpui::{
     AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _,
 };
 
-use crate::ai::skills::SkillManager;
 use crate::appearance::Appearance;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::search::{SearchItem, SyncDataSource};
-use crate::terminal::cli_agent_sessions::{CLIAgentInputState, CLIAgentSessionsModel};
 use crate::terminal::input::inline_menu::{
     default_navigation_message_items, styles as inline_styles, InlineMenuAction,
     InlineMenuMessageArgs, InlineMenuType,
 };
 use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::input::skills::{query_selectable_skills, SelectableSkill};
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 
 #[derive(Clone, Debug)]
 pub struct AcceptSkill {
@@ -68,12 +68,16 @@ pub struct SkillSelectorDataSource {
     /// Whether bundled skills should be included in results.
     /// False for `/open-skill` (bundled skills can't be edited), true for `/skills` (they can be invoked).
     include_bundled: bool,
+    /// Ambient agent view model for the pane, if it is a cloud pane. Used to detect when this
+    /// is a disconnected cloud follow-up composer and skills should be hidden (they run locally).
+    ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
 }
 
 impl SkillSelectorDataSource {
     pub fn new(
         active_session: ModelHandle<ActiveSession>,
         terminal_view_id: EntityId,
+        ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&active_session, |_, _, event, ctx| match event {
@@ -87,16 +91,31 @@ impl SkillSelectorDataSource {
             active_session,
             terminal_view_id,
             include_bundled: false,
+            ambient_agent_view_model,
         }
     }
 
-    /// Returns the supported skill providers for the active CLI agent, or `None` if
-    /// CLI agent input is not open.
-    fn active_cli_agent_providers(&self, app: &AppContext) -> Option<&'static [SkillProvider]> {
-        CLIAgentSessionsModel::as_ref(app)
-            .session(self.terminal_view_id)
-            .filter(|s| matches!(s.input_state, CLIAgentInputState::Open { .. }))
-            .map(|s| s.agent.supported_skill_providers())
+    /// Attaches an ambient agent view model after construction. Used on the shared-session viewer
+    /// path where the model is created lazily at `SessionJoined`. Idempotent: a no-op when a
+    /// model is already set.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        self.ambient_agent_view_model = Some(view_model);
+        // Re-run the query in case the menu is open so the routing state is re-evaluated.
+        ctx.emit(UpdatedAvailableSkills);
+    }
+
+    /// True when the pane is a cloud agent pane (viewer, disconnected follow-up, or read-only
+    /// tombstone). Skills invoke locally and must be hidden for any cloud pane since running a
+    /// skill locally is disconnected from the remote session.
+    fn is_cloud_pane(&self) -> bool {
+        self.ambient_agent_view_model.is_some()
     }
 
     pub fn set_include_bundled(&mut self, include_bundled: bool) {
@@ -119,77 +138,27 @@ impl SyncDataSource for SkillSelectorDataSource {
         query: &Query,
         app: &AppContext,
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
-        let cwd = self.get_current_working_directory(app);
-        let cli_agent_providers = self.active_cli_agent_providers(app);
-        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
-
-        // Filter out bundled skills when in open mode, since they cannot be opened.
-        // Bundled skills are identified by scope rather than reference: local
-        // catalog entries are `BundledSkillId`-referenced, but remote catalog
-        // entries are path-referenced, and both must be excluded here.
-        // When CLI agent input is open, filter to skills that exist in a supported
-        // provider folder. We check all paths for the skill name (not just the
-        // deduplicated provider) because deduplication may pick a higher-priority
-        // provider even when the skill also exists in the CLI agent's folder.
-        let skill_manager = SkillManager::as_ref(app);
-        let skills: Vec<_> = skills
-            .into_iter()
-            .filter(|skill| {
-                if let Some(providers) = &cli_agent_providers {
-                    skill_manager.skill_exists_for_any_provider(skill, providers)
-                } else {
-                    self.include_bundled || skill.scope != SkillScope::Bundled
-                }
-            })
-            .map(|mut skill| {
-                // When a CLI agent is active, re-map the provider to the best
-                // supported one so the icon reflects the agent's native provider
-                // rather than the global dedup winner.
-                if let Some(providers) = &cli_agent_providers {
-                    skill.provider = skill_manager.best_supported_provider(&skill, providers);
-                }
-                skill
-            })
-            .collect();
-
-        let query_text = query.text.trim();
-        if query_text.is_empty() {
-            return Ok(skills
-                .into_iter()
-                .map(|skill| {
-                    QueryResult::from(SkillSearchItem::new(
-                        skill.name,
-                        skill.reference,
-                        skill.description,
-                        skill.scope,
-                        skill.provider,
-                        skill.icon_override,
-                    ))
-                })
-                .collect());
+        // Skills invoke locally; hide them on any cloud pane (viewer, disconnected follow-up,
+        // or read-only tombstone) since running a skill locally is disconnected from the remote
+        // session. The execute-time guard in `execute_skill_command` provides a safety net for
+        // keybinding-triggered invocations.
+        // TODO: support skills over shared sessions and for handing off based on oz environment
+        if self.is_cloud_pane() {
+            return Ok(vec![]);
         }
-        Ok(skills
-            .into_iter()
-            .filter_map(|skill| {
-                let match_result = match_indices_case_insensitive(skill.name.as_str(), query_text)?;
-                // Avoid spamming results with extremely weak matches.
-                if query_text.len() > 1 && match_result.score < 10 {
-                    return None;
-                }
-                Some(QueryResult::from(
-                    SkillSearchItem::new(
-                        skill.name,
-                        skill.reference,
-                        skill.description,
-                        skill.scope,
-                        skill.provider,
-                        skill.icon_override,
-                    )
-                    .with_name_match_result(Some(match_result.clone()))
-                    .with_score(OrderedFloat(match_result.score as f64)),
-                ))
-            })
-            .collect())
+
+        let cwd = self.get_current_working_directory(app);
+        Ok(query_selectable_skills(
+            cwd.as_ref(),
+            self.terminal_view_id,
+            self.include_bundled,
+            &query.text,
+            app,
+        )
+        .into_iter()
+        .map(SkillSearchItem::from)
+        .map(QueryResult::from)
+        .collect())
     }
 }
 
@@ -210,34 +179,17 @@ struct SkillSearchItem {
 }
 
 impl SkillSearchItem {
-    fn new(
-        skill_name: String,
-        skill_reference: SkillReference,
-        skill_description: String,
-        scope: SkillScope,
-        provider: SkillProvider,
-        icon_override: Option<Icon>,
-    ) -> Self {
+    fn from(skill: SelectableSkill) -> Self {
         Self {
-            skill_name,
-            skill_reference,
-            skill_description,
-            scope,
-            provider,
-            icon_override,
-            name_match_result: None,
-            score: OrderedFloat(f64::MIN),
+            skill_name: skill.name,
+            skill_reference: skill.reference,
+            skill_description: skill.description,
+            scope: skill.scope,
+            provider: skill.provider,
+            icon_override: skill.icon_override,
+            name_match_result: skill.name_match_result,
+            score: skill.score,
         }
-    }
-
-    fn with_name_match_result(mut self, result: Option<FuzzyMatchResult>) -> Self {
-        self.name_match_result = result;
-        self
-    }
-
-    fn with_score(mut self, score: OrderedFloat<f64>) -> Self {
-        self.score = score;
-        self
     }
 }
 

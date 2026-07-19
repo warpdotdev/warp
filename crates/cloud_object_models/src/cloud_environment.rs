@@ -181,9 +181,13 @@ pub struct AmbientAgentEnvironment {
     /// `github_repos`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_repos: Option<Vec<SourceRepo>>,
-    /// Base image specification
-    #[serde(flatten)]
-    pub base_image: BaseImage,
+    /// Base image specification.
+    ///
+    /// Absent when the environment does not pin a base image. The server may
+    /// omit the docker image, so the client must not fail to deserialize an
+    /// environment that lacks one.
+    #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
+    pub base_image: Option<BaseImage>,
     /// List of setup commands to run after cloning
     #[serde(default)]
     pub setup_commands: Vec<String>,
@@ -212,7 +216,7 @@ impl AmbientAgentEnvironment {
             code_forge: None,
             github_repos,
             source_repos: None,
-            base_image: BaseImage::DockerImage(docker_image),
+            base_image: Some(BaseImage::DockerImage(docker_image)),
             setup_commands,
             providers: ProvidersConfig::default(),
             secrets: None,
@@ -223,6 +227,15 @@ impl AmbientAgentEnvironment {
     /// for legacy environments.
     pub fn effective_code_forge(&self) -> CodeForge {
         self.code_forge.unwrap_or_default()
+    }
+
+    /// Display string for this environment's base image, empty when the
+    /// environment does not pin a base image.
+    pub fn base_image_display(&self) -> String {
+        self.base_image
+            .as_ref()
+            .map(|image| image.to_string())
+            .unwrap_or_default()
     }
 
     /// Returns the authoritative provider-neutral repository list.

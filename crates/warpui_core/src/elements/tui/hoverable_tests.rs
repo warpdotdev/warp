@@ -2,13 +2,15 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::TuiHoverable;
+use crate::elements::tui::test_support::{dispatch_presented_event, with_event_context};
 use crate::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPoint, TuiRect,
-    TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPoint, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiText,
 };
 use crate::elements::MouseStateHandle;
 use crate::event::ModifiersState;
-use crate::{App, EntityId, EntityIdMap};
+use crate::presenter::tui::TuiPresenter;
+use crate::{App, AppContext};
 
 fn left_mouse_down(x: u16, y: u16) -> TuiEvent {
     TuiEvent::LeftMouseDown {
@@ -19,90 +21,223 @@ fn left_mouse_down(x: u16, y: u16) -> TuiEvent {
     }
 }
 
+fn left_mouse_up(x: u16, y: u16) -> TuiEvent {
+    TuiEvent::LeftMouseUp {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState::default(),
+    }
+}
+
+fn mouse_moved(x: u16, y: u16, is_synthetic: bool) -> TuiEvent {
+    TuiEvent::MouseMoved {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState::default(),
+        is_synthetic,
+    }
+}
+
+#[test]
+fn pointer_dispatch_before_paint_is_unhandled() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let mut hoverable =
+                TuiHoverable::new(MouseStateHandle::default(), TuiText::new("hello").finish())
+                    .on_click(|_, _| panic!("unpainted hoverable must not click"));
+            with_event_context(|event_ctx| {
+                assert!(!hoverable.dispatch_event(&left_mouse_down(0, 0), event_ctx, app_ctx,));
+            });
+        });
+    });
+}
+
 #[test]
 fn mouse_moves_toggle_hover_state_and_notify_without_consuming_the_event() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let handle = MouseStateHandle::default();
-            let mut hoverable = TuiHoverable::new(handle.clone(), ().finish());
+            let hoverable = TuiHoverable::new(handle.clone(), TuiText::new("0123456789").finish());
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(
+                hoverable.finish(),
+                crate::elements::tui::TuiRect::new(0, 0, 10, 1),
+                app_ctx,
+            );
 
-            let area = TuiRect::new(0, 0, 10, 1);
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            // Returns (event handled, view notified) after moving the mouse.
-            let mut move_to = |x, y| {
-                let mut event_ctx = TuiEventContext::default();
-                event_ctx.set_origin_view(Some(EntityId::new()));
-                let handled = hoverable.dispatch_event(
-                    &TuiEvent::MouseMoved {
-                        position: TuiPoint::new(x, y),
-                        modifiers: ModifiersState::default(),
-                        is_synthetic: false,
-                    },
-                    area,
-                    &mut event_ctx,
-                    &mut ctx,
-                    app_ctx,
-                );
-                (handled, !event_ctx.take_notified().is_empty())
-            };
-
-            // Hover in: state flips and the view is notified, but the move
-            // still propagates for sibling hoverables.
-            assert_eq!(move_to(2, 0), (false, true));
+            assert_eq!(
+                dispatch_presented_event(&mut presenter, &mouse_moved(2, 0, false), app_ctx),
+                (false, 1)
+            );
             assert!(handle.lock().unwrap().is_hovered());
 
-            // A move within the area is not a transition: no notification.
-            assert_eq!(move_to(4, 0), (false, false));
+            assert_eq!(
+                dispatch_presented_event(&mut presenter, &mouse_moved(4, 0, false), app_ctx),
+                (false, 0)
+            );
             assert!(handle.lock().unwrap().is_hovered());
 
-            // Hover out: state flips back and the view is notified again.
-            assert_eq!(move_to(4, 3), (false, true));
+            assert_eq!(
+                dispatch_presented_event(&mut presenter, &mouse_moved(4, 3, false), app_ctx),
+                (false, 1)
+            );
             assert!(!handle.lock().unwrap().is_hovered());
         });
     });
 }
 
 #[test]
-fn click_inside_area_runs_callback_and_reports_handled() {
+fn click_fires_on_release_after_press_inside_bounds() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let hits = Rc::new(Cell::new(0u32));
             let counter = hits.clone();
-            let mut hoverable = TuiHoverable::new(MouseStateHandle::default(), ().finish())
-                .on_click(move |_ctx, _app| {
-                    counter.set(counter.get() + 1);
-                });
-
-            let area = TuiRect::new(0, 0, 4, 2);
-            let mut event_ctx = TuiEventContext::default();
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-
-            let handled = hoverable.dispatch_event(
-                &left_mouse_down(1, 1),
-                area,
-                &mut event_ctx,
-                &mut ctx,
+            let state = MouseStateHandle::default();
+            let hoverable = TuiHoverable::new(state.clone(), TuiText::new("xxxx").finish())
+                .on_click(move |_, _| counter.set(counter.get() + 1));
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(
+                hoverable.finish(),
+                crate::elements::tui::TuiRect::new(0, 0, 4, 1),
                 app_ctx,
             );
-            assert!(handled);
+
+            assert!(dispatch_presented_event(&mut presenter, &left_mouse_down(1, 0), app_ctx).0);
+            assert!(state.lock().unwrap().is_clicked());
+            assert_eq!(hits.get(), 0);
+
+            assert!(dispatch_presented_event(&mut presenter, &left_mouse_up(1, 0), app_ctx).0);
+            assert!(!state.lock().unwrap().is_clicked());
             assert_eq!(hits.get(), 1);
 
-            // A click outside the area is left unhandled and runs no callback.
-            let handled = hoverable.dispatch_event(
-                &left_mouse_down(10, 10),
-                area,
-                &mut event_ctx,
-                &mut ctx,
+            assert!(!dispatch_presented_event(&mut presenter, &left_mouse_down(10, 10), app_ctx).0);
+            assert!(!dispatch_presented_event(&mut presenter, &left_mouse_up(1, 0), app_ctx).0);
+            assert_eq!(hits.get(), 1);
+        });
+    });
+}
+
+#[test]
+fn release_outside_bounds_cancels_the_click() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let hits = Rc::new(Cell::new(0u32));
+            let counter = hits.clone();
+            let state = MouseStateHandle::default();
+            let hoverable = TuiHoverable::new(state.clone(), TuiText::new("xxxx").finish())
+                .on_click(move |_, _| counter.set(counter.get() + 1));
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(
+                hoverable.finish(),
+                crate::elements::tui::TuiRect::new(0, 0, 4, 1),
                 app_ctx,
             );
-            assert!(!handled);
+
+            assert!(dispatch_presented_event(&mut presenter, &left_mouse_down(1, 0), app_ctx).0);
+            assert!(!dispatch_presented_event(&mut presenter, &left_mouse_up(10, 10), app_ctx).0);
+            assert!(!state.lock().unwrap().is_clicked());
+            assert_eq!(hits.get(), 0);
+        });
+    });
+}
+
+#[test]
+fn hit_testing_is_bounded_to_the_child_laid_out_size() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let hits = Rc::new(Cell::new(0u32));
+            let counter = hits.clone();
+            let handle = MouseStateHandle::default();
+            let hoverable = TuiHoverable::new(handle.clone(), TuiText::new("hello").finish())
+                .on_click(move |_, _| counter.set(counter.get() + 1));
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(
+                hoverable.finish(),
+                crate::elements::tui::TuiRect::new(0, 0, 10, 1),
+                app_ctx,
+            );
+
+            dispatch_presented_event(&mut presenter, &mouse_moved(2, 0, false), app_ctx);
+            assert!(handle.lock().unwrap().is_hovered());
+            assert!(dispatch_presented_event(&mut presenter, &left_mouse_down(2, 0), app_ctx).0);
+            assert!(dispatch_presented_event(&mut presenter, &left_mouse_up(2, 0), app_ctx).0);
             assert_eq!(hits.get(), 1);
+
+            dispatch_presented_event(&mut presenter, &mouse_moved(7, 0, false), app_ctx);
+            assert!(!handle.lock().unwrap().is_hovered());
+            assert!(!dispatch_presented_event(&mut presenter, &left_mouse_down(7, 0), app_ctx).0);
+            assert_eq!(hits.get(), 1);
+        });
+    });
+}
+
+struct AlwaysHandles {
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
+}
+
+impl TuiElement for AlwaysHandles {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let size = constraint.clamp(TuiSize::new(1, 1));
+        self.size = Some(size);
+        size
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        _surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
+    }
+
+    fn dispatch_event(
+        &mut self,
+        _event: &TuiEvent,
+        _event_ctx: &mut TuiEventContext<'_>,
+        _app: &AppContext,
+    ) -> bool {
+        true
+    }
+}
+
+#[test]
+fn consecutive_synthetic_hover_flips_are_suppressed() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let handle = MouseStateHandle::default();
+            let hoverable = TuiHoverable::new(handle.clone(), TuiText::new("hello").finish());
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(
+                hoverable.finish(),
+                crate::elements::tui::TuiRect::new(0, 0, 10, 1),
+                app_ctx,
+            );
+
+            // A synthetic flip in is allowed: the previous flip was not synthetic.
+            dispatch_presented_event(&mut presenter, &mouse_moved(2, 0, true), app_ctx);
+            assert!(handle.lock().unwrap().is_hovered());
+
+            // A second consecutive synthetic flip (out) is suppressed to break
+            // potential layout<->hover feedback loops.
+            dispatch_presented_event(&mut presenter, &mouse_moved(9, 0, true), app_ctx);
+            assert!(handle.lock().unwrap().is_hovered());
+
+            // A real move out flips immediately.
+            dispatch_presented_event(&mut presenter, &mouse_moved(9, 0, false), app_ctx);
+            assert!(!handle.lock().unwrap().is_hovered());
         });
     });
 }
@@ -113,64 +248,21 @@ fn child_consumes_the_event_before_the_click_handler() {
         app.read(|app_ctx| {
             let outer_hits = Rc::new(Cell::new(0u32));
             let outer_counter = outer_hits.clone();
-
-            // A child that always handles the event pre-empts the wrapper's click.
-            let mut hoverable =
-                TuiHoverable::new(MouseStateHandle::default(), AlwaysHandles.finish()).on_click(
-                    move |_, _| {
-                        outer_counter.set(outer_counter.get() + 1);
-                    },
-                );
-
-            let mut event_ctx = TuiEventContext::default();
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
+            let child = AlwaysHandles {
+                size: None,
+                origin: None,
             };
-            let handled = hoverable.dispatch_event(
-                &left_mouse_down(0, 0),
-                TuiRect::new(0, 0, 1, 1),
-                &mut event_ctx,
-                &mut ctx,
+            let hoverable = TuiHoverable::new(MouseStateHandle::default(), child.finish())
+                .on_click(move |_, _| outer_counter.set(outer_counter.get() + 1));
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(
+                hoverable.finish(),
+                crate::elements::tui::TuiRect::new(0, 0, 1, 1),
                 app_ctx,
             );
 
-            assert!(handled);
+            assert!(dispatch_presented_event(&mut presenter, &left_mouse_down(0, 0), app_ctx).0);
             assert_eq!(outer_hits.get(), 0);
         });
     });
-}
-
-/// A leaf element that reports every event as handled, used to verify the
-/// wrapper defers to its child.
-struct AlwaysHandles;
-
-impl TuiElement for AlwaysHandles {
-    fn layout(
-        &mut self,
-        constraint: TuiConstraint,
-        _ctx: &mut TuiLayoutContext,
-        _app: &crate::AppContext,
-    ) -> TuiSize {
-        constraint.min
-    }
-
-    fn render(
-        &self,
-        _area: TuiRect,
-        _buffer: &mut crate::elements::tui::TuiBuffer,
-        _ctx: &mut TuiLayoutContext,
-    ) {
-    }
-
-    fn dispatch_event(
-        &mut self,
-        _event: &TuiEvent,
-        _area: TuiRect,
-        _event_ctx: &mut TuiEventContext,
-        _ctx: &mut TuiLayoutContext,
-        _app: &crate::AppContext,
-    ) -> bool {
-        true
-    }
 }

@@ -1311,6 +1311,17 @@ impl RichTextAction<CodeEditorView> for CodeEditorViewAction {
         None
     }
 
+    fn hidden_section_clicked(
+        line_range: Range<LineCount>,
+        _parent_view: &WeakViewHandle<CodeEditorView>,
+        _ctx: &AppContext,
+    ) -> Option<Self> {
+        Some(CodeEditorViewAction::HiddenSectionExpansion {
+            line_range,
+            expansion_type: ExpansionType::Both,
+        })
+    }
+
     fn middle_mouse_down(_ctx: &AppContext) -> Option<Self> {
         None
     }

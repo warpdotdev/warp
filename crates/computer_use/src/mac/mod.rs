@@ -3,6 +3,7 @@ mod keyboard;
 mod keycode_cache;
 mod mouse;
 mod post;
+mod recording;
 mod screenshot;
 mod util;
 mod window;
@@ -10,11 +11,10 @@ mod window;
 use async_trait::async_trait;
 use pathfinder_geometry::vector::Vector2I;
 use post::PostTarget;
+pub use recording::Recorder;
 use util::{display_scale_factor_for_window, main_display_scale_factor};
 use warpui_core::r#async::Timer;
 
-// Video recording is not yet implemented on macOS; reuse the no-op recorder.
-pub use crate::noop::Recorder;
 use crate::{Action, ActionResult, Options, Target, TargetedAction};
 
 pub fn is_supported_on_current_platform() -> bool {

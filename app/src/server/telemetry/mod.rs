@@ -23,6 +23,7 @@ use rudder_message::{
     BatchMessageItem as RudderBatchMessage, Message as RudderMessage,
 };
 use warp_core::channel::RudderStackDestination;
+use warp_errors::report_error;
 use warpui::telemetry::Event;
 
 use crate::auth::UserUid;
@@ -172,7 +173,7 @@ impl TelemetryApi {
 
         let events = warpui::telemetry::flush_events();
         if events.len() > max_event_count {
-            log::error!("More telemetry events in queue than the limit to persist")
+            report_error!("More telemetry events in queue than the limit to persist")
         }
 
         self.persist_events_at_path(&file, max_event_count, events)?;

@@ -67,6 +67,8 @@ pub mod parsing;
 #[cfg(not(target_family = "wasm"))]
 pub use parsing::ParsedTemplatableMCPServerResult;
 #[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
+#[cfg(not(target_family = "wasm"))]
 pub mod reconnecting_peer;
 
 impl CloudObjectUuid for MCPServer {
@@ -377,7 +379,9 @@ impl MCPServerExt for MCPServer {
         // serde_json::to_string_pretty should never fail on our JSONMCPServer type, but better to
         // not crash the app if it does.
         .unwrap_or_else(|err| {
-            log::error!("Could not serialize MCP server to user json: {err:?}");
+            report_error!(
+                anyhow::Error::new(err).context("Could not serialize MCP server to user json")
+            );
             Default::default()
         })
     }
@@ -417,7 +421,9 @@ impl MCPServerExt for MCPServer {
         // serde_json::to_string_pretty should never fail on our JSONMCPServer type, but better to
         // not crash the app if it does.
         .unwrap_or_else(|err| {
-            log::error!("Could not serialize MCP server to user json: {err:?}");
+            report_error!(
+                anyhow::Error::new(err).context("Could not serialize MCP server to user json")
+            );
             Default::default()
         });
 
@@ -456,7 +462,8 @@ impl MCPServerExt for MCPServer {
                     apply_values(&mut cli_server.static_env_vars, &env_vars);
                 }
                 Err(error) => {
-                    log::error!("Could not read MCP server environment variables from sqlite: {error:?}");
+                    report_error!(anyhow::Error::new(error)
+                        .context("Could not read MCP server environment variables from sqlite"));
                 }
             }
         }

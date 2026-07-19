@@ -6,7 +6,6 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-crash_reporting = ["dep:sentry", "dep:sentry-log"]
 integration_tests = []
 local_fs = []
 release_bundle = []
@@ -25,6 +24,7 @@ directories.workspace = true
 shellexpand.workspace = true
 enum-iterator.workspace = true
 futures-lite.workspace = true
+warp_errors.workspace = true
 warp_features.workspace = true
 itertools.workspace = true
 getset.workspace = true
@@ -38,8 +38,6 @@ serde.workspace = true
 settings.workspace = true
 serde_json.workspace = true
 serde_with.workspace = true
-sentry = { workspace = true, optional = true }
-sentry-log = { workspace = true, optional = true }
 strum.workspace = true
 strum_macros.workspace = true
 sysinfo.workspace = true

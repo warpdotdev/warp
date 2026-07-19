@@ -548,6 +548,22 @@ fn map_cli_session_status(
     match status {
         CLIAgentSessionStatus::InProgress => (AgentTaskState::InProgress, None),
         CLIAgentSessionStatus::Success => (AgentTaskState::Succeeded, None),
+        CLIAgentSessionStatus::Failed {
+            error_type,
+            message,
+        } => {
+            // User-actionable errors (bad credentials, org restrictions, billing) map to
+            // FAILED. Everything else (rate limits, server errors, model errors, etc.)
+            // maps to ERROR since they are typically Anthropic's or Warp's fault.
+            // The list of error types on Claude Code comes from https://code.claude.com/docs/en/hooks#stopfailure-input
+            let task_state = match error_type.as_deref() {
+                Some("authentication_failed" | "oauth_org_not_allowed" | "billing_error") => {
+                    AgentTaskState::Failed
+                }
+                _ => AgentTaskState::Error,
+            };
+            (task_state, message.as_ref().map(TaskStatusUpdate::message))
+        }
         CLIAgentSessionStatus::Blocked { message } => (
             AgentTaskState::Blocked,
             message.as_ref().map(TaskStatusUpdate::message),

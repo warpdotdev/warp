@@ -5,7 +5,6 @@ use ai::agent::action::InsertReviewComment;
 use chrono::Local;
 use lsp::LspManagerModel;
 use repo_metadata::repositories::DetectedRepositories;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
@@ -24,8 +23,8 @@ use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::comments::{
     attach_pending_imported_comments, AttachedReviewComment, AttachedReviewCommentTarget,
-    CommentId, CommentOrigin, LineDiffContent, PendingImportedReviewComment,
-    PendingImportedReviewCommentTarget,
+    CommentId, CommentOrigin, ImportedCommentDetails, LineDiffContent,
+    PendingImportedReviewComment, PendingImportedReviewCommentTarget,
 };
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{DiffStateModel, FileDiff, GitFileStatus};
@@ -182,6 +181,45 @@ fn create_line_comment(
         head: None,
         outdated: false,
         origin: CommentOrigin::Native,
+    }
+}
+
+/// Creates an imported (from GitHub) line comment whose stored `content` is the
+/// raw unified-diff line, including its one-char marker. `raw_diff_content`
+/// should therefore carry the leading `+`/`-`/space (e.g. `" line 2"` for a
+/// context line, `"+added"` for an addition).
+fn create_imported_line_comment(
+    file_path: impl Into<PathBuf>,
+    line_number: usize,
+    raw_diff_content: &str,
+    comment_content: &str,
+) -> AttachedReviewComment {
+    let line_count = LineCount::from(line_number);
+    AttachedReviewComment {
+        id: CommentId::new(),
+        content: comment_content.to_string(),
+        target: AttachedReviewCommentTarget::Line {
+            absolute_file_path: LocalOrRemotePath::Local(file_path.into()),
+            line: EditorLineLocation::Current {
+                line_number: line_count,
+                line_range: line_count..LineCount::from(line_number + 1),
+            },
+            content: LineDiffContent {
+                content: raw_diff_content.to_string(),
+                lines_added: LineCount::from(0),
+                lines_removed: LineCount::from(0),
+            },
+        },
+        last_update_time: Local::now(),
+        base: None,
+        head: None,
+        outdated: false,
+        origin: CommentOrigin::ImportedFromGitHub(ImportedCommentDetails {
+            author: "reviewer".to_string(),
+            github_comment_id: "1".to_string(),
+            github_parent_id: None,
+            html_url: None,
+        }),
     }
 }
 
@@ -436,8 +474,6 @@ fn test_relocate_comments_file_comment_passes_through() {
 #[test]
 fn test_relocate_comments_line_comment_no_matching_editor_marked_outdated() {
     App::test((), |mut app| async move {
-        let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
-
         // Editor is for "test.txt" but comment is for "other.txt"
         let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
@@ -701,8 +737,6 @@ fn test_attach_pending_imported_thread_flattens_depth_first_sorted_by_timestamp(
 #[test]
 fn test_relocate_comments_file_comment_no_matching_editor_marked_outdated() {
     App::test((), |mut app| async move {
-        let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
-
         // Editor is for "test.txt" but comment is for "other.txt"
         let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
@@ -741,8 +775,6 @@ fn test_relocate_comments_file_comment_no_matching_editor_marked_outdated() {
 #[test]
 fn test_relocate_comments_line_removed_marked_outdated() {
     App::test((), |mut app| async move {
-        let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
-
         // Editor has "line 1\nline 3" (line 2 was removed)
         // Comment was attached to "line 2" which no longer exists
         let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 3");
@@ -777,6 +809,144 @@ fn test_relocate_comments_line_removed_marked_outdated() {
                 fallbacks, 1,
                 "Should count as a fallback when line content cannot be matched"
             );
+        });
+    });
+}
+
+/// Regression test for the reported bug: an imported GitHub PR comment placed on
+/// a **context** (unchanged) diff line must NOT be marked `outdated` when the
+/// line still exists verbatim in the editor.
+///
+/// Imported context diff lines are stored with the unified-diff leading-space
+/// marker (`" line 2"`). Before the fix, `original_text()` (which strips only
+/// `+`/`-`) was used for matching, so `" line 2"` never matched the editor's
+/// `"line 2"` and the comment fell back to outdated. The fix routes imported
+/// comments through `imported_original_text()`, which also strips the space.
+#[test]
+fn test_imported_context_line_comment_relocates_and_not_outdated() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
+
+        // Imported comment on line 2 as a CONTEXT line (leading-space marker).
+        let comment = create_imported_line_comment(
+            "/repo/test.txt",
+            1,
+            " line 2",
+            "Comment on an unchanged (context) line",
+        );
+
+        ctx.code_review_view.update(&mut app, |_view, view_ctx| {
+            let RelocateCommentsResult {
+                comments: relocated,
+                fallback_count: fallbacks,
+            } = CodeReviewView::relocate_comments(
+                vec![comment],
+                &ctx.state,
+                &ctx.repo_location,
+                view_ctx,
+            );
+
+            assert_eq!(relocated.len(), 1, "Comment should be relocated");
+            assert!(
+                !relocated[0].outdated,
+                "Imported context-line comment should NOT be outdated when the line still exists"
+            );
+            assert_eq!(
+                fallbacks, 0,
+                "Should have no fallbacks when content matches"
+            );
+        });
+    });
+}
+
+/// An imported context-line comment whose line genuinely no longer exists must
+/// still fall back to `outdated` — the fix must not defeat real outdated detection.
+#[test]
+fn test_imported_context_line_comment_removed_marked_outdated() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 3");
+
+        // Imported context comment on a line (" old line 2") that no longer exists.
+        let comment = create_imported_line_comment(
+            "/repo/test.txt",
+            1,
+            " old line 2",
+            "Comment on a since-removed context line",
+        );
+
+        ctx.code_review_view.update(&mut app, |_view, view_ctx| {
+            let RelocateCommentsResult {
+                comments: relocated,
+                fallback_count: fallbacks,
+            } = CodeReviewView::relocate_comments(
+                vec![comment],
+                &ctx.state,
+                &ctx.repo_location,
+                view_ctx,
+            );
+
+            assert_eq!(relocated.len(), 1, "Comment should be kept");
+            assert!(
+                relocated[0].outdated,
+                "Imported comment should be outdated when its line no longer exists"
+            );
+            assert_eq!(
+                fallbacks, 1,
+                "Should count as a fallback when content is gone"
+            );
+        });
+    });
+}
+
+/// Guards against a regression from the fix: a NATIVE comment whose content is a
+/// genuinely indented source line (leading whitespace is significant, not a diff
+/// marker) must keep using `original_text()` and still match / not be outdated.
+#[test]
+fn test_native_indented_context_comment_not_outdated() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "fn f() {\n    let x = 1;\n}");
+
+        // Native comment on the indented line; content is the raw line (no marker).
+        let line_count = LineCount::from(1);
+        let comment = AttachedReviewComment {
+            id: CommentId::new(),
+            content: "Comment on an indented native line".to_string(),
+            target: AttachedReviewCommentTarget::Line {
+                absolute_file_path: LocalOrRemotePath::Local(PathBuf::from("/repo/test.txt")),
+                line: EditorLineLocation::Current {
+                    line_number: line_count,
+                    line_range: line_count..LineCount::from(2),
+                },
+                content: LineDiffContent {
+                    content: "    let x = 1;".to_string(),
+                    lines_added: LineCount::from(0),
+                    lines_removed: LineCount::from(0),
+                },
+            },
+            last_update_time: Local::now(),
+            base: None,
+            head: None,
+            outdated: false,
+            origin: CommentOrigin::Native,
+        };
+
+        ctx.code_review_view.update(&mut app, |_view, view_ctx| {
+            let RelocateCommentsResult {
+                comments: relocated,
+                fallback_count: fallbacks,
+            } = CodeReviewView::relocate_comments(
+                vec![comment],
+                &ctx.state,
+                &ctx.repo_location,
+                view_ctx,
+            );
+
+            assert_eq!(relocated.len(), 1, "Comment should be relocated");
+            assert!(
+                !relocated[0].outdated,
+                "Native indented-line comment should NOT be outdated (leading whitespace is significant)"
+            );
+            assert_eq!(fallbacks, 0, "Should have no fallbacks for native indented match");
         });
     });
 }
@@ -936,8 +1106,6 @@ fn test_handle_edit_comment_scrolls_with_buffer() {
 #[test]
 fn test_active_comments_not_marked_outdated() {
     App::test((), |mut app| async move {
-        let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
-
         let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         // Comment attached to "line 2" which exists in the editor

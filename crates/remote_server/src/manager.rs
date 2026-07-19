@@ -10,6 +10,7 @@ use serde::Serialize;
 #[cfg(not(target_family = "wasm"))]
 use warp_core::channel::ChannelState;
 use warp_core::SessionId;
+use warp_errors::report_error;
 use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
 use warp_util::standardized_path::StandardizedPath;
 #[cfg(not(target_family = "wasm"))]
@@ -868,6 +869,7 @@ fn ripgrep_search_result(
         }
         other => {
             log::error!("Unexpected response variant for RipgrepSearch: {other:?}");
+            report_error!("Unexpected response variant for RipgrepSearch");
             Err(HostRequestError::UnexpectedResponse)
         }
     }
@@ -992,6 +994,7 @@ impl HostRequestHandle {
             Some(crate::proto::server_message::Message::ReadFileContextResponse(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for ReadFileContext: {other:?}");
+                report_error!("Unexpected response variant for ReadFileContext");
                 Err(HostRequestError::UnexpectedResponse)
             }
         }
@@ -1032,6 +1035,7 @@ impl HostRequestHandle {
                 log::error!(
                     "Unexpected response variant for GetFragmentMetadataFromHash: {other:?}"
                 );
+                report_error!("Unexpected response variant for GetFragmentMetadataFromHash");
                 Err(HostRequestError::UnexpectedResponse)
             }
         }
@@ -1058,6 +1062,7 @@ impl HostRequestHandle {
             }
             other => {
                 log::error!("Unexpected response variant for UploadHandoffSnapshot: {other:?}");
+                report_error!("Unexpected response variant for UploadHandoffSnapshot");
                 Err(HostRequestError::UnexpectedResponse)
             }
         }
@@ -1113,6 +1118,7 @@ impl HostRequestHandle {
             }
             other => {
                 log::error!("Unexpected response variant for CommitChain: {other:?}");
+                report_error!("Unexpected response variant for CommitChain");
                 Err(HostRequestError::UnexpectedResponse)
             }
         }
@@ -1144,6 +1150,7 @@ impl HostRequestHandle {
             },
             other => {
                 log::error!("Unexpected response variant for Push: {other:?}");
+                report_error!("Unexpected response variant for Push");
                 Err(HostRequestError::UnexpectedResponse)
             }
         }
@@ -1181,6 +1188,7 @@ impl HostRequestHandle {
             }
             other => {
                 log::error!("Unexpected response variant for CreatePr: {other:?}");
+                report_error!("Unexpected response variant for CreatePr");
                 Err(HostRequestError::UnexpectedResponse)
             }
         }
@@ -1216,6 +1224,7 @@ impl HostRequestHandle {
             },
             other => {
                 log::error!("Unexpected response variant for GetCommittedBranchFiles: {other:?}");
+                report_error!("Unexpected response variant for GetCommittedBranchFiles");
                 Err(HostRequestError::UnexpectedResponse)
             }
         }
@@ -1254,6 +1263,7 @@ impl HostRequestHandle {
             }
             other => {
                 log::error!("Unexpected response variant for GenerateCommitMessage: {other:?}");
+                report_error!("Unexpected response variant for GenerateCommitMessage");
                 Err(HostRequestError::UnexpectedResponse)
             }
         }

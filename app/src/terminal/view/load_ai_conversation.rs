@@ -3,12 +3,13 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use chrono::{DateTime, Local};
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use itertools::Itertools;
 use prost::Message;
 use vec1::Vec1;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui::units::IntoPixels;
 use warpui::{EntityId, ModelHandle, SingletonEntity, ViewContext};
@@ -21,7 +22,6 @@ use crate::ai::agent::{
     AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, CreateDocumentsRequest,
     CreateDocumentsResult, EditDocumentsResult,
 };
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryBlockParams, AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage,
 };
@@ -38,6 +38,9 @@ use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 use crate::persistence::model::AgentConversationData;
 use crate::server::server_api::ServerApiProvider;
+use crate::terminal::conversation_restoration::{
+    command_block_indices_for_exchanges, prepare_conversation_block_restoration,
+};
 use crate::terminal::find::TerminalFindModel;
 use crate::terminal::input::message_bar::{Message as InputMessage, MessageItem};
 use crate::terminal::model::block::SerializedBlock;
@@ -50,7 +53,6 @@ use crate::terminal::view::{
     AIBlockMetadata, Event, RichContent, RichContentInsertionPosition, RichContentMetadata,
     TerminalView,
 };
-use crate::terminal::TerminalModel;
 use crate::util::bindings::keybinding_name_to_keystroke;
 
 /// Describes restore-context setup state for directory reconciliation and hinting.
@@ -155,6 +157,26 @@ impl ConversationRestorationInNewPaneType {
                 conversation.metadata.working_directory.clone()
             }
             Self::Startup { .. } => None,
+        }
+    }
+
+    /// Returns the working directory the newly-created pane's shell should start
+    /// in when restoring this conversation.
+    ///
+    /// For a forked conversation we start the shell in the conversation's
+    /// *current* (latest) working directory so the fork continues where the
+    /// source conversation left off, rather than the directory it was originally
+    /// started in (which is what `initial_working_directory` returns). If no
+    /// later exchange recorded a working directory we fall back to the initial
+    /// one. Other restoration modes keep using the initial working directory.
+    pub fn startup_working_directory(&self) -> Option<String> {
+        match self {
+            Self::Forked { conversation, .. } => conversation
+                .current_working_directory()
+                .or_else(|| conversation.initial_working_directory()),
+            Self::Startup { .. } | Self::Historical { .. } | Self::HistoricalCLIAgent { .. } => {
+                self.initial_working_directory()
+            }
         }
     }
 }
@@ -561,23 +583,10 @@ impl TerminalView {
         let conversation_id = restored.ai_conversation.id();
         log::info!("Restoring conversation after view creation: {conversation_id}",);
 
-        // Insert command blocks into the existing blocklist first, mirroring the
-        // quit/restart path where blocks are passed to the TerminalModel constructor.
-        // This ensures command_block_indices_for_exchanges finds them and AI blocks
-        // get command_block_index = Some(...), so process_restored_outputs doesn't
-        // need to create blocks itself.
-        let serialized_items = restored.ai_conversation.to_serialized_blocklist_items();
-        if !serialized_items.is_empty() {
+        let restoration_plan = {
             let mut model = self.model.lock();
-            let block_list = model.block_list_mut();
-            for item in &serialized_items {
-                match item {
-                    crate::ai::blocklist::SerializedBlockListItem::Command { block } => {
-                        block_list.insert_restored_block(block);
-                    }
-                }
-            }
-        }
+            prepare_conversation_block_restoration(&restored.ai_conversation, &mut model)
+        };
 
         // Calculate height for AI blocks
         let size_info = *self.size_info;
@@ -585,20 +594,10 @@ impl TerminalView {
             .into_pixels()
             .to_lines(size_info.cell_height_px());
 
-        // Now compute block indices — the just-inserted command blocks will be found.
-        let exchanges = exchanges_for_blocklist(&restored.ai_conversation);
-        let command_block_indices = {
-            let terminal_model = self.model.lock();
-            command_block_indices_for_exchanges(
-                &terminal_model,
-                exchanges.iter().copied(),
-                exchanges.len(),
-            )
-        };
-
         // Process all exchanges for this conversation
         let mut all_ai_block_params = Vec::new();
-        for (exchange, command_block_index) in exchanges.into_iter().zip(command_block_indices) {
+        for restored_exchange in restoration_plan.into_exchanges() {
+            let exchange = restored_exchange.exchange().clone();
             let params = AIBlockCreationParams {
                 ai_controller: self.ai_controller.clone(),
                 get_relevant_files_controller: self.get_relevant_files_controller.clone(),
@@ -613,8 +612,8 @@ impl TerminalView {
                 conversation_id,
                 exchange_id: exchange.id,
                 working_directory: exchange.working_directory.clone(),
-                command_block_index,
-                exchange: (*exchange).clone(),
+                command_block_index: restored_exchange.command_block_index(),
+                exchange,
                 use_live_appearance,
                 is_restoring_on_startup: false,
             };
@@ -654,7 +653,9 @@ impl TerminalView {
             conversation_restoration.should_show_restore_context_hint();
 
         // Save the target working directory so we can detect when the dir doesn't exist on this machine.
-        let target_dir = conversation_restoration.initial_working_directory();
+        // Use the same directory the new pane's shell starts in (the latest one for forks) so the
+        // "couldn't find original conversation directory" hint stays consistent with the spawned shell.
+        let target_dir = conversation_restoration.startup_working_directory();
 
         // Extract the active conversation ID if agent view was open (only for startup restoration)
         let active_conversation_id_to_restore = match &conversation_restoration {
@@ -967,7 +968,9 @@ impl TerminalView {
                 );
             }
             Err(e) => {
-                log::error!("Failed to load conversation from tasks: {e:?}");
+                report_error!(
+                    anyhow::Error::new(e).context("Failed to load conversation from tasks")
+                );
             }
         }
     }
@@ -1107,7 +1110,7 @@ impl TerminalView {
                 .not()
                 .then_some(content.plain_text))
         else {
-            log::error!("Clipboard contents are not a conversation debug link");
+            report_error!("Clipboard contents are not a conversation debug link");
             return;
         };
 
@@ -1128,7 +1131,7 @@ impl TerminalView {
 
             url
         } else {
-            log::error!(
+            report_error!(
                 "Invalid debug link format. Expected format: http://host/debug/maa/conversation-id"
             );
             return;
@@ -1179,91 +1182,3 @@ impl TerminalView {
         );
     }
 }
-
-/// Returns block indices where `AIBlock`s created for the given `exchanges` should be inserted.
-///
-/// For each exchange, finds the first command block whose timestamp is after the exchange's
-/// start time. The AI block should be inserted before that command block.
-///
-/// Blocks in the blocklist may not be sorted by timestamp (e.g. when `insert_restored_block`
-/// appends blocks at the end during `restore_conversation_after_view_creation`), so we scan
-/// all command blocks for each exchange rather than relying on a forward-only cursor.
-///
-/// The returned vec is guaranteed to have `exchange_count` len.
-fn command_block_indices_for_exchanges<'a>(
-    terminal_model: &TerminalModel,
-    exchanges: impl Iterator<Item = &'a AIAgentExchange>,
-    _exchange_count: usize,
-) -> Vec<Option<BlockIndex>> {
-    let blocks = terminal_model.block_list().blocks();
-
-    // Collect shell command blocks with their timestamps
-    let command_blocks: Vec<(BlockIndex, DateTime<Local>)> = blocks
-        .iter()
-        .enumerate()
-        .filter_map(|(index, block)| {
-            // Only consider shell command blocks (not background/rich content), and only if they have a start timestamp
-            if !block.is_background() {
-                block.start_ts().map(|ts| (BlockIndex::from(index), *ts))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let exchange_timestamps: Vec<DateTime<Local>> =
-        exchanges.map(|exchange| exchange.start_time).collect();
-    find_block_indices_for_exchange_timestamps(&command_blocks, &exchange_timestamps)
-}
-
-/// Pure implementation of the block-index search used by
-/// [`command_block_indices_for_exchanges`].
-///
-/// For each exchange timestamp, finds the command block with the smallest timestamp
-/// that is >= the exchange timestamp. Iterates the command block list backwards
-/// because `insert_restored_block` appends blocks at the end of the blocklist, so
-/// the tail is a sorted group of conversation blocks while the prefix contains
-/// pre-existing terminal blocks we don't want to match against. The backwards scan
-/// tracks the best candidate and stops as soon as it sees a block before the exchange
-/// timestamp — within the sorted tail, everything earlier is also <=.
-fn find_block_indices_for_exchange_timestamps(
-    command_blocks: &[(BlockIndex, DateTime<Local>)],
-    exchange_timestamps: &[DateTime<Local>],
-) -> Vec<Option<BlockIndex>> {
-    let mut result = Vec::with_capacity(exchange_timestamps.len());
-
-    for &exchange_timestamp in exchange_timestamps {
-        let mut best: Option<(BlockIndex, DateTime<Local>)> = None;
-        for &(idx, ts) in command_blocks.iter().rev() {
-            if ts >= exchange_timestamp {
-                // This block is at or after the exchange; remember it if it's
-                // the earliest such block we've seen. We use >= because a
-                // command block's start_ts comes from the tool call message
-                // timestamp, which is in the same exchange whose start_time
-                // we're comparing against.
-                // When timestamps tie, keep moving backwards so we pick the
-                // earliest inserted block for that timestamp.
-                if best.is_none_or(|(best_idx, best_ts)| {
-                    ts < best_ts || (ts == best_ts && idx < best_idx)
-                }) {
-                    best = Some((idx, ts));
-                }
-            } else {
-                // We've reached a block before the exchange timestamp.
-                // The tail (conversation blocks) is sorted, so all earlier
-                // blocks in the tail are also <= exchange_timestamp. Any
-                // blocks further back belong to the pre-existing prefix
-                // and should not be matched.
-                break;
-            }
-        }
-
-        result.push(best.map(|(idx, _)| idx));
-    }
-
-    result
-}
-
-#[cfg(test)]
-#[path = "load_ai_conversation_tests.rs"]
-mod tests;

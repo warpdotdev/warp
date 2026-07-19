@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::{
@@ -35,9 +36,6 @@ pub enum SlashCommandRequest {
     },
     Summarize {
         prompt: Option<String>,
-    },
-    FetchReviewComments {
-        repo_path: String,
     },
     /// Invoke a skill.
     InvokeSkill {
@@ -148,7 +146,7 @@ impl SlashCommandRequest {
                 Some(controller.start_new_conversation_for_request(ctx).id())
             }
         }) else {
-            log::error!("Failed to get conversation ID for slash command request");
+            report_error!("Failed to get conversation ID for slash command request");
             return;
         };
 
@@ -211,7 +209,7 @@ impl SlashCommandRequest {
                     });
                 }
             }
-            Err(e) => log::error!("Failed to send agent slash command request: {e:?}"),
+            Err(e) => report_error!(e.context("Failed to send agent slash command request")),
         }
     }
 
@@ -221,13 +219,12 @@ impl SlashCommandRequest {
         app: &AppContext,
     ) -> Option<AIConversationId> {
         match self {
-            Self::Summarize { .. }
-            | Self::CreateEnvironment { .. }
-            | Self::InvokeSkill { .. }
-            | Self::FetchReviewComments { .. } => controller
-                .context_model
-                .as_ref(app)
-                .selected_conversation_id(app),
+            Self::Summarize { .. } | Self::CreateEnvironment { .. } | Self::InvokeSkill { .. } => {
+                controller
+                    .context_model
+                    .as_ref(app)
+                    .selected_conversation_id(app)
+            }
             _ => None,
         }
     }
@@ -277,9 +274,6 @@ impl SlashCommandRequest {
             SlashCommandRequest::Summarize { prompt, .. } => {
                 vec![AIAgentInput::SummarizeConversation { prompt, context }]
             }
-            SlashCommandRequest::FetchReviewComments { repo_path } => {
-                vec![AIAgentInput::FetchReviewComments { repo_path, context }]
-            }
             SlashCommandRequest::InvokeSkill { skill, user_query } => {
                 let user_query = if FeatureFlag::SkillArguments.is_enabled() {
                     let query = user_query
@@ -313,7 +307,6 @@ impl SlashCommandRequest {
             SlashCommandRequest::CreateNewProject { .. }
             | SlashCommandRequest::CreateEnvironment { .. }
             | SlashCommandRequest::Summarize { .. }
-            | SlashCommandRequest::FetchReviewComments { .. }
             | SlashCommandRequest::InvokeSkill { .. } => EntrypointType::UserInitiated,
         }
     }

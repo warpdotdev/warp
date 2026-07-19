@@ -13,6 +13,7 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -86,6 +87,9 @@ impl ThirdPartyHarness for CodexHarness {
             // OAuth refresh failures — all five Codex variants share this
             // substring (see upstream session/token messages).
             "could not be refreshed",
+            // Generically check for invalid request errors.
+            // Keep this last so more specific patterns can be matched first.
+            "\"type\": \"invalid_request_error\"",
         ]
     }
 
@@ -322,7 +326,7 @@ impl HarnessRunner for CodexHarnessRunner {
                             .create_external_conversation(CODEX_CLI_FORMAT)
                             .await
                             .map_err(|e| {
-                                log::error!("Failed to create external conversation: {e}");
+                                report_error!(&e);
                                 AgentDriverError::ConfigBuildFailed(e)
                             })
                     })

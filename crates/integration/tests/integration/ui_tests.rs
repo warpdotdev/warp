@@ -156,6 +156,7 @@ integration_tests! {
     test_code_review_scroll_preserved_header_range,
     #[ignore = "Flaking on CI - KC looking into 3/31/26"]
     test_code_review_scroll_preserved_footer_range,
+    test_code_review_double_click_fully_expands_hidden_section,
     test_pane_group_state_single_pane,
     test_pane_group_state_multi_pane,
     test_pane_group_state_close_pane,
@@ -210,6 +211,13 @@ integration_tests! {
     test_alt_screen_secret_detection,
     test_secret_case_sensitivity,
     test_secrets_are_always_redacted_in_ai_inputs,
+
+    // OSC 8 hyperlink tests (GH6393)
+    test_osc8_open_close_renders_visible_text,
+    test_osc8_copy_block_yields_visible_text_only,
+    test_osc8_open_link_action_opens_url,
+    test_osc8_file_scheme_opens_url,
+    test_osc8_no_regression_on_url_autodetect,
 
     test_active_session_follows_focus,
     test_tab_context_menu_copies_metadata,
@@ -323,6 +331,9 @@ integration_tests! {
     test_file_tree_keyboard_navigation,
     test_file_tree_non_openable_files,
     test_file_tree_nested_file_opening,
+
+    // Copy current path command-palette action
+    test_copy_current_path_copies_terminal_pwd,
 
     // Go to Line tests
     test_goto_line_dialog_open_close,

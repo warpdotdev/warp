@@ -24,6 +24,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use base64::Engine as _;
 use chrono::Duration;
 use cli_controller::{CLISubagentController, CLISubagentEvent};
@@ -47,6 +48,7 @@ use warp_editor::content::buffer::InitialBufferState;
 #[cfg(feature = "local_fs")]
 use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_errors::{report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
 use warpui::assets::asset_cache::AssetCache;
@@ -67,8 +69,6 @@ use warpui::{
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-#[cfg(feature = "agent_mode_debug")]
-use self::code_diff_view::FileDiff;
 use self::model::{AIBlockModel, AIBlockModelHelper};
 use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind};
 use super::code_block::CodeSnippetButtonHandles;
@@ -100,7 +100,6 @@ use crate::ai::agent::{
     SummarizationType, TodoOperation,
 };
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::NewConversationDecision;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewEntryOrigin};
@@ -108,6 +107,8 @@ use crate::ai::blocklist::block::keyboard_navigable_buttons::{
     KeyboardNavigableButtonBuilder, KeyboardNavigableButtons,
 };
 use crate::ai::blocklist::context_model::AttachmentType;
+#[cfg(feature = "agent_mode_debug")]
+use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::inline_action::ask_user_question_view::{
     self, AskUserQuestionView, AskUserQuestionViewEvent,
 };
@@ -165,6 +166,7 @@ use crate::editor::InteractionState;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
 use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{
     AgentModeRewindEntrypoint, AutonomySettingToggleSource, InteractionSource, TelemetryEvent,
 };
@@ -202,8 +204,8 @@ use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, 
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    report_error, report_if_error, send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit,
-    LLMPreferences, PrivacySettings, ToastStack,
+    send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit, LLMPreferences,
+    PrivacySettings, ToastStack,
 };
 
 /// The default display name used for the user if they have no associated display name.
@@ -481,6 +483,9 @@ pub(super) struct AIBlockStateHandles {
 
     /// Mouse state handle for the invalid API key button
     invalid_api_key_button_handle: MouseStateHandle,
+
+    /// Mouse state handle for the Subscribe button shown on the out-of-credits error
+    subscribe_button_handle: MouseStateHandle,
 
     /// Mouse state handle for AI document created block
     ai_document_handle: MouseStateHandle,
@@ -1041,6 +1046,15 @@ pub struct AIBlock {
     /// Per-action button components for "View screenshot" buttons on UseComputer actions.
     view_screenshot_buttons: HashMap<AIAgentActionId, ui_components::button::Button>,
 
+    /// Per-action button components for "Open recording" buttons on StopRecording actions.
+    open_recording_buttons: HashMap<AIAgentActionId, ui_components::button::Button>,
+
+    /// Whether this block's output contains recording-related actions
+    /// (StartRecording/StopRecording/UseComputer). Computed on output updates so
+    /// rendering can skip the conversation-wide recording span derivation for
+    /// unrelated blocks.
+    has_recording_related_actions: bool,
+
     /// Stores the last command that was right-clicked by a child component.
     /// When set, CopyCommand will copy this specific command instead of all commands.
     last_right_clicked_command: Option<String>,
@@ -1508,6 +1522,8 @@ impl AIBlock {
             disable_rule_suggestions_button,
             rewind_button,
             view_screenshot_buttons: Default::default(),
+            open_recording_buttons: Default::default(),
+            has_recording_related_actions: false,
             last_right_clicked_command: None,
             is_usage_footer_expanded: false,
             agent_view_controller,
@@ -1793,7 +1809,7 @@ impl AIBlock {
             .unwrap_or(false);
 
         if !conversation_contains_exchange {
-            log::error!(
+            report_error!(
                 "Reassigning AIBlock to a new conversation but the new conversation does not contain the AI exchange"
             );
             return;
@@ -1860,6 +1876,7 @@ impl AIBlock {
         match status {
             AIBlockOutputStatus::Pending => {
                 self.requested_action_ids.clear();
+                self.has_recording_related_actions = false;
                 self.secret_redaction_state.reset();
             }
             AIBlockOutputStatus::PartiallyReceived { output } => {
@@ -1944,6 +1961,15 @@ impl AIBlock {
                 self.todo_list_states.entry(message.id.clone()).or_default();
             }
         }
+
+        self.has_recording_related_actions = output.actions().any(|action| {
+            matches!(
+                &action.action,
+                AIAgentActionType::StartRecording { .. }
+                    | AIAgentActionType::StopRecording { .. }
+                    | AIAgentActionType::UseComputer(_)
+            )
+        });
 
         if FeatureFlag::WebSearchUI.is_enabled() {
             // Handle WebSearch messages
@@ -2036,6 +2062,12 @@ impl AIBlock {
             // Ensure a button component exists for UseComputer actions.
             if matches!(&action.action, AIAgentActionType::UseComputer(_)) {
                 self.view_screenshot_buttons
+                    .entry(action.id.clone())
+                    .or_default();
+            }
+
+            if matches!(&action.action, AIAgentActionType::StopRecording { .. }) {
+                self.open_recording_buttons
                     .entry(action.id.clone())
                     .or_default();
             }
@@ -3145,7 +3177,9 @@ impl AIBlock {
                     .show_code_suggestion_speedbump
                     .set_value(false, ctx)
                 {
-                    log::error!("Failed to persist 'Show code suggestion speedbump' setting: {e}");
+                    report_error!(
+                        e.context("Failed to persist 'Show code suggestion speedbump' setting")
+                    );
                 }
             });
         }
@@ -3167,9 +3201,6 @@ impl AIBlock {
             .action_model
             .as_ref(ctx)
             .request_file_edits_executor(ctx);
-        executor.update(ctx, |executor, _| {
-            executor.register_requested_edits(action_id, &view);
-        });
 
         // If the diff is being viewed in a shared session (read-only mode), populate diffs from the payload.
         if self.action_model.as_ref(ctx).is_view_only() {
@@ -3182,12 +3213,28 @@ impl AIBlock {
             view.update(ctx, |diff_view, ctx| {
                 diff_view.set_candidate_diffs(file_diffs, ctx);
             });
+        } else {
+            // Register the review view as the action's diff storage: the
+            // executor seeds it with the resolved diffs when preprocess
+            // completes and drives its save at execute time.
+            //
+            // View-only (shared-session viewer) diffs must not be registered:
+            // registration wires the view into the persistence flow, and a
+            // spectator's view must never become the surface that writes the
+            // edits to disk.
+            executor.update(ctx, |executor, _| {
+                executor.register_requested_edits(action_id, Box::new(view.downgrade()));
+            });
         }
 
         let action_id_clone = action_id.clone();
         ctx.subscribe_to_view(&view, move |me, view, event, ctx| {
             match event {
                 CodeDiffViewEvent::TryAccept => {
+                    // The executor drives the save through the registered
+                    // diff storage at execute time, pulling the (possibly
+                    // edited) final content from the view's editor buffers.
+                    view.update(ctx, |view, ctx| view.send_malformed_line_telemetry(ctx));
                     me.action_model.update(ctx, |action_model, ctx| {
                         action_model.execute_action(
                             &action_id_clone,
@@ -3391,7 +3438,7 @@ impl AIBlock {
                     match action_status {
                         Some(AIActionStatus::Finished(result)) => {
                             if result.result.is_successful() {
-                                CodeDiffState::Accepted(None)
+                                CodeDiffState::Accepted
                             } else {
                                 // For other finished states, default to rejected
                                 CodeDiffState::Rejected
@@ -4223,7 +4270,9 @@ impl AIBlock {
                     .show_code_suggestion_speedbump
                     .set_value(false, ctx)
                 {
-                    log::error!("Failed to persist 'Show code suggestion speedbump' setting: {e}");
+                    report_error!(
+                        e.context("Failed to persist 'Show code suggestion speedbump' setting")
+                    );
                 }
             });
         }
@@ -6233,6 +6282,9 @@ pub enum AIBlockAction {
     OpenCommentInGitHub {
         url: String,
     },
+    OpenRecordingArtifact {
+        artifact_uid: String,
+    },
 }
 
 impl TypedActionView for AIBlock {
@@ -6819,6 +6871,34 @@ impl TypedActionView for AIBlock {
             }
             AIBlockAction::OpenCommentInGitHub { url } => {
                 ctx.open_url(url);
+            }
+            AIBlockAction::OpenRecordingArtifact { artifact_uid } => {
+                let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+                let artifact_uid = artifact_uid.clone();
+                let artifact_uid_for_error = artifact_uid.clone();
+                ctx.spawn(
+                    async move { ai_client.get_artifact_download(&artifact_uid).await },
+                    move |_, result, ctx| match result {
+                        Ok(artifact) => {
+                            ctx.open_url(artifact.download_url());
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "Failed to prepare recording artifact {artifact_uid_for_error}: {error:#}"
+                            );
+                            let window_id = ctx.window_id();
+                            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                                toast_stack.add_ephemeral_toast(
+                                    DismissibleToast::error(
+                                        "Failed to open recording.".to_string(),
+                                    ),
+                                    window_id,
+                                    ctx,
+                                );
+                            });
+                        }
+                    },
+                );
             }
             AIBlockAction::ViewScreenshot { action_id } => {
                 // Collect all UseComputer action IDs across the entire conversation

@@ -6,6 +6,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use warp_cli::agent::Harness;
+use warp_errors::report_error;
 use warpui::{EntityId, SingletonEntity, ViewContext, ViewHandle};
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -13,12 +14,12 @@ use crate::ai::agent::RenderableAIError;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequestId};
-use crate::ai::llms::LLMPreferences;
+use crate::ai::blocklist::{
+    inherit_child_agent_settings, BlocklistAIHistoryModel, StartAgentRequestId,
+};
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::TerminalView;
-use crate::AIExecutionProfilesModel;
 
 pub(crate) struct HiddenChildAgentConversation {
     pub terminal_view: ViewHandle<TerminalView>,
@@ -74,40 +75,6 @@ pub(crate) fn apply_hidden_child_agent_task_context(
     });
 }
 
-fn propagate_parent_agent_settings(
-    group: &PaneGroup,
-    parent_pane_id: PaneId,
-    child_terminal_view_id: EntityId,
-    ctx: &mut ViewContext<PaneGroup>,
-) {
-    let Some(parent_terminal_view) = group.terminal_view_from_pane_id(parent_pane_id, ctx) else {
-        log::warn!(
-            "Could not find parent terminal view for pane {parent_pane_id:?}; child will use default AI profile"
-        );
-        return;
-    };
-
-    let parent_view_id = parent_terminal_view.id();
-    let parent_profile_id = *AIExecutionProfilesModel::as_ref(ctx)
-        .active_profile(Some(parent_view_id), ctx)
-        .id();
-    AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-        profiles.set_active_profile(child_terminal_view_id, parent_profile_id, ctx);
-    });
-
-    let parent_base_model_id = LLMPreferences::as_ref(ctx)
-        .get_active_base_model(ctx, Some(parent_view_id))
-        .id
-        .clone();
-    LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
-        llm_prefs.update_preferred_agent_mode_llm(
-            &parent_base_model_id,
-            child_terminal_view_id,
-            ctx,
-        );
-    });
-}
-
 fn start_new_child_conversation(
     terminal_view_id: EntityId,
     name: String,
@@ -147,13 +114,19 @@ pub(crate) fn create_hidden_child_agent_conversation(
         ctx,
     );
     let Some(new_terminal_view) = group.terminal_view_from_pane_id(new_pane_id, ctx) else {
-        log::error!("Failed to get terminal view for new StartAgent pane");
+        report_error!("Failed to get terminal view for new StartAgent pane");
         group.discard_pane(new_pane_id.into(), ctx);
         return None;
     };
 
     let terminal_view_id = new_terminal_view.id();
-    propagate_parent_agent_settings(group, parent_pane_id, terminal_view_id, ctx);
+    if let Some(parent_terminal_view) = group.terminal_view_from_pane_id(parent_pane_id, ctx) {
+        inherit_child_agent_settings(parent_terminal_view.id(), terminal_view_id, ctx);
+    } else {
+        log::warn!(
+            "Could not find parent terminal view for pane {parent_pane_id:?}; child will use default AI profile"
+        );
+    }
     if let Some(task_context) = task_context.as_ref() {
         apply_hidden_child_agent_task_context(&new_terminal_view, task_context, ctx);
     }
@@ -241,8 +214,12 @@ pub(crate) fn create_error_child_agent_conversation(
             ctx,
         )
     else {
-        log::error!(
-            "Failed to surface local child harness error for parent conversation {parent_conversation_id:?}: {error_message}"
+        report_error!(
+            "Failed to surface local child harness error for parent conversation",
+            extra: {
+                "parent_conversation_id" => ?parent_conversation_id,
+                "error_message" => %error_message
+            }
         );
         return None;
     };

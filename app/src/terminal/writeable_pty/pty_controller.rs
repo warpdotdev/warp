@@ -5,6 +5,8 @@ use std::sync::Arc;
 use async_channel::{Receiver, Sender};
 use parking_lot::FairMutex;
 use thiserror::Error;
+#[cfg(feature = "local_fs")]
+use warp_errors::report_error;
 use warp_util::path::ShellFamily;
 use warpui::r#async::block_on;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -427,7 +429,7 @@ impl<T: EventLoopSender> PtyController<T> {
                     self.source_bootstrap_script(path, shell_type, ctx);
                 } else {
                     self.write_terminating_bootstrap_bytes(ctx);
-                    log::error!("Could not convert bootstrap script file path to str");
+                    report_error!("Could not convert bootstrap script file path to str");
                 }
 
                 self.bootstrap_file = Some(file);
@@ -584,6 +586,12 @@ impl<T: EventLoopSender> PtyController<T> {
         // TODO: reconsider this behavior since the output was not the result of a command, and given the function name
         // is start_command_execution and no command was executed.
         self.terminal_model.lock().start_command_execution();
+    }
+
+    /// Interrupts the foreground PTY process.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn write_interrupt(&mut self, ctx: &mut ModelContext<Self>) {
+        self.write_bytes(&[escape_sequences::C0::ETX][..], ctx);
     }
 
     /// Resizes the PTY's size (i.e. its notion of the number of columns and rows in the screen) via

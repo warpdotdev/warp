@@ -2,6 +2,7 @@
 //! such as the dimensions of a grid cell and the baseline position of text within a cell.
 use num_traits::Zero;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_errors::report_error;
 use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
 use warpui::fonts::{Cache as FontCache, FamilyId};
 use warpui::text_layout::ComputeBaselinePositionFn;
@@ -48,7 +49,9 @@ pub fn grid_cell_dimensions(
         }
         Err(error) => {
             // Return a default advance width if we couldn't load the advance from the glyph.
-            log::error!("could not obtain advance for m glyph computing cell dimensions: {error}");
+            report_error!(
+                error.context("could not obtain advance for m glyph computing cell dimensions")
+            );
             Vector2F::new(1.0, height)
         }
     }

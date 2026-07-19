@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use warp_errors::report_error;
 #[cfg(target_family = "wasm")]
 use warpui::platform::wasm;
 
@@ -45,7 +46,8 @@ impl TelemetryContext {
         match serde_json::to_value(context) {
             Ok(value) => Self(value),
             Err(e) => {
-                log::error!("Failed to serialize telemetry context info to JSON value: {e:?}");
+                report_error!(anyhow::Error::new(e)
+                    .context("Failed to serialize telemetry context info to JSON value"));
                 Self(json!({}))
             }
         }

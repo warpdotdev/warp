@@ -39,6 +39,7 @@ use session_sharing_protocol::sharer::{
     UpstreamMessage,
 };
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_server_client::iap::IapManager;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
@@ -47,6 +48,8 @@ use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
 use crate::server::server_api::ServerApiProvider;
+#[cfg(not(any(test, feature = "integration_tests")))]
+use crate::server::telemetry::telemetry_context;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shared_session::{
     connect_endpoint, max_session_size, EventNumber, SharedSessionScrollbackType,
@@ -54,11 +57,16 @@ use crate::terminal::shared_session::{
 };
 use crate::terminal::TerminalModel;
 use crate::throttle::throttle;
-#[cfg(not(any(test, feature = "integration_tests")))]
-use crate::{report_error, server::telemetry::telemetry_context};
 
-/// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server
+/// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server.
+#[cfg(not(any(test, feature = "integration_tests")))]
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);
+/// Under `test`/`integration_tests` the threshold is larger so the transient
+/// `Batching` state is reliably observable instead of racing the real ~50ms timer
+/// under coarse scheduler granularity (which flaked on Windows CI); see
+/// `test_handle_pty_read_event_while_not_batching`.
+#[cfg(any(test, feature = "integration_tests"))]
+const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(250);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
@@ -101,11 +109,12 @@ macro_rules! sharer_warn {
 macro_rules! sharer_error {
     ($network:expr, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
-        log::error!(
-            "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
-            message = format_args!($($arg)+),
-            session_id = session_id,
-            source_task_id = source_task_id,
+        warp_errors::report_error!(
+            anyhow::anyhow!("{}", format_args!($($arg)+)),
+            extra: {
+                "session_id" => ?session_id,
+                "source_task_id" => ?source_task_id
+            }
         );
     }};
 }
@@ -1253,7 +1262,8 @@ impl Network {
                 }
                 log::info!("Closing websocket to session sharing server as sharer");
                 if let Err(e) = sink.close().await {
-                    log::error!("Failed to close session sharing websocket as sharer due to {e}");
+                    report_error!(anyhow::Error::new(e)
+                        .context("Failed to close session sharing websocket as sharer"));
                 }
                 startup_send_failed
             },

@@ -28,12 +28,16 @@ tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
 warp_core.workspace = true
+warp_errors.workspace = true
 warpui.workspace = true
 warpui_extras = { workspace = true, features = ["default", "user_preferences-toml"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rmcp = { workspace = true, features = ["client", "client-side-sse", "auth", "transport-streamable-http-client-reqwest", "transport-child-process"] }
-tokio = { workspace = true, features = ["sync", "macros", "rt", "time", "process", "io-util"] }
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time", "process", "io-util", "net"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_System_Threading"] }
+
+[dev-dependencies]
+axum.workspace = true

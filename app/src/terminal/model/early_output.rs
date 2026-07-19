@@ -3,6 +3,7 @@ use std::mem;
 
 use pathfinder_color::ColorU;
 use string_offset::CharOffset;
+use warp_errors::report_error;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 use super::ansi;
@@ -658,7 +659,7 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn prompt_marker(&mut self, _marker: ansi::PromptMarker) {
-        log::error!(
+        report_error!(
             "Received prompt_marker in EarlyOutput, but it should be sent to the active block by the blocklist"
         );
     }

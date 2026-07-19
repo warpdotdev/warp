@@ -57,6 +57,7 @@ use parent_bridge::{MessageBridge, MessageBridgeCleanupDisposition};
 use shell_words::quote as shell_quote;
 #[cfg(test)]
 use wake_driver::{ClaudeWakeRemoteContext, CLAUDE_WAKE_PROMPT_FILE_NAME};
+use warp_errors::report_error;
 
 #[cfg(test)]
 use super::super::OZ_MESSAGE_LISTENER_STATE_ROOT_ENV;
@@ -415,6 +416,7 @@ impl ClaudeHarnessRunner {
             cli_agent_session_status(&self.terminal_driver, foreground).await,
             Some(crate::terminal::cli_agent_sessions::CLIAgentSessionStatus::Blocked { .. })
                 | Some(crate::terminal::cli_agent_sessions::CLIAgentSessionStatus::InProgress)
+                | Some(crate::terminal::cli_agent_sessions::CLIAgentSessionStatus::Failed { .. })
         )
     }
 
@@ -459,7 +461,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
                             .create_external_conversation(CLAUDE_CODE_FORMAT)
                             .await
                             .map_err(|e| {
-                                log::error!("Failed to create external conversation: {e}");
+                                report_error!(&e);
                                 AgentDriverError::ConfigBuildFailed(e)
                             })
                     })

@@ -16,7 +16,7 @@ use crate::ai::agent::{
     ShellCommandCompletedTrigger,
 };
 use crate::ai::block_context::BlockContext;
-use crate::ai::blocklist::inline_action::code_diff_view::FileDiff;
+use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::{
     apply_edits, BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind,
     SessionContext,
@@ -140,9 +140,27 @@ impl PassiveSuggestionsModel {
     }
 
     fn is_ambient_agent_session(&self, ctx: &ModelContext<Self>) -> bool {
-        self.ambient_agent_view_model
+        if self
+            .ambient_agent_view_model
             .as_ref()
             .is_some_and(|model| model.as_ref(ctx).is_ambient_agent())
+        {
+            return true;
+        }
+
+        // `ambient_agent_view_model` is captured at construction and may be `None`
+        // if we joined a session and lazily set the ambient agent config.
+        // Consult live terminal state as well.
+        let terminal_model = self.terminal_model.lock();
+        terminal_model.is_shared_ambient_agent_session()
+            || terminal_model.is_conversation_transcript_viewer()
+    }
+
+    /// Test-only accessor for the private ambient-session guard so shared-session
+    /// view tests can assert passive suggestions are suppressed for viewers.
+    #[cfg(test)]
+    pub(crate) fn is_ambient_agent_session_for_test(&self, ctx: &ModelContext<Self>) -> bool {
+        self.is_ambient_agent_session(ctx)
     }
 
     /// Sends a MAA request to generate passive suggestions.

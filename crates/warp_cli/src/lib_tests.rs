@@ -23,6 +23,145 @@ fn identifies_worker_subcommands() {
     assert!(!is_worker_invocation("--prompt"));
 }
 
+fn parse_run_cloud(args: &[&str]) -> crate::agent::RunCloudArgs {
+    let full: Vec<&str> = std::iter::once("warp")
+        .chain(args.iter().copied())
+        .collect();
+    let parsed = Args::try_parse_from(full).expect("run-cloud args should parse");
+    let Some(Command::CommandLine(boxed)) = parsed.command else {
+        panic!("Expected a CLI command");
+    };
+    match *boxed {
+        CliCommand::Agent(AgentCommand::RunCloud(args)) => args,
+        _ => panic!("Expected `agent run-cloud` command"),
+    }
+}
+
+#[test]
+fn run_cloud_help_lists_harness_and_auth_secret_flags() {
+    use clap::CommandFactory;
+    let mut cmd = <Args as CommandFactory>::command();
+    let sub = cmd
+        .find_subcommand_mut("agent")
+        .expect("agent subcommand exists")
+        .find_subcommand_mut("run-cloud")
+        .expect("run-cloud subcommand exists");
+    let help = sub.render_long_help().to_string();
+
+    assert!(
+        help.contains("--harness"),
+        "help should list --harness:\n{help}"
+    );
+    assert!(
+        help.contains("--claude-auth-secret"),
+        "help should list --claude-auth-secret:\n{help}"
+    );
+    assert!(
+        help.contains("--codex-auth-secret"),
+        "help should list --codex-auth-secret:\n{help}"
+    );
+    assert!(
+        help.contains("oz secret create claude api-key"),
+        "--claude-auth-secret help should explain how to create a secret:\n{help}"
+    );
+    assert!(
+        help.contains("oz secret create codex api-key"),
+        "--codex-auth-secret help should explain how to create a secret:\n{help}"
+    );
+
+    // Only GA cloud harnesses are surfaced; gemini/opencode are hidden.
+    assert!(
+        !help.contains("opencode"),
+        "help should not surface the opencode harness (not GA for cloud):\n{help}"
+    );
+    assert!(
+        !help.contains("gemini"),
+        "help should not surface the gemini harness (not GA for cloud):\n{help}"
+    );
+
+    // Surfaced harness values keep their per-value descriptions.
+    assert!(
+        help.contains("Use Warp's built-in MAA infrastructure"),
+        "help should describe the oz harness value:\n{help}"
+    );
+    assert!(
+        help.contains("Delegate to the `claude` CLI"),
+        "help should describe the claude harness value:\n{help}"
+    );
+    assert!(
+        help.contains("Delegate to the `codex` CLI"),
+        "help should describe the codex harness value:\n{help}"
+    );
+}
+
+#[test]
+fn run_cloud_accepts_claude_auth_secret() {
+    let args = parse_run_cloud(&[
+        "agent",
+        "run-cloud",
+        "--prompt",
+        "hi",
+        "--harness",
+        "claude",
+        "--claude-auth-secret",
+        "my-secret",
+    ]);
+    assert_eq!(args.harness, Harness::Claude);
+    assert_eq!(args.claude_auth_secret.as_deref(), Some("my-secret"));
+    args.validate_auth_secrets()
+        .expect("claude secret with claude harness is valid");
+}
+
+#[test]
+fn run_cloud_accepts_codex_auth_secret() {
+    let args = parse_run_cloud(&[
+        "agent",
+        "run-cloud",
+        "--prompt",
+        "hi",
+        "--harness",
+        "codex",
+        "--codex-auth-secret",
+        "my-secret",
+    ]);
+    assert_eq!(args.harness, Harness::Codex);
+    assert_eq!(args.codex_auth_secret.as_deref(), Some("my-secret"));
+    args.validate_auth_secrets()
+        .expect("codex secret with codex harness is valid");
+}
+
+#[test]
+fn run_cloud_rejects_claude_auth_secret_without_claude_harness() {
+    let args = parse_run_cloud(&[
+        "agent",
+        "run-cloud",
+        "--prompt",
+        "hi",
+        "--claude-auth-secret",
+        "my-secret",
+    ]);
+    let err = args
+        .validate_auth_secrets()
+        .expect_err("claude secret requires --harness claude");
+    assert!(err.contains("--claude-auth-secret"), "got: {err}");
+}
+
+#[test]
+fn run_cloud_rejects_codex_auth_secret_without_codex_harness() {
+    let args = parse_run_cloud(&[
+        "agent",
+        "run-cloud",
+        "--prompt",
+        "hi",
+        "--codex-auth-secret",
+        "my-secret",
+    ]);
+    let err = args
+        .validate_auth_secrets()
+        .expect_err("codex secret requires --harness codex");
+    assert!(err.contains("--codex-auth-secret"), "got: {err}");
+}
+
 fn set_env_var(name: &str, value: &str) -> Option<OsString> {
     let previous = std::env::var_os(name);
     // Safety: tests that mutate process environment are marked `serial` so we
@@ -376,6 +515,46 @@ fn legacy_memory_store_memory_commands_are_rejected() {
             .expect_err("legacy memory-store memory command should not parse");
         assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
+}
+
+#[test]
+fn api_key_before_subcommand_parses() {
+    // Regression test: `warp --api-key KEY <subcommand>` should work.
+    // Previously the top-level [URLS] positional would swallow the subcommand
+    // when --api-key preceded it.
+    let args = Args::try_parse_from(["warp", "--api-key", "test-key", "login"]).unwrap();
+
+    assert_eq!(args.api_key(), Some(&"test-key".to_string()));
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp login` command");
+    };
+    assert!(matches!(boxed_cmd.as_ref(), CliCommand::Login));
+}
+
+#[test]
+fn debug_before_subcommand_parses() {
+    // Regression test: `warp --debug <subcommand>` should work.
+    // Global flags like --debug must not prevent subcommand detection.
+    let args = Args::try_parse_from(["warp", "--debug", "login"]).unwrap();
+
+    assert!(args.debug());
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp login` command");
+    };
+    assert!(matches!(boxed_cmd.as_ref(), CliCommand::Login));
+}
+
+#[test]
+fn multiple_global_flags_before_subcommand_parse() {
+    // Both --api-key and --debug before the subcommand should work.
+    let args = Args::try_parse_from(["warp", "--api-key", "test-key", "--debug", "login"]).unwrap();
+
+    assert_eq!(args.api_key(), Some(&"test-key".to_string()));
+    assert!(args.debug());
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp login` command");
+    };
+    assert!(matches!(boxed_cmd.as_ref(), CliCommand::Login));
 }
 
 #[test]

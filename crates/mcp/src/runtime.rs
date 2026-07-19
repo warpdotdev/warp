@@ -16,6 +16,7 @@ use rmcp::ServiceExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
+use warp_errors::report_error;
 
 use super::TemplatableMCPServerInfo;
 
@@ -192,7 +193,9 @@ pub async fn spawn_server(
                             Ok(_) => logger.log(format!("[info] MCP [pid: {pid}] stderr: {buf}")),
                             // Failed to read from the child process's stderr.
                             Err(e) => {
-                                log::error!("Failed to read stderr: {e}");
+                                report_error!(
+                                    anyhow::Error::new(e).context("Failed to read stderr")
+                                );
                                 return;
                             }
                         }
@@ -374,8 +377,9 @@ async fn determine_transport(
 
             // Go through the OAuth flow to get an authenticated client.
             // This will first attempt to use cached credentials before starting interactive OAuth.
+            let http_client = build_client_with_headers(headers)?;
             let (client, did_require_login) =
-                crate::oauth::make_authenticated_client(url, auth_context)
+                crate::oauth::make_authenticated_client(url, http_client, auth_context)
                     .await
                     .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
 

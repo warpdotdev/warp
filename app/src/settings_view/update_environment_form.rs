@@ -113,18 +113,26 @@ impl EnvironmentFormValues {
             }
         };
 
-        AmbientAgentEnvironment::new(
+        let docker_image = self.docker_image.trim();
+        let mut environment = AmbientAgentEnvironment::new(
             self.name.trim().to_string(),
             description,
             self.selected_repos.clone(),
-            self.docker_image.trim().to_string(),
+            docker_image.to_string(),
             setup_commands,
-        )
+        );
+        // An empty docker image field means the environment does not pin a base
+        // image; preserve that as `None` rather than an empty image string.
+        if docker_image.is_empty() {
+            environment.base_image = None;
+        }
+        environment
     }
 
-    /// Validates the form values.
+    /// Validates the form values. Only the name is required — an environment may
+    /// omit its base image, so the docker image field is optional.
     pub fn is_valid(&self) -> bool {
-        !self.name.trim().is_empty() && !self.docker_image.trim().is_empty()
+        !self.name.trim().is_empty()
     }
 }
 
@@ -2991,10 +2999,11 @@ impl UpdateEnvironmentForm {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(FORM_LABEL_SPACING);
 
-        // Label (without suggest button)
+        // Label (without suggest button). The docker image is optional, so no
+        // required marker is shown.
         field.add_child(Self::render_form_label(
             self.copy.docker_image_label,
-            true,
+            false,
             appearance,
         ));
 

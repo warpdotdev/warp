@@ -370,7 +370,6 @@ pub fn render_router_error_card(
     error_message: impl Into<String>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    use warpui::elements::Shrinkable;
     let theme = appearance.theme();
     let error_fill = warp_core::ui::theme::Fill::Solid(theme.ui_error_color());
     let sub = theme.sub_text_color(theme.surface_2());
@@ -404,13 +403,17 @@ pub fn render_router_error_card(
         error_message.to_string()
     };
 
-    let error_row = Shrinkable::new(
-        1.,
-        Text::new(truncated, appearance.ui_font_family(), 11.)
-            .with_color(sub.into())
-            .finish(),
-    )
-    .finish();
+    // NOTE: this text must not be a flexible flex child (e.g. `Shrinkable`).
+    // The error card is rendered inside the settings page's vertically
+    // scrollable container, which lays it out with an unbounded vertical
+    // constraint; a flexible child in this column panics flex layout with
+    // "flex contains flexible children but has an infinite constraint along
+    // the flex axis". `soft_wrap` keeps long (already length-capped) messages
+    // within the card width without needing flex.
+    let error_row = Text::new(truncated, appearance.ui_font_family(), 11.)
+        .with_color(sub.into())
+        .soft_wrap(true)
+        .finish();
 
     Container::new(
         Flex::column()
@@ -427,3 +430,7 @@ pub fn render_router_error_card(
     .with_vertical_padding(10.)
     .finish()
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "custom_router_view_tests.rs"]
+mod tests;

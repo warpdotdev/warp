@@ -49,7 +49,7 @@ impl BlockDataSource {
 
                     // Process all eligible blocks
                     for block in block_list.blocks().iter() {
-                        if !block.can_be_ai_context(block_list.agent_view_state()) {
+                        if !block.can_be_ai_context(block_list.transcript_scope()) {
                             continue;
                         }
 

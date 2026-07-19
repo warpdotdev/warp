@@ -20,6 +20,7 @@ use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentSaveStat
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::RunAgentsPermission;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+use crate::ai::orchestration::populate_default_auth_secret_for_execution;
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -166,7 +167,7 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
     initialize_settings_for_tests_with_mode(app, mode, false);
     let global_resource_handles = GlobalResourceHandles::mock(app);
     app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
-    let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+    let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(AgentNotificationsModel::new);
@@ -235,6 +236,7 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
                 name: "child".to_string(),
                 prompt: "Help".to_string(),
                 title: String::new(),
+                agent_identity_uid: String::new(),
             }],
             plan_id: String::new(),
             harness_auth_secret_name: None,
@@ -257,6 +259,7 @@ fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
         name: "child".to_string(),
         prompt: "Investigate the failure".to_string(),
         title: String::new(),
+        agent_identity_uid: String::new(),
     };
 
     let mode = run_agents_to_start_agent_mode(

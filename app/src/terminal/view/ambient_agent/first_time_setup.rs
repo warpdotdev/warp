@@ -5,6 +5,7 @@
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
+use warp_errors::report_error;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
     Align, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
@@ -96,7 +97,7 @@ impl FirstTimeCloudAgentSetupView {
                 };
 
                 let Some(owner) = owner else {
-                    log::error!("Unable to create environment: not logged in");
+                    report_error!("Unable to create environment: not logged in");
                     // Reset form before emitting cancelled event
                     self.reset_form(ctx);
                     ctx.emit(FirstTimeCloudAgentSetupViewEvent::Cancelled);

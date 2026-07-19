@@ -21,6 +21,7 @@
 use std::io::{self, Write};
 
 use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::buffer::CellWidth;
 use ratatui::crossterm::queue;
 use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::layout::Position;
@@ -82,7 +83,48 @@ impl TuiFrameRenderer {
                 .expect("previous buffer present when not repainting")
         };
 
-        backend.draw(baseline.diff(buffer).into_iter())?;
+        // Paint continuation cells before each changed wide grapheme. Ratatui
+        // omits style-only continuation diffs, while painting them afterward
+        // can shift following cells or erase the grapheme. Keeping the wide
+        // grapheme in its own batch also gives following cells a fresh MoveTo.
+        let diff: Vec<_> = baseline.diff(buffer);
+        let mut batch_start = 0;
+        let mut index = 0;
+        while index < diff.len() {
+            let (wide_x, wide_y, cell) = diff[index];
+            let wide_width = cell.cell_width();
+            if wide_width <= 1 {
+                index += 1;
+                continue;
+            }
+
+            if batch_start < index {
+                backend.draw(diff[batch_start..index].iter().copied())?;
+            }
+
+            let trailing_diff_end = index
+                + 1
+                + diff[index + 1..]
+                    .iter()
+                    .take_while(|(x, y, _)| *y == wide_y && *x < wide_x.saturating_add(wide_width))
+                    .count();
+            let trailing_cell_end = wide_x
+                .saturating_add(wide_width)
+                .min(buffer.area.x.saturating_add(buffer.area.width));
+            if wide_x.saturating_add(1) < trailing_cell_end {
+                backend.draw(
+                    (wide_x.saturating_add(1)..trailing_cell_end)
+                        .map(|x| (x, wide_y, &buffer[(x, wide_y)])),
+                )?;
+            }
+            backend.draw(diff[index..=index].iter().copied())?;
+
+            index = trailing_diff_end;
+            batch_start = index;
+        }
+        if batch_start < diff.len() {
+            backend.draw(diff[batch_start..].iter().copied())?;
+        }
 
         match cursor_position {
             Some((x, y)) => {

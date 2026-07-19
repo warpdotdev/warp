@@ -119,7 +119,7 @@ use crate::quit_warning::UnsavedStateSummary;
 use crate::send_telemetry_from_ctx;
 #[cfg(feature = "local_fs")]
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
-use crate::settings::AISettings;
+use crate::settings::{AISettings, CodeSettings};
 use crate::settings_view::SettingsSection;
 use crate::terminal::cli_agent::{
     build_selection_line_range_prompt, build_selection_substring_prompt,
@@ -1793,7 +1793,7 @@ impl CodeReviewView {
 
     fn handle_edit_comment(&mut self, comment_id: &CommentId, ctx: &mut ViewContext<Self>) {
         let Some(comment) = self.get_comment_by_id(*comment_id, ctx) else {
-            log::error!("Couldn't find code review comment by ID");
+            report_error!("Couldn't find code review comment by ID");
             return;
         };
 
@@ -1816,9 +1816,9 @@ impl CodeReviewView {
                 };
 
                 let Some(editor_state) = &file_state.editor_state.as_ref() else {
-                    log::error!(
-                        "CodeReviewView could not fetch editor for file {:?}",
-                        file_state.file_diff.file_path
+                    report_error!(
+                        "CodeReviewView could not fetch editor for file",
+                        extra: { "file_path" => ?file_state.file_diff.file_path }
                     );
                     return;
                 };
@@ -1841,7 +1841,7 @@ impl CodeReviewView {
                 self.open_review_comment_composer(Some(comment), ctx);
             }
             AttachedReviewCommentTarget::File { .. } => {
-                log::error!(
+                report_error!(
                     "Attempted to edit a file-level comment; file-level comments are not editable"
                 );
             }
@@ -3202,7 +3202,7 @@ impl CodeReviewView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            LocalCodeEditorEvent::FileSaved => {
+            LocalCodeEditorEvent::FileSaved { .. } => {
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::FileSaved {
                         is_local: self.repo_is_local(),
@@ -3246,7 +3246,7 @@ impl CodeReviewView {
                 // the host on the comment target keeps later helpers
                 // honest.
                 let Some(file_location) = editor.as_ref(ctx).file_location().cloned() else {
-                    log::error!(
+                    report_error!(
                         "Attempted to attach code review comment to a LocalCodeEditorView without a file path"
                     );
                     return;
@@ -3288,7 +3288,7 @@ impl CodeReviewView {
                     }
                     AttachedReviewCommentTarget::File { .. }
                     | AttachedReviewCommentTarget::General => {
-                        log::error!("Tried to reopen a non-line review comment.");
+                        report_error!("Tried to reopen a non-line review comment.");
                     }
                 }
             }
@@ -3541,9 +3541,7 @@ impl CodeReviewView {
                 let Some(editor_view) = matching_editor else {
                     // If there's no matching editor, mark the comment as outdated.
                     // The comment retains its original content so it can still be displayed.
-                    if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-                        comment.outdated = true;
-                    }
+                    comment.outdated = true;
                     return comment;
                 };
 
@@ -3557,20 +3555,28 @@ impl CodeReviewView {
                     return comment;
                 };
 
+                // Imported comments store the raw provider diff line, including its
+                // one-char unified-diff marker (`+`/`-`/space); strip it to recover
+                // the file line for matching. Native comments store raw text where a
+                // leading space would be significant indentation, so keep it as-is.
+                let match_text = if comment.origin.is_imported_from_github() {
+                    content.imported_original_text()
+                } else {
+                    content.original_text()
+                };
+
                 let (new_location, new_content, used_fallback) =
                     editor_view.update(ctx, |local_editor, ctx| {
                         local_editor.editor().update(ctx, |editor, ctx| {
                             editor.model.update(ctx, |model, ctx| {
-                                model.get_new_line_location(line, content.original_text(), ctx)
+                                model.get_new_line_location(line, match_text, ctx)
                             })
                         })
                     });
 
                 if used_fallback {
                     fallback_count += 1;
-                    if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-                        comment.outdated = true;
-                    }
+                    comment.outdated = true;
                 } else {
                     comment.outdated = false;
                     comment.target = AttachedReviewCommentTarget::Line {
@@ -3592,12 +3598,14 @@ impl CodeReviewView {
 
     fn reposition_comments_in_file(&mut self, diff_mode: &DiffMode, ctx: &mut ViewContext<Self>) {
         let Some(model) = &self.active_comment_model else {
-            log::error!("Failed to relocate PR comments: CodeReviewView diff state not loaded",);
+            report_error!(anyhow::anyhow!(
+                "Failed to relocate PR comments: CodeReviewView diff state not loaded",
+            ));
             return;
         };
 
         let Some(repo_path) = self.repo_path().cloned() else {
-            log::error!("Failed to relocate PR comments: CodeReviewView has no repo path");
+            report_error!("Failed to relocate PR comments: CodeReviewView has no repo path");
             return;
         };
 
@@ -4290,7 +4298,7 @@ impl CodeReviewView {
                 ctx.notify();
             }
             ReviewSubmissionResult::Error => {
-                log::error!("Failed to submit review comments");
+                report_error!("Failed to submit review comments");
                 let error_message = "Could not submit comments to the agent".to_string();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     let toast = DismissibleToast::error(error_message);
@@ -4802,7 +4810,7 @@ impl CodeReviewView {
                 Empty::new().finish()
             } else {
                 let header = SavePosition::new(
-                    self.render_file_header(file, appearance, app),
+                    self.render_file_header(file, false, appearance, app),
                     &self.file_diff_header_position(file_index),
                 )
                 .finish();
@@ -4844,7 +4852,7 @@ impl CodeReviewView {
                 .finish(),
             );
             if is_item_being_scrolled && !is_first_item_with_no_scroll {
-                let sticky_file_header = self.render_file_header(file, appearance, app);
+                let sticky_file_header = self.render_file_header(file, true, appearance, app);
                 stack.add_positioned_child(
                     sticky_file_header,
                     // We effectively make this an absolutely positioned header.
@@ -4865,10 +4873,16 @@ impl CodeReviewView {
             .finish()
     }
 
-    /// Renders the file header with name and status
+    /// Renders the file header with name and status.
+    ///
+    /// `is_pinned` is true for the sticky header overlay drawn on top of the diff
+    /// while scrolling within an expanded file. When pinned, the diff content
+    /// scrolls underneath the header, so the header's backing must be opaque all
+    /// the way into its corners (see the corner-radius handling below).
     fn render_file_header(
         &self,
         file: &FileState,
+        is_pinned: bool,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -4950,8 +4964,17 @@ impl CodeReviewView {
             );
         }
 
-        left_section.add_child(if let Some(editor_state) = &file.editor_state {
-            if editor_state.has_unsaved_changes(app) {
+        // When auto-save is enabled, edits are persisted automatically, so the
+        // per-file unsaved dot would just flicker on and off as the user
+        // types. Changes auto-save can't persist (e.g. a disconnected remote
+        // repo) still show the dot.
+        let auto_save_enabled = *CodeSettings::as_ref(app).auto_save;
+        left_section.add_child(match file.editor_state.as_ref() {
+            Some(editor_state)
+                if editor_state.has_unsaved_changes(app)
+                    && (!auto_save_enabled
+                        || !editor_state.editor().as_ref(app).can_auto_save(app)) =>
+            {
                 let save_keystroke = Keystroke::parse("cmdorctrl-s").unwrap_or_default();
                 let save_shortcut = save_keystroke.displayed();
                 let tooltip_text =
@@ -4963,11 +4986,8 @@ impl CodeReviewView {
                     8.,
                     appearance,
                 )
-            } else {
-                Empty::new().finish()
             }
-        } else {
-            Empty::new().finish()
+            _ => Empty::new().finish(),
         });
         left_section.add_child(
             EventHandler::new(
@@ -5080,9 +5100,25 @@ impl CodeReviewView {
         .with_defer_events_to_children()
         .finish();
 
+        // The inner header keeps its rounded top corners for the card look. The
+        // outer backing, however, must be square when the header is pinned as a
+        // sticky overlay: the diff scrolls directly beneath it, and a rounded
+        // backing leaves the corner notches transparent, letting the green/red
+        // diff highlight show through the rounded corners. Squaring the backing
+        // fills those notches with the opaque panel background (`outer_bg`),
+        // which matches what the corners reveal at rest. We only do this when
+        // pinned so the at-rest card is visually unchanged. This avoids clipping
+        // the diff content (which previously inflated the editor's min height and
+        // broke the selection popup / comment box sizing — see #13091 / #13194).
+        let outer_corner_radius = if is_pinned {
+            CornerRadius::default()
+        } else {
+            inner_corner_radius
+        };
+
         Container::new(inner_header)
             .with_background(outer_bg)
-            .with_corner_radius(inner_corner_radius)
+            .with_corner_radius(outer_corner_radius)
             .finish()
     }
 
@@ -5881,9 +5917,9 @@ impl CodeReviewView {
                 let base = match self.get_diff_base(ctx) {
                     Ok(base) => base,
                     Err(err) => {
-                        log::error!(
-                            "CodeReviewView could not find diff base when attaching diff as context: {err:?}"
-                        );
+                        report_error!(err.context(
+                            "CodeReviewView could not find diff base when attaching diff as context"
+                        ));
                         return;
                     }
                 };
@@ -5946,7 +5982,7 @@ impl CodeReviewView {
 
     #[cfg(not(feature = "local_fs"))]
     fn insert_diff_as_context(&mut self, _scope: DiffSetScope, _ctx: &mut ViewContext<Self>) {
-        log::error!("insert_diff_as_context is not supported without the local_fs feature");
+        report_error!("insert_diff_as_context is not supported without the local_fs feature");
     }
 
     fn get_current_head(&self, ctx: &ViewContext<Self>) -> Option<CurrentHead> {
@@ -6255,6 +6291,28 @@ impl CodeReviewView {
         for path in paths {
             self.save_file(path, ctx);
         }
+    }
+
+    /// Flush-saves every unsaved file in the review, marking each save as an
+    /// auto-save so it stays silent (no "File saved." toast). Used when
+    /// auto-save is enabled so closing the review doesn't prompt.
+    pub fn auto_save_all_unsaved_files(&mut self, ctx: &mut ViewContext<Self>) {
+        let paths = self.get_unsaved_file_paths(ctx);
+        let editors: Vec<_> = if let CodeReviewViewState::Loaded(state) = self.state() {
+            paths
+                .iter()
+                .filter_map(|path| state.file_states.get(path))
+                .filter_map(|file_state| {
+                    file_state.editor_state.as_ref().map(|s| s.editor().clone())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for editor in editors {
+            editor.update(ctx, |editor, _| editor.mark_next_save_as_auto_save());
+        }
+        self.save_files(&paths, ctx);
     }
 
     fn save_file(&mut self, repo_relative_path: &str, ctx: &mut ViewContext<CodeReviewView>) {
@@ -7568,6 +7626,12 @@ impl BackingView for CodeReviewView {
         let unsaved_file_paths = self.get_unsaved_file_paths(ctx);
 
         if !unsaved_file_paths.is_empty() && ChannelState::channel() != Channel::Integration {
+            // With auto-save on, flush the edits silently and close without prompting.
+            if *CodeSettings::as_ref(ctx).auto_save {
+                self.auto_save_all_unsaved_files(ctx);
+                ctx.emit(CodeReviewViewEvent::Pane(PaneEvent::Close));
+                return;
+            }
             let file_names = unsaved_file_paths
                 .iter()
                 .filter_map(|path| {
@@ -7697,6 +7761,7 @@ mod code_review_view_integration;
 
 #[cfg(feature = "integration_tests")]
 pub use code_review_view_integration::CodeReviewVisibleAnchorForTest;
+use warp_errors::report_error;
 
 #[cfg(test)]
 #[path = "code_review_view_tests.rs"]

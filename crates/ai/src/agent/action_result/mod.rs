@@ -2,7 +2,7 @@ mod convert;
 
 use std::fmt::Display;
 use std::ops::Range;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Local};
 use itertools::Itertools as _;
@@ -82,6 +82,12 @@ pub enum AIAgentActionResultType {
 
     /// The output of requesting computer use.
     RequestComputerUse(RequestComputerUseResult),
+
+    /// The result of starting a video recording.
+    StartRecording(StartRecordingResult),
+
+    /// The result of stopping a video recording.
+    StopRecording(StopRecordingResult),
 
     /// The result of fetching a conversation's tasks.
     FetchConversation(FetchConversationResult),
@@ -165,6 +171,8 @@ impl Display for AIAgentActionResultType {
             AIAgentActionResultType::UseComputer(result) => result.fmt(f),
             AIAgentActionResultType::InsertReviewComments(result) => result.fmt(f),
             AIAgentActionResultType::RequestComputerUse(result) => result.fmt(f),
+            AIAgentActionResultType::StartRecording(result) => result.fmt(f),
+            AIAgentActionResultType::StopRecording(result) => result.fmt(f),
             AIAgentActionResultType::FetchConversation(result) => result.fmt(f),
             AIAgentActionResultType::StartAgent(result) => result.fmt(f),
             AIAgentActionResultType::SendMessageToAgent(result) => result.fmt(f),
@@ -761,6 +769,8 @@ impl AIAgentActionResultType {
             AIAgentActionResultType::ReadShellCommandOutput(_) => "The shell command output",
             AIAgentActionResultType::UseComputer(_) => "The computer use result",
             AIAgentActionResultType::RequestComputerUse(_) => "The computer use request result",
+            AIAgentActionResultType::StartRecording(_) => "The result of starting a recording",
+            AIAgentActionResultType::StopRecording(_) => "The result of stopping a recording",
             AIAgentActionResultType::FetchConversation(_) => "The fetched conversation tasks",
             AIAgentActionResultType::StartAgent(_) => "The result of starting a child agent",
             AIAgentActionResultType::SendMessageToAgent(_) => "The result of sending a message",
@@ -803,6 +813,8 @@ impl AIAgentActionResultType {
             | Self::UseComputer(UseComputerResult::Success(_))
             | Self::InsertReviewComments(InsertReviewCommentsResult::Success { .. })
             | Self::RequestComputerUse(RequestComputerUseResult::Approved { .. })
+            | Self::StartRecording(StartRecordingResult::Success(_))
+            | Self::StopRecording(StopRecordingResult::Success(_))
             | Self::OpenCodeReview
             | Self::ReadSkill(ReadSkillResult::Success { .. })
             | Self::FetchConversation(FetchConversationResult::Success { .. })
@@ -837,6 +849,8 @@ impl AIAgentActionResultType {
             | Self::UseComputer(UseComputerResult::Error(_))
             | Self::InsertReviewComments(InsertReviewCommentsResult::Error { .. })
             | Self::RequestComputerUse(RequestComputerUseResult::Error(_))
+            | Self::StartRecording(StartRecordingResult::Error(_))
+            | Self::StopRecording(StopRecordingResult::Error(_))
             | Self::FetchConversation(FetchConversationResult::Error(_))
             | Self::StartAgent(StartAgentResult::Error { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Error(_))
@@ -877,6 +891,8 @@ impl AIAgentActionResultType {
             | Self::UseComputer(UseComputerResult::Cancelled)
             | Self::InsertReviewComments(InsertReviewCommentsResult::Cancelled)
             | Self::RequestComputerUse(RequestComputerUseResult::Cancelled)
+            | Self::StartRecording(StartRecordingResult::Cancelled)
+            | Self::StopRecording(StopRecordingResult::Cancelled)
             | Self::TransferShellCommandControlToUser(
                 TransferShellCommandControlToUserResult::Cancelled,
             )
@@ -1195,6 +1211,71 @@ impl Display for RequestComputerUseResult {
                 write!(f, "Request computer use error: {error}")
             }
             RequestComputerUseResult::Cancelled => write!(f, "Request computer use cancelled"),
+        }
+    }
+}
+
+/// The result of a `StartRecording` tool call. Carries the resolved capture
+/// dimensions; frame rate and limits are server-owned and not echoed back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartRecordingResult {
+    Success(RecordingStarted),
+    Error(String),
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordingStarted {
+    pub recording_id: String,
+    pub started_at: SystemTime,
+    pub width_px: i32,
+    pub height_px: i32,
+}
+
+impl Display for StartRecordingResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartRecordingResult::Success(started) => write!(
+                f,
+                "Recording started ({}x{})",
+                started.width_px, started.height_px
+            ),
+            StartRecordingResult::Error(error) => write!(f, "Start recording error: {error}"),
+            StartRecordingResult::Cancelled => write!(f, "Start recording cancelled"),
+        }
+    }
+}
+
+/// The result of a `StopRecording` tool call. Carries the published artifact
+/// reference and video metadata; never the file path or bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopRecordingResult {
+    Success(RecordingStopped),
+    Error(String),
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordingStopped {
+    pub artifact_uid: String,
+    pub duration: Duration,
+    pub width_px: i32,
+    pub height_px: i32,
+    pub size_bytes: i64,
+    pub completion_status: computer_use::RecordingCompletionStatus,
+    pub termination_reason: String,
+}
+
+impl Display for StopRecordingResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StopRecordingResult::Success(stopped) => write!(
+                f,
+                "Recording stopped (artifact {}, {} bytes)",
+                stopped.artifact_uid, stopped.size_bytes
+            ),
+            StopRecordingResult::Error(error) => write!(f, "Stop recording error: {error}"),
+            StopRecordingResult::Cancelled => write!(f, "Stop recording cancelled"),
         }
     }
 }

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use settings_value::SettingsValue;
 use warp_core::define_settings_group;
 use warp_core::settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+use warp_errors::report_error;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
@@ -50,7 +51,7 @@ impl WorkflowAliases {
             };
 
             if let Err(e) = result {
-                log::error!("Error removing aliases for workflow: {e:?}");
+                report_error!(e.context("Error removing aliases for workflow"));
             }
         });
     }

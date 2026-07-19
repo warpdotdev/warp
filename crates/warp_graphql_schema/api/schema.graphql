@@ -613,9 +613,33 @@ type BundledActions {
   latestTimestamp: Time!
   oldestTimestamp: Time!
 }
+"""
+A configured first-party provider credential. Presence in the list means a key is
+configured for that provider.
+"""
+type ByoFirstPartyKey {
+  credentialUid: ID!
+  provider: LlmProvider!
+}
 
 type ByoApiKeyPolicy {
   enabled: Boolean!
+}
+type ByoEndpointMetadata {
+  "Credential handle for this endpoint."
+  credentialUid: ID!
+  enabled: Boolean!
+  models: [ByoEndpointModelMetadata!]!
+  name: String!
+  uid: ID!
+}
+
+type ByoEndpointModelMetadata {
+  alias: String
+  configKey: String!
+  displayName: String!
+  enabled: Boolean!
+  slug: String!
 }
 
 type ByoEndpointPolicy {
@@ -2268,6 +2292,9 @@ type ManagedSecretConfig {
   """
   publicKey: String
 }
+type ManagedByokByoePolicy {
+  enabled: Boolean!
+}
 
 """A managed secret value representing an OpenAI API key."""
 type ManagedSecretOpenAiApiKeyValue {
@@ -2897,6 +2924,125 @@ enum RoleSurveyResponse {
   STUDENT
 }
 
+type RunnerInstanceShape {
+  vcpus: Int!
+  memoryGb: Int!
+}
+
+"""Target operating system for a runner sandbox."""
+enum RunnerOS {
+  LINUX
+  MACOS
+}
+
+"""Target CPU architecture for a runner sandbox."""
+enum RunnerArch {
+  X86_64
+  AARCH64
+}
+
+"""macOS version to use for a sandbox."""
+enum RunnerMacOSVersion {
+  MACOS_14
+  MACOS_15
+  MACOS_26
+  MACOS_27
+}
+
+"""macOS-specific configuration for a cloud agent sandbox."""
+type MacOSConfig {
+  version: RunnerMacOSVersion
+}
+
+"""Linux-specific configuration for a cloud agent sandbox."""
+type LinuxConfig {
+  dockerImage: String!
+}
+
+type RunnerConfig {
+  name: String!
+  description: String
+  setupCommands: [String!]
+  instanceShape: RunnerInstanceShape
+  os: RunnerOS!
+  arch: RunnerArch!
+  mac: MacOSConfig
+  linux: LinuxConfig
+}
+
+type Runner {
+  uid: ID!
+  config: RunnerConfig!
+  lastUpdated: Time!
+  scope: Space!
+  creator: PublicUserProfile
+  lastEditor: PublicUserProfile
+}
+
+enum RunnerSortBy {
+  NAME
+  LAST_UPDATED
+}
+
+type GetRunnersOutput implements Response {
+  runners: [Runner!]!
+  responseContext: ResponseContext!
+}
+
+union GetRunnersResult = GetRunnersOutput | UserFacingError
+
+input RunnerInstanceShapeInput {
+  vcpus: Int!
+  memoryGb: Int!
+}
+
+"""macOS-specific runner configuration."""
+input MacOSConfigInput {
+  version: RunnerMacOSVersion
+}
+
+"""Linux-specific runner configuration."""
+input LinuxConfigInput {
+  dockerImage: String!
+}
+
+input RunnerInput {
+  name: String!
+  description: String
+  setupCommands: [String!]
+  instanceShape: RunnerInstanceShapeInput
+  os: RunnerOS
+  arch: RunnerArch
+  mac: MacOSConfigInput
+  linux: LinuxConfigInput
+}
+
+input UpsertRunnerInput {
+  uid: ID
+  owner: Owner
+  runner: RunnerInput!
+}
+
+type UpsertRunnerOutput implements Response {
+  runner: Runner!
+  isUpdate: Boolean!
+  responseContext: ResponseContext!
+}
+
+union UpsertRunnerResult = UpsertRunnerOutput | UserFacingError
+
+input DeleteRunnerInput {
+  uid: ID!
+}
+
+type DeleteRunnerOutput implements Response {
+  success: Boolean!
+  deletedUid: ID!
+  responseContext: ResponseContext!
+}
+
+union DeleteRunnerResult = DeleteRunnerOutput | UserFacingError
+
 type RootMutation {
   addInviteLinkDomainRestriction(input: AddInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddInviteLinkDomainRestrictionResult!
   addObjectGuests(input: AddObjectGuestsInput!, requestContext: RequestContext!): AddObjectGuestsResult!
@@ -2919,6 +3065,7 @@ type RootMutation {
   createTeam(input: CreateTeamInput!, requestContext: RequestContext!): CreateTeamResult!
   createWorkflow(input: CreateWorkflowInput!, requestContext: RequestContext!): CreateWorkflowResult!
   deleteConversation(input: DeleteConversationInput!, requestContext: RequestContext!): DeleteConversationResult!
+  deleteRunner(input: DeleteRunnerInput!, requestContext: RequestContext!): DeleteRunnerResult!
   deleteInviteLinkDomainRestriction(input: DeleteInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): DeleteInviteLinkDomainRestrictionResult!
   deleteManagedSecret(input: DeleteManagedSecretInput!, requestContext: RequestContext!): DeleteManagedSecretResult!
   deleteObject(input: DeleteObjectInput!, requestContext: RequestContext!): DeleteObjectResult!
@@ -2992,6 +3139,7 @@ type RootMutation {
 
   """This is the public API for updating workspace settings."""
   updateWorkspaceSettings(input: UpdateWorkspaceSettingsInput!, requestContext: RequestContext!): UpdateWorkspaceSettingsResult!
+  upsertRunner(input: UpsertRunnerInput!, requestContext: RequestContext!): UpsertRunnerResult!
 }
 
 type RootQuery {
@@ -3013,6 +3161,12 @@ type RootQuery {
   getIntegrationsUsingEnvironment(input: GetIntegrationsUsingEnvironmentInput!, requestContext: RequestContext!): GetIntegrationsUsingEnvironmentResult!
   getOAuthConnectTxStatus(input: GetOAuthConnectTxStatusInput!, requestContext: RequestContext!): GetOAuthConnectTxStatusResult!
   getRelevantFragments(input: GetRelevantFragmentsInput!, requestContext: RequestContext!): GetRelevantFragmentsResult!
+
+  """
+  Get runners accessible to the principal.
+  Defaults to LAST_UPDATED sorting if not specified.
+  """
+  getRunners(requestContext: RequestContext!, sortBy: RunnerSortBy): GetRunnersResult!
 
   """
   Retrieve managed secrets that serve as authentication credentials for the given harness,
@@ -3593,6 +3747,14 @@ type TeamSizePolicy {
   isUnlimited: Boolean!
   limit: Int!
 }
+type TeamByoSettings {
+  allowUserEndpoints: Boolean!
+  allowUserKeys: Boolean!
+  endpoints: [ByoEndpointMetadata!]!
+  endpointsEnabled: Boolean!
+  firstPartyEnabled: Boolean!
+  firstPartyKeys: [ByoFirstPartyKey!]!
+}
 
 type TelemetryDataCollectionPolicy {
   default: Boolean!
@@ -3629,6 +3791,7 @@ type Tier {
   enterpriseSecretRedactionPolicy: EnterpriseSecretRedactionPolicy
   enterpriseSpendingLimitsPolicy: EnterpriseSpendingLimitsPolicy
   enterpriseUsageThresholdsPolicy: EnterpriseUsageThresholdsPolicy
+  managedByokByoePolicy: ManagedByokByoePolicy
   multiAdminPolicy: MultiAdminPolicy
   name: String!
   pricing: TierPricing
@@ -4434,6 +4597,7 @@ type WorkspaceSettings {
   llmSettings: LlmSettings!
   sandboxedAgentSettings: SandboxedAgentSettings
   secretRedactionSettings: SecretRedactionSettings!
+  teamByo: TeamByoSettings
   telemetrySettings: TelemetrySettings!
   ugcCollectionSettings: UgcCollectionSettings!
   usageBasedPricingSettings: UsageBasedPricingSettings!

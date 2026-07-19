@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
+use warp_errors::report_if_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::auth::auth_state::AuthState;
-use crate::report_if_error;
 use crate::settings::input::InputBoxType;
 use crate::settings::{
     AISettings, FontSettings, InputSettings, PrivacySettings, ThemeSettings, ThinkingDisplayMode,

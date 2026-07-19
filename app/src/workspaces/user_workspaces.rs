@@ -4,6 +4,7 @@ use anyhow::Result;
 use regex::Regex;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::{ChangeEventReason, Setting};
+use warp_errors::report_error;
 use warp_graphql::workspace::FeatureModelChoice;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, Tracked};
 
@@ -20,7 +21,6 @@ use crate::channel::ChannelState;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, ObjectType, Owner, Space};
 use crate::pricing::PricingInfoModel;
-use crate::report_error;
 use crate::server::experiments::{ServerExperiment, ServerExperiments, ServerExperimentsEvent};
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::TeamClient;
@@ -122,7 +122,7 @@ pub struct CreateTeamResponse {
 }
 
 impl UserWorkspaces {
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
         team_client: Arc<dyn TeamClient>,
         workspace_client: Arc<dyn WorkspaceClient>,
@@ -491,6 +491,23 @@ impl UserWorkspaces {
             .map(|workspace| workspace.is_byo_api_key_enabled())
             .unwrap_or(FeatureFlag::SoloUserByok.is_enabled())
     }
+
+    /// Whether the current workspace's managed BYOK/BYOE policy allows members
+    /// to use their own provider API keys. Users with no workspace, or
+    /// workspaces without the managed BYOK/BYOE policy, have no team-level
+    /// restriction, so this returns true and the normal BYO entitlement applies.
+    pub fn are_member_byo_keys_allowed(&self) -> bool {
+        self.current_workspace().is_none_or(|workspace| {
+            !workspace.billing_metadata.is_managed_byok_byoe_enabled()
+                || workspace
+                    .settings
+                    .team_byo
+                    .as_ref()
+                    .is_some_and(|team_byo| {
+                        team_byo.first_party_enabled && team_byo.allow_user_keys
+                    })
+        })
+    }
     /// Whether custom inference endpoints are enabled for the current user.
     /// Anonymous or logged-out users are not allowed to use custom inference.
     /// Controlled by the BYO_ENDPOINT billing policy.
@@ -505,6 +522,23 @@ impl UserWorkspaces {
         self.current_workspace()
             .map(|workspace| workspace.billing_metadata.is_byo_endpoint_enabled())
             .unwrap_or(true)
+    }
+
+    /// Whether the current workspace's managed BYOK/BYOE policy allows members
+    /// to use their own custom endpoints. Users with no workspace, or
+    /// workspaces without the managed BYOK/BYOE policy, have no team-level
+    /// restriction, so this returns true and the normal BYO entitlement applies.
+    pub fn are_member_byo_endpoints_allowed(&self) -> bool {
+        self.current_workspace().is_none_or(|workspace| {
+            !workspace.billing_metadata.is_managed_byok_byoe_enabled()
+                || workspace
+                    .settings
+                    .team_byo
+                    .as_ref()
+                    .is_some_and(|team_byo| {
+                        team_byo.endpoints_enabled && team_byo.allow_user_endpoints
+                    })
+        })
     }
 
     pub fn aws_bedrock_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
@@ -591,6 +625,9 @@ impl UserWorkspaces {
     /// a GEAP credential mint is rooted in the user's Warp session, so without one
     /// there is nothing to mint from.
     pub fn is_gemini_enterprise_credentials_enabled(&self, app: &AppContext) -> bool {
+        if !FeatureFlag::GeminiEnterprise.is_enabled() {
+            return false;
+        }
         if AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out()

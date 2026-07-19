@@ -8,6 +8,7 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use serde::Serialize;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_error;
 use warpui::browser::escape_html_attribute;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
@@ -317,7 +318,7 @@ impl ShareBlockModal {
             let model = match &self.model {
                 Some(model) => model.lock(),
                 None => {
-                    log::error!("Opened share modal without a model");
+                    report_error!("Opened share modal without a model");
                     self.request_state = ShareRequestState::Failed;
                     ctx.notify();
                     return;
@@ -442,7 +443,7 @@ impl ShareBlockModal {
                 .and_then(|block_index| model.block_list().block_at(block_index))
             {
                 None => {
-                    log::error!("Opened block share modal without block");
+                    report_error!("Opened block share modal without block");
                     return;
                 }
                 Some(block) => block,

@@ -25,6 +25,8 @@ use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
 
 const FILE_GLOB_TIMEOUT: Duration = Duration::from_secs(10);
 
+use warp_errors::report_error;
+
 use super::{
     get_server_output_id, is_git_repository, ActionExecution, AnyActionExecution,
     ExecuteActionInput, PreprocessActionInput,
@@ -211,7 +213,7 @@ async fn run_file_glob(
     let is_in_git_repo = is_git_repository(&absolute_path, session.as_ref())
         .await
         .unwrap_or_else(|e| {
-            log::error!("Failed to run command to check if in git repository: {e:?}");
+            report_error!(e.context("Failed to run command to check if in git repository"));
             false
         });
 

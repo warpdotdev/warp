@@ -856,6 +856,10 @@ impl From<&Arc<AIApiError>> for RenderableAIError {
                 false,
                 TransientNetworkErrorKind::Api(value.clone()),
             ),
+            AIApiError::GrokSubscriptionTokenRefreshFailed => Self::other(
+                "Grok subscription token could not be refreshed. Please try reconnecting your subscription.",
+                true,
+            ),
             AIApiError::Deserialization(DeserializationError::Json(_))
             | AIApiError::NoContextFound
             | AIApiError::ErrorStatus(_, _)
@@ -970,6 +974,7 @@ impl ProgrammingLanguage {
                 "xml" => Some("xml"),
                 "vue" => Some("vue"),
                 "dockerfile" | "docker" | "containerfile" => Some("dockerfile"),
+                "markdown" | "md" => Some("md"),
                 _ => None,
             },
             Self::Shell(ShellType::PowerShell) => Some("ps1"),
@@ -1521,6 +1526,12 @@ impl AgentOutputText {
     /// Returns the original responded text with the Markdown format syntax.
     pub fn text(&self) -> &str {
         self.markdown_text.as_str()
+    }
+    /// Returns the cached parsed Markdown, if parsing succeeded.
+    pub fn formatted_text_arc(&self) -> Option<Arc<FormattedText>> {
+        self.formatted_lines
+            .as_ref()
+            .map(FormattedTextWrapper::formatted_text_arc)
     }
 
     /// Note that mutating the returned string will not automatically reparse the text and update `formatted_lines`.
@@ -2716,11 +2727,6 @@ pub enum AIAgentInput {
         review_comments: AgentReviewCommentBatch,
     },
 
-    FetchReviewComments {
-        repo_path: String,
-        context: Arc<[AIAgentContext]>,
-    },
-
     SummarizeConversation {
         prompt: Option<String>,
         context: Arc<[AIAgentContext]>,
@@ -2849,7 +2855,6 @@ impl Display for AIAgentInput {
             Self::CreateNewProject { .. } => write!(f, "CreateNewProject"),
             Self::CloneRepository { .. } => write!(f, "CloneRepository"),
             Self::CodeReview { .. } => write!(f, "CodeReview"),
-            Self::FetchReviewComments { .. } => write!(f, "FetchReviewComments"),
             Self::SummarizeConversation { .. } => write!(f, "SummarizeConversation"),
             Self::InvokeSkill {
                 skill, user_query, ..
@@ -2897,7 +2902,6 @@ impl AIAgentInput {
             Self::InitProjectRules { display_query, .. }
             | Self::CreateEnvironment { display_query, .. } => display_query.clone(),
             Self::CodeReview { .. } => Some("Address these comments".to_string()),
-            Self::FetchReviewComments { .. } => Some(commands::PR_COMMENTS.name.to_string()),
             Self::InvokeSkill {
                 skill, user_query, ..
             } => {
@@ -2955,6 +2959,14 @@ impl AIAgentInput {
             query = format!("/agent {query}");
         }
         Some(query)
+    }
+
+    /// Returns the raw user query text for the [`Self::UserQuery`] variant.
+    pub fn user_query(&self) -> Option<String> {
+        match self {
+            AIAgentInput::UserQuery { query, .. } => Some(query.clone()),
+            _ => None,
+        }
     }
 
     pub fn user_query_mode(&self) -> Option<UserQueryMode> {
@@ -3026,7 +3038,6 @@ impl AIAgentInput {
             | Self::CreateNewProject { context, .. }
             | Self::CloneRepository { context, .. }
             | Self::CodeReview { context, .. }
-            | Self::FetchReviewComments { context, .. }
             | Self::InvokeSkill { context, .. }
             | Self::StartFromAmbientRunPrompt { context, .. }
             | Self::PassiveSuggestionResult { context, .. } => Some(context),
@@ -3058,7 +3069,6 @@ impl AIAgentInput {
             | Self::CreateNewProject { .. }
             | Self::CloneRepository { .. }
             | Self::CodeReview { .. }
-            | Self::FetchReviewComments { .. }
             | Self::SummarizeConversation { .. }
             | Self::InvokeSkill { .. }
             | Self::StartFromAmbientRunPrompt { .. }
@@ -3080,7 +3090,6 @@ impl AIAgentInput {
             self,
             AIAgentInput::InitProjectRules { .. }
                 | AIAgentInput::CreateEnvironment { .. }
-                | AIAgentInput::FetchReviewComments { .. }
                 | AIAgentInput::InvokeSkill { .. }
         )
     }
@@ -3267,6 +3276,15 @@ impl AIAgentExchange {
     pub fn duration(&self) -> Option<TimeDelta> {
         self.finish_time
             .map(|finish_time| finish_time.signed_duration_since(self.start_time))
+    }
+
+    /// The elapsed wall-clock time since this exchange started. `None` when
+    /// the clock skewed such that `start_time` is in the future.
+    pub fn time_since_start(&self) -> Option<Duration> {
+        Local::now()
+            .signed_duration_since(self.start_time)
+            .to_std()
+            .ok()
     }
 }
 

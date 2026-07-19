@@ -64,6 +64,14 @@ fn arrow_keys_map_to_direction_names() {
 }
 
 #[test]
+fn tab_maps_to_the_canonical_keybinding_name() {
+    assert_eq!(keystroke(KeyCode::Tab, KeyModifiers::empty()).key, "tab");
+    let back_tab = keystroke(KeyCode::BackTab, KeyModifiers::SHIFT);
+    assert_eq!(back_tab.key, "tab");
+    assert!(back_tab.shift);
+}
+
+#[test]
 fn ctrl_modifier_is_carried_into_keystroke() {
     let keystroke = keystroke(KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert!(keystroke.ctrl, "ctrl modifier should be set");
@@ -82,6 +90,16 @@ fn non_press_key_events_are_ignored() {
     let mut event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty());
     event.kind = KeyEventKind::Release;
     assert!(crossterm_event_to_tui_event(CrosstermEvent::Key(event)).is_none());
+}
+#[test]
+fn paste_preserves_the_complete_payload() {
+    let payload = "USER:\nhello\n\nAGENT:\nHi!\n";
+    let Some(TuiEvent::Paste { text }) =
+        crossterm_event_to_tui_event(CrosstermEvent::Paste(payload.to_owned()))
+    else {
+        panic!("expected Paste");
+    };
+    assert_eq!(text, payload);
 }
 
 #[test]

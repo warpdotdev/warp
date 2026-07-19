@@ -2,6 +2,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::icons;
 use warp_core::ui::icons::ICON_DIMENSIONS;
@@ -80,6 +81,9 @@ pub fn init(app: &mut AppContext) {
 }
 
 #[cfg(feature = "local_fs")]
+use anyhow::Context as _;
+use warp_errors::report_error;
+#[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
 
 #[cfg(feature = "local_fs")]
@@ -133,8 +137,6 @@ impl From<PaneEvent> for AIDocumentEvent {
         AIDocumentEvent::Pane(event)
     }
 }
-
-pub const DEFAULT_PLANNING_DOCUMENT_TITLE: &str = "Planning document";
 
 /// Entry for the version history dropdown menu.
 struct VersionMenuEntry {
@@ -1007,7 +1009,7 @@ impl AIDocumentView {
             model.sync_to_warp_drive(self.document_id, ctx)
         });
         if !success {
-            log::error!("Failed to create Warp Drive notebook");
+            report_error!("Failed to create Warp Drive notebook");
         }
     }
 
@@ -1047,8 +1049,10 @@ impl AIDocumentView {
         ctx.open_save_file_picker(
             move |path_opt: Option<String>, _me: &mut Self, _ctx: &mut ViewContext<Self>| {
                 if let Some(path) = path_opt {
-                    if let Err(e) = std::fs::write(&path, &markdown) {
-                        log::error!("Failed to export AI document: {e}");
+                    if let Err(e) =
+                        std::fs::write(&path, &markdown).context("Failed to export AI document")
+                    {
+                        report_error!(e);
                     }
                 }
             },
@@ -1200,7 +1204,7 @@ impl TypedActionView for AIDocumentView {
                         self.refresh(ctx);
                     }
                     Err(e) => {
-                        log::error!("Failed to restore previous version: {e}");
+                        report_error!(e.context("Failed to restore previous version"));
                     }
                 }
             }

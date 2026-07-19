@@ -2308,11 +2308,16 @@ fn render_tab_group_internal(
             rows.finish()
         };
 
+        let show_header = should_show_tab_group_header(
+            has_custom_title,
+            is_being_renamed,
+            visible_pane_ids.len(),
+        );
         let group_content = if uses_outer_group_container {
             let mut group = Flex::column()
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-            if has_custom_title || is_being_renamed {
+            if show_header {
                 group.add_child(render_group_header(
                     GroupHeaderProps {
                         tab_index,
@@ -2325,7 +2330,6 @@ fn render_tab_group_internal(
                 ));
             }
 
-            let show_header = has_custom_title || is_being_renamed;
             let mut body_padding = Padding::uniform(0.)
                 .with_left(GROUP_HORIZONTAL_PADDING)
                 .with_right(GROUP_HORIZONTAL_PADDING)
@@ -3901,6 +3905,30 @@ fn pane_matches_query(props: &PaneProps<'_>, query_lower: &str, app: &AppContext
 
 fn uses_outer_group_container(display_granularity: VerticalTabsDisplayGranularity) -> bool {
     matches!(display_granularity, VerticalTabsDisplayGranularity::Panes)
+}
+
+/// Decides whether to render the tab-group header above a multi-row group in
+/// `Panes` granularity.
+///
+/// The header is shown when:
+///   * the tab has a user-set custom title (rename flow), or
+///   * the tab is currently being renamed (inline editor), or
+///   * the tab contains more than one visible pane.
+///
+/// The third condition is what fixes issue #9098: previously the header was
+/// only shown when a custom title existed, so multi-pane tabs with auto-
+/// generated names (the AI/CLI session naming flow) rendered without any
+/// tab-level identifier — only their first row's title was visible, which
+/// looked identical for every tab and made the bar appear "nameless".
+/// Single-pane groups in `Panes` mode still omit the header because the
+/// single row already shows the pane title (avoids duplicating the same
+/// text immediately above itself).
+fn should_show_tab_group_header(
+    has_custom_title: bool,
+    is_being_renamed: bool,
+    visible_pane_count: usize,
+) -> bool {
+    has_custom_title || is_being_renamed || visible_pane_count > 1
 }
 
 fn search_fragments_contain_query(fragments: &[String], query_lower: &str) -> bool {

@@ -225,7 +225,7 @@ impl InBandCommandExecutor {
                                 }
                             };
                             if let Err(error) = output_tx.try_send(command_output) {
-                                log::error!(
+                                log::warn!(
                                     "Error occurred when sending generator command output: {error}"
                                 );
                             }

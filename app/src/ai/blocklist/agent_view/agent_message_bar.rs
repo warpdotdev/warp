@@ -5,7 +5,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{Container, Element, Empty, MouseStateHandle};
+use warpui::elements::{Element, Empty, MouseStateHandle};
 use warpui::keymap::Keystroke;
 use warpui::platform::OperatingSystem;
 use warpui::{
@@ -20,7 +20,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
 use crate::ai::blocklist::agent_view::zero_state_block::render_ambient_credits_banner;
 use crate::ai::blocklist::agent_view::{
-    agent_view_bg_fill, is_in_cloud_context, AgentViewController, AgentViewControllerEvent,
+    is_in_cloud_context, AgentViewController, AgentViewControllerEvent,
 };
 use crate::ai::blocklist::{
     ai_brand_color, BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
@@ -414,14 +414,7 @@ impl View for AgentMessageBar {
             Some(FigmaMcpStatus::Running) | None => {}
         }
 
-        let message_bar = render_standard_message_bar(message, right_element, app);
-        if self.agent_view_controller.as_ref(app).is_inline() {
-            Container::new(message_bar)
-                .with_background(agent_view_bg_fill(app))
-                .finish()
-        } else {
-            message_bar
-        }
+        render_standard_message_bar(message, right_element, app)
     }
 }
 
@@ -609,8 +602,7 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
             .with_is_disabled(!is_buffer_empty),
         );
 
-        let is_cloud_agent =
-            is_in_cloud_context(agent_view_controller.agent_view_state(), terminal_model);
+        let is_cloud_agent = is_in_cloud_context(terminal_model);
         let ai_settings = AISettings::as_ref(app);
 
         // Handoff to cloud only available for local agents.

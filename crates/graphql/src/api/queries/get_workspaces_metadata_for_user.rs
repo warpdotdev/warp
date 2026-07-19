@@ -69,6 +69,9 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
               byoEndpointPolicy {
                 enabled
               }
+              managedByokByoePolicy {
+                enabled
+              }
               usageVisibilityPolicy {
                 adminGranularity
                 maxPriorCycles
@@ -109,6 +112,29 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             isInviteLinkEnabled
             llmSettings {
               enabled
+            }
+            teamByo {
+              firstPartyEnabled
+              endpointsEnabled
+              allowUserKeys
+              allowUserEndpoints
+              firstPartyKeys {
+                provider
+                credentialUid
+              }
+              endpoints {
+                uid
+                name
+                enabled
+                credentialUid
+                models {
+                  configKey
+                  slug
+                  alias
+                  displayName
+                  enabled
+                }
+              }
             }
             telemetrySettings {
               forceEnabled

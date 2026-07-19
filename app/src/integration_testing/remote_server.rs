@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use warp_core::{HostId, SessionId};
+use warp_errors::report_error;
 use warpui::integration::{
     AssertionCallback, AssertionOutcome, AssertionWithDataCallback, StepDataMap, TestStep,
 };
@@ -255,11 +256,14 @@ pub fn write_file_via_remote_server(
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                 let result = rt.block_on(handle.write_file(path.clone(), content));
                 if let Err(e) = &result {
-                    log::error!("write_file_via_remote_server failed for {path}: {e}");
+                    report_error!(
+                        anyhow::anyhow!("{e}").context("write_file_via_remote_server failed"),
+                        extra: { "path" => %path }
+                    );
                 }
             });
         } else {
-            log::error!("write_file_via_remote_server: no connected client");
+            report_error!("write_file_via_remote_server: no connected client");
         }
     })
 }
@@ -277,7 +281,7 @@ pub fn load_repo_metadata_directory_via_remote_server(
         let maybe_session_id = terminal_view.read(app, |view, _ctx| view.active_block_session_id());
 
         let Some(session_id) = maybe_session_id else {
-            log::error!("load_repo_metadata_directory_via_remote_server: no active session");
+            report_error!("load_repo_metadata_directory_via_remote_server: no active session");
             return;
         };
 
