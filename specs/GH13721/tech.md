@@ -200,7 +200,14 @@ Then it constructs a `FormattedImage`:
   exactly like `parse_image` does at `:347`.
 - `width`/`height` parse via a shared `parse_image_dimension(&str) -> Option<ImageDimension>`:
   a trailing `%` → `Percent`, an optional trailing `px` or bare integer → `Pixels`,
-  anything else / empty / negative → `None` (attribute ignored, invariant 12).
+  anything else / empty / negative → `None` (attribute ignored, invariant 12). This
+  mirrors the WHATWG HTML "rules for parsing dimension values"
+  (https://html.spec.whatwg.org/multipage/rendering.html#rules-for-parsing-dimension-values),
+  the legacy algorithm browsers use for `<img>` `width`/`height` presentational
+  attributes — percentages are part of that same algorithm (our percent support
+  mirrors it), and a leading `-` is a parse error in both its absolute and percent
+  forms, so no browser clamps a negative value; it's dropped, falling back to
+  intrinsic/default sizing exactly as this spec does.
 - `align` parses case-insensitively to `Left`/`Center`/`Right`, defaulting to `Left`
   for absent/unrecognized values (invariant 8, 9).
 
