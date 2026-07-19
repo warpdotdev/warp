@@ -214,6 +214,7 @@ pub struct CodeEditorRenderOptions {
     vertical_expansion_behavior: VerticalExpansionBehavior,
     line_height_override: Option<f32>,
     lazy_layout: bool,
+    soft_wrap: bool,
     show_comment_editor_provider: Box<dyn ShowCommentEditorProvider>,
     show_find_references_provider: Box<dyn ShowFindReferencesCardProvider>,
 }
@@ -224,9 +225,16 @@ impl CodeEditorRenderOptions {
             vertical_expansion_behavior,
             line_height_override: None,
             lazy_layout: false,
+            soft_wrap: false,
             show_comment_editor_provider: Box::new(NoopCommentEditorProvider),
             show_find_references_provider: Box::new(NoopFindReferencesCardProvider),
         }
+    }
+
+    /// Lay out lines wrapped to the viewport width instead of scrolling horizontally.
+    pub fn with_soft_wrap(mut self, soft_wrap: bool) -> Self {
+        self.soft_wrap = soft_wrap;
+        self
     }
 
     pub fn lazy_layout(mut self) -> Self {
@@ -318,6 +326,7 @@ impl CodeEditorView {
                 initial_styles,
                 session_platform,
                 render_options.lazy_layout,
+                render_options.soft_wrap,
                 buffer,
                 ctx,
             )

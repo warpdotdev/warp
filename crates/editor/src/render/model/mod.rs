@@ -407,6 +407,32 @@ impl<'a> RenderContentTreeRef<'a> {
         cursor.seek_clamped(&line, SeekBias::Right);
         (cursor.start().height as f32).into_pixels()
     }
+
+    /// Returns the cumulative Y offset (in content-space pixels) at the top of the given *logical*
+    /// (source) line. Mirrors [`Self::y_offset_at_line`] but seeks the logical-line dimension, so
+    /// it stays correct under soft-wrap. When `line >= total logical lines`, returns the total
+    /// content height.
+    pub fn y_offset_at_logical_line(&self, line: LogicalLineCount) -> Pixels {
+        let summary = self.0.summary();
+        if line >= summary.logical_lines {
+            return (summary.height as f32).into_pixels();
+        }
+        let mut cursor = self.0.cursor::<LogicalLineCount, LayoutSummary>();
+        cursor.seek_clamped(&line, SeekBias::Right);
+        (cursor.start().height as f32).into_pixels()
+    }
+
+    /// The *logical* (source) line index at the start of the block containing `offset`. Mirrors the
+    /// seek in [`Self::block_at_offset`] but accumulates the logical-line dimension, so the result
+    /// is a source-line index rather than a wrapped-row index.
+    pub fn logical_line_at_offset(&self, offset: CharOffset) -> Option<LogicalLineCount> {
+        let mut cursor = self.0.cursor::<CharOffset, LogicalLineCount>();
+        if cursor.seek(&offset, SeekBias::Right) {
+            Some(*cursor.start())
+        } else {
+            None
+        }
+    }
 }
 
 /// A ghost line (deleted/replaced diff content) to interleave when rendering a
@@ -1249,6 +1275,7 @@ pub struct LayoutSummary {
     height: f64,
     width: Pixels,
     lines: LineCount,
+    logical_lines: LogicalLineCount,
     item_count: usize,
 }
 
@@ -1348,6 +1375,15 @@ impl ColumnUnit {
         }
     }
 }
+
+/// A count of *logical* source lines (newline-separated), as opposed to [`LineCount`], which
+/// counts *visual* rows after soft-wrapping. The two diverge only when a line soft-wraps. Used to
+/// drive the code-editor gutter (line numbers and diff decorations) so they track source lines
+/// rather than wrapped rows.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LogicalLineCount(usize);
+
+impl_offset!(LogicalLineCount);
 
 /// A character offset within a [`TextFrame`]. These offsets count characters in the Rust string
 /// passed to [`warpui_core::text_layout::LayoutCache::layout_text()`].
@@ -3371,13 +3407,16 @@ impl RenderState {
     }
 
     /// Replace all temporary blocks in the BlockItem cache with a new set of temporary
-    fn reset_temporary_block(&self, mut blocks: HashMap<LineCount, Vec<BlockItem>>) {
+    fn reset_temporary_block(&self, mut blocks: HashMap<LogicalLineCount, Vec<BlockItem>>) {
         let mut new_tree = SumTree::new();
         {
             let content = self.content.borrow();
-            let mut cursor = content.cursor::<LineCount, CharOffset>();
+            // Temporary (removed-line) blocks are anchored by *logical* source line, so seek the
+            // logical dimension here. Seeking the visual `LineCount` would mis-anchor them once any
+            // preceding line soft-wraps (visual rows > logical lines).
+            let mut cursor = content.cursor::<LogicalLineCount, CharOffset>();
 
-            if let Some(items) = blocks.remove(&LineCount::zero()) {
+            if let Some(items) = blocks.remove(&LogicalLineCount::zero()) {
                 for item in items {
                     new_tree.push(item);
                 }
@@ -4055,6 +4094,18 @@ impl RenderState {
         Some(content.block_at_offset(offset)?.start_line)
     }
 
+    /// The *logical* (source) line index at which `block` starts. Mirrors [`Self::start_line_index`]
+    /// but returns a source-line index instead of a wrapped-row index, so callers (the gutter) can
+    /// label lines and look up diff hunks in logical-line space.
+    pub fn start_logical_line_index(
+        &self,
+        block: &dyn RenderableBlock,
+    ) -> Option<LogicalLineCount> {
+        let content = self.content();
+        let offset = block.viewport_item().block_offset();
+        content.logical_line_at_offset(offset)
+    }
+
     /// The line height of the first line. Different from `first_line_bounds`, this does not
     /// return the viewport origin.
     pub fn first_line_height(&self, block: &dyn RenderableBlock) -> Option<f32> {
@@ -4272,6 +4323,7 @@ impl AddAssign<&LayoutSummary> for LayoutSummary {
         self.content_length += rhs.content_length;
         self.width = self.width.max(rhs.width);
         self.lines += rhs.lines;
+        self.logical_lines += rhs.logical_lines;
         self.item_count += rhs.item_count;
     }
 }
@@ -4452,6 +4504,41 @@ impl BlockItem {
             | BlockItem::Image { .. } => LineCount(1),
             BlockItem::Table(laid_out_table) => laid_out_table.lines(),
             BlockItem::Hidden(config) => config.line_count(),
+        }
+    }
+
+    /// The number of *logical* source lines this block represents, as opposed to [`Self::lines`],
+    /// which counts visual rows after soft-wrapping. The two diverge when a source line soft-wraps
+    /// (one logical line, several visual rows). This is what the code-editor gutter uses so line
+    /// numbers and diff decorations track source lines rather than wrapped rows.
+    pub fn logical_lines(&self) -> LogicalLineCount {
+        match self {
+            // Single-source-line blocks: each renders one source line, and only its visual row
+            // count grows when it soft-wraps.
+            BlockItem::Paragraph(_)
+            | BlockItem::Header { .. }
+            | BlockItem::UnorderedList { .. }
+            | BlockItem::OrderedList { .. }
+            | BlockItem::TaskList { .. }
+            | BlockItem::MermaidDiagram { .. }
+            | BlockItem::TrailingNewLine(_)
+            | BlockItem::Embedded(_)
+            | BlockItem::HorizontalRule(_)
+            | BlockItem::Image { .. } => LogicalLineCount(1),
+            // Text/code blocks hold one `Paragraph` per source line, so the logical line count is
+            // the paragraph count — independent of how many visual rows each paragraph wraps to.
+            BlockItem::TextBlock { paragraph_block }
+            | BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => LogicalLineCount(paragraph_block.paragraphs().len()),
+            // Removed-line diff placeholders are not lines in the current buffer, so they must not
+            // advance the logical line counter (matches their visual `lines()` of 0).
+            BlockItem::TemporaryBlock { .. } => LogicalLineCount(0),
+            // Tables and collapsed sections don't soft-wrap their row count, so logical == visual.
+            BlockItem::Table(laid_out_table) => {
+                LogicalLineCount(laid_out_table.lines().as_usize())
+            }
+            BlockItem::Hidden(config) => LogicalLineCount(config.line_count().as_usize()),
         }
     }
 
@@ -4761,6 +4848,7 @@ impl sum_tree::Item for BlockItem {
             height: self.height().as_f32() as f64,
             width: self.width(),
             lines: self.lines(),
+            logical_lines: self.logical_lines(),
             item_count: 1,
         }
     }
@@ -5338,6 +5426,12 @@ impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LayoutSummary {
 impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LineCount {
     fn add_summary(&mut self, summary: &'a LayoutSummary) {
         *self += summary.lines;
+    }
+}
+
+impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LogicalLineCount {
+    fn add_summary(&mut self, summary: &'a LayoutSummary) {
+        *self += summary.logical_lines;
     }
 }
 

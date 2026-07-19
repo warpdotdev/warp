@@ -16,7 +16,7 @@ use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
 use warp_editor::content::edit::TemporaryBlock;
 use warp_editor::content::version::BufferVersion;
 use warp_editor::multiline::{AnyMultilineString, MultilineStr, MultilineString, LF};
-use warp_editor::render::model::{Decoration, LineCount, LineDecoration};
+use warp_editor::render::model::{Decoration, LineCount, LineDecoration, LogicalLineCount};
 use warpui::{Entity, ModelContext};
 
 use super::super::DiffResult;
@@ -319,7 +319,7 @@ impl DiffModel {
 
                     removed_lines.push(TemporaryBlock {
                         content,
-                        insert_before: LineCount::from(range.start),
+                        insert_before: LogicalLineCount::from(range.start),
                         line_decoration: Some(remove_overlay_color(appearance).into()),
                         inline_text_decorations: Vec::new(),
                     });
@@ -373,7 +373,7 @@ impl DiffModel {
 
                             removed_lines.push(TemporaryBlock {
                                 content,
-                                insert_before: LineCount::from(range.start),
+                                insert_before: LogicalLineCount::from(range.start),
                                 line_decoration: Some(remove_overlay_color(appearance).into()),
                                 inline_text_decorations,
                             });

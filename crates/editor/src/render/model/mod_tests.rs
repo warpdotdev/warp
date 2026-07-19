@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use markdown_parser::{FormattedTextStyles, Hyperlink};
@@ -28,7 +29,8 @@ use crate::content::text::{
 };
 use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
 use crate::render::model::{
-    ColumnUnit, Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
+    ColumnUnit, Height, LayoutSummary, LineCount, LogicalLineCount, RenderedSelection,
+    SoftWrapPoint, TEXT_SPACING,
 };
 
 #[test]
@@ -69,6 +71,7 @@ fn test_height() {
             height: 48. + 24. + 24. + 32.,
             width: (17.).into_pixels(),
             lines: LineCount(4),
+            logical_lines: LogicalLineCount(4),
             item_count: 4,
         }
     );
@@ -144,9 +147,85 @@ fn test_width() {
             height: 24.,
             width: (26.).into_pixels(),
             lines: LineCount(1),
+            logical_lines: LogicalLineCount(1),
             item_count: 1,
         }
     );
+}
+
+#[test]
+fn test_logical_line_dimension_ignores_soft_wrap() {
+    let mut content = SumTree::new();
+    // "ABCDEFG" soft-wraps to 2 visual rows at this width but is a single source line.
+    content.push(laid_out_paragraph("ABCDEFG\n", &TEST_STYLES, 40.));
+    // "ABCD" fits on a single visual row.
+    content.push(laid_out_paragraph("ABCD\n", &TEST_STYLES, 40.));
+
+    let summary = content.summary();
+    // Two source lines, but more than two visual rows because the first paragraph wrapped.
+    assert_eq!(summary.logical_lines, LogicalLineCount(2));
+    assert!(summary.lines > LineCount(2));
+
+    // Seeking to logical line 1 lands at the start of the second block (after the first block's
+    // 8 characters: "ABCDEFG\n"), even though that position is a wrapped visual row.
+    let mut cursor = content.cursor::<LogicalLineCount, CharOffset>();
+    cursor.seek_clamped(&LogicalLineCount(1), sum_tree::SeekBias::Right);
+    assert_eq!(*cursor.start(), CharOffset::from(8));
+}
+
+#[test]
+fn test_logical_lines_counts_paragraphs_for_multi_line_blocks() {
+    // A TextBlock holds one Paragraph per source line, so its logical line count is the paragraph
+    // count regardless of soft-wrapping. (The earlier implementation incorrectly returned 1 here.)
+    let paragraph_block = ParagraphBlock::new(layout_paragraphs(
+        "alpha\nbeta\ngamma",
+        &TEST_STYLES,
+        &BufferBlockStyle::PlainText,
+        40.,
+    ));
+    let block = BlockItem::TextBlock { paragraph_block };
+    assert_eq!(block.logical_lines(), LogicalLineCount(3));
+    // Sanity: it really is a multi-row block (at least one visual row per source line).
+    assert!(block.lines() >= LineCount(3));
+}
+
+#[test]
+fn test_temporary_block_anchors_to_logical_line_under_wrap() {
+    // Regression: removed-line (temporary) blocks are anchored by *logical* source line. When a
+    // preceding line soft-wraps to several visual rows, anchoring by visual rows finds no matching
+    // block boundary, so the block is silently dropped — that is why removed-line decorations
+    // vanished in narrow (more-wrapped) panes. Seeking the logical dimension keeps it anchored.
+    let mut model =
+        RenderState::new_for_test(TEST_STYLES.clone(), 40.0.into_pixels(), 60.0.into_pixels());
+    let mut content = SumTree::new();
+    // Source line 0 soft-wraps to 2 visual rows at this width; source line 1 fits on one row.
+    content.push(laid_out_paragraph("ABCDEFG\n", &TEST_STYLES, 40.));
+    content.push(laid_out_paragraph("ABCD\n", &TEST_STYLES, 40.));
+    model.set_content(content);
+
+    // A removed-line placeholder anchored before logical source line 1 (i.e. after line 0).
+    let removed = layout_paragraph("removed\n", &TEST_STYLES, &BufferBlockStyle::PlainText, 40.);
+    let temporary_block = BlockItem::TemporaryBlock {
+        paragraph_block: ParagraphBlock::new(vec1![removed]),
+        text_decoration: Vec::new(),
+        decoration: None,
+    };
+    let mut blocks = HashMap::new();
+    blocks.insert(LogicalLineCount(1), vec![temporary_block]);
+    model.reset_temporary_block(blocks);
+
+    // The placeholder lands right after source line 0 (index 1) and is not dropped, even though
+    // line 0 wrapped to two visual rows. Visual-row seeking would have produced an empty list.
+    let temporary_positions: Vec<usize> = model
+        .content
+        .borrow()
+        .items()
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| matches!(item, BlockItem::TemporaryBlock { .. }))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(temporary_positions, vec![1]);
 }
 
 #[test]
