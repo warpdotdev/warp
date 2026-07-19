@@ -2093,16 +2093,52 @@ fn test_parse_unmatched_subscript_close_is_literal() {
 }
 
 #[test]
-fn test_parse_superscript_nested_in_subscript_innermost_wins() {
-    // Invariant 7: nesting does not panic; the innermost tag's alignment applies to the
-    // overlapping span, and outer-only spans keep the outer alignment. No compounding.
+fn test_parse_nested_vertical_align_bails_whole_span_to_literal() {
+    // Invariant 7 (superseded product ruling, #13734/#13948): nesting does not panic, but does
+    // NOT style either level. ANY nesting of `<sub>`/`<sup>` — regardless of direction — degrades
+    // the ENTIRE outermost span (open tag through close tag, all contents, including the nested
+    // tag) to literal text. A partially-styled nested construct (e.g. a literal inner tag rendered
+    // under a styled outer baseline shift) still reads as a plausible-but-wrong formula; showing
+    // the whole span as source text is the only rendering that can't be misread as a real formula.
+    // Only a single, non-nested `<sub>`/`<sup>` renders styled (see `test_parse_superscript_basic`
+    // and `test_parse_subscript_composes_with_italic`).
     assert_eq!(
         parse_all("<sub>a<sup>b</sup>c</sub>", parse_inline),
-        vec![
-            FormattedTextFragment::subscript("a"),
-            FormattedTextFragment::superscript("b"),
-            FormattedTextFragment::subscript("c"),
-        ]
+        vec![FormattedTextFragment::plain_text(
+            "<sub>a<sup>b</sup>c</sub>"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_nested_vertical_align_same_direction_bails_whole_span_to_literal() {
+    // The motivating case for the whole-formula-bail rule: `2<sup>3<sup>4</sup></sup>` is meant to
+    // read as a stacked exponent tower (2^(3^4)), but the buffer's `vertical_align` is a flat
+    // tri-state attribute with no compounding, so naive same-direction-nesting rendering would
+    // flatten "3" and "4" to the identical single-step superscript offset — reading as 2^(34), a
+    // different and wrong number. Bailing the whole span to literal shows the source instead of a
+    // wrong formula.
+    assert_eq!(
+        parse_all("2<sup>3<sup>4</sup></sup>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "2<sup>3<sup>4</sup></sup>"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_nested_vertical_align_opposite_direction_bails_whole_span_to_literal() {
+    // The second motivating case: `2<sup>3<sub>4</sub></sup>` is meant to read as 2^(3-sub-4) (an
+    // exponent containing its own subscript), but innermost-wins rendering would render "4" at
+    // full subscript depth relative to "2"'s baseline, reading as (2³)₄ — a different, wrong
+    // formula (this is what killed the innermost-wins carve-out for single ties: even a single
+    // opposite-direction tie misreads once nested two levels deep). Bails to literal like the
+    // same-direction tower above.
+    assert_eq!(
+        parse_all("2<sup>3<sub>4</sub></sup>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "2<sup>3<sub>4</sub></sup>"
+        )]
     );
 }
 

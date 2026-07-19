@@ -1738,23 +1738,25 @@ impl AddAssign<&StyleSummary> for StyleSummary {
 /// The single tie/nesting rule for overlapping subscript and superscript, shared by every consumer
 /// that has to collapse the two independent markers into one `Option<VerticalAlign>`.
 ///
-/// Subscript and superscript are tracked as independent markers (`StyleSummary` keeps a depth counter
-/// for each; the buffer emits properly-nested `<sub_s>…<sup_s>…<sup_e>…<sub_e>` pairs), so a span can
-/// have BOTH active at once. When that happens, **the innermost still-active marker wins** — this
-/// matches the browser mental model, where a nested `<sup>` inside a `<sub>` controls its own text,
-/// and the outer alignment resumes once the inner element closes. `last_opened` names whichever of the
-/// two markers was most recently *opened* (not closed) in document order; a close never updates it, so
-/// that once the inner marker's depth returns to zero this function falls through to whichever marker
-/// is still active. Both the style-summary reconstruction and the render-run iterator MUST route
-/// through this function so they never disagree about which alignment a nested span renders as, or
-/// which one an inner end-marker restores (issue #13734 finding 3; tie rule flipped to innermost-wins
-/// per product ruling — superscript-wins was an implementation convenience, not intended behavior).
-///
-/// Note: this collapses same-direction nesting flat rather than compounding it — nesting two
-/// superscripts, for instance, still renders as a single superscript baseline offset, not a taller
-/// stacked one. `vertical_align` is a tri-state (`None`/`Sub`/`Sup`) attribute on the run, so there is
-/// no representation for "two levels of superscript." See the sub/sup spec for the follow-up ticket
-/// tracking depth-aware cumulative rendering.
+/// IMPORTANT — this function is internal editor-consistency plumbing only, and is NOT the product's
+/// nesting behavior for parsed Markdown. The product rule (see `markdown_parser::parse_vertical_align`)
+/// is a whole-formula literal bail: any nesting of `<sub>`/`<sup>` tags in Markdown source degrades
+/// the entire outermost span to literal text *before the buffer ever sees it*, so imported/parsed
+/// content never produces overlapping buffer markers in the first place — this function's overlap
+/// branch is simply unreachable from that path. It's reachable only through *live interactive style
+/// editing*: applying subscript over a selection that already has superscript active (or vice versa)
+/// directly in the buffer, which has no equivalent "is this nested" concept and can't refuse the
+/// operation the way the parser can refuse to render a nested tag. For that editor-only case, ties
+/// resolve **innermost-wins** (whichever marker was applied most recently over the overlapping
+/// region) purely so `StyleSummary` and the render iterator agree with each other — there is no
+/// visible product behavior riding on which specific tie-break rule this picks, since it's never
+/// reachable from Markdown source, but the two consumers disagreeing with each other would still be
+/// a real bug (cursor/toolbar state vs. rendered runs), which is what issue #13734 finding 3
+/// originally caught. `last_opened` names whichever of the two markers was most recently *opened*
+/// (not closed) in document order; a close never updates it, so that once the inner marker's depth
+/// returns to zero this function falls through to whichever marker is still active. Both the
+/// style-summary reconstruction and the render-run iterator MUST route through this function so they
+/// never disagree with each other.
 pub(super) fn resolve_vertical_align(
     subscript_depth: i32,
     superscript_depth: i32,

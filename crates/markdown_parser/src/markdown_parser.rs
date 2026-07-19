@@ -1344,11 +1344,21 @@ fn parse_sup<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
 
 /// Shared resolver for a matched `<sub>`/`<sup>` delimiter pair, mirroring [`parse_underline`].
 ///
-/// On a missing/inactive start, the closing tag falls back to literal text. On a match, the
-/// `vertical_align` flag is set over the enclosed span — but only on fragments that don't already
-/// carry a vertical alignment, so that in a nested pair (`<sub>…<sup>…</sup>…</sub>`) the innermost
-/// tag wins (it resolves first and claims its span; the outer tag's later backtrack skips it). This
-/// is the documented degraded behavior for nesting; compounding offsets is out of scope.
+/// On a missing/inactive start, the closing tag falls back to literal text. On a match, whether
+/// styling is applied depends on nesting (product ruling on #13734, GH13948): ANY nesting of
+/// vertical-align tags — same-direction, opposite-direction, or depth ≥ 2 — degrades the ENTIRE
+/// outermost span (open tag through close tag, all contents, including nested tags) to literal
+/// text. A partially-styled nested construct (e.g. a literal inner tag rendered under a styled
+/// outer baseline shift) still reads as a plausible-but-wrong formula; only showing the whole span
+/// as source text avoids ever displaying a misleading formula. Only a single, non-nested
+/// `<sub>`/`<sup>` renders styled.
+///
+/// Nesting is detected when THIS close finds an outer vertical-align delimiter still active
+/// earlier on the stack: that means this tag opened *inside* an already-open vertical-align span.
+/// When that happens, this tag's own span is reverted to literal (rather than styled), and the
+/// outer delimiter is marked `vertical_align_poisoned` so that when it eventually closes, it also
+/// bails to literal for its entire span instead of applying its own alignment — propagating the
+/// bail outward through arbitrarily many enclosing levels.
 fn parse_vertical_align<'a>(
     state: &mut InlineState,
     remaining: &'a str,
@@ -1381,6 +1391,54 @@ fn parse_vertical_align<'a>(
     }
 
     let start_node = start.node_index;
+    let start_poisoned = start.vertical_align_poisoned;
+
+    // Nesting check: is there still an active vertical-align delimiter (Sub or Sup) earlier on
+    // the stack? If so, this tag opened inside an already-open outer vertical-align span, so this
+    // close must bail to literal and poison that outer delimiter.
+    let outer_active_vertical_align =
+        state.delimiters[..start_index]
+            .iter()
+            .rposition(|delimiter| {
+                delimiter.active
+                    && matches!(
+                        delimiter.kind,
+                        DelimiterKind::SubStart | DelimiterKind::SupStart
+                    )
+            });
+
+    if let Some(outer_index) = outer_active_vertical_align {
+        state.delimiters[outer_index].vertical_align_poisoned = true;
+    }
+
+    if start_poisoned || outer_active_vertical_align.is_some() {
+        // Bail this span to literal: don't apply `align`, and leave this tag's own opening
+        // placeholder node (already literal `<sub>`/`<sup>` text since push time) in place rather
+        // than removing it. If this delimiter was itself poisoned (an inner nested tag already
+        // bailed within its span), its content is already literal text from that inner bail, so
+        // this just leaves it untouched and wraps it with this tag's own literal markers.
+        state.backtrack_styles(start_node, |_styles| {
+            // Deliberately not touching `vertical_align` — leaving it `None` so the whole span
+            // renders as plain text. `backtrack_styles` still ensures a fragment exists to hold
+            // this tag's own literal open tag position.
+        });
+        process_emphasis(state, Some(start_index));
+
+        // Push this tag's own literal closing text; the opening node is left as-is (not removed),
+        // so both tags plus everything in between remain as plain text.
+        state.push_text(close_tag);
+
+        // Only remove *this* delimiter from the stack. Do NOT deactivate other same-kind
+        // delimiters here (unlike the successful-match path below): an enclosing same-kind
+        // delimiter earlier on the stack is the poisoned outer wrapper, not an unrelated sibling,
+        // and must reach its own close still `active` so it takes the poisoned-bail branch above
+        // rather than the stale "inactive start" literal-degradation branch, which doesn't account
+        // for an already-open styled span the way this branch does.
+        state.delimiters.remove(start_index);
+        state.last_node_closed = true;
+        return remaining;
+    }
+
     state.backtrack_styles(start_node, |styles| {
         if styles.vertical_align.is_none() {
             styles.vertical_align = Some(align);
@@ -1852,6 +1910,16 @@ struct Delimiter {
     can_open: bool,
     /// Whether or not this delimiter can close a strong/emphasis range.
     can_close: bool,
+    /// Only meaningful for `SubStart`/`SupStart`: set when a *nested* vertical-align open was
+    /// detected inside this delimiter's span (see `parse_vertical_align`). A poisoned delimiter's
+    /// close renders the entire span — this tag through its matching close, all contents,
+    /// including any nested `<sub>`/`<sup>` tags — as literal text rather than applying styling.
+    /// This is the whole-formula bail: any nesting of vertical-align tags (same-direction,
+    /// opposite-direction, or depth ≥ 2) means NO partial styling is applied anywhere in the span,
+    /// because a partially-styled nested construct (e.g. a literal inner tag under a styled outer
+    /// baseline shift) still reads as a plausible-but-wrong formula. Showing the whole thing as
+    /// source text is the only rendering that can't be misread as a real (if odd) formula.
+    vertical_align_poisoned: bool,
 }
 
 impl Delimiter {
@@ -1922,6 +1990,7 @@ impl Delimiter {
             can_open,
             active: true,
             node_index,
+            vertical_align_poisoned: false,
         }
     }
 

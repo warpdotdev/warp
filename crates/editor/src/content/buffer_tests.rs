@@ -2035,10 +2035,16 @@ fn render_run_vertical_aligns(buffer: &Buffer) -> Vec<(char, bool, bool)> {
 
 #[test]
 fn test_nested_sub_inside_sup_render_matches_summary() {
-    // #13734 finding 3: subscript and superscript are independent, overlappable markers. When one
-    // is applied inside the other, the render iterator must (a) render the overlap with the same
-    // innermost-wins tie rule `StyleSummary` uses, and (b) *restore* the outer alignment at the
-    // inner end-marker instead of clearing to None. Both views must agree on every character.
+    // EDITOR-ACTION-LEVEL test, not a product-behavior test for parsed Markdown. Overlapping
+    // subscript/superscript buffer markers are unreachable via markdown import (the parser bails
+    // any nesting to a single literal fragment — see
+    // `test_nested_sub_sup_markdown_import_matches_parser_resolution` and
+    // `resolve_vertical_align`'s doc comment); they're only reachable by applying one alignment
+    // directly over an in-buffer selection that already carries the other, which is what this test
+    // builds via `style_internal`. This exercises internal-consistency plumbing only: `StyleSummary`
+    // and the render iterator must agree with each other on the same tie rule (#13734 finding 3),
+    // even though which specific rule they pick has no visible product behavior since it's never
+    // reachable from Markdown source.
     //
     // NOTE: this test's buffer is subscript-outer / superscript-inner, so the overlap ("bcd") is
     // Sup under BOTH the old superscript-wins rule and the current innermost-wins rule — the
@@ -2107,6 +2113,9 @@ fn test_nested_sub_inside_sup_render_matches_summary() {
 
 #[test]
 fn test_nested_sup_inside_sub_render_matches_summary() {
+    // EDITOR-ACTION-LEVEL test (see the note on the sibling test above — this is internal
+    // `StyleSummary`/render-iterator consistency, not a product behavior reachable via Markdown).
+    //
     // Mirror of the above with the outer/inner alignments swapped: superscript outer, subscript
     // inner. The tie rule is innermost-wins, so the overlap ("bcd") renders Sub — the inner,
     // more-deeply-nested marker — even though it's the outer marker (superscript) that would have
@@ -3288,17 +3297,18 @@ fn test_sub_sup_style_and_font_from_real_styled_run() {
 
 /// Nested `<sub>`/`<sup>` reaching the render path through *markdown import*, as opposed to
 /// `test_nested_sub_inside_sup_render_matches_summary` / `test_nested_sup_inside_sub_render_matches_summary`
-/// above, which build the overlap via direct `style_internal` calls over an in-buffer selection.
+/// above, which build an overlapping buffer marker structure via direct `style_internal` calls over
+/// an in-buffer selection (an editor-only case — see the note on `resolve_vertical_align`).
 ///
-/// This is a distinct seam: `markdown_parser::parse_inline` already flattens nested sub/sup tags to
-/// one resolved `vertical_align` per fragment before the buffer ever sees them (see
-/// `test_parse_superscript_nested_in_subscript_innermost_wins` in `markdown_parser_tests.rs`), so
-/// `Buffer::from_formatted_text` never actually emits *overlapping* subscript/superscript markers for
-/// imported markdown — each fragment's single resolved alignment becomes one clean, non-overlapping
-/// marker pair. The buffer-level tie rule in `resolve_vertical_align` is therefore only reachable via
-/// live interactive editing (applying one alignment over a selection that already carries the other),
-/// never via markdown import. This test locks in that import fidelity (the parser's innermost-wins
-/// resolution survives the round-trip to render runs) without claiming to exercise the overlap branch.
+/// This is a distinct seam: `markdown_parser::parse_vertical_align` bails ANY nesting of `<sub>`/
+/// `<sup>` tags to a single literal fragment (whole-formula bail, product ruling on #13734/#13948 —
+/// see `test_parse_nested_vertical_align_bails_whole_span_to_literal` in `markdown_parser_tests.rs`)
+/// before the buffer ever sees it, so `Buffer::from_formatted_text` never emits *overlapping*
+/// subscript/superscript markers for imported markdown at all — nested markdown becomes one plain,
+/// unstyled text fragment. The buffer-level tie rule in `resolve_vertical_align` is therefore
+/// unreachable via markdown import; it only exists for live interactive editing (applying one
+/// alignment over a selection that already carries the other). This test locks in that the parser's
+/// literal bail survives the round-trip to render runs — no run in the imported buffer is styled.
 #[test]
 fn test_nested_sub_sup_markdown_import_matches_parser_resolution() {
     App::test((), |mut app| async move {
@@ -3312,16 +3322,39 @@ fn test_nested_sub_sup_markdown_import_matches_parser_resolution() {
 
         let render = app.read_model(&buffer, |buffer, _| render_run_vertical_aligns(buffer));
 
-        // The parser already resolved this to innermost-wins (Sub, Sup, Sup, Sup, Sub) before the
-        // buffer ever saw it; this just confirms the import path doesn't lose or re-derive that.
+        // The parser already bailed this to a fully literal fragment before the buffer ever saw
+        // it; this just confirms the import path doesn't accidentally re-derive styling from the
+        // literal tag text (e.g. via some unrelated re-parse) and renders everything unstyled.
         assert_eq!(
             render,
             vec![
-                ('a', true, false),
-                ('b', false, true),
-                ('c', false, true),
-                ('d', false, true),
-                ('e', true, false),
+                ('<', false, false),
+                ('s', false, false),
+                ('u', false, false),
+                ('b', false, false),
+                ('>', false, false),
+                ('a', false, false),
+                ('<', false, false),
+                ('s', false, false),
+                ('u', false, false),
+                ('p', false, false),
+                ('>', false, false),
+                ('b', false, false),
+                ('c', false, false),
+                ('d', false, false),
+                ('<', false, false),
+                ('/', false, false),
+                ('s', false, false),
+                ('u', false, false),
+                ('p', false, false),
+                ('>', false, false),
+                ('e', false, false),
+                ('<', false, false),
+                ('/', false, false),
+                ('s', false, false),
+                ('u', false, false),
+                ('b', false, false),
+                ('>', false, false),
             ]
         );
     });
