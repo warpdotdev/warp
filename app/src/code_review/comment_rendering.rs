@@ -41,7 +41,7 @@ pub(crate) struct HeaderClickHandler {
 
 /// Wraps the given content element in the standard comment card chrome
 /// (rounded corners, neutral background, outline border).
-fn comment_card_container(
+pub(crate) fn comment_card_container(
     content: Box<dyn Element>,
     theme: &warp_core::ui::theme::WarpTheme,
 ) -> Box<dyn Element> {
@@ -75,7 +75,7 @@ fn render_collapsed_comment_card(
     comment_card_container(header, theme)
 }
 
-fn render_comment_file_path_header(
+pub(crate) fn render_comment_file_path_header(
     title: &str,
     is_outdated: bool,
     trailing_element: Option<Box<dyn Element>>,
@@ -155,7 +155,7 @@ fn render_comment_file_path_header(
     }
 }
 
-fn render_comment_text_section(
+pub(crate) fn render_comment_text_section(
     comment_editor: &ViewHandle<RichTextEditorView>,
     last_updated_duration: Duration,
     is_imported_from_github: bool,

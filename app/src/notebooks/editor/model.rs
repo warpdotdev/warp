@@ -18,6 +18,7 @@ use vec1::{vec1, Vec1};
 use warp_core::features::FeatureFlag;
 use warp_core::r#async::debounce;
 use warp_core::semantic_selection::SemanticSelection;
+use warp_editor::content::anchor::Anchor;
 use warp_editor::content::buffer::{
     AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
     SelectionOffsets, ShouldAutoscroll,
@@ -1205,6 +1206,33 @@ impl NotebooksEditorModel {
             .as_ref(ctx)
             .selected_text_as_plain_text(self.selection_model.clone(), ctx)
             .into_string()
+    }
+
+    /// Creates anchors tracking the current selection range, returning `(head, tail, quoted_text)`.
+    ///
+    /// Returns `None` if the selection is empty (a single cursor with no selected text). The
+    /// anchors are created on the same [`BufferSelectionModel`] the buffer updates on edits, so they
+    /// follow subsequent edits and can be resolved later via
+    /// [`BufferSelectionModel::resolve_anchor`].
+    pub fn create_selection_anchors(
+        &self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<(Anchor, Anchor, String)> {
+        let range = self
+            .selection_model
+            .as_ref(ctx)
+            .selection_to_first_offset_range();
+        if range.start == range.end {
+            return None;
+        }
+        let quoted_text = self.selected_text(ctx);
+        let (head, tail) = self.selection_model.update(ctx, |selection_model, ctx| {
+            (
+                selection_model.anchor(range.start, ctx),
+                selection_model.anchor(range.end, ctx),
+            )
+        });
+        Some((head, tail, quoted_text))
     }
 
     pub fn has_single_exact_rendered_mermaid_selection(&self, ctx: &AppContext) -> bool {

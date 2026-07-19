@@ -7,6 +7,8 @@ use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::icons;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_editor::content::anchor::Anchor;
+use warp_editor::model::CoreEditorModel;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
@@ -29,11 +31,19 @@ use crate::ai::document::ai_document_model::{
     AIDocumentUpdateSource, AIDocumentUserEditStatus, AIDocumentVersion,
 };
 use crate::ai::document::orchestration_config_block::OrchestrationConfigBlockView;
+use crate::ai::document::plan_comment_list_view::{PlanCommentListEvent, PlanCommentListView};
+use crate::ai::document::plan_comments::{
+    build_plan_comment_prompt, PlanComment, PlanCommentBatch, PlanCommentId, PlanCommentTarget,
+};
 use crate::appearance::Appearance;
+use crate::code::editor::comment_editor::{CommentEditor, CommentEditorEvent};
+use crate::code::editor::EditorCommentsModel;
+use crate::code_review::comments::{CommentId, CommentOrigin};
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::sharing::ShareableObject;
 use crate::drive::CloudObjectTypeAndId;
 use crate::editor::InteractionState;
+use crate::features::FeatureFlag;
 use crate::menu::{Menu, MenuItem, MenuItemFields};
 use crate::notebooks::editor::model::NotebooksEditorModel;
 use crate::notebooks::editor::rich_text_styles;
@@ -110,6 +120,7 @@ pub enum AIDocumentAction {
     CopyPlanId,
     ShowInWarpDrive,
     AttachToActiveSession,
+    AddComment,
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +175,16 @@ pub struct AIDocumentView {
     view_position_id: String,
     version_button: ViewHandle<ActionButton>,
     orchestration_config_block: Option<ViewHandle<OrchestrationConfigBlockView>>,
+    /// Plan comments model + bottom panel (gated by `FeatureFlag::PlanComments`).
+    comment_model: ModelHandle<PlanCommentBatch>,
+    comment_list_view: ViewHandle<PlanCommentListView>,
+    /// The inline comment composer, when open.
+    comment_composer: Option<ViewHandle<CommentEditor>>,
+    /// Captured selection anchors (head, tail, quoted text) for a new range comment.
+    pending_comment_anchors: Option<(Anchor, Anchor, String)>,
+    /// The comment currently being edited, if any.
+    editing_comment_id: Option<PlanCommentId>,
+    add_comment_button: ViewHandle<ActionButton>,
 }
 
 impl AIDocumentView {
@@ -349,7 +370,10 @@ impl AIDocumentView {
                 view_position_id.clone(),
                 initial_editor_model.clone(),
                 links.clone(),
-                RichTextEditorConfig::default(),
+                RichTextEditorConfig {
+                    comments_enabled: FeatureFlag::PlanComments.is_enabled(),
+                    ..Default::default()
+                },
                 ctx,
             )
         });
@@ -460,6 +484,26 @@ impl AIDocumentView {
             })
         });
 
+        let comment_model = ctx.add_model(|_| PlanCommentBatch::default());
+        let comment_list_view = ctx.add_typed_action_view({
+            let comment_model = comment_model.clone();
+            move |ctx| PlanCommentListView::new(comment_model, ctx)
+        });
+        ctx.subscribe_to_view(&comment_list_view, |me, _, event, ctx| {
+            me.handle_comment_list_event(event, ctx);
+        });
+        let add_comment_button = ctx.add_typed_action_view(|_ctx| {
+            ActionButton::new("Comment", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(
+                        PaneHeaderAction::<AIDocumentAction, AIDocumentAction>::CustomAction(
+                            AIDocumentAction::AddComment,
+                        ),
+                    );
+                })
+        });
+
         let mut me = Self {
             document_id,
             document_version,
@@ -478,6 +522,12 @@ impl AIDocumentView {
             view_position_id,
             version_button,
             orchestration_config_block,
+            comment_model,
+            comment_list_view,
+            comment_composer: None,
+            pending_comment_anchors: None,
+            editing_comment_id: None,
+            add_comment_button,
         };
         // Force update the editor view based on the initial document version
         me.refresh(ctx);
@@ -800,6 +850,13 @@ impl AIDocumentView {
         if let Some(sharing) = header_ctx.sharing_controls(app, None, None) {
             right_row.add_child(sharing);
         }
+        if FeatureFlag::PlanComments.is_enabled() {
+            right_row.add_child(
+                Container::new(ChildView::new(&self.add_comment_button).finish())
+                    .with_margin_right(8.)
+                    .finish(),
+            );
+        }
         if let Some(header_buttons) = self.render_header_buttons(app) {
             right_row.add_child(header_buttons);
         }
@@ -848,7 +905,10 @@ impl AIDocumentView {
                 view_position_id.clone(),
                 editor_model.clone(),
                 links,
-                RichTextEditorConfig::default(),
+                RichTextEditorConfig {
+                    comments_enabled: FeatureFlag::PlanComments.is_enabled(),
+                    ..Default::default()
+                },
                 ctx,
             );
             editor.set_interaction_state(
@@ -986,6 +1046,9 @@ impl AIDocumentView {
                     });
                 }
             }
+            EditorViewEvent::AddComment => {
+                self.add_comment(ctx);
+            }
             _ => (),
         }
     }
@@ -1065,6 +1128,207 @@ impl AIDocumentView {
     fn export(&self, _ctx: &mut ViewContext<Self>) {
         // No-op for WASM target
     }
+
+    /// Opens the comment composer to attach a comment to the current selection (or the whole plan
+    /// if there is no selection).
+    fn add_comment(&mut self, ctx: &mut ViewContext<Self>) {
+        let editor_model = self.editor.as_ref(ctx).model().clone();
+        self.pending_comment_anchors =
+            editor_model.update(ctx, |model, ctx| model.create_selection_anchors(ctx));
+        self.editing_comment_id = None;
+        self.open_comment_composer(None, ctx);
+    }
+
+    fn start_editing_comment(&mut self, id: PlanCommentId, ctx: &mut ViewContext<Self>) {
+        let Some(body) = self
+            .comment_model
+            .read(ctx, |batch, _| batch.get(id).map(|c| c.body.clone()))
+        else {
+            return;
+        };
+        self.editing_comment_id = Some(id);
+        self.pending_comment_anchors = None;
+        self.open_comment_composer(Some(body), ctx);
+    }
+
+    fn open_comment_composer(&mut self, prefill: Option<String>, ctx: &mut ViewContext<Self>) {
+        let comment_model = ctx.add_model(EditorCommentsModel::new);
+        let composer = ctx.add_typed_action_view(move |ctx| CommentEditor::new(ctx, comment_model));
+
+        if let Some(text) = &prefill {
+            composer.update(ctx, |editor, ctx| {
+                editor.reopen_saved_comment(
+                    &CommentId::new(),
+                    None,
+                    text,
+                    &CommentOrigin::Native,
+                    ctx,
+                );
+            });
+        }
+
+        ctx.subscribe_to_view(&composer, |me, _, event, ctx| {
+            me.handle_comment_composer_event(event, ctx);
+        });
+
+        ctx.focus(&composer);
+        self.comment_composer = Some(composer);
+        ctx.notify();
+    }
+
+    fn handle_comment_composer_event(
+        &mut self,
+        event: &CommentEditorEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            CommentEditorEvent::CommentSaved { comment_text, .. } => {
+                self.save_plan_comment(comment_text.clone(), ctx);
+            }
+            CommentEditorEvent::DeleteComment { .. } => {
+                if let Some(id) = self.editing_comment_id.take() {
+                    self.comment_model
+                        .update(ctx, |batch, ctx| batch.delete_comment(id, ctx));
+                }
+            }
+            CommentEditorEvent::CloseEditor => {
+                self.comment_composer = None;
+                self.pending_comment_anchors = None;
+                self.editing_comment_id = None;
+                ctx.notify();
+            }
+            CommentEditorEvent::ContentChanged => {}
+        }
+    }
+
+    fn save_plan_comment(&mut self, body: String, ctx: &mut ViewContext<Self>) {
+        if let Some(id) = self.editing_comment_id {
+            if let Some(mut comment) = self
+                .comment_model
+                .read(ctx, |batch, _| batch.get(id).cloned())
+            {
+                comment.body = body;
+                comment.last_update_time = chrono::Local::now();
+                self.comment_model
+                    .update(ctx, |batch, ctx| batch.upsert_comment(comment, ctx));
+            }
+        } else {
+            let comment = match self.pending_comment_anchors.take() {
+                Some((head, tail, quoted_text)) => {
+                    PlanComment::new_range(body, head, tail, quoted_text)
+                }
+                None => PlanComment::new_general(body),
+            };
+            self.comment_model
+                .update(ctx, |batch, ctx| batch.upsert_comment(comment, ctx));
+        }
+        self.comment_list_view
+            .update(ctx, |list, ctx| list.expand(ctx));
+    }
+
+    fn handle_comment_list_event(
+        &mut self,
+        event: &PlanCommentListEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            PlanCommentListEvent::Submitted => self.submit_comments(ctx),
+            PlanCommentListEvent::Cancelled => {
+                self.comment_model
+                    .update(ctx, |batch, ctx| batch.clear_all(ctx));
+            }
+            PlanCommentListEvent::DeleteComment(id) => {
+                self.comment_model
+                    .update(ctx, |batch, ctx| batch.delete_comment(*id, ctx));
+            }
+            PlanCommentListEvent::EditComment(id) => self.start_editing_comment(*id, ctx),
+        }
+    }
+
+    /// Submits the active plan comments to the agent by sending a formatted query into the plan's
+    /// conversation, with the latest plan attached as context.
+    fn submit_comments(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(terminal_view) = self.original_terminal_view.clone() else {
+            log::warn!("Cannot submit plan comments: no terminal view associated");
+            return;
+        };
+        let Some(conversation_id) =
+            AIDocumentModel::as_ref(ctx).get_conversation_id_for_document_id(&self.document_id)
+        else {
+            log::warn!("Cannot submit plan comments: no conversation ID for document");
+            return;
+        };
+
+        // Refresh outdated flags by resolving each range comment's anchors against the editor.
+        let selection_model = self
+            .editor
+            .as_ref(ctx)
+            .model()
+            .as_ref(ctx)
+            .buffer_selection_model()
+            .clone();
+        let outdated_updates = self.comment_model.read(ctx, |batch, read_ctx| {
+            batch
+                .comments()
+                .iter()
+                .map(|comment| {
+                    let outdated =
+                        matches!(comment.target, PlanCommentTarget::DocumentRange { .. })
+                            && comment
+                                .resolve_range(selection_model.as_ref(read_ctx))
+                                .is_none();
+                    (comment.id, outdated)
+                })
+                .collect::<Vec<_>>()
+        });
+        self.comment_model.update(ctx, |batch, _| {
+            for (id, outdated) in outdated_updates {
+                batch.set_outdated(id, outdated);
+            }
+        });
+
+        let comments = self
+            .comment_model
+            .read(ctx, |batch, _| batch.comments().to_vec());
+        if !comments.iter().any(|comment| !comment.outdated) {
+            log::info!("No active plan comments to submit");
+            return;
+        }
+
+        let prompt = build_plan_comment_prompt(&comments);
+        let document_id = self.document_id;
+
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            terminal_view
+                .ai_context_model()
+                .update(ctx, |context_model, ctx| {
+                    context_model.set_pending_query_state_for_existing_conversation(
+                        conversation_id,
+                        AgentViewEntryOrigin::AIDocument,
+                        ctx,
+                    );
+                    context_model.set_pending_document(Some(document_id), ctx);
+                });
+            terminal_view
+                .ai_controller()
+                .update(ctx, |controller, ctx| {
+                    controller.send_user_query_in_conversation(prompt, conversation_id, None, ctx);
+                });
+        });
+
+        self.comment_model
+            .update(ctx, |batch, ctx| batch.clear_all(ctx));
+
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::success("Comments sent to agent".to_string()),
+                window_id,
+                ctx,
+            );
+        });
+        ctx.notify();
+    }
 }
 
 impl Entity for AIDocumentView {
@@ -1109,6 +1373,18 @@ impl View for AIDocumentView {
             .with_padding_right(8.)
             .finish();
         content_column.add_child(warpui::elements::Expanded::new(1.0, editor).finish());
+
+        if FeatureFlag::PlanComments.is_enabled() {
+            if let Some(composer) = &self.comment_composer {
+                content_column.add_child(
+                    Container::new(ChildView::new(composer).finish())
+                        .with_horizontal_padding(8.)
+                        .with_padding_bottom(8.)
+                        .finish(),
+                );
+            }
+            content_column.add_child(ChildView::new(&self.comment_list_view).finish());
+        }
 
         let mut stack = Stack::new().with_child(content_column.finish());
 
@@ -1286,6 +1562,9 @@ impl TypedActionView for AIDocumentView {
             }
             AIDocumentAction::AttachToActiveSession => {
                 ctx.emit(AIDocumentEvent::AttachPlanAsContext(self.document_id));
+            }
+            AIDocumentAction::AddComment => {
+                self.add_comment(ctx);
             }
         }
     }

@@ -971,6 +971,8 @@ pub enum EditorViewEvent {
     /// Escape was pressed (emitted when shell command execution is disabled,
     /// e.g. in comment editors).
     EscapePressed,
+    /// The user requested to comment on the current selection (via the omnibar "Comment" button).
+    AddComment,
 }
 
 #[derive(Default)]
@@ -1092,6 +1094,10 @@ pub struct RichTextEditorConfig {
     /// Enable or disable the block insertion menu (slash menu).
     /// When disabled, typing "/" will not open the menu.
     pub disable_block_insertion_menu: bool,
+
+    /// When true, the selection omnibar shows a "Comment" button. Used by planning documents to
+    /// let users comment on a selection.
+    pub comments_enabled: bool,
 }
 
 impl RichTextEditorView {
@@ -1135,7 +1141,9 @@ impl RichTextEditorView {
             ctx.notify();
         });
 
-        let omnibar = ctx.add_typed_action_view(|ctx| Omnibar::new(model.clone(), ctx));
+        let comments_enabled = config.comments_enabled;
+        let omnibar =
+            ctx.add_typed_action_view(|ctx| Omnibar::new(model.clone(), comments_enabled, ctx));
         ctx.subscribe_to_view(&omnibar, Self::handle_omnibar_event);
 
         let link_editor = ctx.add_typed_action_view(|ctx| LinkEditor::new(model.clone(), ctx));
@@ -1189,8 +1197,10 @@ impl RichTextEditorView {
         event: &OmnibarEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        if matches!(event, OmnibarEvent::OpenLinkEditor) {
-            self.open_link_editor(ctx);
+        match event {
+            OmnibarEvent::OpenLinkEditor => self.open_link_editor(ctx),
+            // Forward to the parent view (e.g. the plan document) to open the comment composer.
+            OmnibarEvent::AddComment => ctx.emit(EditorViewEvent::AddComment),
         }
     }
 
