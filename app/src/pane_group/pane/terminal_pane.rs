@@ -28,6 +28,7 @@ use crate::AIExecutionProfilesModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{RenderableAIError, StartAgentExecutionMode};
+use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::ambient_agents::task::{HarnessConfig, normalize_orchestrator_agent_name};
 use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId};
 #[cfg(feature = "local_fs")]
@@ -446,6 +447,10 @@ impl PaneContent for TerminalPane {
         if !matches!(detach_type, DetachType::Moved) {
             CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
                 sessions.remove_session(terminal_view_id, ctx);
+            });
+            // Drop any unviewed-bell Dock badge entry for the closing terminal.
+            AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.clear_terminal_bell(terminal_view_id, ctx);
             });
         }
 

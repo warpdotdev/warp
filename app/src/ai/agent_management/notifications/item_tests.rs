@@ -8,13 +8,29 @@ fn make_conversation_notification(
     conversation_id: AIConversationId,
     terminal_view_id: EntityId,
 ) -> NotificationItem {
+    make_conversation_notification_with(
+        conversation_id,
+        terminal_view_id,
+        false,
+        NotificationCategory::Complete,
+        false,
+    )
+}
+
+fn make_conversation_notification_with(
+    conversation_id: AIConversationId,
+    terminal_view_id: EntityId,
+    is_ambient: bool,
+    category: NotificationCategory,
+    is_read: bool,
+) -> NotificationItem {
     NotificationItem::new(
         "test".to_owned(),
         "msg".to_owned(),
-        NotificationCategory::Complete,
-        NotificationSourceAgent::Oz { is_ambient: false },
+        category,
+        NotificationSourceAgent::Oz { is_ambient },
         NotificationOrigin::Conversation(conversation_id),
-        false,
+        is_read,
         terminal_view_id,
         vec![],
         None,
@@ -22,16 +38,29 @@ fn make_conversation_notification(
 }
 
 fn make_cli_session_notification(terminal_view_id: EntityId) -> NotificationItem {
+    make_cli_session_notification_with(
+        terminal_view_id,
+        CLIAgent::Claude,
+        false,
+        NotificationCategory::Complete,
+        false,
+    )
+}
+
+fn make_cli_session_notification_with(
+    terminal_view_id: EntityId,
+    agent: CLIAgent,
+    is_ambient: bool,
+    category: NotificationCategory,
+    is_read: bool,
+) -> NotificationItem {
     NotificationItem::new(
         "cli test".to_owned(),
         "cli msg".to_owned(),
-        NotificationCategory::Complete,
-        NotificationSourceAgent::CLI {
-            agent: CLIAgent::Claude,
-            is_ambient: false,
-        },
+        category,
+        NotificationSourceAgent::CLI { agent, is_ambient },
         NotificationOrigin::CLISession(terminal_view_id),
-        false,
+        is_read,
         terminal_view_id,
         vec![],
         None,
@@ -98,4 +127,152 @@ fn remove_by_origin_returns_false_when_nothing_to_remove() {
 
     let removed = items.remove_by_origin(NotificationOrigin::CLISession(terminal_view_id));
     assert!(!removed);
+}
+
+#[test]
+fn dock_badge_count_counts_requested_unread_local_outcomes() {
+    let mut items = NotificationItems::default();
+
+    items.push(make_conversation_notification(
+        AIConversationId::new(),
+        EntityId::new(),
+    ));
+    for agent in [
+        CLIAgent::Claude,
+        CLIAgent::Codex,
+        CLIAgent::Auggie,
+        CLIAgent::OpenCode,
+    ] {
+        items.push(make_cli_session_notification_with(
+            EntityId::new(),
+            agent,
+            false,
+            NotificationCategory::Complete,
+            false,
+        ));
+    }
+    items.push(make_cli_session_notification_with(
+        EntityId::new(),
+        CLIAgent::Claude,
+        false,
+        NotificationCategory::Request,
+        false,
+    ));
+
+    assert_eq!(items.dock_badge_count(), 6);
+}
+
+#[test]
+fn dock_badge_count_excludes_non_matching_notifications() {
+    let mut items = NotificationItems::default();
+    let terminal_view_id = EntityId::new();
+
+    items.push(make_conversation_notification_with(
+        AIConversationId::new(),
+        terminal_view_id,
+        true,
+        NotificationCategory::Complete,
+        false,
+    ));
+    items.push(make_conversation_notification_with(
+        AIConversationId::new(),
+        terminal_view_id,
+        false,
+        NotificationCategory::Complete,
+        true,
+    ));
+    items.push(make_conversation_notification_with(
+        AIConversationId::new(),
+        terminal_view_id,
+        false,
+        NotificationCategory::Error,
+        false,
+    ));
+    items.push(make_cli_session_notification_with(
+        EntityId::new(),
+        CLIAgent::Claude,
+        false,
+        NotificationCategory::Complete,
+        true,
+    ));
+    items.push(make_cli_session_notification_with(
+        EntityId::new(),
+        CLIAgent::Claude,
+        true,
+        NotificationCategory::Complete,
+        false,
+    ));
+    items.push(make_cli_session_notification_with(
+        EntityId::new(),
+        CLIAgent::Claude,
+        false,
+        NotificationCategory::Error,
+        false,
+    ));
+    for agent in [CLIAgent::Gemini, CLIAgent::Amp, CLIAgent::Unknown] {
+        items.push(make_cli_session_notification_with(
+            EntityId::new(),
+            agent,
+            false,
+            NotificationCategory::Complete,
+            false,
+        ));
+    }
+
+    assert_eq!(items.dock_badge_count(), 0);
+}
+
+#[test]
+fn dock_badge_count_updates_after_read_all_and_remove() {
+    let mut items = NotificationItems::default();
+    let terminal_a = EntityId::new();
+    let terminal_b = EntityId::new();
+
+    let first = make_cli_session_notification_with(
+        terminal_a,
+        CLIAgent::Claude,
+        false,
+        NotificationCategory::Complete,
+        false,
+    );
+    let first_id = first.id;
+    items.push(first);
+    items.push(make_cli_session_notification_with(
+        terminal_b,
+        CLIAgent::Codex,
+        false,
+        NotificationCategory::Request,
+        false,
+    ));
+    assert_eq!(items.dock_badge_count(), 2);
+
+    assert!(items.mark_item_read(first_id));
+    assert_eq!(items.dock_badge_count(), 1);
+
+    assert!(items.remove_by_origin(NotificationOrigin::CLISession(terminal_b)));
+    assert_eq!(items.dock_badge_count(), 0);
+
+    items.push(make_cli_session_notification(EntityId::new()));
+    assert_eq!(items.dock_badge_count(), 1);
+
+    assert!(items.mark_all_items_read());
+    assert_eq!(items.dock_badge_count(), 0);
+}
+
+#[test]
+fn dock_badge_count_counts_terminals_not_items() {
+    let mut items = NotificationItems::default();
+    let terminal_view_id = EntityId::new();
+
+    items.push(make_conversation_notification(
+        AIConversationId::new(),
+        terminal_view_id,
+    ));
+    items.push(make_conversation_notification(
+        AIConversationId::new(),
+        terminal_view_id,
+    ));
+
+    assert_eq!(items.filtered_count(NotificationFilter::Unread), 2);
+    assert_eq!(items.dock_badge_count(), 1);
 }

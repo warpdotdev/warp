@@ -5,7 +5,7 @@ use warpui::{App, EntityId, ModelHandle, SingletonEntity};
 
 use super::AgentNotificationsModel;
 use crate::BlocklistAIHistoryModel;
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::active_agent_views_model::{ActiveAgentViewsEvent, ActiveAgentViewsModel};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent_management::notifications::{
     NotificationCategory, NotificationFilter, NotificationOrigin, NotificationSourceAgent,
@@ -13,8 +13,16 @@ use crate::ai::agent_management::notifications::{
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::settings::AISettings;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent_sessions::event::{
+    CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
+};
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
+    CLIAgentSessionsModel,
+};
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspace::WorkspaceRegistry;
 
 fn setup_app(
     app: &mut App,
@@ -29,6 +37,7 @@ fn setup_app(
     app.add_singleton_model(crate::ai::blocklist::QueuedQueryModel::new);
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
+    app.add_singleton_model(|_| WorkspaceRegistry::new());
     let notifications = app.add_singleton_model(AgentNotificationsModel::new);
     (history, notifications)
 }
@@ -147,6 +156,217 @@ fn add_notification_tracks_unread_activity_when_in_app_notifications_are_hidden(
                     .has_unread_for_terminal_view(terminal_view_id)
             );
         });
+        assert_eq!(app.dock_badge_count(), 1);
+    });
+}
+
+#[test]
+fn dock_badge_is_seeded_when_notifications_model_starts() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        setup_app(&mut app);
+
+        assert_eq!(app.dock_badge_count(), 0);
+    });
+}
+
+#[test]
+fn dock_badge_updates_after_add_and_item_read() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        let terminal_view_id = EntityId::new();
+        notifications.update(&mut app, |model, ctx| {
+            model.add_notification(
+                "Claude task".to_owned(),
+                "Task completed.".to_owned(),
+                NotificationCategory::Complete,
+                NotificationSourceAgent::CLI {
+                    agent: CLIAgent::Claude,
+                    is_ambient: false,
+                },
+                NotificationOrigin::CLISession(terminal_view_id),
+                terminal_view_id,
+                vec![],
+                None,
+                ctx,
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        let notification_id = notifications.read(&app, |model, _| {
+            model
+                .notifications()
+                .items_filtered(NotificationFilter::All)
+                .next()
+                .expect("notification was just added")
+                .id
+        });
+        notifications.update(&mut app, |model, ctx| {
+            model.mark_item_read(notification_id, ctx);
+        });
+
+        assert_eq!(app.dock_badge_count(), 0);
+    });
+}
+
+#[test]
+fn dock_badge_counts_local_warp_agent_completion_and_clears_when_read() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        let conversation_id = AIConversationId::new();
+        let terminal_view_id = EntityId::new();
+        notifications.update(&mut app, |model, ctx| {
+            model.add_notification(
+                "Agent task".to_owned(),
+                "Task completed.".to_owned(),
+                NotificationCategory::Complete,
+                NotificationSourceAgent::Oz { is_ambient: false },
+                NotificationOrigin::Conversation(conversation_id),
+                terminal_view_id,
+                vec![],
+                None,
+                ctx,
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        let notification_id = notifications.read(&app, |model, _| {
+            let item = model
+                .notifications()
+                .items_filtered(NotificationFilter::All)
+                .next()
+                .expect("local Warp agent notification was just added");
+            assert!(!item.is_read);
+            item.id
+        });
+        notifications.update(&mut app, |model, ctx| {
+            model.mark_item_read(notification_id, ctx);
+        });
+
+        assert_eq!(app.dock_badge_count(), 0);
+    });
+}
+
+#[test]
+fn dock_badge_updates_after_terminal_view_read_and_mark_all_read() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        let terminal_a = EntityId::new();
+        let terminal_b = EntityId::new();
+        notifications.update(&mut app, |model, ctx| {
+            model.add_notification(
+                "Codex task".to_owned(),
+                "Task completed.".to_owned(),
+                NotificationCategory::Complete,
+                NotificationSourceAgent::CLI {
+                    agent: CLIAgent::Codex,
+                    is_ambient: false,
+                },
+                NotificationOrigin::CLISession(terminal_a),
+                terminal_a,
+                vec![],
+                None,
+                ctx,
+            );
+            model.add_notification(
+                "OpenCode task".to_owned(),
+                "Waiting for input.".to_owned(),
+                NotificationCategory::Request,
+                NotificationSourceAgent::CLI {
+                    agent: CLIAgent::OpenCode,
+                    is_ambient: false,
+                },
+                NotificationOrigin::CLISession(terminal_b),
+                terminal_b,
+                vec![],
+                None,
+                ctx,
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 2);
+
+        notifications.update(&mut app, |model, ctx| {
+            model.mark_items_from_terminal_view_read(terminal_a, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        notifications.update(&mut app, |model, ctx| {
+            model.mark_all_items_read(ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+    });
+}
+
+#[test]
+fn dock_badge_updates_after_source_removal_and_active_view_close_cleanup() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        let terminal_view_id = EntityId::new();
+        notifications.update(&mut app, |model, ctx| {
+            model.add_notification(
+                "Auggie task".to_owned(),
+                "Task completed.".to_owned(),
+                NotificationCategory::Complete,
+                NotificationSourceAgent::CLI {
+                    agent: CLIAgent::Auggie,
+                    is_ambient: false,
+                },
+                NotificationOrigin::CLISession(terminal_view_id),
+                terminal_view_id,
+                vec![],
+                None,
+                ctx,
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        notifications.update(&mut app, |model, ctx| {
+            model.remove_notification_by_source(
+                NotificationOrigin::CLISession(terminal_view_id),
+                ctx,
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+
+        let conversation_id = AIConversationId::new();
+        let terminal_view_id = EntityId::new();
+        notifications.update(&mut app, |model, ctx| {
+            model.add_notification(
+                "Claude task".to_owned(),
+                "Waiting for input.".to_owned(),
+                NotificationCategory::Request,
+                NotificationSourceAgent::CLI {
+                    agent: CLIAgent::Claude,
+                    is_ambient: false,
+                },
+                NotificationOrigin::Conversation(conversation_id),
+                terminal_view_id,
+                vec![],
+                None,
+                ctx,
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        notifications.update(&mut app, |model, ctx| {
+            model.handle_active_agent_views_changed(
+                &ActiveAgentViewsEvent::ConversationClosed { conversation_id },
+                ctx,
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 0);
     });
 }
 
@@ -318,6 +538,83 @@ fn disable_telemetry_path(app: &mut App) {
     });
 }
 
+fn start_cli_agent_session(app: &mut App, terminal_view_id: EntityId, agent: CLIAgent) {
+    CLIAgentSessionsModel::handle(app).update(app, |sessions, ctx| {
+        sessions.set_session(
+            terminal_view_id,
+            CLIAgentSession {
+                agent,
+                status: CLIAgentSessionStatus::InProgress,
+                session_context: CLIAgentSessionContext::default(),
+                input_state: CLIAgentInputState::Closed,
+                should_auto_toggle_input: false,
+                listener: None,
+                plugin_version: None,
+                remote_host: None,
+                draft_text: None,
+                custom_command_prefix: None,
+                received_rich_notification: false,
+            },
+            ctx,
+        );
+    });
+}
+
+fn emit_cli_agent_event(
+    app: &mut App,
+    terminal_view_id: EntityId,
+    agent: CLIAgent,
+    event_type: CLIAgentEventType,
+    payload: CLIAgentEventPayload,
+) {
+    let event = CLIAgentEvent {
+        v: 1,
+        agent,
+        event: event_type,
+        session_id: Some("test-session".to_owned()),
+        cwd: None,
+        project: None,
+        payload,
+        source: CLIAgentEventSource::RichPlugin,
+    };
+
+    CLIAgentSessionsModel::handle(app).update(app, |sessions, ctx| {
+        sessions.update_from_event(terminal_view_id, &event, ctx);
+    });
+}
+
+fn assert_cli_notification(
+    notifications: &ModelHandle<AgentNotificationsModel>,
+    app: &App,
+    terminal_view_id: EntityId,
+    expected_agent: CLIAgent,
+    expected_category: NotificationCategory,
+    expected_title: &str,
+    expected_message: &str,
+) {
+    notifications.read(app, |model, _| {
+        let item = model
+            .notifications()
+            .items_filtered(NotificationFilter::All)
+            .find(|item| item.terminal_view_id == terminal_view_id)
+            .expect("notification should exist for terminal view");
+        assert_eq!(
+            item.origin,
+            NotificationOrigin::CLISession(terminal_view_id)
+        );
+        assert_eq!(item.category, expected_category);
+        assert_eq!(item.title, expected_title);
+        assert_eq!(item.message, expected_message);
+        assert!(!item.is_read);
+
+        let NotificationSourceAgent::CLI { agent, is_ambient } = item.agent else {
+            panic!("expected CLI notification source");
+        };
+        assert_eq!(agent, expected_agent);
+        assert!(!is_ambient);
+    });
+}
+
 /// Pre-populates a `Complete` notification for `conversation_id` so that a
 /// subsequent non-terminal status update has something to clear.
 fn seed_stale_notification(
@@ -338,6 +635,182 @@ fn seed_stale_notification(
             None,
             ctx,
         );
+    });
+}
+
+#[test]
+fn cli_agent_stop_events_add_completed_notifications_and_dock_badge_for_supported_agents() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        for (idx, (agent, expected_title, expected_message)) in [
+            (
+                CLIAgent::Codex,
+                "Codex completed",
+                "Notification from Codex",
+            ),
+            (CLIAgent::Claude, "Claude Code completed", "Task completed."),
+            (CLIAgent::OpenCode, "OpenCode completed", "Task completed."),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let terminal_view_id = EntityId::new();
+            start_cli_agent_session(&mut app, terminal_view_id, agent);
+            emit_cli_agent_event(
+                &mut app,
+                terminal_view_id,
+                agent,
+                CLIAgentEventType::Stop,
+                CLIAgentEventPayload::default(),
+            );
+
+            assert_eq!(app.dock_badge_count(), idx + 1);
+            assert_cli_notification(
+                &notifications,
+                &app,
+                terminal_view_id,
+                agent,
+                NotificationCategory::Complete,
+                expected_title,
+                expected_message,
+            );
+        }
+
+        notifications.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .notifications()
+                    .filtered_count(NotificationFilter::All),
+                3
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 3);
+    });
+}
+
+#[test]
+fn cli_agent_question_events_badge_needs_attention_for_supported_agents() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        for (idx, (agent, expected_title)) in [
+            (CLIAgent::Codex, "Codex needs attention"),
+            (CLIAgent::Claude, "Claude Code needs attention"),
+            (CLIAgent::OpenCode, "OpenCode needs attention"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let terminal_view_id = EntityId::new();
+            start_cli_agent_session(&mut app, terminal_view_id, agent);
+            emit_cli_agent_event(
+                &mut app,
+                terminal_view_id,
+                agent,
+                CLIAgentEventType::QuestionAsked,
+                CLIAgentEventPayload::default(),
+            );
+
+            assert_eq!(app.dock_badge_count(), idx + 1);
+            assert_cli_notification(
+                &notifications,
+                &app,
+                terminal_view_id,
+                agent,
+                NotificationCategory::Request,
+                expected_title,
+                "Waiting for your answer",
+            );
+        }
+
+        assert_eq!(app.dock_badge_count(), 3);
+    });
+}
+
+#[test]
+fn cli_agent_permission_request_summary_is_request_notification_and_counts_in_dock_badge() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        for (idx, agent) in [CLIAgent::Codex, CLIAgent::Claude, CLIAgent::OpenCode]
+            .into_iter()
+            .enumerate()
+        {
+            let terminal_view_id = EntityId::new();
+            let summary = format!("{} wants approval", agent.display_name());
+            start_cli_agent_session(&mut app, terminal_view_id, agent);
+            emit_cli_agent_event(
+                &mut app,
+                terminal_view_id,
+                agent,
+                CLIAgentEventType::PermissionRequest,
+                CLIAgentEventPayload {
+                    summary: Some(summary.clone()),
+                    ..Default::default()
+                },
+            );
+
+            assert_eq!(app.dock_badge_count(), idx + 1);
+            assert_cli_notification(
+                &notifications,
+                &app,
+                terminal_view_id,
+                agent,
+                NotificationCategory::Request,
+                &summary,
+                &summary,
+            );
+        }
+
+        assert_eq!(app.dock_badge_count(), 3);
+    });
+}
+
+#[test]
+fn cli_agent_in_progress_event_clears_stale_notification_and_dock_badge() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        let terminal_view_id = EntityId::new();
+        start_cli_agent_session(&mut app, terminal_view_id, CLIAgent::Codex);
+        emit_cli_agent_event(
+            &mut app,
+            terminal_view_id,
+            CLIAgent::Codex,
+            CLIAgentEventType::Stop,
+            CLIAgentEventPayload::default(),
+        );
+        assert_eq!(app.dock_badge_count(), 1);
+
+        emit_cli_agent_event(
+            &mut app,
+            terminal_view_id,
+            CLIAgent::Codex,
+            CLIAgentEventType::PromptSubmit,
+            CLIAgentEventPayload {
+                query: Some("continue".to_owned()),
+                ..Default::default()
+            },
+        );
+
+        notifications.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .notifications()
+                    .filtered_count(NotificationFilter::All),
+                0
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 0);
     });
 }
 
@@ -437,5 +910,90 @@ fn in_progress_resume_clears_stale_notification_and_adds_none() {
                  (covers PRODUCT.md (18))"
             );
         });
+    });
+}
+
+#[test]
+fn dock_badge_counts_belled_terminal_once_and_clears_when_viewed() {
+    App::test((), |mut app| async move {
+        let (_history, notifications) = setup_app(&mut app);
+
+        let terminal_view_id = EntityId::new();
+        notifications.update(&mut app, |model, ctx| {
+            model.record_terminal_bell(terminal_view_id, ctx);
+            model.record_terminal_bell(terminal_view_id, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        // Viewing the terminal clears its bell entry even with HOA notifications disabled.
+        notifications.update(&mut app, |model, ctx| {
+            model.mark_items_from_terminal_view_read(terminal_view_id, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+    });
+}
+
+#[test]
+fn dock_badge_dedupes_bell_and_notification_for_same_terminal() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        let terminal_view_id = EntityId::new();
+        notifications.update(&mut app, |model, ctx| {
+            model.add_notification(
+                "Claude task".to_owned(),
+                "Task completed.".to_owned(),
+                NotificationCategory::Complete,
+                NotificationSourceAgent::CLI {
+                    agent: CLIAgent::Claude,
+                    is_ambient: false,
+                },
+                NotificationOrigin::CLISession(terminal_view_id),
+                terminal_view_id,
+                vec![],
+                None,
+                ctx,
+            );
+            model.record_terminal_bell(terminal_view_id, ctx);
+        });
+        // The same terminal has an unread notification and an unviewed bell: badge once.
+        assert_eq!(app.dock_badge_count(), 1);
+
+        let other_terminal = EntityId::new();
+        notifications.update(&mut app, |model, ctx| {
+            model.record_terminal_bell(other_terminal, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 2);
+
+        // Viewing the first terminal clears both its bell and its unread notification.
+        notifications.update(&mut app, |model, ctx| {
+            model.mark_items_from_terminal_view_read(terminal_view_id, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        notifications.update(&mut app, |model, ctx| {
+            model.clear_terminal_bell(other_terminal, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+    });
+}
+
+#[test]
+fn mark_all_items_read_clears_belled_terminals() {
+    App::test((), |mut app| async move {
+        let (_history, notifications) = setup_app(&mut app);
+
+        notifications.update(&mut app, |model, ctx| {
+            model.record_terminal_bell(EntityId::new(), ctx);
+            model.record_terminal_bell(EntityId::new(), ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 2);
+
+        notifications.update(&mut app, |model, ctx| {
+            model.mark_all_items_read(ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 0);
     });
 }

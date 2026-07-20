@@ -260,6 +260,15 @@ pub trait Delegate: 'static {
     /// Default no-op for platforms without a Dock concept.
     fn set_dock_icon_visible(&self, _visible: bool) {}
 
+    /// Set the application's Dock badge count (macOS only).
+    /// Default no-op for platforms without a Dock concept.
+    fn set_dock_badge_count(&self, _count: usize) {}
+
+    #[cfg(feature = "test-util")]
+    fn dock_badge_count(&self) -> usize {
+        0
+    }
+
     fn terminate_app(&self, termination_mode: TerminationMode);
 
     /// Returns whether or not a screen reader is enabled, or None if we do not

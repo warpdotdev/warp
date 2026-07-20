@@ -576,6 +576,7 @@ impl platform::Delegate for AppDelegate {
 pub struct IntegrationTestDelegate {
     app_delegate: AppDelegate,
     clipboard: InMemoryClipboard,
+    dock_badge_count: Mutex<usize>,
 }
 
 impl IntegrationTestDelegate {
@@ -583,6 +584,7 @@ impl IntegrationTestDelegate {
         Ok(IntegrationTestDelegate {
             app_delegate: AppDelegate::new(event_loop_proxy)?,
             clipboard: InMemoryClipboard::default(),
+            dock_badge_count: Mutex::new(0),
         })
     }
 }
@@ -659,6 +661,15 @@ impl platform::Delegate for IntegrationTestDelegate {
 
     fn set_cursor_shape(&self, cursor: platform::Cursor) {
         self.app_delegate.set_cursor_shape(cursor)
+    }
+
+    fn set_dock_badge_count(&self, count: usize) {
+        *self.dock_badge_count.lock() = count;
+    }
+
+    #[cfg(feature = "test-util")]
+    fn dock_badge_count(&self) -> usize {
+        *self.dock_badge_count.lock()
     }
 
     fn close_ime_async(&self, _window_id: WindowId) {

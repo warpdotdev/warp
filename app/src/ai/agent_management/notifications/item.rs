@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use enum_iterator::Sequence;
 use instant::Instant;
 use uuid::Uuid;
@@ -163,6 +165,40 @@ impl NotificationItems {
 
     pub(crate) fn filtered_count(&self, filter: NotificationFilter) -> usize {
         self.items_filtered(filter).count()
+    }
+
+    /// Count unread local agent outcomes that should be reflected in the Dock badge.
+    /// Counted per terminal, so several unread outcomes in one terminal badge once.
+    /// Production code unions `dock_badge_terminal_ids` with belled terminals instead.
+    #[cfg(test)]
+    pub(crate) fn dock_badge_count(&self) -> usize {
+        self.dock_badge_terminal_ids().len()
+    }
+
+    /// Terminals with unread local agent outcomes that should be reflected in the Dock badge.
+    pub(crate) fn dock_badge_terminal_ids(&self) -> HashSet<EntityId> {
+        self.items
+            .iter()
+            .filter(|item| {
+                !item.is_read
+                    && matches!(
+                        item.category,
+                        NotificationCategory::Complete | NotificationCategory::Request
+                    )
+                    && matches!(
+                        item.agent,
+                        NotificationSourceAgent::Oz { is_ambient: false }
+                            | NotificationSourceAgent::CLI {
+                                agent: CLIAgent::Claude
+                                    | CLIAgent::Codex
+                                    | CLIAgent::Auggie
+                                    | CLIAgent::OpenCode,
+                                is_ambient: false,
+                            }
+                    )
+            })
+            .map(|item| item.terminal_view_id)
+            .collect()
     }
 
     /// Returns the filters that should be shown as tabs.

@@ -133,6 +133,11 @@ impl App {
         Ok(app)
     }
 
+    #[cfg(feature = "test-util")]
+    pub fn dock_badge_count(&self) -> usize {
+        self.0.borrow().dock_badge_count()
+    }
+
     pub(crate) fn can_borrow_mut(&self) -> bool {
         self.0.try_borrow_mut().is_ok()
     }
@@ -1221,6 +1226,16 @@ impl AppContext {
     /// Show or hide the Dock icon (macOS only — no-op elsewhere).
     pub fn set_dock_icon_visible(&self, visible: bool) {
         self.platform_delegate.set_dock_icon_visible(visible);
+    }
+
+    /// Set the Dock badge count (macOS only — no-op elsewhere).
+    pub fn set_dock_badge_count(&self, count: usize) {
+        self.platform_delegate.set_dock_badge_count(count);
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn dock_badge_count(&self) -> usize {
+        self.platform_delegate.dock_badge_count()
     }
 
     fn dispatch_draw_frame_error_callback(&mut self, window_id: WindowId) {

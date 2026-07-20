@@ -216,6 +216,7 @@ use crate::ai::agent::{
 #[cfg(feature = "local_fs")]
 use crate::ai::agent::{CurrentHead, DiffBase};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
+use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::ambient_agents::{
     AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
 };
@@ -390,7 +391,9 @@ use crate::terminal::cli_agent_sessions::event::{
     CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource,
     CLIAgentEventType, parse_event,
 };
-use crate::terminal::cli_agent_sessions::listener::{CLIAgentSessionListener, is_agent_supported};
+use crate::terminal::cli_agent_sessions::listener::{
+    CLIAgentSessionListener, is_agent_supported, parse_codex_osc9_fallback_event,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
 use crate::terminal::cli_agent_sessions::{
@@ -11705,8 +11708,23 @@ impl TerminalView {
                 // TODO(vorporeal): Remove this once we have a visual bell
                 // indicator in terminal tabs.
                 ctx.request_user_attention();
+
+                // Count this terminal in the Dock badge when it bells while not
+                // viewed (focused in the active window); cleared when it's viewed,
+                // its shell exits, or its pane closes (GH-11095).
+                let is_viewed = ctx.is_self_or_child_focused()
+                    && ctx.windows().state().active_window == Some(ctx.window_id());
+                if !is_viewed {
+                    AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.record_terminal_bell(self.view_id, ctx);
+                    });
+                }
             }
             ModelEvent::Exit { reason } => {
+                // A dead shell no longer needs bell attention in the Dock badge.
+                AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.clear_terminal_bell(self.view_id, ctx);
+                });
                 if !self.manual_pty_shutdown_requested
                     && let Some(conversation_id) = self.maybe_send_agent_exited_shell_telemetry(ctx)
                 {
@@ -12769,6 +12787,10 @@ impl TerminalView {
                     if has_codex_listener {
                         return;
                     }
+
+                    if self.handle_codex_osc9_fallback_notification(body, ctx) {
+                        return;
+                    }
                 }
 
                 if self.is_navigated_away_from_window(ctx) {
@@ -13204,6 +13226,63 @@ impl TerminalView {
                 listener,
                 ctx,
             );
+        });
+        true
+    }
+
+    /// Handles legacy Codex OSC 9 notifications when the proactive listener was
+    /// not registered yet. Returns true only when the notification was consumed
+    /// as a Codex CLI-agent event; unrelated OSC 9 notifications should keep
+    /// flowing through the generic terminal-notification path.
+    fn handle_codex_osc9_fallback_notification(
+        &mut self,
+        body: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(notification) = parse_codex_osc9_fallback_event(body) else {
+            return false;
+        };
+
+        let has_codex_session = CLIAgentSessionsModel::as_ref(ctx)
+            .session(self.view_id)
+            .is_some_and(|session| session.agent == CLIAgent::Codex);
+
+        if !has_codex_session {
+            let detection = {
+                let model = self.model.lock();
+                self.detect_cli_agent_from_model(&model, ctx)
+            };
+            let Some((CLIAgent::Codex, custom_command_prefix)) = detection else {
+                return false;
+            };
+
+            let remote_host = self.active_session_remote_host(ctx);
+            let view_id = self.view_id;
+            let should_auto_toggle_input =
+                *AISettings::as_ref(ctx).auto_open_rich_input_on_cli_agent_start;
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
+                sessions_model.set_session(
+                    view_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Codex,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext::default(),
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host,
+                        draft_text: None,
+                        custom_command_prefix,
+                        received_rich_notification: false,
+                    },
+                    ctx,
+                );
+            });
+        }
+
+        CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
+            sessions_model.update_from_event(self.view_id, &notification, ctx);
         });
         true
     }

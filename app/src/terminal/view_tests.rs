@@ -13,10 +13,11 @@ use warp_cli::agent::Harness;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START, C0};
 use warpui::notification::UserNotification;
 use warpui::platform::WindowStyle;
+use warpui::windowing::WindowManager;
+use warpui::windowing::state::ApplicationStage;
 use warpui::{App, EntityIdSet, Presenter, ReadModel, WindowInvalidation};
 
 use super::*;
-use crate::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -24,6 +25,7 @@ use crate::ai::agent::{
     UserQueryMode,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::agent_management::notifications::NotificationFilter;
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
@@ -69,6 +71,7 @@ use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{TotalIndex, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::model_events::ModelEvent;
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::shared_handlers::{
     RemoteUpdateGuard, apply_cli_agent_state_update,
@@ -86,6 +89,7 @@ use crate::test_util::terminal::{
 use crate::test_util::{add_window_with_terminal, assert_eventually};
 use crate::view_components::find::FindWithinBlockState;
 use crate::workspace::ToastStack;
+use crate::{ActiveAgentViewsModel, AgentNotificationsModel};
 
 fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView> {
     let tips_model = app.add_model(|_| Default::default());
@@ -486,6 +490,151 @@ fn updated_conversation_metadata_refreshes_selected_conversation_pane_title() {
 
             assert_eq!(view.pane_configuration.as_ref(ctx).title(), "Renamed title");
         });
+    })
+}
+
+#[test]
+fn codex_osc9_completion_without_rich_plugin_adds_notification_and_dock_badge() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        // Codex OSC 9 handling rides the Codex plugin pipeline, which is gated
+        // behind the CodexPlugin feature flag upstream.
+        let _codex_plugin = FeatureFlag::CodexPlugin.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let generic_notification_events = Rc::new(RefCell::new(0usize));
+        let desktop_notification_events = Rc::new(RefCell::new(0usize));
+        let generic_events = generic_notification_events.clone();
+        let desktop_events = desktop_notification_events.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::PluggableNotification { .. } => {
+                    *generic_events.borrow_mut() += 1;
+                }
+                Event::SendNotification(_) => {
+                    *desktop_events.borrow_mut() += 1;
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, _ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block(CLIAgent::Codex.command_prefix(), "");
+        });
+
+        // Command detection registers the Codex session (and, with the plugin
+        // flag on, its proactive listener) asynchronously. Wait for it, matching
+        // the real-world order: Codex runs long before its completion OSC 9
+        // arrives. The raw OSC 9 below then flows through the listener — or
+        // through the view fallback when it loses this race.
+        assert_eventually!(
+            terminal.read(&app, |view, ctx| {
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .session(view.view_id)
+                    .is_some_and(|session| session.agent == CLIAgent::Codex)
+            }),
+            "codex command detection should create a session"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model_event_dispatcher().update(ctx, |_, ctx| {
+                ctx.emit(ModelEvent::PluggableNotification {
+                    title: None,
+                    body: "Agent turn complete".to_owned(),
+                });
+            });
+        });
+
+        assert_eventually!(
+            terminal.read(&app, |view, ctx| {
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .session(view.view_id)
+                    .is_some_and(|session| {
+                        session.agent == CLIAgent::Codex
+                            && session.status == CLIAgentSessionStatus::Success
+                    })
+            }) && app.dock_badge_count() == 1
+                && AgentNotificationsModel::handle(&app).read(
+                    &app,
+                    |notifications: &AgentNotificationsModel, _| notifications
+                        .notifications()
+                        .filtered_count(NotificationFilter::All)
+                ) == 1,
+            "raw Codex OSC 9 completion should create a successful CLI agent session and Dock badge notification"
+        );
+
+        assert_eq!(*generic_notification_events.borrow(), 0);
+        assert_eq!(*desktop_notification_events.borrow(), 0);
+    })
+}
+
+#[test]
+fn non_codex_osc9_notification_stays_generic_and_does_not_badge() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let generic_notification_events = Rc::new(RefCell::new(0usize));
+        let desktop_notification_events = Rc::new(RefCell::new(0usize));
+        let generic_events = generic_notification_events.clone();
+        let desktop_events = desktop_notification_events.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::PluggableNotification { .. } => {
+                    *generic_events.borrow_mut() += 1;
+                }
+                Event::SendNotification(_) => {
+                    *desktop_events.borrow_mut() += 1;
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "");
+            assert!(
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .session(view.view_id)
+                    .is_none()
+            );
+
+            view.model_event_dispatcher().update(ctx, |_, ctx| {
+                ctx.emit(ModelEvent::PluggableNotification {
+                    title: None,
+                    body: "Background task complete".to_owned(),
+                });
+            });
+        });
+
+        assert_eventually!(
+            *generic_notification_events.borrow() + *desktop_notification_events.borrow() == 1,
+            "non-Codex OSC 9 notification should still flow through the generic terminal notification path"
+        );
+        assert_eq!(app.dock_badge_count(), 0);
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .session(view.view_id)
+                    .is_none()
+            );
+        });
+        AgentNotificationsModel::handle(&app).read(
+            &app,
+            |notifications: &AgentNotificationsModel, _| {
+                assert_eq!(
+                    notifications
+                        .notifications()
+                        .filtered_count(NotificationFilter::All),
+                    0
+                );
+            },
+        );
     })
 }
 struct TestTerminalManager {
@@ -8056,5 +8205,58 @@ fn cmd_k_in_agent_view_cancels_in_progress_conversation_and_starts_new_one() {
                 "the old in-progress conversation must be Cancelled after cmd-k"
             );
         });
+    })
+}
+
+#[test]
+fn bell_records_dock_badge_only_when_terminal_is_not_viewed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        // Viewed: focused terminal in the active window — a bell does not badge.
+        app.update(|ctx| {
+            WindowManager::handle(ctx).update(ctx, |state, ctx| {
+                state.overwrite_for_test(ApplicationStage::Active, Some(window_id));
+                ctx.notify();
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.focus_terminal(ctx);
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(&ModelEvent::Bell, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+
+        // Unviewed: the window is no longer active — the bell counts.
+        app.update(|ctx| {
+            WindowManager::handle(ctx).update(ctx, |state, ctx| {
+                state.overwrite_for_test(ApplicationStage::Inactive, None);
+                ctx.notify();
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(&ModelEvent::Bell, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        // Repeat bells from the same terminal still badge once.
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(&ModelEvent::Bell, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        // Viewing the terminal again (focus in the active window) clears the badge.
+        app.update(|ctx| {
+            WindowManager::handle(ctx).update(ctx, |state, ctx| {
+                state.overwrite_for_test(ApplicationStage::Active, Some(window_id));
+                ctx.notify();
+            });
+        });
+        AgentNotificationsModel::handle(&app).update(&mut app, |model, ctx| {
+            model.mark_items_from_terminal_view_read(terminal.id(), ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 0);
     })
 }
