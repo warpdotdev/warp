@@ -81,7 +81,7 @@ pub(crate) fn render_formatted_text(
     let mut column = TuiFlex::column();
     let mut code_index = 0;
     let mut list_numbering = ListNumbering::new();
-    for line in &formatted.lines {
+    for (line_index, line) in formatted.lines.iter().enumerate() {
         let element = match line {
             FormattedTextLine::Heading(header) => {
                 inline_text(&header.text, palette.heading, palette)
@@ -143,6 +143,17 @@ pub(crate) fn render_formatted_text(
             list_numbering.reset();
         }
         column.add_child(element);
+        if matches!(
+            line,
+            FormattedTextLine::Heading(_) | FormattedTextLine::Line(_)
+        ) && formatted.lines.get(line_index + 1).is_some_and(|next| {
+            !matches!(
+                next,
+                FormattedTextLine::LineBreak | FormattedTextLine::HorizontalRule
+            )
+        }) {
+            column.add_child(blank_row());
+        }
     }
     column.finish()
 }

@@ -18,6 +18,30 @@ use super::{TuiMarkdownBlockHooks, TuiMarkdownPalette, render_formatted_text};
 use crate::test_fixtures::TestHostView;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
+#[test]
+fn inserts_blank_rows_between_tightly_packed_headers_and_paragraphs() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let formatted =
+                parse_markdown("# Heading\nFirst paragraph.\n## Next heading\nSecond paragraph.")
+                    .expect("Markdown should parse");
+            let (lines, _) = render(&formatted, 80, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "Heading",
+                    "",
+                    "First paragraph.",
+                    "",
+                    "Next heading",
+                    "",
+                    "Second paragraph.",
+                ]
+            );
+        });
+    });
+}
 
 #[test]
 fn renders_blocks_inline_styles_and_accessible_links_without_markers() {
@@ -194,7 +218,7 @@ fn delegates_code_blocks_to_the_supplied_hook() {
                 render_code: Some(&render_code),
             };
             let (lines, _) = render_with_hooks(&formatted, 40, &hooks, ctx);
-            assert_eq!(lines, vec!["before", "code 0: rust"]);
+            assert_eq!(lines, vec!["before", "", "code 0: rust"]);
             assert_eq!(calls.get(), 1);
         });
     });
