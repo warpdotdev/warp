@@ -89,8 +89,9 @@ fn test_end_to_end() {
     use crate::render::layout::TextLayout;
     use crate::render::model::test_utils::TEST_BASELINE_OFFSET;
     use crate::render::model::{
-        BlockItem, BrokenLinkStyle, CheckBoxStyle, HorizontalRuleStyle, InlineCodeStyle,
-        PARAGRAPH_MIN_HEIGHT, ParagraphStyles, RenderLayoutOptions, RichTextStyles, TableStyle,
+        BlockItem, BrokenImageStyle, BrokenLinkStyle, CheckBoxStyle, HorizontalRuleStyle,
+        InlineCodeStyle, PARAGRAPH_MIN_HEIGHT, ParagraphStyles, RenderLayoutOptions,
+        RichTextStyles, TableStyle,
     };
 
     App::test((), |mut app| async move {
@@ -129,6 +130,10 @@ fn test_end_to_end() {
             icon_path: "bundled/svg/link-broken-02.svg",
             icon_color: ColorU::black(),
         };
+        let broken_image = BrokenImageStyle {
+            icon_path: "bundled/svg/image-01.svg",
+            icon_color: ColorU::black(),
+        };
         let styles = RichTextStyles {
             base_text: paragraph_styles,
             code_text: paragraph_styles,
@@ -143,6 +148,7 @@ fn test_end_to_end() {
             check_box_style: checkbox,
             horizontal_rule_style: horizontal_rule,
             broken_link_style: broken_link,
+            broken_image_style: broken_image,
             block_spacings: Default::default(),
             show_placeholder_text_on_empty_block: false,
             minimum_paragraph_height: Some(PARAGRAPH_MIN_HEIGHT),

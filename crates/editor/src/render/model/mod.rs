@@ -1101,6 +1101,8 @@ pub struct RichTextStyles {
     pub horizontal_rule_style: HorizontalRuleStyle,
     /// Path to the broken link icon svg.
     pub broken_link_style: BrokenLinkStyle,
+    /// Icon and color for the placeholder shown when an image fails to load.
+    pub broken_image_style: BrokenImageStyle,
     /// Spacing configuration for blocks.
     pub block_spacings: BlockSpacings,
     /// Minimum height a paragraph will take. This currently
@@ -1194,6 +1196,12 @@ pub struct CheckBoxStyle {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BrokenLinkStyle {
+    pub icon_path: &'static str,
+    pub icon_color: ColorU,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BrokenImageStyle {
     pub icon_path: &'static str,
     pub icon_color: ColorU,
 }
