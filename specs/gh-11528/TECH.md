@@ -51,9 +51,19 @@ crate-private `ProjectExplorerAliasState` per local repository with:
   directory.
 
 Return lightweight `ProjectExplorerAliasRoot` descriptors as side metadata whenever a shared build
-encounters readable directory symlinks, while continuing to omit them from the shared `Entry`, flat
-`files` list, standing-query results, and incremental remote updates. Descriptor production must run
-through all three discovery lifecycles:
+encounters directory symlinks, while continuing to omit them from the shared `Entry`, flat `files`
+list, standing-query results, and incremental remote updates. Discovery first uses
+`symlink_metadata` to identify the lexical link, then follows metadata only far enough to classify
+the target; it does not call `read_dir`. A target classified as a directory therefore receives an
+unloaded descriptor even when enumerating its contents would return `PermissionDenied`.
+
+The failure matrix's root read errors refer to `read_dir` after this type-only probe has already
+identified a directory and created its descriptor. If the type probe itself cannot determine
+whether a newly encountered symlink targets a directory, Project Explorer must not fabricate a
+directory entry and change file-symlink behavior. A refresh or link-path event retries
+classification; for an already-known alias, a transient type-probe failure preserves its unloaded
+descriptor while clearing stale children. Descriptor production must run through all three
+discovery lifecycles:
 
 1. The initial repository build records aliases whose shared parents are loaded.
 2. An ordinary shared lazy-parent expansion returns descriptors discovered immediately below the
@@ -61,9 +71,9 @@ through all three discovery lifecycles:
 3. Shared watcher create/remove/retarget deltas add, remove, or replace descriptors and overlay
    subtrees without waiting for a full repository rebuild.
 
-Descriptors contain the lexical path and resolved target only; discovery does not traverse or watch
-the target. If an alias sits below an unloaded shared parent, it becomes visible only after that
-ordinary parent is expanded and its descriptor is returned.
+Descriptors contain the lexical path and resolved target. Discovery does not traverse or watch the
+target. If an alias sits below an unloaded shared parent, it becomes visible only after that ordinary
+parent is expanded and its descriptor is returned.
 
 Expose an explicit wrapper query such as `project_explorer_entry(repository_id)` that returns the
 shared entry plus the overlay as a copy-on-write projection. Update only `FileTreeView` to use that
@@ -155,14 +165,18 @@ Classify alias-resolution and read failures before applying the completion resul
 | Condition | Overlay result | Cursor/watch result |
 | --- | --- | --- |
 | `NotFound`, broken link, or target no longer a directory | Remove alias root and stale descendants | Drop all cursors, generation, and leases for the alias |
-| Root `PermissionDenied` | Replace stale subtree with the unloaded alias root | Retain a retry cursor; release target watch if it cannot be maintained |
-| Other transient root I/O error | Replace stale subtree with the unloaded alias root | Retain a retry cursor; keep only a valid existing expansion lease |
+| Root `read_dir` returns `PermissionDenied` after directory classification | Replace stale subtree with the unloaded alias root, including on first expansion | Retain a retry cursor; release the target watch if it cannot be maintained |
+| Other transient root `read_dir` error after directory classification | Replace stale subtree with the unloaded alias root, including on first expansion | Retain a retry cursor; keep only a valid existing expansion lease |
 | Unreadable descendant | Keep that descendant as an unloaded placeholder; continue siblings | Persist a retry cursor for that descendant |
 | Retargeted link | Remove old subtree before installing a new unloaded alias root | Increment generation, release old-target lease, discard stale completions |
 
 The completion future may still resolve with a typed `RepoMetadataError` for logging/tests, but its
-callback first establishes the table's safe visible state and emits a refresh. A retry always starts
-from the retained cursor and revalidates the current link target.
+callback first establishes the table's safe visible state and emits a refresh. Error display and
+logging must not include the canonical external target path: structured events record only the
+workspace-relative lexical alias path, alias generation, and error class, and user-visible errors
+follow the same rule. Tests may inspect typed fields directly but must not format or snapshot an
+external target path. A retry always starts from the retained cursor and revalidates the current
+link target.
 
 ### 6. Bound target watches to expanded aliases
 
@@ -227,16 +241,21 @@ behavior. Add:
    both in-workspace and external targets without inserting canonical target paths (PRODUCT 1–6).
 3. Descriptor-lifecycle tests covering an alias found during initial indexing, an alias below an
    initially unloaded ordinary shared parent discovered only when that parent loads, and alias
-   create/remove/retarget watcher deltas after indexing. Assert every path adds or removes the same
-   unloaded overlay descriptor without traversing or watching its target.
+   create/remove/retarget watcher deltas after indexing. Include a directory that is classified and
+   added without enumerating its unreadable contents, then restores access and populates on retry.
+   Assert every path adds or removes the same unloaded overlay descriptor without traversing or
+   watching its target.
 4. A multi-step completion test that expands `A → B → A` in three separate
    `load_directory_with_completion` calls and asserts the final `A` is loaded and childless. Also
    assert every cursor includes its own `resolved_path` as the last lineage item; cover root
    initialization, a direct self-cycle, and two independent aliases to one target (PRODUCT 7–8).
 5. Table-driven local-model tests for every failure-matrix row: `NotFound`, broken/non-directory,
-   root `PermissionDenied`, transient root error, unreadable descendant with readable sibling, and
-   retarget during an in-flight load. Assert stale children/cursors/watches are removed exactly as
-   specified (PRODUCT 9–10, 15, 19).
+   root `read_dir` `PermissionDenied`, other transient root read errors, unreadable descendant with
+   readable sibling, a transient type-probe failure for an already-known alias, and retarget during
+   an in-flight load. Assert initial enumeration failures remain visible and retryable, and stale
+   children/cursors/watches are removed exactly as specified (PRODUCT 9–10, 15, 19). Add a
+   logging/redaction assertion proving a typed external-target error formats only the lexical alias
+   path, generation, and error class.
 6. Scope-boundary tests proving an expanded external alias is present in
    `project_explorer_entry` but absent from `get_repo_contents`, repository search/index input,
    agent-context collection, generic standing-query/skill-rule results, `RepoMetadataUpdate`, and

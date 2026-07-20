@@ -36,9 +36,11 @@ expandable tree behavior; this change introduces no new visual treatment.
 
 ## Behavior
 
-1. In a local macOS workspace, a symbolic link whose target is a readable directory appears in
-   Project Explorer at the link's path and with the link's filename, in the same sorted position as
-   an ordinary directory.
+1. In a local macOS workspace, a symbolic link whose target can be identified as a directory
+   appears in Project Explorer at the link's path and with the link's filename, in the same sorted
+   position as an ordinary directory. Directory classification does not require enumerating the
+   target's contents, so a directory whose contents are temporarily unreadable still appears as an
+   unloaded, retryable alias.
 
 2. The linked directory is loaded on demand. Before it is expanded, Project Explorer retains it as
    an unloaded directory, does not walk the target, and does not begin watching an external target.
