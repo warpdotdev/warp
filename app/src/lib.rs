@@ -233,6 +233,7 @@ use warp_logging::LogDestination;
 use warp_managed_secrets::ManagedSecretManager;
 use warp_server_client::iap::{IapManager, IapManagerEvent, IapState, ManagedIapMint};
 use warp_server_client::network_logging::NetworkLogModel;
+use warpui::clipboard::ClipboardContent;
 use warpui::integration::TestDriver;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
 use warpui::platform::TerminationMode;
@@ -283,6 +284,7 @@ use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::manager::NotebookManager;
 use crate::notification::NotificationContext;
 use crate::palette::PaletteMode;
+use crate::pane_group::Direction;
 use crate::persistence::PersistenceWriter;
 use crate::persistence::model::AgentConversationData;
 use crate::projects::ProjectManagementModel;
@@ -2250,10 +2252,27 @@ pub(crate) fn initialize_app(
         if !*is_first_failure_of_streak {
             return;
         }
+        // Clone the error message for the "Copy Error" button callback.
+        let error_msg_for_copy = message.clone();
         let dialog = AlertDialogWithCallbacks::for_app(
             "IAP credential refresh failed",
+            // Show the raw error as the info text so it can be read/selected
+            // (macOS native dialog info text is keyboard-selectable).
+            // Include the gcloud hint below the error.
             format!("{message}\n\nHave you tried running `gcloud auth login`?"),
-            vec![ModalButton::for_app("Dismiss", |_| {})],
+            vec![
+                // "Copy Error" lets non-macOS users grab the error text since
+                // the Warp-native modal does not support text selection.
+                ModalButton::for_app("Copy Error", move |ctx| {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(error_msg_for_copy));
+                }),
+                // Opens a new pane and pre-fills the input with `gcloud auth login`.
+                ModalButton::for_app("Open New Pane", move |ctx| {
+                    open_new_pane_with_gcloud_auth_login(ctx);
+                }),
+                ModalButton::for_app("Dismiss", |_| {}),
+            ],
             |_| {},
         );
         if cfg!(all(not(target_family = "wasm"), target_os = "macos")) {
@@ -2790,6 +2809,28 @@ fn focus_running_window_and_show_native_modal(
     {
         handle.update(ctx, |view, ctx| {
             view.show_native_modal(dialog_with_callbacks, ctx);
+        });
+    }
+}
+
+/// Opens a new terminal pane to the right and pre-fills its input buffer with
+/// `gcloud auth login`, providing a quick path for users to re-authenticate when
+/// IAP credential refresh fails.
+fn open_new_pane_with_gcloud_auth_login(ctx: &mut AppContext) {
+    let window_id = ctx
+        .windows()
+        .active_window()
+        .or_else(|| ctx.windows().ordered_window_ids().first().copied());
+    if let Some(window_id) = window_id
+        && let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+        && let Some(workspace_handle) = workspaces.first().cloned()
+    {
+        workspace_handle.update(ctx, |workspace, ctx| {
+            let pane_group_handle = workspace.active_tab_pane_group().clone();
+            pane_group_handle.update(ctx, |pane_group, ctx| {
+                pane_group.add_terminal_pane(Direction::Right, None, ctx);
+            });
+            workspace.set_active_terminal_input_contents_and_focus_app("gcloud auth login", ctx);
         });
     }
 }
