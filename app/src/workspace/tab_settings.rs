@@ -581,6 +581,7 @@ define_settings_group!(TabSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "appearance.tabs.show_navigation_buttons",
         description: "Whether to show navigation buttons in the tab bar.",

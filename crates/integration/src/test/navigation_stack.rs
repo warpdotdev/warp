@@ -4,7 +4,7 @@ use std::time::Duration;
 use warp::features::FeatureFlag;
 use warp::integration_testing::assertions::assert_binding_display_string;
 use warp::integration_testing::command_palette::{
-    open_command_palette_and_run_action, TestStepsExt,
+    TestStepsExt, open_command_palette_and_run_action,
 };
 use warp::integration_testing::pane_group::{assert_focused_pane_index, close_pane_by_index};
 use warp::integration_testing::settings::toggle_setting;
@@ -25,20 +25,20 @@ use warp::integration_testing::{self};
 use warp::settings_view::{FeaturesPageAction, SettingsAction};
 use warp::terminal::block_list_viewport::ScrollPosition;
 use warp::terminal::view::TerminalAction;
+use warp::workspace::WorkspaceAction;
 use warp::workspace::nav_stack::NavigationStack;
 use warp::workspace::tab_settings::TabSettings;
-use warp::workspace::WorkspaceAction;
-use warp::{cmd_or_ctrl_shift, CodeEditorViewAction};
+use warp::{CodeEditorViewAction, cmd_or_ctrl_shift};
 use warpui_core::integration::AssertionCallback;
 use warpui_core::keymap::PerPlatformKeystroke;
 use warpui_core::units::{Lines, Pixels};
 use warpui_core::windowing::WindowManager;
 use warpui_core::{
-    async_assert, async_assert_eq, App, ReadModel, SingletonEntity, TypedActionView, UpdateView,
-    WindowId,
+    App, ReadModel, SingletonEntity, TypedActionView, UpdateView, WindowId, async_assert,
+    async_assert_eq,
 };
 
-use super::{new_builder, Builder, TEST_ONLY_ASSETS};
+use super::{Builder, TEST_ONLY_ASSETS, new_builder};
 use crate::util::write_all_rc_files_for_test;
 
 const NAVIGATE_BACK: PerPlatformKeystroke = PerPlatformKeystroke {

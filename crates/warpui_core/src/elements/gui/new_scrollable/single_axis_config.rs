@@ -299,7 +299,6 @@ impl SingleAxisConfig {
 
         match self {
             Self::Manual { child, .. } => {
-                eprintln!("[NAV-DEBUG] SingleAxisConfig::Manual scroll_to called, delta={delta:?}, axis={axis:?}");
                 child.scroll(delta, axis, ctx);
             }
             Self::Clipped { handle, child } => {

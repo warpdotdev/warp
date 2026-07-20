@@ -2166,9 +2166,11 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleShowNavigationButtons => {
                 TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
-                    report_if_error!(tab_settings
-                        .show_navigation_buttons
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        tab_settings
+                            .show_navigation_buttons
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             SetNotificationToastDuration => {

@@ -1,6 +1,6 @@
 use warp_editor::render::model::viewport::ScrollPositionSnapshot;
 use warpui::units::Pixels;
-use warpui::{navigation, AppContext, EntityId, WindowId};
+use warpui::{AppContext, EntityId, WindowId, navigation};
 
 use crate::pane_group::PaneId;
 use crate::terminal::block_list_viewport::ScrollPosition;

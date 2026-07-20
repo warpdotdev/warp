@@ -158,7 +158,7 @@ use super::util::{
     WorkspaceMouseStates, WorkspaceState,
 };
 use super::{
-    nav_stack, util, ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry,
+    ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry, nav_stack, util,
 };
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -11929,19 +11929,22 @@ impl Workspace {
         let mut entry = self.build_navigation_entry(ctx);
         let pane_group = self.active_tab_pane_group();
 
-        if pane_group.as_ref(ctx).right_panel_open {
-            if let Some(code_review_view) = self
+        // Only snapshot the code-review panel scroll when the right panel is
+        // the actual focus target. If focus is in a terminal or editor pane,
+        // using the code-review position would cause Back/Forward to restore
+        // review scroll instead of the pane state the user actually left.
+        if pane_group.as_ref(ctx).right_panel_open
+            && self.right_panel_view.is_self_or_child_focused(ctx)
+            && let Some(code_review_view) = self
                 .right_panel_view
                 .as_ref(ctx)
                 .get_active_code_review_view(ctx)
-            {
-                let (scroll_index, scroll_offset_px) =
-                    code_review_view.as_ref(ctx).scroll_snapshot();
-                entry.scroll_snapshot = Some(nav_stack::ScrollSnapshot::CodeReview {
-                    scroll_index,
-                    scroll_offset_px,
-                });
-            }
+        {
+            let (scroll_index, scroll_offset_px) = code_review_view.as_ref(ctx).scroll_snapshot();
+            entry.scroll_snapshot = Some(nav_stack::ScrollSnapshot::CodeReview {
+                scroll_index,
+                scroll_offset_px,
+            });
         }
 
         entry
@@ -12091,12 +12094,12 @@ impl Workspace {
             return self.navigation_entry_can_restore_local(entry, ctx);
         }
 
-        if let Some(workspace) = self.navigation_workspace_for_window(entry.window_id, ctx) {
-            if ctx.is_window_open(entry.window_id) {
-                return workspace.read(ctx, |workspace, ctx| {
-                    workspace.navigation_entry_can_restore_local(entry, ctx)
-                });
-            }
+        if let Some(workspace) = self.navigation_workspace_for_window(entry.window_id, ctx)
+            && ctx.is_window_open(entry.window_id)
+        {
+            return workspace.read(ctx, |workspace, ctx| {
+                workspace.navigation_entry_can_restore_local(entry, ctx)
+            });
         }
 
         UndoCloseStack::handle(ctx)
@@ -12109,8 +12112,14 @@ impl Workspace {
         entry: &nav_stack::NavigationEntry,
         ctx: &AppContext,
     ) -> bool {
-        if let Some(tab) = self.tabs.get(entry.tab_index) {
-            return Self::navigation_entry_can_restore_in_pane_group(&tab.pane_group, entry, ctx);
+        // When a live tab occupies `entry.tab_index`, check the pane group
+        // first. If the pane is not found there (e.g. the tab was closed and
+        // a later tab shifted into the same index), fall through to the
+        // undo-close stack so closed-tab history entries remain restorable.
+        if let Some(tab) = self.tabs.get(entry.tab_index)
+            && Self::navigation_entry_can_restore_in_pane_group(&tab.pane_group, entry, ctx)
+        {
+            return true;
         }
 
         UndoCloseStack::handle(ctx)
@@ -12298,12 +12307,11 @@ impl Workspace {
             return true;
         }
 
-        if let Some(nav_stack::ScrollSnapshot::CodeDiff { view_id, .. }) = entry.scroll_snapshot {
-            if let Some(code_diff_view) = ctx.view_with_id::<CodeDiffView>(ctx.window_id(), view_id)
-            {
-                self.open_code_diff(code_diff_view, ctx);
-                return true;
-            }
+        if let Some(nav_stack::ScrollSnapshot::CodeDiff { view_id, .. }) = entry.scroll_snapshot
+            && let Some(code_diff_view) = ctx.view_with_id::<CodeDiffView>(ctx.window_id(), view_id)
+        {
+            self.open_code_diff(code_diff_view, ctx);
+            return true;
         }
 
         false

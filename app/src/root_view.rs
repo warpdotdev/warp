@@ -1147,20 +1147,20 @@ pub(crate) fn open_new_window_get_handles(
 ) -> (WindowId, ViewHandle<RootView>) {
     let active_window_id = ctx.windows().active_window();
 
-    if FeatureFlag::NavigationStack.is_enabled() {
-        if let Some(active_wid) = active_window_id {
-            let registry = crate::workspace::WorkspaceRegistry::handle(ctx);
-            let target = registry
-                .as_ref(ctx)
-                .all_workspaces(ctx)
-                .into_iter()
-                .find(|(wid, _)| *wid == active_wid)
-                .map(|(_, ws)| ws);
-            if let Some(ws) = target {
-                ws.update(ctx, |workspace, ctx| {
-                    workspace.record_navigation_entry(ctx);
-                });
-            }
+    if FeatureFlag::NavigationStack.is_enabled()
+        && let Some(active_wid) = active_window_id
+    {
+        let registry = crate::workspace::WorkspaceRegistry::handle(ctx);
+        let target = registry
+            .as_ref(ctx)
+            .all_workspaces(ctx)
+            .into_iter()
+            .find(|(wid, _)| *wid == active_wid)
+            .map(|(_, ws)| ws);
+        if let Some(ws) = target {
+            ws.update(ctx, |workspace, ctx| {
+                workspace.record_navigation_entry(ctx);
+            });
         }
     }
 

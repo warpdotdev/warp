@@ -4452,15 +4452,15 @@ impl PaneGroup {
                     .lock()
                     .shared_session_status()
                     .is_sharer()
-            }) {
-                ctx.emit(Event::CloseSharedSessionPaneRequested { pane_id });
-                return;
-            }
-            let window_id = ctx.window_id();
-            crate::workspace::nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| {
-                stack.retain(|entry| entry.window_id != window_id || entry.pane_id != pane_id);
-            });
+            })
+        {
+            ctx.emit(Event::CloseSharedSessionPaneRequested { pane_id });
+            return;
         }
+        let window_id = ctx.window_id();
+        crate::workspace::nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| {
+            stack.retain(|entry| entry.window_id != window_id || entry.pane_id != pane_id);
+        });
 
         let summary = UnsavedStateSummary::for_pane(self, pane_id, ctx);
         if summary.save_unsaved_code_and_should_warn(ctx)
@@ -7990,7 +7990,6 @@ impl PaneGroup {
                     // state, and not manipulate application focus.
                     self.focus_pane(pane_id, false, ctx);
                     self.update_pane_history(pane_id);
-                    ctx.emit(Event::PaneFocused);
                 };
                 break;
             }

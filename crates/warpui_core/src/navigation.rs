@@ -65,10 +65,10 @@ impl<E: NavigationEntry> NavigationStack<E> {
 
         self.expected_focus_loss = None;
 
-        if let Some(top) = self.back.last() {
-            if !entry.should_push(top) {
-                return;
-            }
+        if let Some(top) = self.back.last()
+            && !entry.should_push(top)
+        {
+            return;
         }
 
         self.back.push(entry);
@@ -193,10 +193,10 @@ impl<E: NavigationEntry> NavigationStack<E> {
     }
 
     pub fn flush_if_expired(&mut self) {
-        if let Some(last) = self.last_debounced_push {
-            if last.elapsed() >= self.debounce_duration {
-                self.flush();
-            }
+        if let Some(last) = self.last_debounced_push
+            && last.elapsed() >= self.debounce_duration
+        {
+            self.flush();
         }
     }
 

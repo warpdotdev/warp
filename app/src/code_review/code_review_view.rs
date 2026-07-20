@@ -685,6 +685,11 @@ pub struct CodeReviewView {
     git_repo_status: Option<ModelHandle<GitRepoStatusModel>>,
     /// Per-repo GitHub-info model for the current repository, if any.
     github_repo_model: Option<ModelHandle<GitHubRepoModel>>,
+    /// The scroll position captured before the most recent user scroll, used
+    /// to record the navigation-stack entry at the location the user *left*
+    /// rather than where they *arrived* (mirrors how editor/terminal scroll
+    /// tracking works).
+    nav_pre_scroll: (usize, Pixels),
 }
 
 impl CodeReviewView {
@@ -1381,6 +1386,7 @@ impl CodeReviewView {
             git_dialog: None,
             git_repo_status: None,
             github_repo_model: None,
+            nav_pre_scroll: (0, Pixels::zero()),
         };
         view.set_active_repo_comment_model(comment_batch_model, ctx);
         if has_repo {
@@ -7557,9 +7563,15 @@ impl TypedActionView for CodeReviewView {
                 scroll_index,
                 scroll_offset_px,
             } => {
+                // Emit the position the user scrolled *from* (pre-scroll) so
+                // the navigation stack records the location the user left,
+                // not where they arrived. The stored value is then updated to
+                // the new position for the next scroll event.
+                let (pre_scroll_index, pre_scroll_offset_px) = self.nav_pre_scroll;
+                self.nav_pre_scroll = (*scroll_index, *scroll_offset_px);
                 ctx.emit(CodeReviewViewEvent::UserScrolled {
-                    scroll_index: *scroll_index,
-                    scroll_offset_px: *scroll_offset_px,
+                    scroll_index: pre_scroll_index,
+                    scroll_offset_px: pre_scroll_offset_px,
                 });
             }
             CodeReviewAction::OpenRepository => {

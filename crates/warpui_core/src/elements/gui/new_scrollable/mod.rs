@@ -1488,11 +1488,6 @@ impl Element for NewScrollable {
             }
         } else {
             let handled_by_child = self.state.dispatch_event_to_child(event, ctx, app);
-            if matches!(event.raw_event(), Event::ScrollWheel { .. }) {
-                eprintln!(
-                    "[NAV-DEBUG] NewScrollable dispatch_event: handled_by_child={handled_by_child}"
-                );
-            }
             if !handled_by_child {
                 self.handle_event(z_index, event, ctx, app)
             } else {

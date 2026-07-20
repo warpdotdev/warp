@@ -27,7 +27,6 @@ use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_editor::render::model::viewport::ScrollPositionSnapshot;
 use warp_errors::report_error;
-use warp_util::file::FileSaveError;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;

@@ -998,7 +998,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::ModelPickerFTUTab,
     FeatureFlag::NavigationStack,
-    FeatureFlag::OwnerOrchestrationAncestorStreamer,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

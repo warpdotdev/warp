@@ -81,6 +81,9 @@ use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings}
 use crate::view_components::find::FindDirection;
 
 mod actions;
+#[cfg(feature = "integration_tests")]
+pub use actions::CodeEditorViewAction;
+#[cfg(not(feature = "integration_tests"))]
 pub(super) use actions::CodeEditorViewAction;
 pub use actions::init;
 
