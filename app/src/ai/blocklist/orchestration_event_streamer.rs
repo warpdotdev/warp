@@ -2103,6 +2103,11 @@ impl OrchestrationEventStreamer {
                 .extend(message_ids);
         }
 
+        // Sync child conversation statuses directly so that hidden child panes
+        // reflect the completed run state immediately, without waiting for the
+        // parent agent to process the events via `wait_for_events`.
+        self.sync_child_conversation_statuses_from_events(&events, self_run_id, ctx);
+
         let lifecycle_events = convert_lifecycle_events(&events, self_run_id);
         if messages.is_empty() && lifecycle_events.is_empty() {
             return;
@@ -2111,6 +2116,89 @@ impl OrchestrationEventStreamer {
         let pending = build_pending_events(messages, lifecycle_events);
         OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
             svc.enqueue_event_batch(conversation_id, pending, ctx);
+        });
+    }
+
+    /// Syncs child conversation statuses in [`BlocklistAIHistoryModel`] directly
+    /// from SSE lifecycle events.
+    ///
+    /// Without this, remote child conversations stay stuck as
+    /// [`ConversationStatus::InProgress`] indefinitely after the child run
+    /// completes. The owner-side SSE delivers child lifecycle events to
+    /// [`OrchestrationEventService`] (for forwarding to the server via the parent
+    /// agent's `wait_for_events` turn), but the child conversation's local
+    /// [`ConversationStatus`] in [`BlocklistAIHistoryModel`] is never explicitly
+    /// updated, because:
+    /// - [`LocalAgentTaskSyncModel`] skips remote children to avoid race
+    ///   conditions with the worker's own status reporting.
+    /// - The child's SSE connection is excluded via `is_remote_run_view`.
+    /// - The parent's `wait_for_events` resumes the parent agent, but does not
+    ///   update the child's local `ConversationStatus`.
+    ///
+    /// This method patches the gap: when a terminal lifecycle event arrives for a
+    /// non-self run_id whose local conversation is a child agent conversation in a
+    /// non-terminal state, the status is pushed directly to
+    /// [`BlocklistAIHistoryModel`]. This ensures any open child pane's input hint
+    /// text and warping indicator reflect the completed state.
+    fn sync_child_conversation_statuses_from_events(
+        &self,
+        events: &[AgentRunEvent],
+        self_run_id: &str,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // Collect (terminal_surface_id, child_conv_id, status) tuples in a
+        // read-only pass to avoid a mutable-borrow conflict with the write below.
+        let updates: Vec<(EntityId, AIConversationId, ConversationStatus)> = {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            events
+                .iter()
+                .filter(|event| event.event_type != "new_message" && event.run_id != self_run_id)
+                .filter_map(|event| {
+                    let lifecycle_type = lifecycle_event_type_from_wire(event.event_type.as_str())?;
+                    let status = conversation_status_from_lifecycle_event_type(lifecycle_type);
+                    // Only apply terminal transitions. Non-terminal states (InProgress)
+                    // are already the initial default and need not be re-asserted.
+                    if !status.is_done() && !status.is_blocked() {
+                        return None;
+                    }
+                    let child_conv_id = history.conversation_id_for_agent_id(&event.run_id)?;
+                    let conversation = history.conversation(&child_conv_id)?;
+                    // Only update child agent conversations.
+                    if !conversation.is_child_agent_conversation() {
+                        return None;
+                    }
+                    // Skip conversations already in a terminal state to avoid
+                    // inadvertent status regressions.
+                    if conversation.status().is_done() || conversation.status().is_blocked() {
+                        return None;
+                    }
+                    // Only update conversations that are live in a terminal
+                    // surface; if the child pane is not open, there is no UI
+                    // to update and the next pane-open will hydrate correctly.
+                    let terminal_surface_id =
+                        history.terminal_surface_id_for_conversation(&child_conv_id)?;
+                    Some((terminal_surface_id, child_conv_id, status))
+                })
+                .collect()
+        };
+
+        if updates.is_empty() {
+            return;
+        }
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, move |history_model, ctx| {
+            for (terminal_surface_id, child_conv_id, status) in updates {
+                log::info!(
+                    "OrchestrationEventStreamer: syncing child conversation {child_conv_id:?} \
+                     status to {status} from SSE lifecycle event"
+                );
+                history_model.update_conversation_status(
+                    terminal_surface_id,
+                    child_conv_id,
+                    status,
+                    ctx,
+                );
+            }
         });
     }
 
