@@ -362,11 +362,11 @@ impl<T: SegmentedControlOption> View for SegmentedControl<T> {
         if let Some(background) = self.styles.background {
             container = container.with_background(background);
         }
-        if let Some(border_width) = self.styles.border_width {
-            if let Some(border_color) = self.styles.border_color {
-                container =
-                    container.with_border(Border::all(border_width).with_border_fill(border_color));
-            }
+        if let Some(border_width) = self.styles.border_width
+            && let Some(border_color) = self.styles.border_color
+        {
+            container =
+                container.with_border(Border::all(border_width).with_border_fill(border_color));
         }
         if let Some(border_radius) = self.styles.border_radius {
             container = container.with_corner_radius(border_radius);

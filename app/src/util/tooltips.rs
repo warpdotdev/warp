@@ -247,8 +247,8 @@ pub fn should_show_open_in_warp_link(path: &Path, app: &AppContext) -> bool {
 
     use crate::code::view::is_binary_file;
     use crate::notebooks::file::renders_in_warp_notebook_viewer;
-    use crate::util::file::external_editor::settings::EditorChoice;
     use crate::util::file::external_editor::EditorSettings;
+    use crate::util::file::external_editor::settings::EditorChoice;
 
     let settings = EditorSettings::as_ref(app);
 

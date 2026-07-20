@@ -5,20 +5,22 @@ use async_channel::unbounded;
 use warpui::{App, EntityId, ModelHandle};
 
 use super::*;
+use crate::LaunchMode;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
     UploadArtifactRequest, UploadArtifactResult,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::ActionPermission;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::sync_queue::SyncQueue;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::event::BlockMetadataReceivedEvent;
 use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -26,11 +28,9 @@ use crate::terminal::model::session::{SessionId, SessionInfo, Sessions};
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
-use crate::terminal::ShellLaunchData;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::LaunchMode;
 
 fn build_upload_artifact_action(file_path: &str) -> AIAgentAction {
     AIAgentAction {

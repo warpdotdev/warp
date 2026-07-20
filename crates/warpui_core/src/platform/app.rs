@@ -7,7 +7,7 @@ use crate::keymap::Keystroke;
 use crate::modals::ModalId;
 use crate::windowing::state::ApplicationStage;
 use crate::windowing::{WindowCallbackDispatcher, WindowManager};
-use crate::{notification, AppContext, ClosedWindowData, SingletonEntity, WindowId};
+use crate::{AppContext, ClosedWindowData, SingletonEntity, WindowId, notification};
 
 pub type AppInitCallbackFn =
     Box<dyn FnOnce(&mut crate::AppContext, LocalBoxFuture<'static, crate::App>)>;

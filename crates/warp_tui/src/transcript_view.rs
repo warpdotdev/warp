@@ -7,11 +7,10 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    should_show_task_in_blocklist, AIAgentActionId, AIAgentExchangeId, AIBlockModelImpl,
-    AIConversationId, BlockHeightItem, BlockIndex, BlockPadding, BlockSpacing,
-    BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    ConversationBlockRestorationPlan, ModelEventDispatcher, RichContentItem, RichContentType,
-    TerminalModel,
+    AIAgentActionId, AIAgentExchangeId, AIBlockModelImpl, AIConversationId, BlockHeightItem,
+    BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, ConversationBlockRestorationPlan, ModelEventDispatcher,
+    RichContentItem, RichContentType, TerminalModel, should_show_task_in_blocklist,
 };
 use warp_core::semantic_selection::SemanticSelection;
 use warpui_core::elements::tui::{
@@ -262,10 +261,10 @@ impl TuiTranscriptView {
                 ..
             } => {
                 let mut conversation_ids = cleared_conversation_ids.clone();
-                if let Some(active_conversation_id) = active_conversation_id {
-                    if !conversation_ids.contains(active_conversation_id) {
-                        conversation_ids.push(*active_conversation_id);
-                    }
+                if let Some(active_conversation_id) = active_conversation_id
+                    && !conversation_ids.contains(active_conversation_id)
+                {
+                    conversation_ids.push(*active_conversation_id);
                 }
                 for conversation_id in conversation_ids {
                     self.remove_conversation(conversation_id, ctx);

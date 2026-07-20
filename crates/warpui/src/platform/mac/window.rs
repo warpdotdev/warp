@@ -7,14 +7,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use cocoa::base::id;
 use instant::Instant;
 use num_traits::FromPrimitive;
 use objc::runtime::Object;
-use objc2::rc::{autoreleasepool, Retained};
+use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
-use objc2::{msg_send, MainThreadMarker};
+use objc2::{MainThreadMarker, msg_send};
 use objc2_app_kit::{NSApplication, NSScreen, NSView, NSWindow, NSWindowButton, NSWindowStyleMask};
 use objc2_foundation::{
     NSArray, NSInteger, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger,
@@ -22,25 +22,24 @@ use objc2_foundation::{
 use objc2_metal::{MTLCopyAllDevices, MTLCreateSystemDefaultDevice, MTLDevice};
 use objc2_quartz_core::CAMetalLayer;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warpui_core::accessibility::AccessibilityContent;
 use warpui_core::actions::StandardAction;
+use warpui_core::r#async::{Timer, executor};
 use warpui_core::event::ModifiersState;
 use warpui_core::platform::{
-    self, file_picker, FilePickerCallback, FilePickerConfiguration, FullscreenState,
-    GraphicsBackend, TerminationMode, WindowBounds, WindowFocusBehavior, WindowOptions,
-    WindowStyle,
+    self, FilePickerCallback, FilePickerConfiguration, FullscreenState, GraphicsBackend,
+    TerminationMode, WindowBounds, WindowFocusBehavior, WindowOptions, WindowStyle, file_picker,
 };
-use warpui_core::r#async::{executor, Timer};
 use warpui_core::rendering::GPUPowerPreference;
 use warpui_core::windowing::WindowCallbacks;
 use warpui_core::{DisplayId, DisplayIdx, Event, OptionalPlatformWindow, Scene, WindowId};
 
 use super::delegate::DispatchDelegate;
-use super::rendering::{self, is_integrated_gpu, Device, RendererManager};
-use super::{app, RectFExt as _};
+use super::rendering::{self, Device, RendererManager, is_integrated_gpu};
+use super::{RectFExt as _, app};
 
-extern "C" {
+unsafe extern "C" {
     fn screenFrame() -> NSRect;
     fn activeScreenId() -> NSUInteger;
 }
@@ -423,7 +422,7 @@ mod Ivar {
 
 // Declarations of functions implemented in ObjC files.
 // These signatures must be manually synced - there's no type checking here.
-extern "C" {
+unsafe extern "C" {
     fn create_warp_nswindow(
         contentRect: NSRect,
         metalDevice: *mut ProtocolObject<dyn MTLDevice>,
@@ -910,15 +909,17 @@ impl Window {
     /// # Safety
     /// This code is unsafe since it requires interfacing with platform code.
     unsafe fn find_window_with_id(window_id: WindowId) -> Option<Retained<NSWindow>> {
-        let mtm = MainThreadMarker::new_unchecked();
-        let windows = NSApplication::sharedApplication(mtm).windows();
-        (0..windows.count())
-            .find(|&i| {
-                let window = windows.objectAtIndex(i);
-                is_warp_window(&window).as_bool()
-                    && get_window_state(as_objc_object(&window)).window_id == window_id
-            })
-            .map(|idx| windows.objectAtIndex(idx))
+        unsafe {
+            let mtm = MainThreadMarker::new_unchecked();
+            let windows = NSApplication::sharedApplication(mtm).windows();
+            (0..windows.count())
+                .find(|&i| {
+                    let window = windows.objectAtIndex(i);
+                    is_warp_window(&window).as_bool()
+                        && get_window_state(as_objc_object(&window)).window_id == window_id
+                })
+                .map(|idx| windows.objectAtIndex(idx))
+        }
     }
 
     pub fn close_window_async(window_id: WindowId, termination_mode: TerminationMode) {
@@ -1287,7 +1288,7 @@ fn dispatch_window_resized(window: &Rc<WindowState>, force_async: bool) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_view_did_change_backing_properties(this: &Object, async_callback: bool) {
     // SAFETY: `this` is a WarpHostView carrying the window-state ivar; its backing
     // layer is always a CAMetalLayer.
@@ -1323,7 +1324,7 @@ extern "C-unwind" fn warp_view_did_change_backing_properties(this: &Object, asyn
     dispatch_window_resized(window, async_callback);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn warp_get_accessibility_contents(object: &mut Object) -> id {
     let state = unsafe { get_window_state(object) };
     let window_id = state.window_id;
@@ -1337,7 +1338,7 @@ pub extern "C-unwind" fn warp_get_accessibility_contents(object: &mut Object) ->
     Retained::autorelease_return(NSString::from_str(accessibility_contents.as_str())).cast()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn warp_ime_position(object: &mut Object, content_rect: NSRect) -> NSRect {
     let state = unsafe { get_window_state(object) };
 
@@ -1366,7 +1367,7 @@ pub extern "C-unwind" fn warp_ime_position(object: &mut Object, content_rect: NS
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_view_set_frame_size(this: &Object, size: NSSize, async_callback: bool) {
     // SAFETY: `this` is a WarpHostView carrying the window-state ivar; its backing
     // layer is always a CAMetalLayer.
@@ -1396,7 +1397,7 @@ extern "C-unwind" fn warp_view_set_frame_size(this: &Object, size: NSSize, async
     dispatch_window_resized(window, async_callback);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_update_layer(this: &Object) {
     if !app::callback_dispatcher().can_borrow_mut() {
         #[cfg(debug_assertions)]
@@ -1459,7 +1460,7 @@ extern "C-unwind" fn warp_update_layer(this: &Object) {
 }
 
 /// Returns whether this event was handled.
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_handle_view_event(
     this: &Object,
     native_event: id,
@@ -1504,7 +1505,7 @@ extern "C-unwind" fn warp_handle_view_event(
 /// Handles the "first mouse event" - the first mouse event fired that causes an unfocused window to
 /// gain focus.
 /// Returns whether this event was handled.
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_handle_first_mouse_event(this: &Object, native_event: id) -> bool {
     let window = unsafe { get_window_state(this) };
     let event =
@@ -1518,7 +1519,7 @@ extern "C-unwind" fn warp_handle_first_mouse_event(this: &Object, native_event: 
     false
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_handle_insert_text(this: &Object, characters: id) {
     // SAFETY: `characters` is a valid `NSString` of the inserted text.
     let string = unsafe { &*characters.cast::<NSString>() }.to_string();
@@ -1528,7 +1529,7 @@ extern "C-unwind" fn warp_handle_insert_text(this: &Object, characters: id) {
         .dispatch_event(Event::TypedCharacters { chars: string });
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_handle_drag_and_drop(this: &Object, paths: id, point: NSPoint) {
     // SAFETY: `paths` is an `NSArray<NSString>` of dropped file paths.
     let paths = unsafe {
@@ -1545,7 +1546,7 @@ extern "C-unwind" fn warp_handle_drag_and_drop(this: &Object, paths: id, point: 
         .dispatch_event(Event::DragAndDropFiles { paths, location });
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_handle_file_drag(this: &Object, point: NSPoint) {
     let window = unsafe { get_window_state(this) };
     let location = vec2f(point.x as f32, window.logical_size().y() - point.y as f32);
@@ -1555,7 +1556,7 @@ extern "C-unwind" fn warp_handle_file_drag(this: &Object, point: NSPoint) {
         .dispatch_event(Event::DragFiles { location });
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_handle_file_drag_exit(this: &Object) {
     let window = unsafe { get_window_state(this) };
 
@@ -1564,7 +1565,7 @@ extern "C-unwind" fn warp_handle_file_drag_exit(this: &Object) {
         .dispatch_event(Event::DragFileExit);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_update_ime_state(this: &mut Object, ime_active: bool) {
     let state = unsafe { get_window_state(this) };
     state.ime_active.set(ime_active);
@@ -1578,7 +1579,7 @@ fn nsrange_to_rust_range(ns_range: NSRange) -> std::ops::Range<usize> {
     start..end
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_marked_text_updated(
     this: &mut Object,
     marked_text: id,
@@ -1596,7 +1597,7 @@ extern "C-unwind" fn warp_marked_text_updated(
         });
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_marked_text_cleared(this: &mut Object) {
     let state = unsafe { get_window_state(&*this) };
     app::callback_dispatcher()
@@ -1604,7 +1605,7 @@ extern "C-unwind" fn warp_marked_text_cleared(this: &mut Object) {
         .dispatch_event(Event::ClearMarkedText);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn warp_dispatch_standard_action(this: id, tag: NSInteger) {
     if let Some(action) = StandardAction::from_isize(tag) {
         let state = unsafe { get_window_state(&*this) };
@@ -1614,7 +1615,7 @@ pub extern "C-unwind" fn warp_dispatch_standard_action(this: id, tag: NSInteger)
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn warp_app_window_moved(this: id, rect: NSRect) {
     let state = unsafe { get_window_state(&*this) };
     let point = Vector2F::new(rect.origin.x as f32, rect.origin.y as f32);
@@ -1640,16 +1641,18 @@ pub extern "C-unwind" fn warp_app_window_moved(this: id, rect: NSRect) {
 /// pointer within the object, and returns the reference-counted pointer to the
 /// state.
 unsafe fn remove_state_ivar_from_object(object: &mut Object) -> Rc<WindowState> {
-    let wrapper_ptr: *mut c_void = *object.get_ivar(WINDOW_STATE_IVAR);
-    let state = Ivar::take_state(wrapper_ptr);
-    object.set_ivar(WINDOW_STATE_IVAR, ptr::null::<c_void>());
-    state
+    unsafe {
+        let wrapper_ptr: *mut c_void = *object.get_ivar(WINDOW_STATE_IVAR);
+        let state = Ivar::take_state(wrapper_ptr);
+        object.set_ivar(WINDOW_STATE_IVAR, ptr::null::<c_void>());
+        state
+    }
 }
 
 // dealloc is called by AppKit when our NSWindow subclass is deallocating,
 // because its retain count has dropped to zero. This is our chance to release
 // our Rust resources. Do not call this manually.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn warp_dealloc_window(native_window: &mut Object) {
     log::info!("dealloc native window {native_window:p}");
     let state;
@@ -1684,8 +1687,10 @@ pub extern "C-unwind" fn warp_dealloc_window(native_window: &mut Object) {
 }
 
 pub unsafe fn get_window_state(object: &Object) -> &Rc<WindowState> {
-    let wrapper_ptr: *mut c_void = *object.get_ivar(WINDOW_STATE_IVAR);
-    Ivar::get_state(wrapper_ptr)
+    unsafe {
+        let wrapper_ptr: *mut c_void = *object.get_ivar(WINDOW_STATE_IVAR);
+        Ivar::get_state(wrapper_ptr)
+    }
 }
 
 fn schedule_synthetic_drag(
@@ -1700,16 +1705,16 @@ fn schedule_synthetic_drag(
         .executor
         .spawn(async move {
             Timer::at(instant).await;
-            if let Some(window_state) = weak_window_state.upgrade() {
-                if window_state.synthetic_drag_counter.get() == drag_id {
-                    schedule_synthetic_drag(&window_state, position, modifiers);
-                    app::callback_dispatcher()
-                        .for_window(&Window(window_state))
-                        .dispatch_event(Event::LeftMouseDragged {
-                            position,
-                            modifiers,
-                        });
-                }
+            if let Some(window_state) = weak_window_state.upgrade()
+                && window_state.synthetic_drag_counter.get() == drag_id
+            {
+                schedule_synthetic_drag(&window_state, position, modifiers);
+                app::callback_dispatcher()
+                    .for_window(&Window(window_state))
+                    .dispatch_event(Event::LeftMouseDragged {
+                        position,
+                        modifiers,
+                    });
             }
         })
         .detach();

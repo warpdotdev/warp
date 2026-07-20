@@ -136,8 +136,7 @@ impl WorkflowCommandDisplayData {
     }
 
     pub fn get_argument_values(&self) -> HashMap<String, String> {
-        let args = self
-            .command_parts
+        self.command_parts
             .iter()
             .filter_map(|part| {
                 if let WorkflowCommandPart::Argument { name, value } = part {
@@ -146,8 +145,7 @@ impl WorkflowCommandDisplayData {
                     None
                 }
             })
-            .collect();
-        args
+            .collect()
     }
 
     /// Prints out the command as a string

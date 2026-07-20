@@ -90,11 +90,11 @@ impl From<InputClassifierDecisionSource> for InputTypeAutoDetectionSource {
 
 use warp_errors::report_if_error;
 
+use super::ConversationSelectionHandle;
 use super::context_model::BlocklistAIContextModel;
 use super::history_model::BlocklistAIHistoryModel;
 use super::input_mode_policy::{InputModePolicyHandle, PolicyConfigUpdate};
 use super::telemetry_banner::should_collect_ai_ugc_telemetry;
-use super::ConversationSelectionHandle;
 use crate::input_classifier::InputClassifierModel;
 use crate::settings::{AISettings, AISettingsChangedEvent, InputBoxType, InputSettings};
 use crate::terminal::cli_agent_sessions::{
@@ -104,7 +104,7 @@ use crate::terminal::input::decorations::ParsedTokensSnapshot;
 use crate::terminal::model::rich_content::RichContentType;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::{History, TerminalModel};
-use crate::{send_telemetry_from_ctx, PrivacySettings, TelemetryEvent};
+use crate::{PrivacySettings, TelemetryEvent, send_telemetry_from_ctx};
 
 /// Cutoff score for deciding an user input matches a history command entry.
 const HISTORY_ENTRY_MATCH_CUTOFF: f32 = 0.9;
@@ -475,9 +475,11 @@ impl BlocklistAIInputModel {
         if new_config.input_type.is_ai() {
             AISettings::handle(ctx).update(ctx, |settings, ctx| {
                 let new_num_times = *settings.entered_agent_mode_num_times + 1;
-                report_if_error!(settings
-                    .entered_agent_mode_num_times
-                    .set_value(new_num_times, ctx));
+                report_if_error!(
+                    settings
+                        .entered_agent_mode_num_times
+                        .set_value(new_num_times, ctx)
+                );
             });
         }
 

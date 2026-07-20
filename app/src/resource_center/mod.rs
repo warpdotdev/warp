@@ -238,14 +238,18 @@ pub fn mark_feature_used_and_write_to_user_defaults(
 ) {
     if tips_completed.mark_feature_used(feature) {
         GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
-            report_if_error!(general_settings
-                .welcome_tips_features_used
-                .set_value(tips_completed.features_used.clone(), ctx));
+            report_if_error!(
+                general_settings
+                    .welcome_tips_features_used
+                    .set_value(tips_completed.features_used.clone(), ctx)
+            );
 
             if tips_completed.skipped_or_completed {
-                report_if_error!(general_settings
-                    .welcome_tips_skipped_or_completed
-                    .set_value(true, ctx));
+                report_if_error!(
+                    general_settings
+                        .welcome_tips_skipped_or_completed
+                        .set_value(true, ctx)
+                );
             }
         });
     }
@@ -258,9 +262,11 @@ pub fn skip_tips_and_write_to_user_defaults(
 ) {
     tips_completed.skipped_or_completed = true;
     GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
-        report_if_error!(general_settings
-            .welcome_tips_skipped_or_completed
-            .set_value(true, ctx));
+        report_if_error!(
+            general_settings
+                .welcome_tips_skipped_or_completed
+                .set_value(true, ctx)
+        );
     });
 }
 
@@ -271,9 +277,11 @@ pub fn complete_tips_and_write_to_user_defaults(
 ) {
     tips_completed.skipped_or_completed = true;
     GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
-        report_if_error!(general_settings
-            .welcome_tips_skipped_or_completed
-            .set_value(true, ctx));
+        report_if_error!(
+            general_settings
+                .welcome_tips_skipped_or_completed
+                .set_value(true, ctx)
+        );
     });
 }
 
@@ -291,10 +299,11 @@ impl TipsCompleted {
         let is_new_value = self.features_used.insert(feature);
 
         // Check if all gamified tips are completed
-        if let Some(total_tips) = self.gamified_tips_count {
-            if is_new_value && self.features_used.len() == total_tips {
-                self.skipped_or_completed = true;
-            }
+        if let Some(total_tips) = self.gamified_tips_count
+            && is_new_value
+            && self.features_used.len() == total_tips
+        {
+            self.skipped_or_completed = true;
         }
 
         is_new_value

@@ -2,14 +2,15 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-use ai::skills::{parse_skill, ParsedSkill, SkillProvider, SkillReference, SkillScope};
+use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope, parse_skill};
 use async_channel::unbounded;
+use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
-use repo_metadata::RepoMetadataModel;
 use tempfile::TempDir;
-use warp_core::features::FeatureFlag;
 use warp_core::HostId;
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
+use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
@@ -31,6 +32,7 @@ use crate::terminal::model_events::ModelEventDispatcher;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 
 fn initialize_app(app: &mut App) {
+    app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
     app.add_singleton_model(DirectoryWatcher::new);
     app.add_singleton_model(AISettings::new_with_defaults);
     app.add_singleton_model(|_| DetectedRepositories::default());
@@ -353,6 +355,45 @@ fn test_read_skill_executor_rejects_warp_control_bundled_skills_when_disabled() 
             requires_result: false,
         };
 
+        let input = ExecuteActionInput {
+            action: &action,
+            conversation_id: AIConversationId::new(),
+        };
+
+        executor_handle.update(&mut app, |executor, ctx| {
+            let result: AnyActionExecution = executor.execute(input, ctx).into();
+            assert!(matches!(
+                result,
+                AnyActionExecution::Sync(AIAgentActionResultType::ReadSkill(
+                    ReadSkillResult::Error(_)
+                ))
+            ));
+        });
+    });
+}
+
+#[test]
+fn test_read_skill_executor_rejects_tui_only_skill_in_gui() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
+        let skill_id = "tui-migrate-setup";
+        SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
+            manager.add_bundled_skill_for_testing(
+                skill_id,
+                bundled_skill(skill_id),
+                BundledSkillActivation::TuiOnly,
+            );
+        });
+        let executor_handle = add_test_read_skill_executor(&mut app);
+        let action = AIAgentAction {
+            id: AIAgentActionId::from(format!("test-action-id-{skill_id}")),
+            action: AIAgentActionType::ReadSkill(ReadSkillRequest {
+                skill: SkillReference::BundledSkillId(skill_id.to_string()),
+            }),
+            task_id: TaskId::new(format!("test-task-id-{skill_id}")),
+            requires_result: false,
+        };
         let input = ExecuteActionInput {
             action: &action,
             conversation_id: AIConversationId::new(),

@@ -24,7 +24,7 @@ use warpui_core::{App, AppContext, TuiView, TypedActionView, ViewContext};
 use super::{AgentBlockRegistry, TuiBlockListViewportItemId, TuiBlockListViewportSource};
 use crate::agent_block::{TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent};
 use crate::terminal_block::should_render_terminal_block;
-use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
+use crate::test_fixtures::{TestHostView, add_test_action_model_and_events};
 
 #[test]
 fn tui_block_list_viewport_source_uses_canonical_block_list_order() {

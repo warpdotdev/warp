@@ -12,27 +12,27 @@ use warpui::{
 };
 
 use super::search_results_common::{
-    render_collapsible_search_results, CollapsibleSearchResultsState,
+    CollapsibleSearchResultsState, render_collapsible_search_results,
 };
-use crate::ai::agent::icons::yellow_running_icon;
 use crate::ai::agent::FileContext;
+use crate::ai::agent::icons::yellow_running_icon;
+use crate::ai::blocklist::TextLocation;
 use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::block::find::FindState;
 use crate::ai::blocklist::block::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::block::view_impl::output::{
-    render_read_files_text, LinkActionConstructors, RenderContext, RenderReadFileArg,
+    LinkActionConstructors, RenderContext, RenderReadFileArg, render_read_files_text,
 };
 use crate::ai::blocklist::block::view_impl::{FindContext, WithContentItemSpacing};
 use crate::ai::blocklist::inline_action::inline_action_header::{
     INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::cancelled_icon;
-use crate::ai::blocklist::TextLocation;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::find::TerminalFindModel;
 use crate::terminal::view::RichContentLink;
-use crate::terminal::ShellLaunchData;
 use crate::util::link_detection::{
-    detect_links, DetectedLinkType, DetectedLinksState, LinkLocation,
+    DetectedLinkType, DetectedLinksState, LinkLocation, detect_links,
 };
 
 pub enum SearchCodebaseViewEvent {

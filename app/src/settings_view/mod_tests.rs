@@ -794,12 +794,16 @@ fn umbrella_with_no_visible_subpages_is_skipped_entirely() {
         "Agents umbrella should not appear when none of its subpages are visible"
     );
     // The still-visible Code / Cloud platform umbrellas remain as stops.
-    assert!(stops
-        .iter()
-        .any(|s| matches!(s, NavStop::CollapsedUmbrella { nav_index: 3, .. })));
-    assert!(stops
-        .iter()
-        .any(|s| matches!(s, NavStop::CollapsedUmbrella { nav_index: 4, .. })));
+    assert!(
+        stops
+            .iter()
+            .any(|s| matches!(s, NavStop::CollapsedUmbrella { nav_index: 3, .. }))
+    );
+    assert!(
+        stops
+            .iter()
+            .any(|s| matches!(s, NavStop::CollapsedUmbrella { nav_index: 4, .. }))
+    );
 }
 
 #[test]
@@ -815,9 +819,11 @@ fn filtered_out_top_level_page_is_skipped() {
         "Teams should be filtered out entirely"
     );
     // But other pages remain.
-    assert!(stops
-        .iter()
-        .any(|s| matches!(s, NavStop::Section(SettingsSection::Account))));
+    assert!(
+        stops
+            .iter()
+            .any(|s| matches!(s, NavStop::Section(SettingsSection::Account)))
+    );
 }
 
 // ── current_stop_index ──────────────────────────────────────────────────────

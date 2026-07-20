@@ -9,7 +9,7 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use lazy_static::lazy_static;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use string_offset::ByteOffset;
 
 use super::{
@@ -364,10 +364,10 @@ impl SelectableArea {
             selection_state.expanded_head = Some(SelectionBound::Relative(head - origin.xy));
             selection_state.expanded_tail = Some(SelectionBound::Relative(tail - origin.xy));
 
-            if head != tail {
-                if let Some(selection_updated_handler) = self.selection_updated_handler.as_mut() {
-                    selection_updated_handler(ctx, app);
-                }
+            if head != tail
+                && let Some(selection_updated_handler) = self.selection_updated_handler.as_mut()
+            {
+                selection_updated_handler(ctx, app);
             }
         }
 

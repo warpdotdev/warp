@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
-    BannerState, IsSharedSessionCreator, LocalTtyTerminalManager, ServerConversationToken,
-    TerminalManagerTrait, TerminalSurfaceResult,
+    AIConversationId, BannerState, BlocklistAIHistoryModel, IsSharedSessionCreator,
+    LocalTtyTerminalManager, ServerConversationToken, TerminalManagerTrait, TerminalSurfaceResult,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -194,6 +194,34 @@ impl TuiSessions {
         orchestration: &ModelHandle<TuiOrchestrationModel>,
         ctx: &mut AppContext,
     ) {
+        let sessions_for_model_updates = sessions.clone();
+        ctx.observe_model(orchestration, move |_, ctx| {
+            let focused_view = sessions_for_model_updates
+                .as_ref(ctx)
+                .focused_session()
+                .map(|session| session.view().clone());
+            if let Some(focused_view) = focused_view {
+                focused_view.update(ctx, |view, ctx| {
+                    view.refresh_orchestration_tab_state(ctx);
+                });
+            }
+        });
+
+        let sessions_for_focus_updates = sessions.clone();
+        ctx.subscribe_to_model(sessions, move |_, event, ctx| {
+            let TuiSessionsEvent::FocusChanged(session_id) = event else {
+                return;
+            };
+            let focused_view = sessions_for_focus_updates
+                .as_ref(ctx)
+                .session(*session_id)
+                .map(|session| session.view().clone());
+            if let Some(focused_view) = focused_view {
+                focused_view.update(ctx, |view, ctx| {
+                    view.refresh_orchestration_tab_state(ctx);
+                });
+            }
+        });
         let sessions = sessions.clone();
         let orchestration_for_events = orchestration.clone();
         ctx.subscribe_to_model(orchestration, move |_, event, ctx| match event {
@@ -323,6 +351,21 @@ impl TuiSessions {
     /// Looks up a registered session.
     pub(crate) fn session(&self, id: TuiSessionId) -> Option<&TuiSession> {
         self.sessions.iter().find(|session| session.id == id)
+    }
+
+    /// Builds the loaded conversation-to-session index used by one topology snapshot.
+    pub(crate) fn session_ids_by_conversation(
+        &self,
+        history: &BlocklistAIHistoryModel,
+    ) -> HashMap<AIConversationId, TuiSessionId> {
+        self.sessions
+            .iter()
+            .flat_map(|session| {
+                history
+                    .all_live_conversations_for_terminal_surface(session.id.surface_id())
+                    .map(move |conversation| (conversation.id(), session.id))
+            })
+            .collect()
     }
 
     /// Whether no session has been registered.

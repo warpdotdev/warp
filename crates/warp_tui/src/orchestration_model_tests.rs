@@ -1,6 +1,7 @@
 use warp::tui_export::{
-    register_tui_session_view_test_singletons, AIConversationId, BlocklistAIHistoryModel,
-    StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    AIConversationId, BlocklistAIHistoryModel, Harness, StartAgentExecutionMode,
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    register_tui_session_view_test_singletons,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
@@ -42,6 +43,32 @@ fn orchestration_fixture(app: &mut App) -> OrchestrationFixture {
     }
 }
 
+fn add_child_session(
+    app: &mut App,
+    fixture: &OrchestrationFixture,
+    parent_conversation_id: AIConversationId,
+    name: &str,
+) -> (TuiSessionId, AIConversationId) {
+    let (session, manager) = add_test_terminal_session(app, fixture.window_id);
+    let session_id = app.update(|ctx| {
+        TuiSessions::register_session(&fixture.sessions, session, manager, false, ctx)
+    });
+    let conversation_id = app.update(|ctx| {
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            let conversation_id = history.start_new_child_conversation(
+                session_id.surface_id(),
+                name.to_owned(),
+                parent_conversation_id,
+                Some(Harness::Oz),
+                ctx,
+            );
+            history.set_active_conversation_id(conversation_id, session_id.surface_id(), ctx);
+            conversation_id
+        })
+    });
+    (session_id, conversation_id)
+}
+
 /// Registers a session with a live active conversation.
 fn add_dispatching_session(
     app: &mut App,
@@ -51,7 +78,6 @@ fn add_dispatching_session(
     let (session, manager) = add_test_terminal_session(app, fixture.window_id);
     app.update(|ctx| TuiSessions::register_session(&fixture.sessions, session, manager, focus, ctx))
 }
-
 /// Creates a standalone executor and relays its frontend materialization
 /// events into the coordinator.
 fn add_relayed_executor(
@@ -133,12 +159,16 @@ fn assert_failed_launch_cleaned_up(
 ) {
     app.read(|ctx| {
         let history = BlocklistAIHistoryModel::as_ref(ctx);
-        assert!(history
-            .child_conversation_ids_of(&parent_conversation_id)
-            .is_empty());
-        assert!(TuiOrchestrationModel::as_ref(ctx)
-            .event_consumers_by_session
-            .is_empty());
+        assert!(
+            history
+                .child_conversation_ids_of(&parent_conversation_id)
+                .is_empty()
+        );
+        assert!(
+            TuiOrchestrationModel::as_ref(ctx)
+                .event_consumers_by_session
+                .is_empty()
+        );
     });
     assert_eq!(
         app.read_model(&fixture.sessions, |sessions, _| sessions.len()),
@@ -167,6 +197,107 @@ fn local_harness_children_fail_cleanly() {
 }
 
 #[test]
+fn snapshot_is_shared_across_tree_and_filters_conversations_without_sessions() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = app.read(|ctx| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation(parent_session_id.surface_id())
+                .expect("parent conversation")
+                .id()
+        });
+        let (first_session_id, first_child_id) =
+            add_child_session(&mut app, &fixture, parent_conversation_id, "first-child");
+        let (second_session_id, second_child_id) =
+            add_child_session(&mut app, &fixture, parent_conversation_id, "second-child");
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.start_new_child_conversation(
+                    warpui::EntityId::new(),
+                    "missing-session".to_owned(),
+                    parent_conversation_id,
+                    Some(Harness::Oz),
+                    ctx,
+                );
+            });
+        });
+
+        app.read(|ctx| {
+            let model = TuiOrchestrationModel::as_ref(ctx);
+            let parent = model
+                .snapshot(parent_conversation_id, ctx)
+                .expect("parent has navigable children");
+            let child = model
+                .snapshot(first_child_id, ctx)
+                .expect("child resolves the same tree");
+            assert_eq!(parent.root_conversation_id, parent_conversation_id);
+            assert_eq!(child.root_conversation_id, parent_conversation_id);
+            assert_eq!(
+                parent
+                    .children
+                    .iter()
+                    .map(|child| child.conversation_id)
+                    .collect::<Vec<_>>(),
+                vec![first_child_id, second_child_id]
+            );
+            assert_eq!(
+                parent
+                    .children
+                    .iter()
+                    .map(|child| child.spawn_index)
+                    .collect::<Vec<_>>(),
+                vec![0, 1]
+            );
+        });
+
+        app.update(|ctx| {
+            let selected = TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.focus_conversation_session(second_child_id, ctx)
+            });
+            assert_eq!(selected, Some(second_session_id));
+        });
+        app.read(|ctx| {
+            let snapshot = TuiOrchestrationModel::as_ref(ctx)
+                .snapshot(second_child_id, ctx)
+                .expect("tab snapshot");
+            assert_eq!(snapshot.page_anchor, Some(first_child_id));
+            assert!(snapshot.reveal_selected);
+        });
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.set_explicit_page(second_child_id, ctx);
+            });
+        });
+        app.read(|ctx| {
+            let snapshot = TuiOrchestrationModel::as_ref(ctx)
+                .snapshot(parent_conversation_id, ctx)
+                .expect("tab snapshot");
+            assert_eq!(snapshot.page_anchor, Some(second_child_id));
+            assert!(!snapshot.reveal_selected);
+        });
+
+        app.update(|ctx| {
+            let selected = TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.focus_conversation_session(first_child_id, ctx)
+            });
+            assert_eq!(selected, Some(first_session_id));
+        });
+        app.read(|ctx| {
+            let snapshot = TuiOrchestrationModel::as_ref(ctx)
+                .snapshot(first_child_id, ctx)
+                .expect("tab snapshot");
+            assert_eq!(
+                TuiSessions::as_ref(ctx).focused_session_id(),
+                Some(first_session_id)
+            );
+            assert_eq!(snapshot.page_anchor, Some(first_child_id));
+            assert!(snapshot.reveal_selected);
+        });
+    });
+}
+
+#[test]
 fn remote_children_fail_cleanly() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture(&mut app);
@@ -186,6 +317,7 @@ fn remote_children_fail_cleanly() {
                 harness_type: "oz".to_string(),
                 title: "Researcher".to_string(),
                 auth_secret_name: None,
+                runner_id: String::new(),
                 agent_identity_uid: None,
             },
         );

@@ -12,7 +12,7 @@ use super::config::{SettingType, ThemeType};
 use crate::interval_timer::IntervalTimer;
 use crate::settings::import::config::{Config, ConfigError};
 #[cfg(target_os = "macos")]
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 #[derive(Clone, Copy, Debug, EnumDiscriminants, Eq, Hash, PartialEq)]
 #[strum_discriminants(derive(EnumIter, Hash, Serialize))]
@@ -86,17 +86,16 @@ impl ImportedConfigModel {
         configs: &Result<Vec<Config>, ConfigError>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let TerminalType::ITerm = terminal_type {
-            if let Ok(configs) = configs {
-                if configs.iter().any(|config| {
-                    matches!(
-                        config.hotkey_mode.setting,
-                        Err(HotkeyError::MultipleHotkeys)
-                    )
-                }) {
-                    send_telemetry_from_ctx!(TelemetryEvent::ITermMultipleHotkeys, ctx);
-                }
-            }
+        if let TerminalType::ITerm = terminal_type
+            && let Ok(configs) = configs
+            && configs.iter().any(|config| {
+                matches!(
+                    config.hotkey_mode.setting,
+                    Err(HotkeyError::MultipleHotkeys)
+                )
+            })
+        {
+            send_telemetry_from_ctx!(TelemetryEvent::ITermMultipleHotkeys, ctx);
         }
     }
 

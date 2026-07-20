@@ -7,7 +7,7 @@ use warpui::{AddWindowOptions, ReadModel, SingletonEntity as _, UpdateModel};
 use warpui_core::App;
 
 use super::{TuiSessions, TuiSessionsEvent};
-use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session, TestHostView};
+use crate::test_fixtures::{TestHostView, add_test_semantic_selection, add_test_terminal_session};
 
 type CapturedEvents = Rc<RefCell<Vec<TuiSessionsEvent>>>;
 
