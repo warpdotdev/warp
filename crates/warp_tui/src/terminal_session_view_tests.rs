@@ -1,6 +1,6 @@
 use warp::appearance::Appearance;
 use warp::tui_export::{
-    PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, export_conversation_markdown,
+    BlockPadding, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, export_conversation_markdown,
     register_tui_session_view_test_singletons,
 };
 use warp_editor::model::CoreEditorModel;
@@ -28,8 +28,10 @@ use crate::keybindings::{
 use crate::orchestration_model::TuiOrchestrationModel;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
+use crate::terminal_block::{block_content_rows, should_render_terminal_block};
 use crate::terminal_use::TuiInputTarget;
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
+use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::tui_builder::TuiUiBuilder;
 
 struct FocusTestFixture {
@@ -222,6 +224,130 @@ fn long_running_command_keeps_input_hidden() {
             "LRC must keep the input editor hidden:\n{}",
             lines.join("\n")
         );
+    });
+}
+
+#[test]
+fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, _| {
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.block_list_mut().reinit_shell();
+            terminal_model.update_blockheight_items(TRANSCRIPT_BLOCK_SPACING.block_padding, 0.0);
+            terminal_model.simulate_block("bootstrap", "");
+            terminal_model.simulate_long_running_block("shell init", "");
+            let bootstrap_block_id = terminal_model.block_list().active_block().id().clone();
+            terminal_model.finish_block();
+            let bootstrap_block = terminal_model
+                .block_list_mut()
+                .mut_block_from_id(&bootstrap_block_id)
+                .expect("bootstrap block should remain in the block list");
+            bootstrap_block.set_should_hide_command_grid(true);
+            terminal_model.update_blockheight_items(
+                BlockPadding {
+                    bottom: 1.0,
+                    ..TRANSCRIPT_BLOCK_SPACING.block_padding
+                },
+                0.0,
+            );
+
+            let block_list = terminal_model.block_list();
+            let bootstrap_block = block_list
+                .block_with_id(&bootstrap_block_id)
+                .expect("bootstrap block should remain in the block list");
+            assert!(
+                should_render_terminal_block(bootstrap_block, block_list),
+                "fixture should contain an eligible shell bootstrap block"
+            );
+            assert!(
+                block_content_rows(bootstrap_block).is_empty(),
+                "fixture bootstrap block should have zero displayed height"
+            );
+        });
+        view.read(&app, |view, ctx| {
+            assert!(
+                view.transcript.as_ref(ctx).is_empty(),
+                "zero-height terminal blocks should leave the transcript empty"
+            );
+        });
+
+        let mut presenter = TuiPresenter::new();
+        let frame = app.update(|ctx| {
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(view.id());
+            invalidation
+                .updated
+                .extend(view.as_ref(ctx).child_view_ids(ctx));
+            presenter.invalidate(&invalidation, ctx, fixture.window_id);
+            presenter.present(ctx, &view, TuiRect::new(0, 0, 120, 40))
+        });
+        let lines = frame.buffer.to_lines();
+        let title_row = lines
+            .iter()
+            .position(|line| line.contains("Warp Agent"))
+            .expect("zero state should render the Warp Agent title");
+        assert!(
+            title_row < 28,
+            "zero-state title should render in the transcript area:\n{}",
+            lines.join("\n")
+        );
+    });
+}
+
+#[test]
+fn zero_state_transitions_through_bootstrap_lifecycle() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        // Phase 1: an unfinished ScriptExecution block with visible output suppresses the zero
+        // state. The `|| !block.finished()` lifecycle guard covers this case: PTY input is still
+        // routed to the block, so the zero state must stay hidden while the block runs.
+        view.update(&mut app, |view, _| {
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.block_list_mut().reinit_shell();
+            terminal_model.update_blockheight_items(TRANSCRIPT_BLOCK_SPACING.block_padding, 0.0);
+            // Advance past WarpInput to ScriptExecution.
+            terminal_model.simulate_block("bootstrap", "");
+            // Create an unfinished ScriptExecution block with visible output rows.
+            terminal_model.simulate_long_running_block("shell init", "startup output\r\n");
+        });
+        view.read(&app, |view, ctx| {
+            assert!(
+                !view.transcript.as_ref(ctx).is_empty(),
+                "unfinished startup block with visible content should suppress the zero state"
+            );
+        });
+
+        // Phase 2: once the startup block finishes it no longer satisfies the lifecycle guard
+        // (it is finished, not restored, and not PostBootstrapPrecmd), so the zero state returns.
+        view.update(&mut app, |view, _| {
+            let mut terminal_model = view.terminal_model.lock();
+            // Advance bootstrap stage so finish_block() promotes the list to PostBootstrapPrecmd.
+            terminal_model.block_list_mut().set_bootstrapped();
+            terminal_model.finish_block();
+        });
+        view.read(&app, |view, ctx| {
+            assert!(
+                view.transcript.as_ref(ctx).is_empty(),
+                "finished ScriptExecution block should no longer suppress the zero state"
+            );
+        });
+
+        // Phase 3: the first normal post-bootstrap command dismisses the zero state.
+        view.update(&mut app, |view, _| {
+            view.terminal_model
+                .lock()
+                .simulate_block("echo hello", "hello\r\n");
+        });
+        view.read(&app, |view, ctx| {
+            assert!(
+                !view.transcript.as_ref(ctx).is_empty(),
+                "post-bootstrap command with visible output should dismiss the zero state"
+            );
+        });
     });
 }
 

@@ -24,7 +24,7 @@ use warpui_core::{
 
 use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
 use super::orchestration_block::TuiOrchestrationBlock;
-use super::terminal_block::should_render_terminal_block;
+use super::terminal_block::{block_content_rows, should_render_terminal_block};
 use super::tui_block_list_viewport_source::{
     AgentBlockRegistry, CLISubagentBlockRegistry, TuiBlockListViewportSource,
 };
@@ -290,20 +290,27 @@ impl TuiTranscriptView {
     }
 
     /// Whether the transcript has no visible content: no agent block and no
-    /// terminal block it would render (per [`should_render_terminal_block`];
-    /// the idle prompt block awaiting the first command doesn't count). The
-    /// session view fills the transcript slot with the zero state exactly
-    /// while this holds.
+    /// terminal block that satisfies a lifecycle and content-row guard
+    /// (per [`should_render_terminal_block`] and [`block_content_rows`]).
+    /// A terminal block is counted only when it is restored
+    /// (`BootstrapStage::RestoreBlocks`), done with bootstrap
+    /// (`PostBootstrapPrecmd`), or currently executing (not yet finished), AND
+    /// has at least one displayed command or output row. Unfinished bootstrap
+    /// blocks (e.g. a `ScriptExecution` startup interaction) count so that PTY
+    /// input can reach them while they run; once finished they stop suppressing
+    /// the zero state. The session view fills the transcript slot with the zero
+    /// state exactly while this holds.
     pub(super) fn is_empty(&self) -> bool {
         if !self.agent_blocks.borrow().is_empty() || !self.cli_subagent_blocks.borrow().is_empty() {
             return false;
         }
         let model = self.model.lock();
         let block_list = model.block_list();
-        !block_list
-            .blocks()
-            .iter()
-            .any(|block| should_render_terminal_block(block, block_list))
+        !block_list.blocks().iter().any(|block| {
+            should_render_terminal_block(block, block_list)
+                && (block.is_restored() || block.bootstrap_stage().is_done() || !block.finished())
+                && !block_content_rows(block).is_empty()
+        })
     }
 
     fn agent_blocks_in_canonical_order(&self) -> Vec<ViewHandle<TuiAIBlock>> {
