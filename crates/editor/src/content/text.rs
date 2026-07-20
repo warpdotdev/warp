@@ -1592,27 +1592,36 @@ impl From<TextStylesWithMetadata> for TextStyles {
     }
 }
 
+/// XOR-toggle delta for an enum-valued `Option` style (`weight`, `vertical_align`).
+///
+/// Unlike a `bool` toggle, these fields carry a *value* (e.g. `Sub` vs `Sup`, `Bold` vs `Light`),
+/// so equal presence isn't enough to decide the delta: comparing only `is_some()` drops a direct
+/// value switch like `Sub` → `Sup` (both present) to no delta, silently losing the transition
+/// (issue #14029). Compare the actual values instead:
+/// - both absent, or both the *same* value → cancel to `None`;
+/// - exactly one present → that present value;
+/// - both present but *different* → the `rhs` (target/incoming) value wins, so the switch survives.
+fn xor_optional_value<T: PartialEq>(lhs: Option<T>, rhs: Option<T>) -> Option<T> {
+    match (lhs, rhs) {
+        (None, None) => None,
+        (Some(l), None) => Some(l),
+        (None, Some(r)) => Some(r),
+        (Some(l), Some(r)) => {
+            if l == r {
+                None
+            } else {
+                Some(r)
+            }
+        }
+    }
+}
+
 impl BitXor for TextStyles {
     type Output = Self;
 
     fn bitxor(self, rhs: Self) -> Self::Output {
-        let weight = if self.weight.is_some() == rhs.weight.is_some() {
-            None
-        } else if self.weight.is_some() {
-            self.weight
-        } else {
-            rhs.weight
-        };
-        // Mirror the `weight` Option handling: equal presence cancels, otherwise the set side wins.
-        let vertical_align = if self.vertical_align.is_some() == rhs.vertical_align.is_some() {
-            None
-        } else if self.vertical_align.is_some() {
-            self.vertical_align
-        } else {
-            rhs.vertical_align
-        };
         Self {
-            weight,
+            weight: xor_optional_value(self.weight, rhs.weight),
             italic: self.italic ^ rhs.italic,
             underline: self.underline ^ rhs.underline,
             placeholder: self.placeholder ^ rhs.placeholder,
@@ -1620,29 +1629,15 @@ impl BitXor for TextStyles {
             strikethrough: self.strikethrough ^ rhs.strikethrough,
             link: self.link ^ rhs.link,
             colored: self.colored ^ rhs.colored,
-            vertical_align,
+            vertical_align: xor_optional_value(self.vertical_align, rhs.vertical_align),
         }
     }
 }
 
 impl BitXorAssign for TextStyles {
     fn bitxor_assign(&mut self, rhs: Self) {
-        let weight = if self.weight.is_some() == rhs.weight.is_some() {
-            None
-        } else if self.weight.is_some() {
-            self.weight
-        } else {
-            rhs.weight
-        };
-        self.weight = weight;
-        // Mirror the `weight` Option handling: equal presence cancels, otherwise the set side wins.
-        self.vertical_align = if self.vertical_align.is_some() == rhs.vertical_align.is_some() {
-            None
-        } else if self.vertical_align.is_some() {
-            self.vertical_align
-        } else {
-            rhs.vertical_align
-        };
+        self.weight = xor_optional_value(self.weight, rhs.weight);
+        self.vertical_align = xor_optional_value(self.vertical_align, rhs.vertical_align);
         self.italic ^= rhs.italic;
         self.underline ^= rhs.underline;
         self.placeholder ^= rhs.placeholder;
