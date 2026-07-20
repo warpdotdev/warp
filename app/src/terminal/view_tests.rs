@@ -12,13 +12,12 @@ use session_sharing_protocol::common::CLIAgentSessionState;
 use warp_cli::agent::Harness;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START, C0};
 use warpui::notification::UserNotification;
-use warpui::windowing::state::ApplicationStage;
-use warpui::windowing::WindowManager;
 use warpui::platform::WindowStyle;
+use warpui::windowing::WindowManager;
+use warpui::windowing::state::ApplicationStage;
 use warpui::{App, EntityIdSet, Presenter, ReadModel, WindowInvalidation};
 
 use super::*;
-use crate::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -599,9 +598,11 @@ fn non_codex_osc9_notification_stays_generic_and_does_not_badge() {
             view.model
                 .lock()
                 .simulate_long_running_block("sleep 10", "");
-            assert!(CLIAgentSessionsModel::as_ref(ctx)
-                .session(view.view_id)
-                .is_none());
+            assert!(
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .session(view.view_id)
+                    .is_none()
+            );
 
             view.model_event_dispatcher().update(ctx, |_, ctx| {
                 ctx.emit(ModelEvent::PluggableNotification {
@@ -617,9 +618,11 @@ fn non_codex_osc9_notification_stays_generic_and_does_not_badge() {
         );
         assert_eq!(app.dock_badge_count(), 0);
         terminal.read(&app, |view, ctx| {
-            assert!(CLIAgentSessionsModel::as_ref(ctx)
-                .session(view.view_id)
-                .is_none());
+            assert!(
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .session(view.view_id)
+                    .is_none()
+            );
         });
         AgentNotificationsModel::handle(&app).read(
             &app,

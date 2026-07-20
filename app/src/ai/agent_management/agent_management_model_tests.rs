@@ -13,6 +13,7 @@ use crate::ai::agent_management::notifications::{
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::settings::AISettings;
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::event::{
     CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
 };
@@ -20,7 +21,6 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
     CLIAgentSessionsModel,
 };
-use crate::terminal::CLIAgent;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::WorkspaceRegistry;
 
