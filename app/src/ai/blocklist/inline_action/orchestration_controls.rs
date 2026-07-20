@@ -32,15 +32,12 @@ use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::ai::orchestration::{
-    AUTH_SECRET_INHERIT_LABEL, OptionBadge, OptionBadge, OptionFooter, OptionFooter, OptionRow,
-    OptionRow, OptionSnapshot, OptionSnapshot, OptionSourceStatus, OptionSourceStatus,
-    api_key_snapshot, api_key_snapshot, build_runner_snapshot, environment_snapshot,
-    environment_snapshot, harness_snapshot, harness_snapshot, host_snapshot, host_snapshot,
-    model_snapshot, model_snapshot, persist_auth_secret_selection, persist_auth_secret_selection,
+    AUTH_SECRET_INHERIT_LABEL, OptionBadge, OptionFooter, OptionRow, OptionSnapshot,
+    OptionSourceStatus, api_key_snapshot, build_runner_snapshot, environment_snapshot,
+    harness_snapshot, host_snapshot, model_snapshot, persist_auth_secret_selection,
 };
 pub use crate::ai::orchestration::{
-    AuthSecretSelection, ORCHESTRATION_WARP_WORKER_HOST, ORCHESTRATION_WARP_WORKER_HOST,
-    OrchestrationConfigState, OrchestrationConfigState, OrchestrationEditState,
+    AuthSecretSelection, ORCHESTRATION_WARP_WORKER_HOST, OrchestrationConfigState,
     OrchestrationEditState, accept_disabled_reason_with_auth, empty_env_recommendation_message,
     persist_environment_selection, persist_host_selection,
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,

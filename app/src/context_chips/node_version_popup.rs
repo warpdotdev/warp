@@ -526,18 +526,19 @@ fn list_nvm_versions() -> Vec<String> {
             if let Ok(read_dir) = std::fs::read_dir(base) {
                 for entry in read_dir.flatten() {
                     if let Ok(ft) = entry.file_type()
-                        && ft.is_dir() {
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            // nvm-windows typically uses folder names like v18.19.1 or 18.19.1
-                            if name
-                                .chars()
-                                .next()
-                                .map(|c| c == 'v' || c.is_ascii_digit())
-                                .unwrap_or(false)
-                            {
-                                out.push(name);
-                            }
+                        && ft.is_dir()
+                    {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        // nvm-windows typically uses folder names like v18.19.1 or 18.19.1
+                        if name
+                            .chars()
+                            .next()
+                            .map(|c| c == 'v' || c.is_ascii_digit())
+                            .unwrap_or(false)
+                        {
+                            out.push(name);
                         }
+                    }
                 }
             }
         }

@@ -8,9 +8,10 @@ pub fn is_running_in_windows_parallels_vm() -> bool {
 
     if let Ok(system_key) = hklm.open_subkey(r"HARDWARE\DESCRIPTION\System\BIOS")
         && let Ok(bios_version) = system_key.get_value::<String, _>("SystemManufacturer")
-            && bios_version.to_lowercase().contains("parallels") {
-                return true;
-            }
+        && bios_version.to_lowercase().contains("parallels")
+    {
+        return true;
+    }
 
     false
 }
