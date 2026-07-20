@@ -8,7 +8,7 @@ use warpui_core::elements::tui::{
     TuiChildView, TuiContainer, TuiElement, TuiEventHandler, TuiFlex, TuiText,
 };
 use warpui_core::keymap::macros::*;
-use warpui_core::keymap::{self, EditableBinding, FixedBinding};
+use warpui_core::keymap::{self, EditableBinding};
 use warpui_core::platform::TerminationMode;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
@@ -21,14 +21,12 @@ use crate::keybindings::TUI_BINDING_GROUP;
 use crate::link::TuiLink;
 use crate::orchestration_model::{TuiOrchestrationModel, TuiOrchestrationSnapshot};
 use crate::orchestration_tab_bar::{
-    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_bar_config,
+    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, TuiOrchestrationTabNavigationAction,
+    orchestration_tab_bar_config, register_orchestration_surface_bindings,
     render_cloud_orchestration_tab_footer,
 };
 use crate::session_registry::TuiSessions;
-use crate::tab_bar::{
-    TuiTabBarConfig, TuiTabBarEvent, TuiTabBarNavigationDirection, TuiTabBarSecondaryEdge,
-    TuiTabBarView,
-};
+use crate::tab_bar::{TuiTabBarConfig, TuiTabBarEvent, TuiTabBarView};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::centered_in_viewport;
 
@@ -38,10 +36,7 @@ pub(crate) enum TuiCloudRunAction {
     OpenUrl(String),
     OpenPrimaryUrl,
     FocusOrchestrationTabs,
-    SelectPreviousOrchestrationTab,
-    SelectNextOrchestrationTab,
-    SelectFirstOrchestrationChild,
-    SelectLastOrchestrationChild,
+    NavigateOrchestrationTabs(TuiOrchestrationTabNavigationAction),
 }
 
 struct CloudRunDisplayState {
@@ -62,15 +57,14 @@ pub(crate) struct TuiCloudRunView {
 }
 
 pub(crate) fn init(app: &mut AppContext) {
-    app.register_fixed_bindings([FixedBinding::new(
-        "ctrl-c",
-        TuiCloudRunAction::Interrupt,
-        id!(TuiCloudRunView::ui_name()),
-    )
-    .with_group(TUI_BINDING_GROUP)]);
-
     let view_context = id!(TuiCloudRunView::ui_name());
-    let tab_context = view_context.clone() & id!(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
+    register_orchestration_surface_bindings(
+        app,
+        view_context.clone(),
+        TuiCloudRunAction::Interrupt,
+        TuiCloudRunAction::NavigateOrchestrationTabs,
+    );
+
     app.register_editable_bindings([
         EditableBinding::new(
             "tui:cloud_session:open_url",
@@ -88,54 +82,6 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_context_predicate(view_context)
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("shift-up"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:previous",
-            "Select the previous orchestration tab",
-            TuiCloudRunAction::SelectPreviousOrchestrationTab,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("left"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:previous",
-            "Select the previous orchestration tab",
-            TuiCloudRunAction::SelectPreviousOrchestrationTab,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("shift-tab"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:next",
-            "Select the next orchestration tab",
-            TuiCloudRunAction::SelectNextOrchestrationTab,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("right"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:next",
-            "Select the next orchestration tab",
-            TuiCloudRunAction::SelectNextOrchestrationTab,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("tab"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:first_child",
-            "Select the first child agent",
-            TuiCloudRunAction::SelectFirstOrchestrationChild,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("shift-left"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:last_child",
-            "Select the last child agent",
-            TuiCloudRunAction::SelectLastOrchestrationChild,
-        )
-        .with_context_predicate(tab_context)
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("shift-right"),
     ]);
 }
 
@@ -442,32 +388,8 @@ impl TypedActionView for TuiCloudRunView {
             TuiCloudRunAction::FocusOrchestrationTabs => {
                 self.set_orchestration_tab_focus(true, ctx);
             }
-            TuiCloudRunAction::SelectPreviousOrchestrationTab => {
-                let key = self
-                    .orchestration_tab_bar
-                    .as_ref(ctx)
-                    .navigation_target(TuiTabBarNavigationDirection::Previous);
-                self.switch_to_orchestration_tab(key, ctx);
-            }
-            TuiCloudRunAction::SelectNextOrchestrationTab => {
-                let key = self
-                    .orchestration_tab_bar
-                    .as_ref(ctx)
-                    .navigation_target(TuiTabBarNavigationDirection::Next);
-                self.switch_to_orchestration_tab(key, ctx);
-            }
-            TuiCloudRunAction::SelectFirstOrchestrationChild => {
-                let key = self
-                    .orchestration_tab_bar
-                    .as_ref(ctx)
-                    .secondary_edge_target(TuiTabBarSecondaryEdge::First);
-                self.switch_to_orchestration_tab(key, ctx);
-            }
-            TuiCloudRunAction::SelectLastOrchestrationChild => {
-                let key = self
-                    .orchestration_tab_bar
-                    .as_ref(ctx)
-                    .secondary_edge_target(TuiTabBarSecondaryEdge::Last);
+            TuiCloudRunAction::NavigateOrchestrationTabs(action) => {
+                let key = action.target(self.orchestration_tab_bar.as_ref(ctx));
                 self.switch_to_orchestration_tab(key, ctx);
             }
         }

@@ -81,7 +81,8 @@ use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::orchestration_model::{TuiOrchestrationModel, TuiOrchestrationSnapshot};
 use crate::orchestration_tab_bar::{
-    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_bar_config,
+    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, TuiOrchestrationTabNavigationAction,
+    orchestration_tab_bar_config, register_orchestration_surface_bindings,
     render_orchestration_tab_footer,
 };
 use crate::platform::reveal_path_in_file_manager;
@@ -89,10 +90,7 @@ use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
-use crate::tab_bar::{
-    TuiTabBarConfig, TuiTabBarEvent, TuiTabBarNavigationDirection, TuiTabBarSecondaryEdge,
-    TuiTabBarView,
-};
+use crate::tab_bar::{TuiTabBarConfig, TuiTabBarEvent, TuiTabBarView};
 use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
     TerminalUseInterruptAction, TuiInputTarget, hide_agent_requested_command_from_top_level,
@@ -101,9 +99,7 @@ use crate::terminal_use::{
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
 use crate::tui_builder::TuiUiBuilder;
-use crate::tui_cli_subagent_view::{
-    HAND_BACK_KEY_BINDING, TAKE_CONTROL_KEY_BINDING, TuiCLISubagentView,
-};
+use crate::tui_cli_subagent_view::{HAND_BACK_KEY_BINDING, TuiCLISubagentView};
 use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;
 use crate::warping_indicator::{render_response_summary, render_warping_indicator};
@@ -271,14 +267,8 @@ pub(crate) enum TuiTerminalSessionAction {
     TogglePlan,
     /// Return keyboard focus from tabs to the session's default interaction target.
     FocusDefaultInteractionTarget,
-    /// Select the previous tab using the tab view's semantic order.
-    SelectPreviousOrchestrationTab,
-    /// Select the next tab using the tab view's semantic order.
-    SelectNextOrchestrationTab,
-    /// Select the first child tab, excluding the orchestrator.
-    SelectFirstOrchestrationChild,
-    /// Select the last child tab, excluding the orchestrator.
-    SelectLastOrchestrationChild,
+    /// Navigate the orchestration tabs using their semantic order.
+    NavigateOrchestrationTabs(TuiOrchestrationTabNavigationAction),
     /// Move focus from the prompt input into the attachment bar.
     FocusAttachments,
     /// Read a raw image from the host clipboard and attach it to the next query.
@@ -348,13 +338,14 @@ pub(crate) struct TuiTerminalSessionView {
 /// from `keybindings::init`. Ctrl-c is a fixed (non-remappable) binding,
 /// mirroring peer agent CLIs that treat it as reserved.
 pub(crate) fn init(app: &mut AppContext) {
+    let view_context = id!(TuiTerminalSessionView::ui_name());
+    register_orchestration_surface_bindings(
+        app,
+        view_context.clone(),
+        TuiTerminalSessionAction::Interrupt,
+        TuiTerminalSessionAction::NavigateOrchestrationTabs,
+    );
     app.register_fixed_bindings([
-        FixedBinding::new(
-            TAKE_CONTROL_KEY_BINDING,
-            TuiTerminalSessionAction::Interrupt,
-            id!(TuiTerminalSessionView::ui_name()),
-        )
-        .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
             "ctrl-d",
             TuiTerminalSessionAction::Eof,
@@ -380,7 +371,7 @@ pub(crate) fn init(app: &mut AppContext) {
             "Toggle the latest plan",
             TuiTerminalSessionAction::TogglePlan,
         )
-        .with_context_predicate(id!(TuiTerminalSessionView::ui_name()))
+        .with_context_predicate(view_context)
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-shift-P"),
         EditableBinding::new(
@@ -431,68 +422,16 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_key_binding("alt-v"),
     ]);
 
-    // Tab navigation is user-remappable, unlike the reserved session-control
-    // bindings above, so the two groups use different registration APIs.
     let tab_context =
         id!(TuiTerminalSessionView::ui_name()) & id!(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
-    app.register_editable_bindings([
-        EditableBinding::new(
-            "tui:orchestration_tabs:previous",
-            "Select the previous orchestration tab",
-            TuiTerminalSessionAction::SelectPreviousOrchestrationTab,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("left"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:previous",
-            "Select the previous orchestration tab",
-            TuiTerminalSessionAction::SelectPreviousOrchestrationTab,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("shift-tab"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:next",
-            "Select the next orchestration tab",
-            TuiTerminalSessionAction::SelectNextOrchestrationTab,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("right"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:next",
-            "Select the next orchestration tab",
-            TuiTerminalSessionAction::SelectNextOrchestrationTab,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("tab"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:first_child",
-            "Select the first child agent",
-            TuiTerminalSessionAction::SelectFirstOrchestrationChild,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("shift-left"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:last_child",
-            "Select the last child agent",
-            TuiTerminalSessionAction::SelectLastOrchestrationChild,
-        )
-        .with_context_predicate(tab_context.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("shift-right"),
-        EditableBinding::new(
-            "tui:orchestration_tabs:focus_input",
-            "Return focus to the session input",
-            TuiTerminalSessionAction::FocusDefaultInteractionTarget,
-        )
-        .with_context_predicate(tab_context)
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("shift-down"),
-    ]);
+    app.register_editable_bindings([EditableBinding::new(
+        "tui:orchestration_tabs:focus_input",
+        "Return focus to the session input",
+        TuiTerminalSessionAction::FocusDefaultInteractionTarget,
+    )
+    .with_context_predicate(tab_context)
+    .with_group(TUI_BINDING_GROUP)
+    .with_key_binding("shift-down")]);
 }
 
 impl TuiTerminalSessionView {
@@ -3072,32 +3011,8 @@ impl TypedActionView for TuiTerminalSessionView {
             TuiTerminalSessionAction::FocusDefaultInteractionTarget => {
                 self.set_orchestration_tab_focus(false, ctx)
             }
-            TuiTerminalSessionAction::SelectPreviousOrchestrationTab => {
-                let key = self
-                    .orchestration_tab_bar
-                    .as_ref(ctx)
-                    .navigation_target(TuiTabBarNavigationDirection::Previous);
-                self.switch_to_orchestration_tab(key, true, ctx);
-            }
-            TuiTerminalSessionAction::SelectNextOrchestrationTab => {
-                let key = self
-                    .orchestration_tab_bar
-                    .as_ref(ctx)
-                    .navigation_target(TuiTabBarNavigationDirection::Next);
-                self.switch_to_orchestration_tab(key, true, ctx);
-            }
-            TuiTerminalSessionAction::SelectFirstOrchestrationChild => {
-                let key = self
-                    .orchestration_tab_bar
-                    .as_ref(ctx)
-                    .secondary_edge_target(TuiTabBarSecondaryEdge::First);
-                self.switch_to_orchestration_tab(key, true, ctx);
-            }
-            TuiTerminalSessionAction::SelectLastOrchestrationChild => {
-                let key = self
-                    .orchestration_tab_bar
-                    .as_ref(ctx)
-                    .secondary_edge_target(TuiTabBarSecondaryEdge::Last);
+            TuiTerminalSessionAction::NavigateOrchestrationTabs(action) => {
+                let key = action.target(self.orchestration_tab_bar.as_ref(ctx));
                 self.switch_to_orchestration_tab(key, true, ctx);
             }
             TuiTerminalSessionAction::ForwardUserPtyBytes(bytes) => {

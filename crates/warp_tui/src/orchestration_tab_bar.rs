@@ -7,15 +7,107 @@ use std::collections::HashMap;
 
 use warp::tui_export::{AIConversationId, ConversationStatus};
 use warpui_core::elements::tui::{TuiElement, TuiStyle, TuiText};
+use warpui_core::keymap::macros::*;
+use warpui_core::keymap::{ContextPredicate, EditableBinding, FixedBinding};
+use warpui_core::{Action, AppContext};
 
 use crate::agent_message::{conversation_status_glyph, conversation_status_glyph_style};
+use crate::keybindings::TUI_BINDING_GROUP;
 use crate::orchestrated_agent_identity_styling::{AgentIdentity, assign_agent_identity_indices};
 use crate::orchestration_model::TuiOrchestrationSnapshot;
-use crate::tab_bar::{TuiTab, TuiTabBarConfig};
+use crate::tab_bar::{
+    TuiTab, TuiTabBarConfig, TuiTabBarNavigationDirection, TuiTabBarSecondaryEdge, TuiTabBarView,
+};
 use crate::tui_builder::TuiUiBuilder;
 
 pub(crate) const ORCHESTRATION_TAB_BAR_FOCUSED_FLAG: &str = "TuiOrchestrationTabBarFocused";
 const ORCHESTRATION_TAB_LABEL_MAX_COLUMNS: u16 = 20;
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TuiOrchestrationTabNavigationAction {
+    Previous,
+    Next,
+    FirstChild,
+    LastChild,
+}
+
+impl TuiOrchestrationTabNavigationAction {
+    pub(crate) fn target(self, tab_bar: &TuiTabBarView) -> Option<String> {
+        match self {
+            Self::Previous => tab_bar.navigation_target(TuiTabBarNavigationDirection::Previous),
+            Self::Next => tab_bar.navigation_target(TuiTabBarNavigationDirection::Next),
+            Self::FirstChild => tab_bar.secondary_edge_target(TuiTabBarSecondaryEdge::First),
+            Self::LastChild => tab_bar.secondary_edge_target(TuiTabBarSecondaryEdge::Last),
+        }
+    }
+}
+
+pub(crate) fn register_orchestration_surface_bindings<A>(
+    app: &mut AppContext,
+    surface_context: ContextPredicate,
+    interrupt_action: A,
+    navigation_action: impl Fn(TuiOrchestrationTabNavigationAction) -> A,
+) where
+    A: Action,
+{
+    app.register_fixed_bindings([FixedBinding::new(
+        "ctrl-c",
+        interrupt_action,
+        surface_context.clone(),
+    )
+    .with_group(TUI_BINDING_GROUP)]);
+
+    let tab_context = surface_context & id!(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "tui:orchestration_tabs:previous",
+            "Select the previous orchestration tab",
+            navigation_action(TuiOrchestrationTabNavigationAction::Previous),
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("left"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:previous",
+            "Select the previous orchestration tab",
+            navigation_action(TuiOrchestrationTabNavigationAction::Previous),
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-tab"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:next",
+            "Select the next orchestration tab",
+            navigation_action(TuiOrchestrationTabNavigationAction::Next),
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("right"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:next",
+            "Select the next orchestration tab",
+            navigation_action(TuiOrchestrationTabNavigationAction::Next),
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("tab"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:first_child",
+            "Select the first child agent",
+            navigation_action(TuiOrchestrationTabNavigationAction::FirstChild),
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-left"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:last_child",
+            "Select the last child agent",
+            navigation_action(TuiOrchestrationTabNavigationAction::LastChild),
+        )
+        .with_context_predicate(tab_context)
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-right"),
+    ]);
+}
 
 pub(crate) fn orchestration_tab_bar_config(
     snapshot: &TuiOrchestrationSnapshot,
