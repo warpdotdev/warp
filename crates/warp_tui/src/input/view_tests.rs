@@ -179,7 +179,7 @@ fn agent_mode_placeholder_hint_renders_only_while_empty() {
 }
 
 #[test]
-fn shell_mode_renders_no_placeholder_hint() {
+fn shell_mode_placeholder_hint_teaches_exit() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
@@ -190,7 +190,18 @@ fn shell_mode_renders_no_placeholder_hint() {
             );
             assert!(view.as_ref(ctx).is_shell_mode(ctx));
             let buffer = render_input_buffer(&view, ctx);
-            assert_eq!(buffer.to_lines()[0].trim_end(), "");
+            let line = &buffer.to_lines()[0];
+            assert!(
+                line.starts_with(&format!(" {}", crate::input_hints::SHELL_HINT)),
+                "unexpected line: {line:?}"
+            );
+
+            // Typing a command hides the hint.
+            type_str(&view, ctx, "ls");
+            let buffer = render_input_buffer(&view, ctx);
+            let line = &buffer.to_lines()[0];
+            assert!(line.starts_with("ls"), "unexpected line: {line:?}");
+            assert!(!line.contains("Run a shell command"));
         });
     });
 }

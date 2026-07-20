@@ -358,21 +358,23 @@ impl TuiInputView {
         // this view re-rendering (transcript emptiness flips when blocks land
         // via history events or PTY wakeups), so the hint is resolved by a
         // provider on every layout pass instead of being snapshotted here.
-        // Shell mode gets its own copy in a follow-up, so it renders no
-        // placeholder yet.
+        // Shell mode teaches how to exit; agent mode adapts to the transcript
+        // state.
         let input_mode = self.input_mode.clone();
         let transcript = self.transcript.clone();
         element.with_placeholder_ghost_text(move |app| {
-            if input_mode_policy::is_shell_mode(input_mode.as_ref(app)) {
-                return None;
-            }
-            // Inputs constructed without a transcript (isolated tests) count
-            // as zero-state.
-            let transcript_is_empty = transcript
-                .as_ref()
-                .is_none_or(|transcript| transcript.as_ref(app).is_empty());
+            let hint = if input_mode_policy::is_shell_mode(input_mode.as_ref(app)) {
+                input_hints::SHELL_HINT
+            } else {
+                // Inputs constructed without a transcript (isolated tests)
+                // count as zero-state.
+                let transcript_is_empty = transcript
+                    .as_ref()
+                    .is_none_or(|transcript| transcript.as_ref(app).is_empty());
+                input_hints::agent_input_hint(transcript_is_empty)
+            };
             Some((
-                input_hints::agent_input_hint(transcript_is_empty).to_owned(),
+                hint.to_owned(),
                 TuiUiBuilder::from_app(app).muted_text_style(),
             ))
         })

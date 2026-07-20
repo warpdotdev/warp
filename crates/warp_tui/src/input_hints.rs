@@ -18,6 +18,11 @@ pub(crate) const ZERO_STATE_AGENT_HINT: &str = "/ for commands • ← for conve
 /// TUI has a shortcuts menu to open.
 pub(crate) const AGENT_HINT: &str = "Ask the agent anything • ! for shell mode • / for commands";
 
+/// Ghost text for an empty `!` shell-mode input: how to run and how to get
+/// back to agent mode (esc is the input's contextual escape; backspace on the
+/// empty input exits too).
+pub(crate) const SHELL_HINT: &str = "Run a shell command • esc for agent mode";
+
 /// The agent-mode placeholder hint for the current transcript state.
 pub(crate) fn agent_input_hint(transcript_is_empty: bool) -> &'static str {
     if transcript_is_empty {

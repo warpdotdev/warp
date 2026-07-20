@@ -169,8 +169,10 @@ const SWITCH_UNAVAILABLE_HINT: &str = "That conversation is no longer available.
 const LOADING_CONVERSATION_HINT: &str = "Loading conversation…";
 const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model.";
 
-/// Footer hint shown while the input is in `!` shell mode.
-const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
+/// Footer label shown while the input is in `!` shell mode. The how-to-exit
+/// guidance lives in the input's placeholder ghost text, so the footer only
+/// names the mode.
+const SHELL_MODE_HINT: &str = "shell mode";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
 const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
