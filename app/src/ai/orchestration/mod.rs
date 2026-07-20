@@ -27,6 +27,7 @@ pub(crate) use providers::{
     populate_default_auth_secret_for_execution,
 };
 pub(crate) use remote_child::should_disable_snapshot;
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use remote_child::{
     CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
     PrepareRemoteChildLaunchError, PreparedRemoteChildLaunch, RemoteChildLaunchConfig,

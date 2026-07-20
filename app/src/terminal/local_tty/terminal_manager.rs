@@ -38,7 +38,6 @@ use crate::send_telemetry_on_executor;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{DebugSettings, PrivacySettings, SshSettings};
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
-use crate::terminal::color::List as ColorList;
 use crate::terminal::event_listener::ChannelEventListener;
 #[cfg(unix)]
 use crate::terminal::local_tty::terminal_attributes::Event as TerminalAttributesPollerEvent;
@@ -54,7 +53,7 @@ use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
 use crate::terminal::shared_session::sharer::network::Network;
 use crate::terminal::shared_session::{IsSharedSessionCreator, SharedSessionStatus};
 use crate::terminal::shell::ShellName;
-use crate::terminal::terminal_manager::BlockSpacing;
+use crate::terminal::terminal_manager::{BlockSpacing, TerminalSurfaceInit};
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
@@ -110,44 +109,6 @@ pub struct TerminalManager<S> {
     /// The sharer side of the session sharing protocol. [`Some`] only when a
     /// shared session connection is ongoing.
     pub(super) session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>>,
-}
-
-/// Shared inputs needed to construct a terminal surface for a local PTY.
-pub struct TerminalSurfaceInit {
-    pub wakeups_rx: async_channel::Receiver<()>,
-    pub model_events: ModelHandle<ModelEventDispatcher>,
-    pub model: Arc<FairMutex<TerminalModel>>,
-    pub sessions: ModelHandle<Sessions>,
-    pub size_info: SizeInfo,
-    pub colors: ColorList,
-    pub inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
-}
-
-impl TerminalSurfaceInit {
-    /// Creates mock terminal surface inputs without spawning a PTY.
-    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
-    pub fn new_for_test(ctx: &mut AppContext) -> Self {
-        let (_wakeups_tx, wakeups_rx) = async_channel::unbounded();
-        let (_events_tx, events_rx) = async_channel::unbounded();
-        let (pty_reads_tx, pty_reads_rx) =
-            async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
-        drop(pty_reads_tx);
-        let sessions = ctx.add_model(|_| Sessions::new_for_test());
-        let model_events =
-            ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
-        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
-        let colors = model.lock().colors();
-        let size_info = model.lock().block_list().size().to_owned();
-        Self {
-            wakeups_rx,
-            model_events,
-            model,
-            sessions,
-            size_info,
-            colors,
-            inactive_pty_reads_rx: pty_reads_rx.deactivate(),
-        }
-    }
 }
 
 /// A newly constructed terminal surface and its manager post-wiring callback.

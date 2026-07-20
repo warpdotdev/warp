@@ -48,7 +48,6 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::input::CommandExecutionSource;
-use crate::terminal::local_tty::terminal_manager::TerminalSurfaceInit;
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::ModelEventDispatcher;
@@ -61,7 +60,9 @@ use crate::terminal::shared_session::shared_handlers::{
     apply_cli_agent_state_update, apply_input_mode_update, apply_selected_agent_model_update,
     apply_selected_conversation_update, build_selected_conversation_update,
 };
-use crate::terminal::terminal_manager::{BlockSpacing, compute_block_size, terminal_colors_list};
+use crate::terminal::terminal_manager::{
+    BlockSpacing, TerminalSurfaceInit, compute_block_size, terminal_colors_list,
+};
 use crate::terminal::view::ExecuteCommandEvent;
 use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::{

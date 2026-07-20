@@ -1,10 +1,10 @@
 # TECH: TUI Cloud Orchestration Children
 Linear: [CODE-1822 — Orchestration](https://linear.app/warpdotdev/issue/CODE-1822/orchestration)
 Product: [specs/code-1822-tui-cloud-children/PRODUCT.md](./PRODUCT.md)
-Inspected commit: `8f73e01bd1f0638e24ff09f4d24e76d91e2e5b76`
+Baseline commit: `8f73e01bd1f0638e24ff09f4d24e76d91e2e5b76`
 
 ## Context
-The downstack TUI already configures and accepts remote `run_agents` requests, retains multiple full terminal sessions, materializes native local children, renders child messages/status identities, and navigates an orchestration tree. The remaining remote arm deliberately resolves as unsupported:
+At the baseline commit, the downstack TUI already configured and accepted remote `run_agents` requests, retained multiple full terminal sessions, materialized native local children, rendered child messages/status identities, and navigated an orchestration tree. The remaining remote arm deliberately resolved as unsupported:
 - [`crates/warp_tui/src/orchestration_model.rs (371-659) @ 8f73e01b`](https://github.com/warpdotdev/warp/blob/8f73e01bd1f0638e24ff09f4d24e76d91e2e5b76/crates/warp_tui/src/orchestration_model.rs#L371-L659) — `TuiOrchestrationModel` subscribes to each retained session's `StartAgentExecutor`, registers the parent event consumer, materializes native children, and fails Remote requests. It also owns the narrow child-conversation/session map used by failed-launch cleanup.
 - [`crates/warp_tui/src/session_registry.rs (20-175) @ 8f73e01b`](https://github.com/warpdotdev/warp/blob/8f73e01bd1f0638e24ff09f4d24e76d91e2e5b76/crates/warp_tui/src/session_registry.rs#L20-L175) — every `TuiSession` retains one `TuiTerminalSessionView` and a type-erased `TerminalManagerTrait`; the view ID is also the terminal surface ID used by shared AI models.
 - [`crates/warp_tui/src/session.rs (175-215) @ 8f73e01b`](https://github.com/warpdotdev/warp/blob/8f73e01bd1f0638e24ff09f4d24e76d91e2e5b76/crates/warp_tui/src/session.rs#L175-L215) — `create_local_terminal_session` is the single local PTY materializer and the pattern for registering focused/background sessions.
@@ -29,7 +29,7 @@ The parent event stream already receives child lifecycle events, but its owner-s
 - [`app/src/ai/blocklist/orchestration_event_streamer.rs (911-1110) @ 8f73e01b`](https://github.com/warpdotdev/warp/blob/8f73e01bd1f0638e24ff09f4d24e76d91e2e5b76/app/src/ai/blocklist/orchestration_event_streamer.rs#L911-L1110) — viewer-mode ancestor events emit child status broadcasts; this path must not be registered by the TUI because it would duplicate the parent's active SSE connection.
 - [`app/src/ai/blocklist/orchestration_event_streamer.rs (2141-2340) @ 8f73e01b`](https://github.com/warpdotdev/warp/blob/8f73e01bd1f0638e24ff09f4d24e76d91e2e5b76/app/src/ai/blocklist/orchestration_event_streamer.rs#L2141-L2340) — canonical lifecycle-wire mapping into `ConversationStatus`, reused by the new owner-side notification.
 
-## Proposed changes
+## Implemented design
 ### 1. Extract shared remote-child launch preparation, not a launch coordinator
 Add a frontend-neutral module under `app/src/ai/orchestration`, re-exported through `app/src/tui_export.rs`, containing:
 - `RemoteChildLaunchConfig`: the remote fields currently destructured into GUI-local `RemoteLaunchFields`.
@@ -51,6 +51,8 @@ Add `initialize_tui_cloud_viewer_terminal` beside the GUI shared-session viewer 
 
 The TUI manager owns no local PTY, network transport, session-sharing connection API, polling loop, or speculative connected-state enum.
 
+`TerminalSurfaceInit` lives in `app/src/terminal/terminal_manager.rs:51`, not under `terminal::local_tty`, because both native local terminals and PTY-less shared-session viewers construct the same frontend-neutral surface inputs. The local TTY adapter, shared-session viewer, and `tui_export` import it from that shared module. This keeps the WASM viewer build independent of the `local_tty` feature while preserving the same model, event, session, color, size, and inactive-receiver ownership.
+
 **GUI prior art:** This deliberately mirrors the GUI's `shared_session::viewer::TerminalManager::new_deferred` construction and lifetime model: create the real terminal model, event plumbing, view, and concrete type-erased manager before a remote session exists, then retain their identities for an eventual in-place attachment. It does not reuse the GUI manager implementation because that implementation constructs `TerminalView` and owns GUI-specific network, orchestration polling, `ActiveAgentViewsModel`, permission, and session-attachment behavior.
 
 Add `create_cloud_terminal_session` beside `create_local_terminal_session` in `crates/warp_tui/src/session_registry.rs`. It creates `TuiCloudTerminalManager`, constructs an unfocused `TuiTerminalSessionView` from its `TerminalSurfaceInit`, and registers the view plus type-erased manager with `TuiSessions`. The resulting view ID remains the `TuiSessionId` and terminal surface ID for the session's lifetime.
@@ -60,7 +62,7 @@ The manager is intentionally the valid deferred initial state of a future cloud 
 ### 3. Add cloud session state and centralize session-mode branching
 Add a per-session `TuiCloudRunState` model containing:
 - Child conversation ID.
-- Shared startup display state (`Dispatching`, blocker, or terminal startup failure).
+- Shared startup display state (`Dispatching`, `Blocked`, `Failed`, or `Spawned`).
 - Optional task ID, run ID, and deterministic Oz run URL.
 
 Do not duplicate ongoing `ConversationStatus`; after run-ID assignment the view reads the authoritative status from `BlocklistAIHistoryModel`.
@@ -117,8 +119,9 @@ Keep keyboard ownership in `TuiTerminalSessionView`, not the element: Enter is a
 
 ### 7. Exports and cleanup
 Re-export only the least-visible shared APIs needed by `warp_tui` through `app/src/tui_export.rs`: the prepared launch types/helper, startup blocker/failure values, spawn response/request types if not already exported, and the owner-side lifecycle event.
+Use `TuiOrchestrationModel::child_session_by_conversation` only to locate retained sessions for failed-launch cleanup, and prune it whenever any retained child session is removed. Conversation lineage, navigation, run-ID lookup, and lifecycle routing remain authoritative in shared history and existing topology helpers.
 
-Continue using `TuiOrchestrationModel::child_session_by_conversation` only for failed-launch cleanup. Conversation lineage, navigation, run-ID lookup, and lifecycle routing remain authoritative in shared history and existing topology helpers.
+Both frontends consume the remote configuration, request preparer, spawn request, startup classifier, and startup issue enums. The TUI additionally reads the prepared display name/harness, startup-value accessors, Oz run URL, and owner-side watched-run payload fields. Those definitions remain frontend-neutral, while narrowly scoped `cfg_attr(not(feature = "tui"), allow(...))` annotations cover only the TUI-only re-exports, fields, and accessors so non-TUI builds stay warning-clean. Native-only imports used by local child launch paths remain gated from WASM.
 
 ## End-to-end flow
 ```mermaid
@@ -139,37 +142,28 @@ flowchart LR
 
 ## Testing and validation
 ### Shared launch preparation and error classification
-- Table-driven tests cover PRODUCT (1, 14, 26-35):
-  - Empty and explicit environment IDs.
-  - Oz/default, Claude, Codex, Gemini, OpenCode, and unknown harness input.
-  - Oz-only computer-use propagation.
-  - Claude/Codex auth-secret mapping and ignored unsupported secret combinations.
-  - Empty and explicit model, worker host, and title.
-  - Parent run-ID validation, runtime-skill resolution, and snapshot policy.
-  - GitHub auth, capacity, quota, overload, and fallback error classification.
-- Existing GUI tests continue passing against the extracted preparer/classifier, proving the refactor did not change GUI launch behavior.
+- `app/src/ai/orchestration/remote_child_tests.rs` covers default-Oz and Claude harness parsing, normalized display names, the full Oz happy-path request shape, explicit environment/runner/model/worker-host/computer-use propagation, parent run ID, and agent identity.
+- Error-classification tests cover GitHub-auth blockers and their callback URL, capacity failures, quota messages, and fallback failures.
+- The GUI and TUI both compile against `prepare_remote_child_launch` and `classify_cloud_agent_startup_error`; GUI launch ordering and `AmbientAgentViewModel` ownership remain unchanged.
 
 ### Deferred manager and cloud session view
-- Unit tests construct `TuiCloudTerminalManager` and assert that it exposes a PTY-less cloud-viewer terminal model and a usable `TerminalSurfaceInit` without starting a local shell.
-- Render-to-lines tests cover PRODUCT (7-13, 15-20, 26-28, 36-41):
-  - Centered dispatching, launched, blocked-auth, failed, and terminal-status callouts.
-  - Status glyph/text parity between the tab snapshot and callout.
-  - URL wrapping at narrow widths and recentering after resize.
-  - Dark/light theme semantic styles.
-  - Click and Enter dispatch the same open-URL action.
-  - No transcript, input, zero state, normal terminal metadata footer, or PTY event routing in cloud session mode; only the unfocused sub-agent hint or focused cloud-tab navigation footer renders.
-- `TuiLink` tests cover persistent hover styling, footprint-correct click dispatch, label/URL preservation, and reuse with both cloud and authentication URLs.
+- `crates/warp_tui/src/orchestration_model_tests.rs:429` exercises deferred cloud-session construction through `TuiSessions`, including the centered dispatching state, cloud footer, retained navigation, and lifecycle projection.
+- `crates/warp_tui/src/link_tests.rs:9` verifies the reusable link's default underlined rendering.
+- `TuiCloudTerminalManager`, blocked/failed/spawned callouts, narrow-width wrapping, resize recentering, theme variants, hover/click behavior, Enter-to-open behavior, and suppression of normal terminal content are implemented but do not currently have dedicated unit or render-to-lines coverage.
 
 ### Orchestration launch and lifecycle
-- Extend `orchestration_model_tests.rs` for PRODUCT (2-6, 14, 21-35):
-  - Remote dispatch eagerly creates one unfocused retained session and child conversation.
-  - Successful spawn assigns task/run IDs, resolves `run_agents` as launched, produces the channel-correct Oz URL, and leaves the session navigable.
-  - GitHub auth produces a retained blocked pane and failed child result with no automatic retry.
-  - Terminal pre-run errors trigger existing cleanup and do not affect siblings.
-  - Mixed local/remote and concurrent remote children remain isolated.
-  - Owner-side lifecycle events map to the correct remote child, update background sessions, ignore stale/mismatched events, and never mutate another tree.
-  - Success/error/cancelled lifecycle states retain the pane and URL.
-- Streamer tests prove the new owner-side notification reuses the existing connection/cursor path and leaves viewer-mode events and GUI subscribers unchanged.
+- `crates/warp_tui/src/orchestration_model_tests.rs` covers local-harness failure, GitHub-auth blocker retention, orchestration snapshots and paging, a retained remote child moving from dispatching to a projected success status, and local failed-launch cleanup.
+- The remote lifecycle fixture exercises `WatchedRunStatusChanged` through the TUI subscriber at `crates/warp_tui/src/orchestration_model.rs:477`. There is no dedicated streamer-level test for the event's cursor/dedup path, and no dedicated coverage for mismatched/stale events, mixed local/remote concurrency, successful spawn response assignment, or retained error/cancelled states.
+
+### Build and lint validation
+Run:
+- `./script/format`
+- `cargo clippy -p warp --all-targets --tests -- -D warnings`
+- `cargo clippy -p warp_tui --all-targets --tests -- -D warnings`
+- `cargo clippy --target wasm32-unknown-unknown --profile release-wasm-debug_assertions --no-deps`
+- `git diff --check`
+
+The WASM check is required because shared-session viewer code compiles without the native `local_tty` feature. The shared placement of `TerminalSurfaceInit` and native-only import gates preserve that target boundary.
 
 ### Live verification
 Use `tui-verify-change` with `./script/run-tui`:
@@ -180,12 +174,11 @@ Use `tui-verify-change` with `./script/run-tui`:
 5. Exercise an authentication-required launch and verify the retained blocked pane, auth link, failed child result, and no automatic retry.
 6. Resize across narrow and wide terminal widths and verify centering, wrapping, tab stability, and input suppression.
 
-Run focused validation:
+Run focused behavioral validation:
 - `cargo nextest run -p warp_tui orchestration`
 - `cargo nextest run -p warp_tui terminal_session`
 - Focused app tests for the shared preparer, startup classifier, and event streamer.
-
-Before submission, run `./script/format`, the repository-prescribed Clippy command, and `./script/presubmit`.
+Before submission, run `./script/presubmit` in addition to the focused and target-specific checks above.
 
 ## Parallelization
 Do not split implementation across child agents. Shared launch preparation must preserve the GUI contract while TUI session creation, the deferred manager, history linkage, lifecycle projection, and cloud-session rendering share ordering and identity invariants. The reusable link element is independent but small; integrating it sequentially avoids worktree/stack coordination overhead. Long-running focused test groups may run concurrently after implementation.

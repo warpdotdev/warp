@@ -315,6 +315,7 @@ pub enum OrchestrationEventStreamerEvent {
         status: ConversationStatus,
     },
     /// Lifecycle transition observed on an owner-side stream for a watched run.
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     WatchedRunStatusChanged {
         owner_conversation_id: AIConversationId,
         run_id: String,

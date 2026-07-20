@@ -24,7 +24,7 @@ use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
 
-use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
+use super::terminal_manager::{TerminalManager, TerminalSurfaceResult};
 use crate::NetworkStatus;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversation;
@@ -66,6 +66,7 @@ use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
     SharedSessionStatus,
 };
+use crate::terminal::terminal_manager::TerminalSurfaceInit;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
 use crate::terminal::writeable_pty::terminal_manager_util::wire_up_remote_server_controller_with_view;
 use crate::terminal::{TerminalManager as TerminalManagerTrait, TerminalModel, TerminalView};

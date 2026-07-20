@@ -6,6 +6,7 @@ use std::sync::mpsc::SyncSender;
 #[cfg(not(target_family = "wasm"))]
 use session_sharing_protocol::sharer::SessionSourceType;
 use url::Url;
+#[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_errors::report_error;
