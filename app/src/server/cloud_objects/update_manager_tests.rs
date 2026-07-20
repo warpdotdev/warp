@@ -10,6 +10,7 @@ use settings::{RespectUserSyncSetting, SyncToCloud};
 use warp_core::features::FeatureFlag;
 use warp_graphql::object_permissions::AccessLevel;
 use warp_graphql::scalars::time::ServerTimestamp;
+use warpui::r#async::FutureExt as _;
 use warpui::{App, ModelHandle, SingletonEntity};
 
 use super::{GetCloudObjectResponse, InitialLoadResponse, UpdateManager};
@@ -376,28 +377,43 @@ fn assert_pending_status_for_object(app: &mut App, uid: &ObjectUid, status: bool
     });
 }
 
-/// Polls `trashed_ts.is_some()` for `uid` until it settles to `is_trashed` or a generous deadline
-/// elapses, instead of asserting immediately after a fixed sleep. This is more robust under
-/// contended/parallel test runs, where the wall-clock time for the trash-object retries to
-/// exhaust (and the resulting untrash to apply) can exceed a fixed budget even though the retry
-/// backoff itself is short.
-async fn wait_for_trashed_status_for_object(app: &mut App, uid: &ObjectUid, is_trashed: bool) {
-    for _ in 0..300 {
-        let trashed = CloudModel::handle(app).read(app, |cloud_model, _| {
-            cloud_model
-                .get_by_uid(uid)
-                .map(|object| object.metadata().trashed_ts.is_some())
-        });
-        match trashed {
-            Some(trashed) if trashed == is_trashed => return,
-            Some(_) => {}
-            None => panic!("object should have been in cloud model, but wasn't"),
-        }
-        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
-    }
+/// Longest we wait for `trashed_ts` to settle. The update manager retries a failed trash with
+/// exponential backoff (500ms + 1s + 2s ≈ 3.5s of real `Timer` sleeps; see
+/// `ONLINE_ONLY_OPERATION_RETRY_STRATEGY` in `update_manager.rs`) before the `RequestFailed` arm
+/// undoes the optimistic update, and those `async_io::Timer` sleeps run on real wall-clock, so the
+/// ceiling is set well above the backoff total to absorb scheduling contention under parallel runs.
+const TRASHED_STATUS_WAIT_CEILING: Duration = Duration::from_secs(30);
 
-    // Timed out: fall through to the normal assertion helper for a clear failure message.
-    assert_trashed_status_for_object(app, uid, is_trashed);
+/// How often to re-read the model while waiting for `trashed_ts` to settle.
+const TRASHED_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Waits for `trashed_ts.is_some()` on `uid` to reach `is_trashed`, up to `TRASHED_STATUS_WAIT_CEILING`.
+///
+/// The condition can only change once the trash-object retry backoff has elapsed, and this stack has
+/// no awaitable model-update signal a test can subscribe to (`await_spawned_future` resolves on a
+/// single spawned hop, not the delayed-respawn retry cascade), so the wait is expressed as a poll
+/// bounded by a real deadline rather than a fixed iteration count.
+async fn wait_for_trashed_status_for_object(app: &mut App, uid: &ObjectUid, is_trashed: bool) {
+    let poll = async {
+        loop {
+            let trashed = CloudModel::handle(app).read(app, |cloud_model, _| {
+                cloud_model
+                    .get_by_uid(uid)
+                    .map(|object| object.metadata().trashed_ts.is_some())
+            });
+            match trashed {
+                Some(trashed) if trashed == is_trashed => return,
+                Some(_) => {}
+                None => panic!("object should have been in cloud model, but wasn't"),
+            }
+            warpui::r#async::Timer::after(TRASHED_STATUS_POLL_INTERVAL).await;
+        }
+    };
+
+    if poll.with_timeout(TRASHED_STATUS_WAIT_CEILING).await.is_err() {
+        // Timed out: fall through to the normal assertion helper for a clear failure message.
+        assert_trashed_status_for_object(app, uid, is_trashed);
+    }
 }
 
 fn assert_errored_status_for_object(app: &mut App, uid: &ObjectUid, is_errored: bool) {
