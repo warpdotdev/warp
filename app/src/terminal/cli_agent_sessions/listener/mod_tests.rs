@@ -156,6 +156,11 @@ fn pi_is_supported() {
 }
 
 #[test]
+fn oh_my_pi_is_supported() {
+    assert!(is_agent_supported(&CLIAgent::OhMyPi));
+}
+
+#[test]
 fn pi_default_handler_skips_session_start() {
     let mut handler = DefaultSessionListener;
     let event = CLIAgentEvent {
@@ -238,4 +243,32 @@ fn droid_default_handler_forwards_permission_request() {
         payload: CLIAgentEventPayload::default(),
     };
     assert!(handler.handle_event(event).is_some());
+}
+
+#[test]
+fn oh_my_pi_end_to_end_parsing_and_handling() {
+    let mut handler = create_handler(&CLIAgent::OhMyPi).expect("should create handler");
+
+    // Test session_start payload: proves SessionStart is skipped
+    let start_body = r#"{"v":1,"agent":"omp","event":"session_start"}"#;
+    let parsed_start = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), start_body, false)
+        .expect("should successfully parse session_start payload");
+    assert_eq!(parsed_start.agent, CLIAgent::OhMyPi);
+    assert_eq!(parsed_start.event, CLIAgentEventType::SessionStart);
+    assert!(handler.handle_event(parsed_start).is_none());
+
+    // Test stop payload: proves Stop forwards with CLIAgent::OhMyPi
+    let stop_body = r#"{"v":1,"agent":"omp","event":"stop"}"#;
+    let parsed_stop = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), stop_body, false)
+        .expect("should successfully parse stop payload");
+    assert_eq!(parsed_stop.agent, CLIAgent::OhMyPi);
+    assert_eq!(parsed_stop.event, CLIAgentEventType::Stop);
+
+    let handled_stop = handler
+        .handle_event(parsed_stop)
+        .expect("should forward stop event");
+    assert_eq!(handled_stop.agent, CLIAgent::OhMyPi);
+    assert_eq!(handled_stop.event, CLIAgentEventType::Stop);
 }
