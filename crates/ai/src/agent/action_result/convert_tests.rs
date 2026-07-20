@@ -26,10 +26,10 @@ fn read_files_partial_success_converts_failed_files() {
     };
 
     assert_eq!(success.files.len(), 1);
-    assert_eq!(success.failed_files.len(), 1);
-    assert_eq!(success.failed_files[0].path, "/tmp/missing.txt");
+    assert_eq!(success.failed_reads.len(), 1);
+    assert_eq!(success.failed_reads[0].path, "/tmp/missing.txt");
     assert_eq!(
-        success.failed_files[0].message,
+        success.failed_reads[0].message,
         "File not found or could not be read"
     );
 }

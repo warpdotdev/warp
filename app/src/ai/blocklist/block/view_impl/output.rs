@@ -90,8 +90,8 @@ use crate::ai::blocklist::inline_action::inline_action_header::{
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::{
-    render_requested_action_body_text, render_requested_action_row, render_requested_action_row_for_text,
-    FormattedTextOrElement, RenderableAction,
+    render_requested_action_body_text, render_requested_action_row,
+    render_requested_action_row_for_text, FormattedTextOrElement, RenderableAction,
 };
 use crate::ai::blocklist::inline_action::requested_command::RequestedCommand;
 use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardView;

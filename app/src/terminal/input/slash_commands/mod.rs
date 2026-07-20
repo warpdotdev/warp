@@ -142,6 +142,7 @@ pub enum TuiSlashCommand {
     ExportToFile,
     Mcp,
     Exit,
+    ViewLogs,
 }
 
 impl TuiSlashCommand {
@@ -160,6 +161,7 @@ impl TuiSlashCommand {
             name if name == commands::EXPORT_TO_FILE.name => Some(Self::ExportToFile),
             name if name == commands::MCP.name => Some(Self::Mcp),
             name if name == commands::EXIT.name => Some(Self::Exit),
+            name if name == commands::VIEW_LOGS.name => Some(Self::ViewLogs),
             _ => None,
         }
     }

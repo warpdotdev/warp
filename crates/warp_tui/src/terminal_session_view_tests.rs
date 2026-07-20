@@ -15,8 +15,8 @@ use warpui_core::keymap::{Context, Keystroke, Trigger};
 use warpui_core::{App, AppContext, TuiView};
 
 use super::{
-    export_file_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
-    TuiTerminalSessionEvent, ORCHESTRATION_TAB_BAR_FOCUSED_FLAG,
+    export_file_success_message, log_bundle_success_message, raw_prompt_if_not_blank,
+    render_left_footer_hint, TuiTerminalSessionEvent, ORCHESTRATION_TAB_BAR_FOCUSED_FLAG,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::keybindings::{
@@ -32,6 +32,15 @@ use crate::tui_builder::TuiUiBuilder;
 struct FocusTestFixture {
     window_id: warpui_core::WindowId,
     sessions: ModelHandle<TuiSessions>,
+}
+
+#[test]
+fn log_bundle_success_message_includes_the_absolute_path() {
+    let path = std::path::Path::new("/tmp/warp-20260718-132640.zip");
+    assert_eq!(
+        log_bundle_success_message(path),
+        "Log bundle saved to /tmp/warp-20260718-132640.zip"
+    );
 }
 
 fn focus_test_fixture(app: &mut App) -> FocusTestFixture {
