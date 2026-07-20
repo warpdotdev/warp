@@ -307,21 +307,31 @@ fn test_merge_ranges_with_same_end() {
 // rather than system default regexes.
 
 #[test]
+#[serial(secrets_regex)]
 fn test_detect_secrets_no_regexes_configured() {
+    // Explicitly clear the global regex registry rather than relying on its initial state, since
+    // other tests in this serial group leave their own regexes installed until their guard drops.
+    let _secrets_regex_guard =
+        secrets::test_set_secrets_regex(std::iter::empty(), std::iter::empty());
+
     // With no regexes configured, no secrets should be detected
     let text = "foo warp-server-staging.firebaseapp.com bar";
     let detected_secrets = find_secrets_in_text(text);
     assert_eq!(detected_secrets, vec![]);
 }
 
-// #[serial] is used to ensure custom regexes state does not interfere with other tests,
-// as the custom regexes are global state.
+// #[serial(secrets_regex)] is used to ensure custom regexes state does not interfere with other
+// tests, as the custom regexes are global state. A named group is used (rather than the crate's
+// default `#[serial]` group) so these tests don't needlessly serialize against unrelated tests
+// elsewhere in the crate that also use `#[serial]`. The guard returned by `test_set_secrets_regex`
+// restores the previous regexes on drop, so tests are also isolated from state left behind by a
+// previous test — serialization alone only prevents concurrent interleaving, not leakage.
 
 #[test]
-#[serial]
+#[serial(secrets_regex)]
 fn test_detect_secrets_single_secret_custom() {
     // Set as user secret (enterprise secrets is empty)
-    secrets::set_user_and_enterprise_secret_regexes(
+    let _secrets_regex_guard = secrets::test_set_secrets_regex(
         [&Regex::new("ABCD").expect("Should be able to construct regex")],
         std::iter::empty(), // No enterprise secrets
     );
@@ -338,11 +348,11 @@ fn test_detect_secrets_single_secret_custom() {
 }
 
 #[test]
-#[serial]
+#[serial(secrets_regex)]
 fn test_detect_secrets_single_secret_custom_with_multibyte() {
     // Set a custom secret regex that matches a Chinese multibyte secret, e.g., "秘密"
     // Set as user secret (enterprise secrets is empty)
-    secrets::set_user_and_enterprise_secret_regexes(
+    let _secrets_regex_guard = secrets::test_set_secrets_regex(
         [&Regex::new("秘密").expect("Should be able to construct regex")],
         std::iter::empty(), // No enterprise secrets
     );
@@ -361,10 +371,10 @@ fn test_detect_secrets_single_secret_custom_with_multibyte() {
 }
 
 #[test]
-#[serial]
+#[serial(secrets_regex)]
 fn test_detect_secrets_multiple_secrets() {
     // Set custom regexes to include patterns that would previously have been system defaults
-    secrets::set_user_and_enterprise_secret_regexes(
+    let _secrets_regex_guard = secrets::test_set_secrets_regex(
         [
             &Regex::new("ABCD").expect("Should be able to construct regex"),
             &Regex::new(r"\bghp_[A-Za-z0-9_]{36}\b").expect("Should be able to construct regex"),
@@ -483,10 +493,10 @@ fn test_add_secret_redaction_to_text_with_multibyte_characters() {
 
 // Test case-sensitive matching by default
 #[test]
-#[serial]
+#[serial(secrets_regex)]
 fn test_detect_secrets_case_sensitive() {
     // Set as user secret (enterprise secrets is empty)
-    secrets::set_user_and_enterprise_secret_regexes(
+    let _secrets_regex_guard = secrets::test_set_secrets_regex(
         [&Regex::new("ABCD").expect("Should be able to construct regex")],
         std::iter::empty(), // No enterprise secrets
     );
@@ -510,10 +520,10 @@ fn test_detect_secrets_case_sensitive() {
 
 // Test opt-in case-insensitive matching with (?i) flag
 #[test]
-#[serial]
+#[serial(secrets_regex)]
 fn test_detect_secrets_case_insensitive_opt_in() {
     // Set as user secret with case-insensitive flag
-    secrets::set_user_and_enterprise_secret_regexes(
+    let _secrets_regex_guard = secrets::test_set_secrets_regex(
         [&Regex::new("(?i)ABCD").expect("Should be able to construct regex")],
         std::iter::empty(), // No enterprise secrets
     );
@@ -538,10 +548,10 @@ fn test_detect_secrets_case_insensitive_opt_in() {
 
 // Test case sensitivity for default regex patterns
 #[test]
-#[serial]
+#[serial(secrets_regex)]
 fn test_detect_secrets_default_regex_case_sensitivity() {
     // Set user secret with a stripe-key like pattern, but enforce case sensitivity
-    secrets::set_user_and_enterprise_secret_regexes(
+    let _secrets_regex_guard = secrets::test_set_secrets_regex(
         [&Regex::new(r"\bsk_test_[0-9a-z]{24}\b").expect("Should be able to construct regex")],
         std::iter::empty(), // No enterprise secrets
     );
@@ -584,11 +594,11 @@ fn test_detect_secrets_default_regex_case_sensitivity() {
 // Regression test for panic `assertion failed: self.is_char_boundary(n)`.
 // End-to-end detection and redaction of custom multibyte secrets.
 #[test]
-#[serial]
+#[serial(secrets_regex)]
 fn test_detect_and_redact_custom_multibyte_secrets() {
     // Set the custom secret regex to detect both "テストファイル" and "ABCD"
     // Set as user secrets (enterprise secrets is empty)
-    secrets::set_user_and_enterprise_secret_regexes(
+    let _secrets_regex_guard = secrets::test_set_secrets_regex(
         [
             &Regex::new("テストファイル").expect("Should be able to construct regex"),
             &Regex::new("ABCD").expect("Should be able to construct regex"),
