@@ -102,7 +102,7 @@ use crate::ai::blocklist::inline_action::web_search::WebSearchView;
 use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
-use crate::ai::blocklist::view_util::format_credits;
+use crate::ai::blocklist::view_util::{format_credits, should_show_failed_output_usage_notice};
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
 use crate::ai::skills::{
@@ -1252,11 +1252,12 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 .finish(),
             );
 
-            if props.model.is_latest_visible_exchange_in_root_task(app)
-                && !has_expanded_last_requested_command
-                && !props.model.is_restored()
-                && !error.is_invalid_api_key()
-            {
+            if should_show_failed_output_usage_notice(
+                error,
+                props.model.is_latest_visible_exchange_in_root_task(app),
+                has_expanded_last_requested_command,
+                props.model.is_restored(),
+            ) {
                 output_items.add_child(
                     render_informational_footer(
                         app,

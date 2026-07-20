@@ -170,6 +170,9 @@ impl TuiShellCommandView {
     pub(super) fn needs_continuous_height_measurement(&self) -> bool {
         !self.state.is_collapsed() && self.command_running.get()
     }
+    pub(super) fn is_expanded(&self) -> bool {
+        !self.state.is_collapsed()
+    }
 
     /// Resolves the shared terminal block exactly as the GUI requested-command
     /// view does: first by agent action metadata, then by a long-running

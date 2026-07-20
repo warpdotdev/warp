@@ -48,7 +48,6 @@ use warpui::{Action, AppContext, Element, EventContext, SingletonEntity, View, V
 
 use super::output::LinkActionConstructors;
 use super::{add_highlights_to_rich_text, add_highlights_to_text};
-use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::icons::red_stop_icon;
 use crate::ai::agent::{
@@ -77,7 +76,9 @@ use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
 use crate::ai::blocklist::secret_redaction::{SecretRedactionState, redact_secrets_in_element};
-use crate::ai::blocklist::view_util::error_color;
+use crate::ai::blocklist::view_util::{
+    FailedOutputPresentation, error_color, failed_output_presentation,
+};
 use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
 use crate::ai::loading::shimmering_warp_loading_text;
 use crate::code::editor::view::CodeEditorView;
@@ -105,9 +106,6 @@ pub const STATUS_ICON_SIZE_DELTA: f32 = 4.;
 pub const STATUS_FOOTER_VERTICAL_PADDING: f32 = 4.;
 pub const WAITING_FOR_USER_INPUT_MESSAGE: &str = "Agent waiting for instructions...";
 const IMAGE_SOURCE_LINK_LINE_INDEX: usize = 1;
-
-const ERROR_APOLOGY_TEXT: &str = "I'm sorry, I couldn't complete that request.";
-const INTERNAL_WARP_ERROR: &str = "Internal Warp error.";
 
 pub const LOAD_OUTPUT_MESSAGE: &str = "Warping...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_ADJUSTING: &str = "Adjusting tasks...";
@@ -3043,92 +3041,44 @@ pub struct FailedOutputProps<'a> {
 
 pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
-
-    // While an automatic retry/resume is still in flight, don't surface the underlying
-    // transport failure at all. These are typically transient and recover on their own,
-    // so showing the alarming "Warp lost connection" banner (plus debug info) for every
-    // blip is noisy and misleading. Render nothing during in-flight recovery; the full
-    // error banner is only shown once recovery has actually failed. Dogfood builds
-    // (Local/Dev) opt out so developers still see every transport failure aggressively.
-    if props.error.should_suppress_during_recovery() {
+    let Some(presentation) = failed_output_presentation(props.error, app) else {
         return Empty::new().finish();
-    }
+    };
 
-    let error_text = match props.error {
-        RenderableAIError::QuotaLimit {
-            user_display_message,
-        } => {
-            if let Some(message) = user_display_message {
-                if should_show_subscribe_cta(app) {
-                    return render_out_of_credits_error(
-                        message,
-                        props.subscribe_button_handle,
-                        props.is_ai_input_enabled,
-                        props.icon_right_margin,
-                        app,
-                    );
-                }
-                format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
-            } else {
-                let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
-                let formatted_next_refresh_time = ai_request_usage_model
-                    .next_refresh_time()
-                    .format("%B %d")
-                    .to_string();
-
-                format!(
-                    "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
-                )
-            }
+    let error_text = match presentation {
+        FailedOutputPresentation::Message(message) => message,
+        FailedOutputPresentation::OutOfCredits { title, detail, .. } => {
+            return render_out_of_credits_error(
+                title,
+                detail,
+                props.subscribe_button_handle,
+                props.is_ai_input_enabled,
+                props.icon_right_margin,
+                app,
+            );
         }
-        RenderableAIError::ServerOverloaded => {
-            "Warp is currently overloaded. Please try again later.".to_string()
-        }
-        RenderableAIError::InternalWarpError => {
-            format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_WARP_ERROR}")
-        }
-        RenderableAIError::Other { error_message, .. } => {
-            // A still-recovering `Other` error is handled by the early return above; once we
-            // reach here recovery has failed, so surface the error directly.
-            format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
-        }
-        RenderableAIError::AgentExitedShell => {
-            format!("{ERROR_APOLOGY_TEXT}\n\n{}", props.error)
-        }
-        RenderableAIError::TransientNetworkError { .. } => {
-            // Recovering transient errors are handled by the early return above; once we
-            // reach here recovery has failed. These carry their own complete user-facing
-            // copy (plus debug info), so the apology prefix adds nothing.
-            props.error.to_string()
-        }
-        RenderableAIError::InvalidApiKey {
-            provider,
-            model_name,
-        } => {
+        FailedOutputPresentation::InvalidApiKey { title, detail } => {
             return render_invalid_api_key_error(
-                provider,
-                model_name,
+                title,
+                &detail,
                 props.invalid_api_key_button_handle,
                 app,
             );
         }
-        RenderableAIError::ContextWindowExceeded(error) => {
+        FailedOutputPresentation::ContextWindowExceeded { message } => {
             // This is rendered in a different way, like a failed action.
-            return RenderableAction::new(error.as_str(), app)
+            return RenderableAction::new(message.as_str(), app)
                 .with_icon(inline_action_icons::cancelled_icon(appearance).finish())
                 .render(app)
                 .finish();
         }
-        RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { model_name } => {
+        FailedOutputPresentation::AwsBedrockCredentialsExpiredOrInvalid { fallback_message } => {
             // Use the rich stateful view if it exists, otherwise show a simple error message
             if let Some(view) = props.aws_bedrock_credentials_error_view {
                 return ChildView::new(view).finish();
             }
             // Fallback for contexts that don't have the stateful view (e.g. CLI subagent)
-            format!(
-                "{ERROR_APOLOGY_TEXT}\n\nAWS credentials expired or missing for {model_name}. \
-                 Please refresh your AWS credentials."
-            )
+            fallback_message
         }
     };
 
@@ -3175,15 +3125,6 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
         )
         .finish()
 }
-
-/// Whether to show the out-of-credits CTAs: only for non-paid users. Paid users and the
-/// enterprise spend-limit variant of this message fall back to plain text.
-fn should_show_subscribe_cta(app: &AppContext) -> bool {
-    UserWorkspaces::as_ref(app)
-        .current_workspace()
-        .is_none_or(|workspace| !workspace.billing_metadata.is_user_on_paid_plan())
-}
-
 /// Builds an out-of-credits CTA button, styled like the invalid-API-key error's button.
 fn out_of_credits_cta_button(
     label: &str,
@@ -3218,7 +3159,8 @@ fn out_of_credits_cta_button(
 
 /// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
 fn render_out_of_credits_error(
-    message: &str,
+    title: &str,
+    detail: &str,
     subscribe_button_handle: &MouseStateHandle,
     is_ai_input_enabled: bool,
     icon_right_margin: f32,
@@ -3242,7 +3184,7 @@ fn render_out_of_credits_error(
     .finish();
 
     let text = Text::new(
-        format!("{ERROR_APOLOGY_TEXT}\n\n{message}"),
+        format!("{title}\n\n{detail}"),
         appearance.monospace_font_family(),
         appearance.monospace_font_size(),
     )
@@ -3291,8 +3233,8 @@ fn render_out_of_credits_error(
 }
 
 fn render_invalid_api_key_error(
-    provider: &str,
-    model_name: &str,
+    title: &str,
+    detail: &str,
     state_handle: &MouseStateHandle,
     app: &AppContext,
 ) -> Box<dyn Element> {
@@ -3308,29 +3250,18 @@ fn render_invalid_api_key_error(
     .with_height(icon_size(app))
     .finish();
 
-    let alert_text = Text::new(
-        "Provided API key is not valid",
-        appearance.ui_font_family(),
-        14.,
-    )
-    .with_color(error_color(appearance.theme()))
-    .with_selectable(false)
-    .finish();
+    let alert_text = Text::new(title.to_string(), appearance.ui_font_family(), 14.)
+        .with_color(error_color(appearance.theme()))
+        .with_selectable(false)
+        .finish();
 
-    let detail_text = Text::new(
-        format!(
-            "Failed to authenticate with {provider} when using {model_name}. \
-                     Double-check that your API key is correct."
-        ),
-        appearance.ui_font_family(),
-        14.,
-    )
-    .with_color(blended_colors::text_sub(
-        appearance.theme(),
-        appearance.theme().surface_1(),
-    ))
-    .with_selectable(false)
-    .finish();
+    let detail_text = Text::new(detail.to_string(), appearance.ui_font_family(), 14.)
+        .with_color(blended_colors::text_sub(
+            appearance.theme(),
+            appearance.theme().surface_1(),
+        ))
+        .with_selectable(false)
+        .finish();
 
     let settings_button = appearance
         .ui_builder()

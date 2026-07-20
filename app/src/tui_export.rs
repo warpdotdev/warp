@@ -49,7 +49,8 @@ pub use crate::ai::blocklist::block::cli_controller::{
     UserTakeOverReason,
 };
 pub use crate::ai::blocklist::block::model::{
-    AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback,
+    AIBlockModel, AIBlockModelHelper, AIBlockModelImpl, AIBlockOutputStatus, AIRequestType,
+    OutputStatusUpdateCallback,
 };
 pub use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle,
@@ -73,7 +74,10 @@ pub use crate::ai::blocklist::orchestration_topology::{
     orchestration_root_conversation_id, orchestrator_agent_id_for_conversation,
     resolve_orchestration_participant,
 };
-pub use crate::ai::blocklist::view_util::format_credits;
+pub use crate::ai::blocklist::view_util::{
+    FailedOutputPresentation, failed_output_presentation, format_credits,
+    should_show_failed_output_usage_notice,
+};
 pub use crate::ai::blocklist::{
     AIActionStatus, AskUserQuestionExecutor, AttachmentType, BlocklistAIActionEvent,
     BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
