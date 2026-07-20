@@ -51,10 +51,16 @@ expandable tree behavior; this change introduces no new visual treatment.
    appears and opens as `/workspace/vendor/src/lib.rs`. Project Explorer does not replace the link
    with `/shared/library` or expose `/shared`.
 
-4. Opening, selecting, copying the path of, renaming, or deleting an item under a linked directory
-   uses the workspace-visible path. The operating system continues to apply its normal symlink
-   semantics to the resulting filesystem operation; Warp does not silently redirect the operation
-   to a different visible tree entry.
+4. Opening, selecting, copying the path of, renaming, or deleting a descendant under a linked
+   directory uses the workspace-visible path. The operating system continues to apply its normal
+   symlink semantics to that explicit descendant operation; Warp does not silently redirect the
+   operation to a different visible tree entry.
+
+   The directory-symlink root is a separate destructive boundary. Renaming the root renames only
+   the symlink entry at its workspace-visible path; the target directory, its name, and its contents
+   do not move or change. Deleting the root unlinks only the symlink entry and never recursively
+   deletes or modifies the target directory or any target descendant. Rename/delete confirmation
+   and error UI identify the workspace-visible alias path, not the canonical external target.
 
 5. A link may target a directory outside the workspace. Only the target directory and its
    descendants are reachable through the link; the target's parent and siblings do not become

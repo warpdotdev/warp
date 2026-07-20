@@ -85,6 +85,23 @@ The overlay stores lexical paths, so Project Explorer selection, path copy, open
 actions keep using `/workspace/alias/...`. Canonical targets remain private model metadata and never
 become `FileTreeEntry` keys.
 
+Before a destructive action, use overlay metadata to distinguish an alias root from a descendant.
+For an alias root:
+
+- Revalidate its generation and `symlink_metadata` at the lexical path immediately before the
+  operation. If it is no longer the expected symlink, fail closed and refresh the projection rather
+  than applying ordinary-directory behavior to the replacement.
+- Rename passes only the lexical symlink path to the platform rename primitive. It never
+  canonicalizes the source or substitutes `resolved_path`.
+- Delete uses the macOS unlink/remove-file operation for the symlink entry. It never passes the
+  lexical or resolved target to a recursive directory-delete API and never traverses the target.
+- After success, update or remove that alias generation, subtree, cursors, and leases. The canonical
+  target state is not mutated.
+
+Descendant actions retain the existing lexical-path behavior from PRODUCT invariant 4. This typed
+root/descendant boundary prevents a future generic directory action from treating an alias root as
+an external target directory.
+
 ### 2. Route UI expansion through the existing completion path
 
 Keep `FileTreeView::load_directory_from_model` → `RepoMetadataModel::load_directory` →
@@ -268,7 +285,11 @@ behavior. Add:
    must refresh before display (PRODUCT 14–16).
 8. Project Explorer action tests selecting and opening a descendant and invoking copy, rename, and
    delete paths, asserting every emitted/requested path uses the lexical alias rather than the
-   canonical target (PRODUCT 4).
+   canonical target. Add alias-root destructive-boundary tests with an external target containing a
+   sentinel file: renaming the root moves only the symlink entry, and deleting the renamed root
+   removes only that symlink, while the target directory and sentinel remain byte-for-byte intact.
+   Also replace the link with an ordinary directory immediately before delete and assert generation
+   plus `symlink_metadata` revalidation fails closed without recursive deletion (PRODUCT 4).
 9. `view_tests.rs` coverage with hidden files and directories below an alias, verifying the existing
    setting hides them by default and reveals them after `show_hidden_files` changes (PRODUCT 13).
 10. Budget/depth tests proving every explicit expansion starts with a fresh
@@ -301,6 +322,8 @@ On macOS, create one workspace-local target and one external target, then captur
 2. A short recording that opens a target file through its alias, changes target content while
    expanded, collapses/re-expands the alias, and retargets the link without stale children.
 3. A cycle fixture showing repeated `A → B → A` expansion terminates and Warp remains responsive.
+4. An external-target fixture showing root rename and delete affect only the workspace symlink while
+   the target directory and a sentinel file remain present and unchanged.
 
 The issue screenshots establish the before state. No Linux-only visual evidence is required for
 this macOS-reported bug.
@@ -340,3 +363,7 @@ macOS evidence runs only after integration.
    leases; assert every overlay node and UI operation uses the lexical prefix.
 7. **Explicit skill discovery could regress.** Leave its current standing-query path separate and
    retain its existing symlink regression test unchanged.
+8. **A root rename/delete could be misrouted through an ordinary-directory action and mutate an
+   external target.** Represent the alias-root boundary in action dispatch, revalidate the lexical
+   symlink immediately before mutation, use rename/unlink without canonicalization or recursion, and
+   fail closed on replacement races.
