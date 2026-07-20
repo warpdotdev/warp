@@ -3,7 +3,7 @@ use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{AddSingletonModel, App, SingletonEntity, TypedActionView, ViewHandle};
 
-use super::{DriveIndex, DriveIndexAction};
+use super::{DriveIndex, DriveIndexAction, SharedObjectLimitBannerKind};
 use crate::ASSETS;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::auth::AuthStateProvider;
@@ -272,6 +272,49 @@ fn test_warp_drive_navigation_states() {
                 Some(WarpDriveItemId::Object(cloud_object_type_and_id)),
                 "Expect selected to have correct value"
             );
+        });
+    });
+}
+
+#[test]
+fn test_shared_object_limit_banner_dismissal_persists_per_type() {
+    App::test(ASSETS, |mut app| async move {
+        initialize_app(&mut app);
+        let index = create_index(&mut app);
+
+        // Neither banner is dismissed by default.
+        index.read(&app, |_index, cx| {
+            assert!(!DriveIndex::is_object_limit_banner_dismissed(
+                SharedObjectLimitBannerKind::Notebook,
+                cx,
+            ));
+            assert!(!DriveIndex::is_object_limit_banner_dismissed(
+                SharedObjectLimitBannerKind::Workflow,
+                cx,
+            ));
+        });
+
+        // Dismissing the notebook banner is remembered.
+        index.update(&mut app, |index, ctx| {
+            index.handle_action(
+                &DriveIndexAction::DismissObjectLimitBanner {
+                    banner_kind: SharedObjectLimitBannerKind::Notebook,
+                },
+                ctx,
+            );
+        });
+
+        // The notebook banner stays dismissed, and the workflow banner is
+        // unaffected — dismissal is tracked per object type.
+        index.read(&app, |_index, cx| {
+            assert!(DriveIndex::is_object_limit_banner_dismissed(
+                SharedObjectLimitBannerKind::Notebook,
+                cx,
+            ));
+            assert!(!DriveIndex::is_object_limit_banner_dismissed(
+                SharedObjectLimitBannerKind::Workflow,
+                cx,
+            ));
         });
     });
 }
