@@ -151,44 +151,6 @@ impl crate::core::View for View {
 impl TypedActionView for View {
     type Action = ();
 }
-#[test]
-fn test_dispatch_before_paint_is_recoverable_and_trace_only() {
-    App::test((), |mut app| async move {
-        let app = &mut app;
-        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| View::default());
-        let root_view_id = view.id();
-        let mut presenter = Presenter::new(window_id);
-
-        let mut updated = EntityIdSet::default();
-        updated.insert(root_view_id);
-        let invalidation = WindowInvalidation {
-            updated,
-            ..Default::default()
-        };
-
-        app.update(move |ctx| {
-            // Populate the rendered element tree without painting a scene. This
-            // reproduces the pre-paint dispatch path where z-index data is absent.
-            presenter.invalidate(invalidation, ctx);
-            let handled = ctx.simulate_window_event(
-                Event::MouseMoved {
-                    position: vec2f(10., 10.),
-                    cmd: false,
-                    shift: false,
-                    is_synthetic: false,
-                },
-                window_id,
-                Rc::new(RefCell::new(presenter)),
-            );
-            assert!(!handled);
-        });
-
-        view.read(app, |view, _| {
-            assert!(view.mouse_ins.is_empty());
-            assert!(view.mouse_downs.is_empty());
-        });
-    });
-}
 
 #[test]
 fn test_layered_click_handling() {

@@ -249,7 +249,7 @@ impl Element for EventHandler {
         }
 
         let Some(z_index) = self.child_max_z_index else {
-            log::trace!("Dispatching event on EventHandler element which was never painted");
+            log::error!("Dispatching event on EventHandler element which was never painted");
             return false;
         };
         match event.at_z_index(z_index, ctx) {
