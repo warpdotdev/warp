@@ -1,8 +1,8 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use wgpu::util::BufferInitDescriptor;
-use wgpu::{Buffer, BufferAddress, BufferDescriptor, Device, COPY_BUFFER_ALIGNMENT};
+use wgpu::{Buffer, BufferAddress, BufferDescriptor, COPY_BUFFER_ALIGNMENT, Device};
 
 use super::Error;
 

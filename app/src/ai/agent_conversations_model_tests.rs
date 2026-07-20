@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Duration, Utc};
 use instant::Instant;
@@ -15,12 +15,12 @@ use super::entry::{
 };
 use super::query::{DEFAULT_RESULT_COUNT, MAX_SEARCH_RESULTS};
 use super::{
-    query_conversation_entries, record_earliest_rtc_task_refresh_timestamp,
     AgentConversationsModel, AgentConversationsModelEvent, AgentManagementFilters,
     AgentRunDisplayStatus, ArtifactFilter, CloudConversationMetadataLoadState,
-    ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter, OwnerFilter,
-    RtcTaskRefreshThrottleState, StatusFilter, TaskFetchError, TaskFetchState, MAX_PERSONAL_TASKS,
-    MAX_TEAM_TASKS,
+    ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter,
+    MAX_PERSONAL_TASKS, MAX_TEAM_TASKS, OwnerFilter, RtcTaskRefreshThrottleState, StatusFilter,
+    TaskFetchError, TaskFetchState, query_conversation_entries,
+    record_earliest_rtc_task_refresh_timestamp,
 };
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
@@ -713,9 +713,11 @@ fn conversation_query_caps_recent_entries_and_places_newest_last() {
                     .map(|result| result.entry.display.title.as_str()),
                 Some("Conversation 0")
             );
-            assert!(!results
-                .iter()
-                .any(|result| result.entry.display.title == "Conversation 50"));
+            assert!(
+                !results
+                    .iter()
+                    .any(|result| result.entry.display.title == "Conversation 50")
+            );
         });
     });
 }
@@ -743,9 +745,11 @@ fn conversation_query_filters_titles_and_caps_best_fuzzy_results() {
             let results = query_conversation_entries(entries, "deploy");
 
             assert_eq!(results.len(), MAX_SEARCH_RESULTS);
-            assert!(results
-                .iter()
-                .all(|result| result.entry.display.title.contains("Deploy")));
+            assert!(
+                results
+                    .iter()
+                    .all(|result| result.entry.display.title.contains("Deploy"))
+            );
             assert!(results.windows(2).all(|window| {
                 window[0].title_match.as_ref().unwrap().score
                     <= window[1].title_match.as_ref().unwrap().score
@@ -1294,9 +1298,11 @@ fn test_get_entries_keeps_unrelated_task_and_conversation_entries() {
             let entries = model.get_entries(&all_owner_filters(), ctx);
 
             assert_eq!(entries.len(), 2);
-            assert!(entries
-                .iter()
-                .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id)));
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id))
+            );
             assert!(entries.iter().any(|entry| {
                 entry.id == AgentConversationEntryId::Conversation(conversation_id)
             }));
@@ -2123,9 +2129,11 @@ fn test_environment_none_filter_includes_conversations() {
         app.update(|ctx| {
             let entries = model.get_entries(&filters, ctx);
 
-            assert!(entries
-                .iter()
-                .any(|entry| entry.id == AgentConversationEntryId::Conversation(conversation_id)));
+            assert!(
+                entries.iter().any(
+                    |entry| entry.id == AgentConversationEntryId::Conversation(conversation_id)
+                )
+            );
             assert!(
                 entries
                     .iter()
@@ -2335,9 +2343,11 @@ fn test_get_entries_keeps_unrelated_tasks_and_conversations() {
             let entries = model.get_entries(&all_owner_filters(), ctx);
 
             assert_eq!(entries.len(), 2);
-            assert!(entries
-                .iter()
-                .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id)));
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id))
+            );
             assert!(entries.iter().any(|entry| {
                 entry.id == AgentConversationEntryId::Conversation(conversation_id)
             }));

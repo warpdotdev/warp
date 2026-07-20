@@ -175,7 +175,7 @@ fn build_finalize_future(
     ctx: &AppContext,
 ) -> (
     String,
-    impl Future<Output = StopRecordingResult> + Send + 'static,
+    impl Future<Output = StopRecordingResult> + Send + 'static + use<>,
 ) {
     let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
         .conversation(&recording.conversation_id)

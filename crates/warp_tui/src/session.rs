@@ -5,8 +5,8 @@
 //! defers creating the first terminal session until login.
 
 use anyhow::{Context, Result};
-use clap::error::ErrorKind;
 use clap::Parser;
+use clap::error::ErrorKind;
 use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::telemetry::TelemetryEvent as _;
@@ -71,12 +71,12 @@ pub fn run() -> Result<()> {
         args.api_key,
         Box::new(move |ctx| init(resume_token, exit_summary_for_app, ctx)),
     );
-    if result.is_ok() {
-        if let Some(token) = exit_summary.token() {
-            let token = token.as_str();
-            println!("To continue this conversation, run:");
-            println!("warp --resume {token}");
-        }
+    if result.is_ok()
+        && let Some(token) = exit_summary.token()
+    {
+        let token = token.as_str();
+        println!("To continue this conversation, run:");
+        println!("warp --resume {token}");
     }
     result
 }

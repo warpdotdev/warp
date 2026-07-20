@@ -478,7 +478,7 @@ pub(crate) fn apply_editor_action(
         TuiEditorAction::InsertChar(c) => {
             model.update(ctx, |model, ctx| model.user_insert(&c.to_string(), ctx));
         }
-        TuiEditorAction::InsertText(text) => {
+        TuiEditorAction::PasteText(text) => {
             let text = behavior.normalize_text(text);
             model.update(ctx, |model, ctx| model.user_insert(text, ctx));
         }

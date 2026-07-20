@@ -1,8 +1,9 @@
 use warp::appearance::Appearance;
 use warp::tui_export::{
-    export_conversation_markdown, register_tui_session_view_test_singletons, PtyIntent,
-    PtyIntentEvent, SizeInfo, SizeUpdate,
+    PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, export_conversation_markdown,
+    register_tui_session_view_test_singletons,
 };
+use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
 use warpui::{
     AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, SingletonEntity, UpdateModel, ViewHandle,
@@ -12,11 +13,12 @@ use warpui_core::elements::tui::{
     TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
 };
 use warpui_core::keymap::{Context, Keystroke, Trigger};
-use warpui_core::{App, AppContext, TuiView};
+use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::{App, AppContext, TuiView, WindowInvalidation};
 
 use super::{
-    export_file_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
-    TuiTerminalSessionEvent, ORCHESTRATION_TAB_BAR_FOCUSED_FLAG,
+    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, TuiTerminalSessionEvent, export_file_success_message,
+    log_bundle_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::keybindings::{
@@ -26,12 +28,22 @@ use crate::keybindings::{
 use crate::orchestration_model::TuiOrchestrationModel;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
+use crate::terminal_use::TuiInputTarget;
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 use crate::tui_builder::TuiUiBuilder;
 
 struct FocusTestFixture {
     window_id: warpui_core::WindowId,
     sessions: ModelHandle<TuiSessions>,
+}
+
+#[test]
+fn log_bundle_success_message_includes_the_absolute_path() {
+    let path = std::path::Path::new("/tmp/warp-20260718-132640.zip");
+    assert_eq!(
+        log_bundle_success_message(path),
+        "Log bundle saved to /tmp/warp-20260718-132640.zip"
+    );
 }
 
 fn focus_test_fixture(app: &mut App) -> FocusTestFixture {
@@ -68,13 +80,22 @@ fn add_focus_test_session(
     (view, session_id)
 }
 
-fn render_element(mut element: Box<dyn TuiElement>, ctx: &AppContext, width: u16) -> TuiBuffer {
+fn render_element(element: Box<dyn TuiElement>, ctx: &AppContext, width: u16) -> TuiBuffer {
+    render_element_with_size(element, ctx, width, 1)
+}
+
+fn render_element_with_size(
+    mut element: Box<dyn TuiElement>,
+    ctx: &AppContext,
+    width: u16,
+    height: u16,
+) -> TuiBuffer {
     let mut rendered_views = EntityIdMap::default();
     let mut layout_ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };
     let size = element.layout(
-        TuiConstraint::loose(TuiSize::new(width, 1)),
+        TuiConstraint::loose(TuiSize::new(width, height)),
         &mut layout_ctx,
         ctx,
     );
@@ -90,6 +111,118 @@ fn render_element(mut element: Box<dyn TuiElement>, ctx: &AppContext, width: u16
         );
     }
     buffer
+}
+fn render_session(
+    app: &mut App,
+    view: &ViewHandle<super::TuiTerminalSessionView>,
+    width: u16,
+    height: u16,
+) -> Vec<String> {
+    let mut presenter = TuiPresenter::new();
+    app.update(|ctx| {
+        let mut invalidation = WindowInvalidation::default();
+        invalidation.updated.insert(view.id());
+        invalidation
+            .updated
+            .extend(view.as_ref(ctx).child_view_ids(ctx));
+        presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
+        presenter
+            .present(ctx, view, TuiRect::new(0, 0, width, height))
+            .buffer
+            .to_lines()
+    })
+}
+
+fn input_text(view: &ViewHandle<super::TuiTerminalSessionView>, ctx: &AppContext) -> String {
+    view.as_ref(ctx)
+        .input_view
+        .as_ref(ctx)
+        .model()
+        .as_ref(ctx)
+        .content()
+        .as_ref(ctx)
+        .text()
+        .into_string()
+}
+
+#[test]
+fn bootstrap_renders_starting_shell_above_input() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, _| {
+            view.terminal_model.lock().block_list_mut().reinit_shell();
+        });
+
+        let lines = render_session(&mut app, &view, 80, 40);
+        let status_index = lines
+            .iter()
+            .position(|line| line.trim() == "Starting shell...")
+            .unwrap_or_else(|| panic!("bootstrap status should render:\n{}", lines.join("\n")));
+        let input_index = lines
+            .iter()
+            .enumerate()
+            .skip(status_index + 1)
+            .find(|(_, line)| line.contains('┌') || line.contains('─'))
+            .map(|(index, _)| index)
+            .expect("bootstrap input border should render below the status");
+        assert!(status_index < input_index);
+    });
+}
+
+#[test]
+fn submit_is_blocked_during_bootstrap_and_allowed_at_prompt() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("draft", ctx);
+            });
+            view.terminal_model.lock().block_list_mut().reinit_shell();
+            view.handle_submitted("draft".to_owned(), ctx);
+        });
+
+        assert_eq!(
+            app.read(|ctx| input_text(&view, ctx)),
+            "draft",
+            "bootstrap submission must leave the draft untouched"
+        );
+        assert!(!view.read(&app, |view, _| {
+            view.input_target().agent_editor_owns_input()
+        }));
+        assert!(TuiInputTarget::AgentEditor.agent_editor_owns_input());
+    });
+}
+
+#[test]
+fn long_running_command_keeps_input_hidden() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, _| {
+            view.terminal_model
+                .lock()
+                .simulate_long_running_block("cat", "");
+        });
+
+        let lines = render_session(&mut app, &view, 80, 40);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.trim_end() == "Starting shell..."),
+            "LRC must not render bootstrap status:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains('┌') || line.contains('─')),
+            "LRC must keep the input editor hidden:\n{}",
+            lines.join("\n")
+        );
+    });
 }
 
 #[test]
@@ -307,10 +440,12 @@ fn alternate_screen_clears_orchestration_tab_focus_and_bindings() {
         });
         view.read(&app, |view, ctx| {
             assert!(!view.orchestration_tabs_focused);
-            assert!(!view
-                .keymap_context(ctx)
-                .set
-                .contains(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG));
+            assert!(
+                !view
+                    .keymap_context(ctx)
+                    .set
+                    .contains(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG)
+            );
         });
     });
 }
@@ -337,8 +472,11 @@ fn orchestration_updates_refresh_only_the_focused_session() {
             }),
             Some(foreground_id)
         );
-        assert!(app
-            .read(|ctx| { ctx.check_view_or_child_focused(fixture.window_id, &foreground.id()) }));
+        assert!(
+            app.read(|ctx| {
+                ctx.check_view_or_child_focused(fixture.window_id, &foreground.id())
+            })
+        );
         assert!(background.read(&app, |view, _| view.orchestration_tabs_focused));
 
         app.update_model(&fixture.sessions, |sessions, ctx| {

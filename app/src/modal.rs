@@ -256,7 +256,7 @@ impl<T: View> Modal<T> {
     }
 
     fn render_close_modal_button(&self, appearance: &Appearance) -> Box<dyn Element> {
-        use ui_components::{keyboard_shortcut, Component};
+        use ui_components::{Component, keyboard_shortcut};
 
         const BUTTON_DIAMETER: f32 = 24.;
         let close_button = appearance

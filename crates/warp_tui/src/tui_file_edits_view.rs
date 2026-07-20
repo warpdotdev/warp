@@ -29,15 +29,15 @@ use warp::tui_export::{
     AIAgentActionId, BlocklistAIActionEvent, BlocklistAIActionModel, DiffSessionType, FileDiff,
 };
 use warp_editor::content::buffer::InitialBufferState;
-use warpui_core::elements::tui::{
-    tui_collapsible, Modifier, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiStyle,
-    TuiText,
-};
 use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{
+    Modifier, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiStyle, TuiText,
+    tui_collapsible,
+};
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
-use crate::tool_call_labels::{tool_call_display_state, ToolCallDisplayState};
+use crate::tool_call_labels::{ToolCallDisplayState, tool_call_display_state};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageEvent, TuiDiffStorageHandle};
 
@@ -172,10 +172,10 @@ impl TuiFileEditsView {
         // the terminal result so the row doesn't stay pending. Successful
         // actions also update their header glyph from this event.
         ctx.subscribe_to_model(action_model, |me, _, event, ctx| {
-            if let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event {
-                if *action_id == me.action_id {
-                    ctx.notify();
-                }
+            if let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event
+                && *action_id == me.action_id
+            {
+                ctx.notify();
             }
         });
 

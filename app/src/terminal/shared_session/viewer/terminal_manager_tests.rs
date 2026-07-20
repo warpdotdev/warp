@@ -14,8 +14,8 @@ use async_broadcast::broadcast;
 use warpui::App;
 
 use super::*;
-use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::QueuedQueryModel;
+use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 // Bring the `TerminalManager` trait into scope (named under a different alias
 // since the local `TerminalManager` struct shadows it) so the trait method
 // `on_view_detached` is callable on the struct.

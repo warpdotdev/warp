@@ -22,7 +22,7 @@ use context_chip::PromptGenerator;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use warp_core::ui::color::blend::Blend;
-use warp_core::ui::color::contrast::{high_enough_contrast, MinimumAllowedContrast};
+use warp_core::ui::color::contrast::{MinimumAllowedContrast, high_enough_contrast};
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::color::ColorU;
 use warpui::elements::Text;

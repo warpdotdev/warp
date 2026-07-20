@@ -22,19 +22,19 @@ use warpui::{App, AppContext, EntityId, ModelHandle, SingletonEntity};
 
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::BlocklistAIContextModel;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle,
     MockConversationSelection,
 };
 use crate::ai::blocklist::input_mode_policy::{InputModePolicy, PolicyConfigUpdate};
-use crate::ai::blocklist::BlocklistAIContextModel;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::color::{self, Colors};
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::test_utils::block_size;
 use crate::terminal::model::TerminalModel;
+use crate::terminal::model::test_utils::block_size;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 /// Returns a timestamp and a strictly-later timestamp, for ordering assertions.

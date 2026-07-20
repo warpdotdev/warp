@@ -10,9 +10,9 @@ use warpui::elements::{
 use warpui::platform::Cursor;
 use warpui::{AppContext, Element, SingletonEntity};
 
-use super::common::render_scrollable_collapsible_content;
-use super::output::{action_icon, Props};
 use super::WithContentItemSpacing;
+use super::common::render_scrollable_collapsible_content;
+use super::output::{Props, action_icon};
 use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
@@ -20,6 +20,7 @@ use crate::ai::agent::{
     AIAgentActionId, AIAgentActionResultType, MessageId, ReceivedMessageDisplay,
     SendMessageToAgentResult, StartAgentExecutionMode, StartAgentResult,
 };
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::agent_view::orchestration_avatar::OrchestrationAvatar;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
@@ -28,7 +29,7 @@ use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
 };
 use crate::ai::blocklist::block::model::AIBlockModelHelper;
 use crate::ai::blocklist::block::{
-    received_message_collapsible_id, AIBlockAction, CollapsibleExpansionState,
+    AIBlockAction, CollapsibleExpansionState, received_message_collapsible_id,
 };
 use crate::ai::blocklist::inline_action::inline_action_header::{
     ICON_MARGIN, INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
@@ -38,10 +39,9 @@ use crate::ai::blocklist::inline_action::requested_action::{
     render_requested_action_row, render_requested_action_row_for_text,
 };
 use crate::ai::blocklist::orchestration_topology::{
-    orchestrator_agent_id_for_conversation, resolve_orchestration_participant,
-    OrchestrationParticipantKind,
+    OrchestrationParticipantKind, orchestrator_agent_id_for_conversation,
+    resolve_orchestration_participant,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;

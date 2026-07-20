@@ -42,8 +42,8 @@ use secret_redaction::*;
 use serde::Serialize;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::buffer::InitialBufferState;
 #[cfg(feature = "local_fs")]
 use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
@@ -52,14 +52,14 @@ use warp_errors::{report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
 use warpui::assets::asset_cache::AssetCache;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    get_rich_content_position_id, ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, SecretRange, SelectionBound, SelectionHandle, TableStateHandle,
+    ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize, MouseStateHandle, SecretRange,
+    SelectionBound, SelectionHandle, TableStateHandle, get_rich_content_position_id,
 };
 use warpui::image_cache::ImageType;
 use warpui::keymap::FixedBinding;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::text::SelectionType;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
@@ -155,13 +155,13 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
 use crate::code::editor_management::CodeSource;
+use crate::code_review::CodeReviewTelemetryEvent;
 use crate::code_review::comment_rendering::{CommentViewCard, HeaderClickHandler};
 use crate::code_review::comments::{
-    attach_pending_imported_comments, convert_insert_review_comments, AttachedReviewComment,
-    CommentId, CommentOrigin,
+    AttachedReviewComment, CommentId, CommentOrigin, attach_pending_imported_comments,
+    convert_insert_review_comments,
 };
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::code_review::CodeReviewTelemetryEvent;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
@@ -177,12 +177,12 @@ use crate::settings::{
 };
 use crate::settings_view::SettingsSection;
 use crate::terminal::find::TerminalFindModel;
+use crate::terminal::model::BlockId;
 use crate::terminal::model::secrets::RichContentSecretTooltipInfo;
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
-use crate::terminal::model::BlockId;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::safe_mode_settings::{
-    get_secret_obfuscation_mode, SafeModeSettings, SafeModeSettingsChangedEvent,
+    SafeModeSettings, SafeModeSettingsChangedEvent, get_secret_obfuscation_mode,
 };
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::terminal::view::{
@@ -192,20 +192,20 @@ use crate::terminal::{ShellLaunchData, TerminalModel, TerminalView};
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::*;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{is_supported_image_file, FileTarget};
+use crate::util::openable_file_type::{FileTarget, is_supported_image_file};
+use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
     SecondaryTheme,
 };
 use crate::view_components::compactible_action_button::CompactibleActionButton;
 use crate::view_components::find::FindEvent;
-use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, WorkspaceAction};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit, LLMPreferences,
-    PrivacySettings, ToastStack,
+    AIAgentTodoList, Appearance, FileEdit, LLMPreferences, PrivacySettings, ToastStack,
+    send_telemetry_from_ctx,
 };
 
 /// The default display name used for the user if they have no associated display name.
@@ -271,14 +271,13 @@ fn user_avatar_info_for_conversation_creator(
         };
     }
 
-    if let Some(creator_uid) = creator_uid {
-        if let Some(profile) = UserProfiles::as_ref(app).profile_for_uid(UserUid::new(creator_uid))
-        {
-            return UserAvatarInfo {
-                display_name: profile.displayable_identifier(),
-                profile_image_path: non_empty_photo_url(&profile.photo_url),
-            };
-        }
+    if let Some(creator_uid) = creator_uid
+        && let Some(profile) = UserProfiles::as_ref(app).profile_for_uid(UserUid::new(creator_uid))
+    {
+        return UserAvatarInfo {
+            display_name: profile.displayable_identifier(),
+            profile_image_path: non_empty_photo_url(&profile.photo_url),
+        };
     }
 
     fallback
@@ -1249,10 +1248,10 @@ impl AIBlock {
         });
 
         ctx.subscribe_to_model(&get_relevant_files_controller, |me, _, event, ctx| {
-            if let GetRelevantFilesControllerEvent::Success { action_id, .. } = event {
-                if me.requested_action_ids.contains(action_id) {
-                    ctx.notify();
-                }
+            if let GetRelevantFilesControllerEvent::Success { action_id, .. } = event
+                && me.requested_action_ids.contains(action_id)
+            {
+                ctx.notify();
             }
         });
 
@@ -1277,13 +1276,11 @@ impl AIBlock {
 
                 if let (Some(server_conversation_token), Some(server_output_id)) =
                     (server_conversation_token, server_output_id)
+                    && request_id.eq(server_output_id.to_string().as_str())
+                    && server_conversation_id.eq(server_conversation_token.as_str())
                 {
-                    if request_id.eq(server_output_id.to_string().as_str())
-                        && server_conversation_id.eq(server_conversation_token.as_str())
-                    {
-                        me.request_refunded_count = Some(*requests_refunded);
-                        ctx.notify();
-                    }
+                    me.request_refunded_count = Some(*requests_refunded);
+                    ctx.notify();
                 }
             }
         });
@@ -2577,27 +2574,25 @@ impl AIBlock {
         }
 
         // Only show the agent mode workflow if there are no rules.
-        if FeatureFlag::SuggestedAgentModeWorkflows.is_enabled() && self.suggested_rules.is_empty()
+        if FeatureFlag::SuggestedAgentModeWorkflows.is_enabled()
+            && self.suggested_rules.is_empty()
+            && let Some(workflow) = suggestions.agent_mode_workflows.first()
         {
-            if let Some(workflow) = suggestions.agent_mode_workflows.first() {
-                let workflow_view = ctx.add_typed_action_view(|ctx| {
-                    SuggestionChipView::new_agent_mode_workflow_chip(workflow.clone(), ctx)
-                });
-                ctx.subscribe_to_view(&workflow_view, |_me, _view, event, ctx| match event {
-                    SuggestedChipViewEvent::OpenWorkflow { sync_id } => {
-                        ctx.emit(AIBlockEvent::OpenWorkflow { sync_id: *sync_id });
-                    }
-                    SuggestedChipViewEvent::ShowSuggestedAgentModeWorkflowModal {
-                        workflow_and_id,
-                    } => {
-                        ctx.emit(AIBlockEvent::OpenSuggestedAgentModeWorkflowModal {
-                            workflow_and_id: workflow_and_id.clone(),
-                        });
-                    }
-                    _ => {}
-                });
-                self.suggested_agent_mode_workflow = Some(workflow_view);
-            }
+            let workflow_view = ctx.add_typed_action_view(|ctx| {
+                SuggestionChipView::new_agent_mode_workflow_chip(workflow.clone(), ctx)
+            });
+            ctx.subscribe_to_view(&workflow_view, |_me, _view, event, ctx| match event {
+                SuggestedChipViewEvent::OpenWorkflow { sync_id } => {
+                    ctx.emit(AIBlockEvent::OpenWorkflow { sync_id: *sync_id });
+                }
+                SuggestedChipViewEvent::ShowSuggestedAgentModeWorkflowModal { workflow_and_id } => {
+                    ctx.emit(AIBlockEvent::OpenSuggestedAgentModeWorkflowModal {
+                        workflow_and_id: workflow_and_id.clone(),
+                    });
+                }
+                _ => {}
+            });
+            self.suggested_agent_mode_workflow = Some(workflow_view);
         }
 
         for action in output.actions() {
@@ -2806,15 +2801,14 @@ impl AIBlock {
             }
 
             for citation in &output.citations {
-                if is_command_copied_from_document(command, citation, shell_type, ctx) {
-                    if let Some(requested_command) =
+                if is_command_copied_from_document(command, citation, shell_type, ctx)
+                    && let Some(requested_command) =
                         self.requested_commands.get(requested_command_action_id)
-                    {
-                        requested_command.view.update(ctx, |view, ctx| {
-                            view.update_copied_from_citation(citation);
-                            ctx.notify();
-                        });
-                    }
+                {
+                    requested_command.view.update(ctx, |view, ctx| {
+                        view.update_copied_from_citation(citation);
+                        ctx.notify();
+                    });
                 }
             }
         }
@@ -2922,16 +2916,16 @@ impl AIBlock {
         }
 
         // This is used to trigger the theme chooser opening when the theme chooser onboarding block is active.
-        if let Some(text_message) = output.text_from_agent_output().last() {
-            if text_message.sections.iter().any(|section| {
+        if let Some(text_message) = output.text_from_agent_output().last()
+            && text_message.sections.iter().any(|section| {
                 if let AIAgentTextSection::PlainText { text } = section {
                     text.text().contains("The matrix theme is now available at")
                 } else {
                     false
                 }
-            }) {
-                ctx.emit(AIBlockEvent::OpenThemeChooser);
-            }
+            })
+        {
+            ctx.emit(AIBlockEvent::OpenThemeChooser);
         }
         if self.requested_action_ids.is_empty() {
             // There are no actions to be taken in this block, it is finished.
@@ -4372,11 +4366,11 @@ impl AIBlock {
             return;
         };
 
-        if let Some(state) = self.collapsible_block_states.get_mut(message_id) {
-            if let CollapsibleExpansionState::Collapsed = state.expansion_state {
-                state.expand();
-                ctx.notify();
-            }
+        if let Some(state) = self.collapsible_block_states.get_mut(message_id)
+            && let CollapsibleExpansionState::Collapsed = state.expansion_state
+        {
+            state.expand();
+            ctx.notify();
         }
     }
 }
@@ -4521,8 +4515,10 @@ impl AIBlock {
                             ..
                         } if speedbump_action_id == action_id && *shown.lock() => {
                             BlocklistAIPermissions::handle(ctx).update(ctx, |permissions, ctx| {
-                                report_if_error!(permissions
-                                    .set_should_autoexecute_readonly_commands(*checked, ctx));
+                                report_if_error!(
+                                    permissions
+                                        .set_should_autoexecute_readonly_commands(*checked, ctx)
+                                );
                             });
                         }
                         AutonomySettingSpeedbump::ShouldShowForFileAccess {
@@ -4574,8 +4570,12 @@ impl AIBlock {
                                     permission,
                                     AgentModeCodingPermissionsType::AllowReadingSpecificFiles
                                 ) {
-                                    report_if_error!(permissions
-                                        .add_filepath_to_code_read_allowlist(root_repo_path, ctx));
+                                    report_if_error!(
+                                        permissions.add_filepath_to_code_read_allowlist(
+                                            root_repo_path,
+                                            ctx
+                                        )
+                                    );
                                 }
                             });
                         }
@@ -4878,11 +4878,11 @@ impl AIBlock {
         // If there's a blocking passive code diff, focus that.
         // We special case this since get_pending_action only focuses on active conversations,
         // and passive code diffs are not part of an active conversation, when they initially appear.
-        if self.model.request_type(ctx).is_passive_code_diff() {
-            if let Some(diff) = self.find_undismissed_code_diff(ctx) {
-                ctx.focus(&diff.view);
-                return;
-            }
+        if self.model.request_type(ctx).is_passive_code_diff()
+            && let Some(diff) = self.find_undismissed_code_diff(ctx)
+        {
+            ctx.focus(&diff.view);
+            return;
         }
 
         if self
@@ -5444,16 +5444,16 @@ impl AIBlock {
                 .map(|a| a.id.clone())
         };
 
-        if let Some(action_id) = pending_action_id {
-            if let Some(requested_command) = self.requested_commands.get(&action_id) {
-                let command_text = requested_command
-                    .view
-                    .update(ctx, |view, ctx| view.commit_and_get_command_text(ctx));
-                self.action_model.update(ctx, |action_model, ctx| {
-                    action_model.handle_requested_command_accepted(&action_id, command_text, ctx);
-                });
-                ctx.notify();
-            }
+        if let Some(action_id) = pending_action_id
+            && let Some(requested_command) = self.requested_commands.get(&action_id)
+        {
+            let command_text = requested_command
+                .view
+                .update(ctx, |view, ctx| view.commit_and_get_command_text(ctx));
+            self.action_model.update(ctx, |action_model, ctx| {
+                action_model.handle_requested_command_accepted(&action_id, command_text, ctx);
+            });
+            ctx.notify();
         }
     }
     /// Accepts the latest pending (blocked) requested MCP tool call, if any.
@@ -5465,13 +5465,13 @@ impl AIBlock {
                 .map(|a| a.id.clone())
         };
 
-        if let Some(action_id) = pending_action_id {
-            if self.requested_mcp_tools.contains_key(&action_id) {
-                self.action_model.update(ctx, |action_model, ctx| {
-                    action_model.execute_action(&action_id, self.client_ids.conversation_id, ctx);
-                });
-                ctx.notify();
-            }
+        if let Some(action_id) = pending_action_id
+            && self.requested_mcp_tools.contains_key(&action_id)
+        {
+            self.action_model.update(ctx, |action_model, ctx| {
+                action_model.execute_action(&action_id, self.client_ids.conversation_id, ctx);
+            });
+            ctx.notify();
         }
     }
 
@@ -5571,13 +5571,12 @@ impl AIBlock {
         // If the input model is "auto", always display that, otherwise use the actual output model if available.
         if model_name != "auto" {
             let model_id = self.model.model_id(app);
-            if let Some(model_id) = model_id {
-                if let Some(output_model_name) = LLMPreferences::as_ref(app)
+            if let Some(model_id) = model_id
+                && let Some(output_model_name) = LLMPreferences::as_ref(app)
                     .get_llm_info(&model_id)
                     .map(|info| info.display_name.clone())
-                {
-                    model_name = output_model_name;
-                }
+            {
+                model_name = output_model_name;
             }
         }
         model_name
@@ -5732,17 +5731,16 @@ impl AIBlock {
             .action_model
             .as_ref(app)
             .get_finished_action_results(conversation.id())
-        {
-            if finished_action_results.iter().any(|result| {
+            && finished_action_results.iter().any(|result| {
                 matches!(
                     result.result,
                     AIAgentActionResultType::RequestFileEdits(
                         RequestFileEditsResult::Success { .. }
                     )
                 )
-            }) {
-                return true;
-            }
+            })
+        {
+            return true;
         }
 
         // Otherwise, we also check all past exchanges since the last user query for accepted file edits.
@@ -6296,15 +6294,14 @@ impl TypedActionView for AIBlock {
                 message_id,
                 pinned_to_bottom,
             } => {
-                if let Some(state) = self.collapsible_block_states.get_mut(message_id) {
-                    if let CollapsibleExpansionState::Expanded {
+                if let Some(state) = self.collapsible_block_states.get_mut(message_id)
+                    && let CollapsibleExpansionState::Expanded {
                         scroll_pinned_to_bottom,
                         ..
                     } = &mut state.expansion_state
-                    {
-                        *scroll_pinned_to_bottom = *pinned_to_bottom;
-                        ctx.notify();
-                    }
+                {
+                    *scroll_pinned_to_bottom = *pinned_to_bottom;
+                    ctx.notify();
                 }
             }
             AIBlockAction::ContinueConversation => {
@@ -6410,13 +6407,15 @@ impl TypedActionView for AIBlock {
                     .last()
                     .map(|action| action.id.clone());
                 if let Some(run_agents_id) = run_agents_id {
-                    if let Some(card_view) = self.run_agents_card_views.get(&run_agents_id).cloned()
-                    {
-                        card_view.update(ctx, |view, ctx_view| view.accept(ctx_view));
-                    } else {
-                        log::warn!(
-                            "ExecuteNextPendingAction: no RunAgentsCardView for {run_agents_id:?}"
-                        );
+                    match self.run_agents_card_views.get(&run_agents_id).cloned() {
+                        Some(card_view) => {
+                            card_view.update(ctx, |view, ctx_view| view.accept(ctx_view));
+                        }
+                        _ => {
+                            log::warn!(
+                                "ExecuteNextPendingAction: no RunAgentsCardView for {run_agents_id:?}"
+                            );
+                        }
                     }
                 } else {
                     self.action_model.update(ctx, |action_model, ctx| {
@@ -6541,9 +6540,11 @@ impl TypedActionView for AIBlock {
                     }
                 });
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .rule_suggestions_enabled_internal
-                        .set_value(false, ctx));
+                    report_if_error!(
+                        settings
+                            .rule_suggestions_enabled_internal
+                            .set_value(false, ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -6667,19 +6668,18 @@ impl TypedActionView for AIBlock {
                     return;
                 }
 
-                if matches!(rating, AIBlockResponseRating::Negative) {
-                    if let Some(output_id) = output_id.clone() {
-                        let request_usage_model = AIRequestUsageModel::handle(ctx);
-                        request_usage_model.update(ctx, |request_usage_model, ctx| {
-                            request_usage_model
-                                .provide_negative_feedback_response_for_ai_conversation(
-                                    self.client_ids.conversation_id,
-                                    output_id.to_string(),
-                                    self.client_ids.client_exchange_id,
-                                    ctx,
-                                );
-                        });
-                    }
+                if matches!(rating, AIBlockResponseRating::Negative)
+                    && let Some(output_id) = output_id.clone()
+                {
+                    let request_usage_model = AIRequestUsageModel::handle(ctx);
+                    request_usage_model.update(ctx, |request_usage_model, ctx| {
+                        request_usage_model.provide_negative_feedback_response_for_ai_conversation(
+                            self.client_ids.conversation_id,
+                            output_id.to_string(),
+                            self.client_ids.client_exchange_id,
+                            ctx,
+                        );
+                    });
                 }
 
                 let window_id = ctx.window_id();
@@ -6831,20 +6831,20 @@ impl TypedActionView for AIBlock {
                 action_id,
                 comment_index,
             } => {
-                if let Some(group) = self.imported_comments.get_mut(action_id) {
-                    if let Some(card) = group.card_mut(*comment_index) {
-                        card.toggle_collapsed();
-                        let is_collapsed = card.is_collapsed();
-                        if let Some(state) = group.element_states.get(*comment_index) {
-                            let icon = if is_collapsed {
-                                Icon::ChevronRight
-                            } else {
-                                Icon::ChevronDown
-                            };
-                            state.chevron_button.update(ctx, |button, ctx| {
-                                button.set_icon(Some(icon), ctx);
-                            });
-                        }
+                if let Some(group) = self.imported_comments.get_mut(action_id)
+                    && let Some(card) = group.card_mut(*comment_index)
+                {
+                    card.toggle_collapsed();
+                    let is_collapsed = card.is_collapsed();
+                    if let Some(state) = group.element_states.get(*comment_index) {
+                        let icon = if is_collapsed {
+                            Icon::ChevronRight
+                        } else {
+                            Icon::ChevronDown
+                        };
+                        state.chevron_button.update(ctx, |button, ctx| {
+                            button.set_icon(Some(icon), ctx);
+                        });
                     }
                 }
             }
@@ -7071,15 +7071,15 @@ impl AIBlock {
         let active_config = {
             let history = crate::BlocklistAIHistoryModel::as_ref(ctx);
             let conv = history.conversation(&self.client_ids.conversation_id);
-            let result = if !request.plan_id.is_empty() {
+
+            if !request.plan_id.is_empty() {
                 conv.and_then(|conv| {
                     conv.orchestration_config_for_plan(&request.plan_id)
                         .map(|(config, status)| (config.clone(), status))
                 })
             } else {
                 None
-            };
-            result
+            }
         };
 
         let action_id_clone = action_id.clone();

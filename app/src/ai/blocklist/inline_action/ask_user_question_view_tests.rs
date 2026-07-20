@@ -1,7 +1,7 @@
 use ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
 use ai::agent::{AskUserQuestionAction, AskUserQuestionSession};
 
-use super::{ask_user_question_view_state, AskUserQuestionViewState};
+use super::{AskUserQuestionViewState, ask_user_question_view_state};
 
 fn build_question(question_id: &str, supports_other: bool) -> AskUserQuestionItem {
     AskUserQuestionItem {

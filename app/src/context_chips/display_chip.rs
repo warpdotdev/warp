@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Empty, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    DEFAULT_UI_LINE_HEIGHT_RATIO, Empty, Flex, Hoverable, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Cache, FamilyId, Properties, Weight};
 use warpui::keymap::Keystroke;
@@ -28,8 +28,8 @@ use super::display_menu::{
     ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
 };
 use super::{
-    agent_view_chip_color, github_pr_display_text_from_url, render_text_from_kind, ChipResult,
-    ChipValue, ContextChipKind,
+    ChipResult, ChipValue, ContextChipKind, agent_view_chip_color, github_pr_display_text_from_url,
+    render_text_from_kind,
 };
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::prompt::plan_and_todo_list::{PlanAndTodoListEvent, PlanAndTodoListView};
@@ -41,7 +41,7 @@ use crate::code_review::code_review_view::CODE_REVIEW_TOOLTIP_TEXT;
 use crate::code_review::diff_state::DiffStats;
 use crate::completer::SessionContext;
 use crate::context_chips::git_branch_on_click::{
-    is_plausible_new_branch_name, GitBranchOnClickValue,
+    GitBranchOnClickValue, is_plausible_new_branch_name,
 };
 use crate::context_chips::node_version_popup::{NodeVersionPopupEvent, NodeVersionPopupView};
 use crate::context_chips::spacing;
@@ -397,15 +397,15 @@ impl GitLineChanges {
 
         let words: Vec<&str> = line.split_whitespace().collect();
         for (i, word) in words.iter().enumerate() {
-            if let Ok(num) = word.parse::<u32>() {
-                if let Some(next_word) = words.get(i + 1) {
-                    if next_word.starts_with("file") {
-                        files_changed = num;
-                    } else if next_word.starts_with("insertion") {
-                        lines_added = num;
-                    } else if next_word.starts_with("deletion") {
-                        lines_removed = num;
-                    }
+            if let Ok(num) = word.parse::<u32>()
+                && let Some(next_word) = words.get(i + 1)
+            {
+                if next_word.starts_with("file") {
+                    files_changed = num;
+                } else if next_word.starts_with("insertion") {
+                    lines_added = num;
+                } else if next_word.starts_with("deletion") {
+                    lines_removed = num;
                 }
             }
         }
@@ -1599,15 +1599,16 @@ impl DisplayChip {
             }
 
             let mut stack = Stack::new().with_child(chip_element.finish());
-            if state.is_hovered() && !menu_open {
-                if let Some(tooltip_text) = tooltip_text.clone() {
-                    let tool_tip = appearance
-                        .ui_builder()
-                        .tool_tip(tooltip_text)
-                        .build()
-                        .finish();
-                    stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
-                }
+            if state.is_hovered()
+                && !menu_open
+                && let Some(tooltip_text) = tooltip_text.clone()
+            {
+                let tool_tip = appearance
+                    .ui_builder()
+                    .tool_tip(tooltip_text)
+                    .build()
+                    .finish();
+                stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
             }
             stack.finish()
         });
@@ -2071,16 +2072,17 @@ impl View for DisplayChip {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        if let Some(chip) = self.render_chip(app) {
-            if self.is_in_agent_view {
-                chip
-            } else {
-                Container::new(chip)
-                    .with_margin_right(CHIP_MARGIN_RIGHT)
-                    .finish()
+        match self.render_chip(app) {
+            Some(chip) => {
+                if self.is_in_agent_view {
+                    chip
+                } else {
+                    Container::new(chip)
+                        .with_margin_right(CHIP_MARGIN_RIGHT)
+                        .finish()
+                }
             }
-        } else {
-            Empty::new().finish()
+            _ => Empty::new().finish(),
         }
     }
 }

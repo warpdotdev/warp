@@ -29,25 +29,25 @@ pub use host_selector::{
     Host, HostSelector, HostSelectorAction, HostSelectorEvent, NakedHeaderButtonTheme,
 };
 pub use loading_screen::{render_cloud_mode_error_screen, render_cloud_mode_loading_screen};
-pub(crate) use model::should_disable_snapshot;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 pub(crate) use model::PendingHandoff;
+pub(crate) use model::should_disable_snapshot;
 pub use model::{AgentProgress, AmbientAgentViewModel, AmbientAgentViewModelEvent, Status};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 pub(crate) use model::{HandoffSubmissionState, SnapshotUploadStatus};
 pub use model_selector::{
     HarnessSelection, ModelSelection, ModelSelector, ModelSelectorAction, ModelSelectorEvent,
 };
-pub use progress::{render_progress, ProgressProps, ProgressStep, ProgressStepState};
+pub use progress::{ProgressProps, ProgressStep, ProgressStepState, render_progress};
 pub use progress_ui_state::AmbientAgentProgressUIState;
-pub use tips::{get_cloud_mode_tips, CloudModeTip};
+pub use tips::{CloudModeTip, get_cloud_mode_tips};
 use warp_core::features::FeatureFlag;
 use warpui::geometry::vector::Vector2F;
 use warpui::{AppContext, ModelHandle, ViewHandle, WindowId};
 
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewState};
 use crate::pane_group::TerminalViewResources;
-use crate::terminal::{shared_session, TerminalManager, TerminalModel, TerminalView};
+use crate::terminal::{TerminalManager, TerminalModel, TerminalView, shared_session};
 
 /// Creates a cloud mode terminal view and manager for ambient agent sessions.
 /// See `viewer::TerminalManager::enable_orchestration_polling` for the flag.

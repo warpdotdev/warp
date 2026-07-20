@@ -19,7 +19,7 @@ use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
 use super::shell::ShellType;
-use super::{prompt, SizeInfo, TerminalModel};
+use super::{SizeInfo, TerminalModel, prompt};
 use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::appearance::Appearance;
 use crate::context_chips::display::PromptDisplay;
@@ -30,10 +30,10 @@ use crate::terminal::blockgrid_element::BlockGridElement;
 use crate::terminal::grid_size_util::grid_compute_baseline_position_fn;
 use crate::terminal::input::get_input_box_top_border_width;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
+use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::session::Sessions;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::view::{TerminalAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT};
+use crate::terminal::view::{PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT, TerminalAction};
 use crate::themes::theme::PromptColors;
 
 /// How long we're willing to wait after precmd for a marker-based prompt to appear before we
@@ -245,28 +245,26 @@ impl PromptRenderHelper {
 
         // If a remote server setup is in progress for the pending session,
         // show a stage-specific message instead of the generic "Starting shell...".
-        if let Some(pending_session_id) = model.pending_session_id() {
-            if let Some(state) = sessions.remote_server_setup_state(pending_session_id) {
-                return match state {
-                    RemoteServerSetupState::Checking => "Starting shell...".to_string(),
-                    RemoteServerSetupState::Installing {
-                        progress_percent: Some(p),
-                    } => format!("Installing Warp SSH Extension... ({p}%)"),
-                    RemoteServerSetupState::Installing {
-                        progress_percent: None,
-                    } => "Installing Warp SSH Extension...".to_string(),
-                    RemoteServerSetupState::Updating => {
-                        "Updating Warp SSH Extension...".to_string()
-                    }
-                    RemoteServerSetupState::Initializing => "Initializing...".to_string(),
-                    RemoteServerSetupState::Ready => "Starting shell...".to_string(),
-                    // Failed and Unsupported both fall back to the wrapper-only SSH
-                    // flow, so we render the same generic prompt as a normal
-                    // SSH session that doesn't have the remote-server extension.
-                    RemoteServerSetupState::Failed { .. }
-                    | RemoteServerSetupState::Unsupported { .. } => "Starting shell...".to_string(),
-                };
-            }
+        if let Some(pending_session_id) = model.pending_session_id()
+            && let Some(state) = sessions.remote_server_setup_state(pending_session_id)
+        {
+            return match state {
+                RemoteServerSetupState::Checking => "Starting shell...".to_string(),
+                RemoteServerSetupState::Installing {
+                    progress_percent: Some(p),
+                } => format!("Installing Warp SSH Extension... ({p}%)"),
+                RemoteServerSetupState::Installing {
+                    progress_percent: None,
+                } => "Installing Warp SSH Extension...".to_string(),
+                RemoteServerSetupState::Updating => "Updating Warp SSH Extension...".to_string(),
+                RemoteServerSetupState::Initializing => "Initializing...".to_string(),
+                RemoteServerSetupState::Ready => "Starting shell...".to_string(),
+                // Failed and Unsupported both fall back to the wrapper-only SSH
+                // flow, so we render the same generic prompt as a normal
+                // SSH session that doesn't have the remote-server extension.
+                RemoteServerSetupState::Failed { .. }
+                | RemoteServerSetupState::Unsupported { .. } => "Starting shell...".to_string(),
+            };
         }
 
         if !sessions.is_empty() {

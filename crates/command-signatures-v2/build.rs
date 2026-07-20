@@ -24,7 +24,9 @@ If you continue to encounter issues, ensure you don't have conflicting Node inst
 "#
             )
         } else {
-            println!("cargo:warning=Failed to build command signatures JS. Proceeding with stale command signatures!");
+            println!(
+                "cargo:warning=Failed to build command signatures JS. Proceeding with stale command signatures!"
+            );
         }
     }
     Ok(())

@@ -7,17 +7,17 @@
 
 use pathfinder_color::ColorU;
 use warp::tui_export::Appearance;
-use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::Opacity;
+use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
-    tui_collapsible, Color, Modifier, TuiElement, TuiEventContext, TuiStyle,
+    Color, Modifier, TuiElement, TuiEventContext, TuiStyle, tui_collapsible,
 };
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
-use warpui_core::AppContext;
 
-use crate::orchestrated_agent_identity_styling::{agent_identity_palette, AgentIdentity};
+use crate::orchestrated_agent_identity_styling::{AgentIdentity, agent_identity_palette};
 use crate::tab_bar::TuiTabBarStyles;
 use crate::terminal_background::probed_colors;
 

@@ -1,8 +1,8 @@
 use warp::tui_export::light_theme;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
-use warpui_core::elements::tui::{Color, Modifier};
 use warpui_core::elements::Fill as CoreFill;
+use warpui_core::elements::tui::{Color, Modifier};
 
 use super::TuiUiBuilder;
 

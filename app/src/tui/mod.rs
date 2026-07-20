@@ -13,10 +13,10 @@ pub use mcp::{
 };
 use warpui::{AppContext, Entity, SingletonEntity};
 
-use crate::ai::mcp::FileBasedMCPManager;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
-use crate::auth::AuthStateProvider;
 use crate::TuiMountFn;
+use crate::ai::mcp::FileBasedMCPManager;
+use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 
 /// Login state of the headless TUI, observed by the `warp_tui` root view to
 /// decide whether to show the login placeholder or the input UI.

@@ -7,9 +7,9 @@ use std::time::Duration;
 use futures::channel::oneshot;
 use repo_metadata::RepoMetadataUpdate;
 use serde::Serialize;
+use warp_core::SessionId;
 #[cfg(not(target_family = "wasm"))]
 use warp_core::channel::ChannelState;
-use warp_core::SessionId;
 use warp_errors::report_error;
 use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
 use warp_util::standardized_path::StandardizedPath;
@@ -17,6 +17,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::FutureExt as _;
 use warpui_core::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
+use crate::HostId;
 use crate::auth::RemoteServerAuthContext;
 #[cfg(not(target_family = "wasm"))]
 use crate::client::ClientEvent;
@@ -25,10 +26,9 @@ use crate::client::InitializeParams;
 use crate::client::RemoteServerClient;
 use crate::codebase_index_proto::RemoteCodebaseIndexStatus;
 use crate::proto::{
-    diff_state, get_diff_state_response, CodebaseIndexLimits, DiffMode, DiffState,
-    DiffStateErrorValue, DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot,
-    FileStatusInfo, GetDiffStateResponse, GitOpDelta, GitStatusMetadata, PrInfo, RepositoryInfo,
-    TextEdit,
+    CodebaseIndexLimits, DiffMode, DiffState, DiffStateErrorValue, DiffStateFileDelta,
+    DiffStateMetadataUpdate, DiffStateSnapshot, FileStatusInfo, GetDiffStateResponse, GitOpDelta,
+    GitStatusMetadata, PrInfo, RepositoryInfo, TextEdit, diff_state, get_diff_state_response,
 };
 use crate::repo_metadata_proto::proto_load_repo_metadata_directory_response_to_update;
 #[cfg(not(target_family = "wasm"))]
@@ -41,7 +41,6 @@ use crate::setup::{PreinstallCheckResult, RemotePlatform, RemoteServerSetupState
 #[cfg(not(target_family = "wasm"))]
 use crate::transport::{Connection, ControlPath};
 use crate::transport::{Error, InstallSource, RemoteTransport};
-use crate::HostId;
 
 /// Maximum number of reconnection attempts after a spontaneous disconnect.
 pub const MAX_RECONNECT_ATTEMPTS: u32 = 2;
@@ -1400,10 +1399,10 @@ impl RemoteServerManager {
         host_id: &HostId,
         preferred_session: Option<SessionId>,
     ) -> Option<Arc<RemoteServerClient>> {
-        if let Some(session_id) = preferred_session {
-            if let Some(client) = self.client_for_session(session_id) {
-                return Some(client.clone());
-            }
+        if let Some(session_id) = preferred_session
+            && let Some(client) = self.client_for_session(session_id)
+        {
+            return Some(client.clone());
         }
         self.client_for_host(host_id).cloned()
     }
@@ -2769,7 +2768,7 @@ impl RemoteServerManager {
         session_id: SessionId,
         path: String,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Option<RemoteNavigationResult>> {
+    ) -> impl Future<Output = Option<RemoteNavigationResult>> + use<> {
         use futures::future::ready;
 
         match self.navigate_to_directory_impl(session_id, path, ctx) {
@@ -3025,7 +3024,7 @@ impl RemoteServerManager {
         ctx: &mut ModelContext<Self>,
     ) {
         use crate::proto::{
-            get_branches_response, host_scoped_request, ClientMessage, GetBranches,
+            ClientMessage, GetBranches, get_branches_response, host_scoped_request,
         };
 
         let session_id = match self.find_connected_session(&host_id) {
@@ -3107,7 +3106,7 @@ impl RemoteServerManager {
         mode: DiffMode,
         ctx: &mut ModelContext<Self>,
     ) {
-        use crate::proto::{host_scoped_request, ClientMessage, DiscardFilesRequest};
+        use crate::proto::{ClientMessage, DiscardFilesRequest, host_scoped_request};
 
         let request_id = crate::protocol::RequestId::new();
         let msg = ClientMessage::host_scoped(
@@ -3724,17 +3723,17 @@ impl RemoteServerManager {
         // (Re-)send the SessionBootstrapped notification so the daemon
         // registers an executor for this session. This fires on both the
         // initial connect and every reconnect.
-        if let Some(info) = self.session_bootstrap_info.get(&session_id) {
-            if let Some(client) = self.client_for_session(session_id) {
-                log::info!(
-                    "Remote server sending SessionBootstrapped notification: session={session_id:?}"
-                );
-                client.notify_session_bootstrapped(
-                    session_id,
-                    &info.shell_type,
-                    info.shell_path.as_deref(),
-                );
-            }
+        if let Some(info) = self.session_bootstrap_info.get(&session_id)
+            && let Some(client) = self.client_for_session(session_id)
+        {
+            log::info!(
+                "Remote server sending SessionBootstrapped notification: session={session_id:?}"
+            );
+            client.notify_session_bootstrapped(
+                session_id,
+                &info.shell_type,
+                info.shell_path.as_deref(),
+            );
         }
     }
 

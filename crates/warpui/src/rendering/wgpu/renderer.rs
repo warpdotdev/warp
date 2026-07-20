@@ -12,10 +12,10 @@ use wgpu::wgc::device::DeviceError;
 use wgpu::wgc::present::SurfaceError;
 
 pub use super::resources::{GetSurfaceTextureError, SurfaceConfigureError};
+use crate::Scene;
 use crate::r#async::block_on;
 use crate::rendering::wgpu::Resources;
 use crate::rendering::{GlyphConfig, GlyphRasterBoundsFn, RasterizeGlyphFn};
-use crate::Scene;
 
 const ENCODER_DESCRIPTOR: wgpu::CommandEncoderDescriptor = wgpu::CommandEncoderDescriptor {
     label: Some("Command encoder"),
@@ -107,12 +107,11 @@ impl Renderer {
             queue.submit(Some(encoder.finish()));
         });
 
-        if let Some(callback) = capture_callback {
-            if let Err(err) =
+        if let Some(callback) = capture_callback
+            && let Err(err) =
                 capture_surface_texture(device, queue, resources, &surface_texture, callback)
-            {
-                log::warn!("Frame capture failed: {err}");
-            }
+        {
+            log::warn!("Frame capture failed: {err}");
         }
 
         if let Some(callback) = pre_present_callback {

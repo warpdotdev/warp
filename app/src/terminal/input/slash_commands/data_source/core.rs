@@ -7,8 +7,8 @@ use ordered_float::OrderedFloat;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon as WarpIcon;
+use warp_core::ui::appearance::Appearance;
 #[cfg(not(target_family = "wasm"))]
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::fonts::FamilyId;
@@ -19,19 +19,19 @@ use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISuba
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::skills::{SkillDescriptor, SkillManager};
 use crate::search::slash_command_menu::fuzzy_match::SlashCommandFuzzyMatchResult;
-use crate::search::slash_command_menu::static_commands::{commands, Availability};
+use crate::search::slash_command_menu::static_commands::{Availability, commands};
 use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::input::slash_command_model::{
-    slash_command_composition_filter, DetectedCommand, DetectedSkillCommand,
-    ParsedSlashCommandInput,
+    DetectedCommand, DetectedSkillCommand, ParsedSlashCommandInput,
+    slash_command_composition_filter,
 };
 use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
-use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::terminal::model::session::SessionType;
+use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Event emitted when the set of active slash commands changes.
@@ -114,10 +114,9 @@ pub(super) fn subscribe_to_shared_dependencies<T>(
                 terminal_view_id: event_terminal_view_id,
                 ..
             } = event
+                && *event_terminal_view_id == terminal_view_id
             {
-                if *event_terminal_view_id == terminal_view_id {
-                    recompute_active_commands(me, ctx);
-                }
+                recompute_active_commands(me, ctx);
             }
         },
     );

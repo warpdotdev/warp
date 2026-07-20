@@ -5,9 +5,9 @@ use warpui::App;
 
 use super::*;
 use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::StartCommandOutcome;
 use crate::terminal::model::ansi::{Handler, PreexecValue};
 use crate::terminal::model::session::Sessions;
-use crate::terminal::model::StartCommandOutcome;
 
 #[derive(Clone, Default)]
 struct TestEventLoopSender {

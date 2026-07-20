@@ -21,15 +21,15 @@ use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use async_trait::async_trait;
 pub use in_band_command_executor::{
-    is_in_band_command, InBandCommand, InBandCommandCancelledEvent, InBandCommandExecutor,
-    InBandCommandOutputReceiver,
+    InBandCommand, InBandCommandCancelledEvent, InBandCommandExecutor, InBandCommandOutputReceiver,
+    is_in_band_command,
 };
 #[cfg(feature = "local_tty")]
 pub use local_command_executor::LocalCommandExecutor;
 pub use noop_command_executor::NoOpCommandExecutor;
 #[cfg(feature = "local_tty")]
 pub use remote_command_executor::RemoteCommandExecutor;
-pub use shared::{shell_escape_single_quotes, shell_quote_arg, ExecutorCommandEvent};
+pub use shared::{ExecutorCommandEvent, shell_escape_single_quotes, shell_quote_arg};
 use warp_completer::completer::CommandOutput;
 #[cfg(feature = "local_tty")]
 use warp_errors::report_error;
@@ -175,20 +175,20 @@ fn new_command_executor_for_local_tty_session(
     // fall through to the existing ControlMaster-based
     // `RemoteCommandExecutor` below. This preserves the fallback behavior
     // described in specs/APP-3797.
-    if FeatureFlag::SshRemoteServer.is_enabled() {
-        if let IsSSHWrapperSession::Yes { .. } = &session_info.is_ssh_wrapper_session {
-            let session_id = session_info.session_id;
-            let maybe_client = RemoteServerManager::handle(ctx)
-                .read(ctx, |mgr, _| mgr.client_for_session(session_id).cloned());
-            if let Some(client) = maybe_client {
-                log::info!("creating a remote server executor for session {session_id:?}");
-                return Arc::new(RemoteServerCommandExecutor::new(session_id, client));
-            }
-            log::info!(
-                "SshRemoteServer flag on but no connected client for session {session_id:?}; \
-                 falling back to ControlMaster executor"
-            );
+    if FeatureFlag::SshRemoteServer.is_enabled()
+        && let IsSSHWrapperSession::Yes { .. } = &session_info.is_ssh_wrapper_session
+    {
+        let session_id = session_info.session_id;
+        let maybe_client = RemoteServerManager::handle(ctx)
+            .read(ctx, |mgr, _| mgr.client_for_session(session_id).cloned());
+        if let Some(client) = maybe_client {
+            log::info!("creating a remote server executor for session {session_id:?}");
+            return Arc::new(RemoteServerCommandExecutor::new(session_id, client));
         }
+        log::info!(
+            "SshRemoteServer flag on but no connected client for session {session_id:?}; \
+                 falling back to ControlMaster executor"
+        );
     }
 
     let debug_settings = DebugSettings::as_ref(ctx);
@@ -305,7 +305,9 @@ fn new_command_executor_for_local_tty_session(
                 log::info!("creating a ControlMaster-based ssh executor!");
                 Arc::new(RemoteCommandExecutor::new(socket_path.clone(), wsl_distro))
             } else {
-                unreachable!("Unreachable because of match! above. Unfortunately if let guards in rust are still experimental.")
+                unreachable!(
+                    "Unreachable because of match! above. Unfortunately if let guards in rust are still experimental."
+                )
             }
         }
         _ => {

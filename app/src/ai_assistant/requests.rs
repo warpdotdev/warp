@@ -9,13 +9,13 @@ use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::execution_context::WarpAiExecutionContext;
-use super::utils::{markdown_segments_from_text, FormattedTranscriptMessage, TranscriptPart};
+use super::utils::{FormattedTranscriptMessage, TranscriptPart, markdown_segments_from_text};
 use crate::ai::{RequestLimitInfo, RequestUsageInfo};
 use crate::ai_assistant::utils::{AssistantTranscriptPart, TranscriptPartSubType};
 use crate::auth::AuthStateProvider;
 use crate::send_telemetry_from_ctx;
-use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::ai::AIClient;
 use crate::server::telemetry::{TelemetryEvent, WarpAIRequestResult};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 

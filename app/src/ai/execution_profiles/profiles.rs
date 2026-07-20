@@ -15,8 +15,8 @@ use super::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
-use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::{CloudModelEvent, UpdateSource};
 use crate::cloud_object::{CloudObject as _, GenericStringObjectFormat, JsonObjectType};
@@ -25,7 +25,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ClientId, SyncId};
 use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, CloudModel, LaunchMode, TelemetryEvent};
+use crate::{CloudModel, LaunchMode, TelemetryEvent, send_telemetry_from_ctx};
 
 /// ExecutionProfileId is the identifier that users of the AIExecutionProfilesModel use
 /// to refer back to a specific profile. These are unique across the lifespan of the app.
@@ -218,26 +218,29 @@ impl AIExecutionProfilesModel {
         // (say, we switch between local and staging servers). When that happens the default profile starts as synced but
         // then the profile is deleted when initial load returns. To fix that, we listen for the deletion of the default
         // profile and reset the model state when that happens.
-        if ChannelState::channel().is_dogfood() {
-            if let DefaultProfileState::Synced { id } = &default_profile_state {
-                let sync_id_of_default_profile = *profile_id_to_sync_id
-                    .get(id)
-                    .expect("default profile is synced but no sync id found");
-                ctx.subscribe_to_model(&CloudModel::handle(ctx), move |me, _, event, _| {
+        if ChannelState::channel().is_dogfood()
+            && let DefaultProfileState::Synced { id } = &default_profile_state
+        {
+            let sync_id_of_default_profile = *profile_id_to_sync_id
+                .get(id)
+                .expect("default profile is synced but no sync id found");
+            ctx.subscribe_to_model(&CloudModel::handle(ctx), move |me, _, event, _| {
                 if let CloudModelEvent::ObjectDeleted {
-                    type_and_id: CloudObjectTypeAndId::GenericStringObject {
-                        id: deleted_sync_id,
-                        ..
-                    },
+                    type_and_id:
+                        CloudObjectTypeAndId::GenericStringObject {
+                            id: deleted_sync_id,
+                            ..
+                        },
                     ..
-                } = event {
-                    if *deleted_sync_id == sync_id_of_default_profile {
-                        log::info!("Resetting execution profile model because default profile was deleted.");
-                        me.reset();
-                    }
+                } = event
+                    && *deleted_sync_id == sync_id_of_default_profile
+                {
+                    log::info!(
+                        "Resetting execution profile model because default profile was deleted."
+                    );
+                    me.reset();
                 }
             });
-            }
         }
 
         log::info!("Initialized execution profile model with state: {default_profile_state}",);
@@ -1260,64 +1263,59 @@ impl AIExecutionProfilesModel {
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         // We don't yet support editing the default profile for the CLI.
-        if let DefaultProfileState::Cli { id, .. } = &self.default_profile_state {
-            if *id == profile_id {
-                log::warn!("Attempted to edit CLI default profile, which is not yet supported.");
-                return false;
-            }
+        if let DefaultProfileState::Cli { id, .. } = &self.default_profile_state
+            && *id == profile_id
+        {
+            log::warn!("Attempted to edit CLI default profile, which is not yet supported.");
+            return false;
         }
 
         // Case: this might be an edit to a not-yet-created default profile object. If so, we need to create
         // a cloud object to back the default profile.
-        if let DefaultProfileState::Unsynced { id, profile } = &self.default_profile_state {
-            if *id == profile_id {
-                let mut new_profile = profile.clone();
-                // If the edit function didn't make any changes to the profile, it's still the default profile, so we don't need to sync it
-                let value_changed = edit_fn(&mut new_profile);
-                if !value_changed {
-                    return false;
-                }
-
-                if let Some(owner) = UserWorkspaces::as_ref(ctx).personal_drive(ctx) {
-                    let update_manager = UpdateManager::handle(ctx);
-                    let client_id = ClientId::default();
-                    update_manager.update(ctx, |update_manager, ctx| {
-                        update_manager.create_ai_execution_profile(
-                            new_profile,
-                            client_id,
-                            owner,
-                            ctx,
-                        );
-                    });
-
-                    // For forever on, the default profile state is synced.
-                    let sync_id = SyncId::ClientId(client_id);
-                    self.default_profile_state = DefaultProfileState::Synced { id: profile_id };
-                    self.profile_id_to_sync_id.insert(profile_id, sync_id);
-
-                    log::info!(
-                        "Creating a cloud object for the default execution profile: {profile_id:?}"
-                    );
-                } else {
-                    // The user isn't logged in yet (or personal drive isn't available),
-                    // so we can't create a cloud object. Persist the edit locally on the
-                    // Unsynced profile so it isn't silently dropped; it will be promoted
-                    // to a Synced cloud object the next time an edit runs after login.
-                    // Without this, onboarding-driven edits (e.g. autonomy permissions
-                    // written by `apply_agent_settings`) disappear when onboarding is
-                    // completed before login.
-                    self.default_profile_state = DefaultProfileState::Unsynced {
-                        id: profile_id,
-                        profile: new_profile,
-                    };
-
-                    log::info!(
-                        "Updated local unsynced default execution profile (no personal drive yet): {profile_id:?}"
-                    );
-                }
-                ctx.emit(AIExecutionProfilesModelEvent::ProfileUpdated(profile_id));
-                return true;
+        if let DefaultProfileState::Unsynced { id, profile } = &self.default_profile_state
+            && *id == profile_id
+        {
+            let mut new_profile = profile.clone();
+            // If the edit function didn't make any changes to the profile, it's still the default profile, so we don't need to sync it
+            let value_changed = edit_fn(&mut new_profile);
+            if !value_changed {
+                return false;
             }
+
+            if let Some(owner) = UserWorkspaces::as_ref(ctx).personal_drive(ctx) {
+                let update_manager = UpdateManager::handle(ctx);
+                let client_id = ClientId::default();
+                update_manager.update(ctx, |update_manager, ctx| {
+                    update_manager.create_ai_execution_profile(new_profile, client_id, owner, ctx);
+                });
+
+                // For forever on, the default profile state is synced.
+                let sync_id = SyncId::ClientId(client_id);
+                self.default_profile_state = DefaultProfileState::Synced { id: profile_id };
+                self.profile_id_to_sync_id.insert(profile_id, sync_id);
+
+                log::info!(
+                    "Creating a cloud object for the default execution profile: {profile_id:?}"
+                );
+            } else {
+                // The user isn't logged in yet (or personal drive isn't available),
+                // so we can't create a cloud object. Persist the edit locally on the
+                // Unsynced profile so it isn't silently dropped; it will be promoted
+                // to a Synced cloud object the next time an edit runs after login.
+                // Without this, onboarding-driven edits (e.g. autonomy permissions
+                // written by `apply_agent_settings`) disappear when onboarding is
+                // completed before login.
+                self.default_profile_state = DefaultProfileState::Unsynced {
+                    id: profile_id,
+                    profile: new_profile,
+                };
+
+                log::info!(
+                    "Updated local unsynced default execution profile (no personal drive yet): {profile_id:?}"
+                );
+            }
+            ctx.emit(AIExecutionProfilesModelEvent::ProfileUpdated(profile_id));
+            return true;
         }
 
         let mut value_changed = false;
@@ -1430,16 +1428,16 @@ impl AIExecutionProfilesModel {
             .collect();
 
         // Transition Unsynced -> Synced if cloud has a default profile.
-        if let DefaultProfileState::Unsynced { id, .. } = self.default_profile_state {
-            if let Some((sync_id, _)) = all_profiles.iter().find(|(_, is_default)| *is_default) {
-                self.default_profile_state = DefaultProfileState::Synced { id };
-                self.profile_id_to_sync_id.insert(id, *sync_id);
-                log::info!(
-                    "Reconciled default execution profile with cloud after initial load: \
+        if let DefaultProfileState::Unsynced { id, .. } = self.default_profile_state
+            && let Some((sync_id, _)) = all_profiles.iter().find(|(_, is_default)| *is_default)
+        {
+            self.default_profile_state = DefaultProfileState::Synced { id };
+            self.profile_id_to_sync_id.insert(id, *sync_id);
+            log::info!(
+                "Reconciled default execution profile with cloud after initial load: \
                      profile_id={id:?}, sync_id={sync_id:?}"
-                );
-                ctx.emit(AIExecutionProfilesModelEvent::ProfileUpdated(id));
-            }
+            );
+            ctx.emit(AIExecutionProfilesModelEvent::ProfileUpdated(id));
         }
 
         // Register non-default profiles from cloud that we aren't
@@ -1491,7 +1489,9 @@ impl AIExecutionProfilesModel {
         let Some(object) = cloud_model
             .get_object_of_type::<GenericStringObjectId, CloudAIExecutionProfileModel>(&sync_id)
         else {
-            log::warn!("Received ObjectCreated event for AI execution profile but object not found in CloudModel: {sync_id:?}");
+            log::warn!(
+                "Received ObjectCreated event for AI execution profile but object not found in CloudModel: {sync_id:?}"
+            );
             return;
         };
 
@@ -1559,7 +1559,9 @@ impl AIExecutionProfilesModel {
             // If the default profile was deleted, transition back to unsynced state
             let is_default = matches!(&self.default_profile_state, DefaultProfileState::Synced { id } if *id == profile_id);
             if is_default {
-                log::warn!("Default execution profile was deleted from cloud. Transitioning to unsynced state: {sync_id:?}");
+                log::warn!(
+                    "Default execution profile was deleted from cloud. Transitioning to unsynced state: {sync_id:?}"
+                );
                 self.default_profile_state = DefaultProfileState::Unsynced {
                     id: profile_id,
                     profile: AIExecutionProfile {

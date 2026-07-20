@@ -7,8 +7,8 @@ use warp::tui_export::{
 use warp_core::command::ExitCode;
 
 use super::{
-    tool_call_display_state, tool_call_label, CommandBlockState, ResolvedCommandBlock,
-    ToolCallDisplayState,
+    CommandBlockState, ResolvedCommandBlock, ToolCallDisplayState, tool_call_display_state,
+    tool_call_label,
 };
 
 /// Builds a `Finished` status wrapping the given result.

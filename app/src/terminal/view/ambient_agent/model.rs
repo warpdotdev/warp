@@ -15,26 +15,26 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::extract_user_query_mode;
 use crate::ai::ambient_agents::github_auth_notifier::{GitHubAuthEvent, GitHubAuthNotifier};
-use crate::ai::ambient_agents::spawn::{spawn_task, submit_run_followup, AmbientAgentEvent};
+use crate::ai::ambient_agents::spawn::{AmbientAgentEvent, spawn_task, submit_run_followup};
 use crate::ai::ambient_agents::task::{HarnessAuthSecretsConfig, HarnessConfig};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::ambient_agents::{
-    github_auth_url, AgentSource, AmbientAgentTaskId, OUT_OF_CREDITS_TASK_FAILURE_MESSAGE,
-    SERVER_OVERLOADED_TASK_FAILURE_MESSAGE,
+    AgentSource, AmbientAgentTaskId, OUT_OF_CREDITS_TASK_FAILURE_MESSAGE,
+    SERVER_OVERLOADED_TASK_FAILURE_MESSAGE, github_auth_url,
 };
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::touched_repos::TouchedWorkspace;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::handoff::touched_repos::TouchedWorkspace;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::{
-    resolve_cloud_agent_computer_use_state, CloudAgentComputerUseState,
+    CloudAgentComputerUseState, resolve_cloud_agent_computer_use_state,
 };
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
-use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -46,8 +46,8 @@ use crate::server::server_api::{
     AIApiError, ClientError, CloudAgentCapacityError, ServerApiProvider,
 };
 use crate::settings::PrivacySettings;
-use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
 use crate::terminal::CLIAgent;
+use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
 
@@ -840,11 +840,11 @@ impl AmbientAgentViewModel {
         environment_id: Option<SyncId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(id) = &environment_id {
-            if CloudAmbientAgentEnvironment::get_by_id(id, ctx).is_none() {
-                log::warn!("Tried to select unknown environment {id:?}");
-                return;
-            }
+        if let Some(id) = &environment_id
+            && CloudAmbientAgentEnvironment::get_by_id(id, ctx).is_none()
+        {
+            log::warn!("Tried to select unknown environment {id:?}");
+            return;
         }
         self.environment_id = environment_id;
         self.environment_id_from_viewed_task = false;
@@ -854,10 +854,10 @@ impl AmbientAgentViewModel {
     /// Resets to the first enabled harness if the current selection is no longer enabled.
     fn validate_selected_harness(&mut self, ctx: &mut ModelContext<Self>) {
         let model = HarnessAvailabilityModel::as_ref(ctx);
-        if !model.is_harness_enabled(self.harness) {
-            if let Some(first_enabled) = model.available_harnesses().iter().find(|h| h.enabled) {
-                self.set_harness(first_enabled.harness, ctx);
-            }
+        if !model.is_harness_enabled(self.harness)
+            && let Some(first_enabled) = model.available_harnesses().iter().find(|h| h.enabled)
+        {
+            self.set_harness(first_enabled.harness, ctx);
         }
     }
 
@@ -1518,11 +1518,11 @@ impl AmbientAgentViewModel {
             ctx
         );
 
-        if let Some(client_error) = err.downcast_ref::<ClientError>() {
-            if let Some(auth_url) = &client_error.auth_url {
-                self.handle_needs_github_auth(auth_url.clone(), client_error.error.clone(), ctx);
-                return;
-            }
+        if let Some(client_error) = err.downcast_ref::<ClientError>()
+            && let Some(auth_url) = &client_error.auth_url
+        {
+            self.handle_needs_github_auth(auth_url.clone(), client_error.error.clone(), ctx);
+            return;
         }
         if let Some(capacity_error) = err.downcast_ref::<CloudAgentCapacityError>() {
             self.handle_spawn_error(capacity_error.error.clone(), ctx);

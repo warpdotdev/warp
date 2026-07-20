@@ -1,8 +1,8 @@
 use std::time::SystemTime;
 
 use ai::agent::action_result::{AIAgentActionResultType, RecordingStarted, StartRecordingResult};
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -36,7 +36,7 @@ impl StartRecordingExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput {
             action,
             conversation_id,

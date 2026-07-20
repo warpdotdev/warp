@@ -1,11 +1,11 @@
 use warp::appearance::Appearance;
+use warpui_core::App;
 use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::App;
 
 use super::{
-    render_inline_menu, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
-    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab,
+    TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab, render_inline_menu,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -47,16 +47,20 @@ fn renders_loading_and_empty_statuses() {
     let loading = render(status_snapshot(TuiInlineMenuStatus::Loading(
         "Loading conversations…".to_owned(),
     )));
-    assert!(loading
-        .iter()
-        .any(|line| line.contains("Loading conversations…")));
+    assert!(
+        loading
+            .iter()
+            .any(|line| line.contains("Loading conversations…"))
+    );
 
     let empty = render(status_snapshot(TuiInlineMenuStatus::Empty(
         "No conversations found".to_owned(),
     )));
-    assert!(empty
-        .iter()
-        .any(|line| line.contains("No conversations found")));
+    assert!(
+        empty
+            .iter()
+            .any(|line| line.contains("No conversations found"))
+    );
 }
 
 #[test]
@@ -206,9 +210,11 @@ fn slash_command_rows_match_figma_layout_and_colors() {
 
             assert!(lines[0].starts_with("/agent                       Start"));
             assert!(lines[1].starts_with("/plan                        Create"));
-            assert!(!lines
-                .iter()
-                .any(|line| line.chars().any(|glyph| "┌┐└┘─│".contains(glyph))));
+            assert!(
+                !lines
+                    .iter()
+                    .any(|line| line.chars().any(|glyph| "┌┐└┘─│".contains(glyph)))
+            );
             assert_eq!(
                 frame.buffer[(0, 0)].bg,
                 builder.slash_command_selection_background()
@@ -278,8 +284,11 @@ fn wide_slash_command_rows_expand_to_show_long_titles() {
         1,
     );
 
-    assert!(lines[0]
-        .starts_with("/respond-to-pr-comments-in-blocklist Walk users through PR review comments"));
+    assert!(
+        lines[0].starts_with(
+            "/respond-to-pr-comments-in-blocklist Walk users through PR review comments"
+        )
+    );
 }
 
 #[test]

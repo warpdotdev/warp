@@ -5,7 +5,7 @@ use ai::gfm_table::{format_gfm_table, maybe_collect_gfm_table_lines};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use markdown_parser::{
-    parse_image_run_line, parse_markdown_with_gfm_tables, FormattedImage, FormattedTextLine,
+    FormattedImage, FormattedTextLine, parse_image_run_line, parse_markdown_with_gfm_tables,
 };
 use mermaid_to_svg::is_mermaid_diagram;
 use regex::Regex;

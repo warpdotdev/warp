@@ -1,5 +1,5 @@
 use super::point::Point;
-use super::{char_slice, count_chars_up_to_byte, str_to_byte_vec, BufferIndex, TextBuffer};
+use super::{BufferIndex, TextBuffer, char_slice, count_chars_up_to_byte, str_to_byte_vec};
 
 #[test]
 fn test_str_to_byte_vec() {

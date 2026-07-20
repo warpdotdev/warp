@@ -5,10 +5,10 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView};
 
 use super::{
+    TuiTab, TuiTabBarConfig, TuiTabBarConfigError, TuiTabBarNavigationDirection,
+    TuiTabBarPagingState, TuiTabBarSecondaryEdge, TuiTabBarStyles, TuiTabBarView,
     deterministic_pages_at_width, minimum_label_width, minimum_row_width, page_variant_at_width,
-    validated_live_keys, TuiTab, TuiTabBarConfig, TuiTabBarConfigError,
-    TuiTabBarNavigationDirection, TuiTabBarPagingState, TuiTabBarSecondaryEdge, TuiTabBarStyles,
-    TuiTabBarView,
+    validated_live_keys,
 };
 
 fn key(key: u8) -> String {
@@ -223,7 +223,7 @@ fn render_composes_selected_and_leading_styles() {
     App::test((), |app| async move {
         app.read(|app| {
             let mut config = config(vec![
-                tab(1, "one").with_leading_text("*", TuiStyle::default().fg(Color::Yellow))
+                tab(1, "one").with_leading_text("*", TuiStyle::default().fg(Color::Yellow)),
             ]);
             config.selected_key = Some(key(1));
             config.focused = true;

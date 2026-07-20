@@ -7,8 +7,8 @@ use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId, Appearance, TaskId,
     TerminalModel,
 };
-use warpui::platform::WindowStyle;
 use warpui::AddWindowOptions;
+use warpui::platform::WindowStyle;
 use warpui_core::elements::tui::{TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityIdMap, TuiView, TypedActionView, ViewHandle};
@@ -16,7 +16,7 @@ use warpui_core::{App, AppContext, EntityIdMap, TuiView, TypedActionView, ViewHa
 use super::{
     ShellCommandViewState, TuiShellCommandView, TuiShellCommandViewAction, TuiShellCommandViewEvent,
 };
-use crate::test_fixtures::{add_test_action_model, TestHostView};
+use crate::test_fixtures::{TestHostView, add_test_action_model};
 
 #[test]
 fn command_without_terminal_block_uses_fallback_row() {

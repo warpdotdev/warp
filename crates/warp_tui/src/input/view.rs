@@ -31,8 +31,8 @@ use warp::tui_export::{
     InputTypeAutoDetectionSource, LLMId, TuiMcpAction,
 };
 use warp_editor::model::CoreEditorModel;
-use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding};
 use warpui_core::{
@@ -42,10 +42,10 @@ use warpui_core::{
 
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::editor_interaction::{
-    apply_editor_action, follow_editor_cursor, TuiEditorBehavior, TuiEditorCommand,
-    TuiEditorInteractionOutcome, TuiEditorState,
+    TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
+    apply_editor_action, follow_editor_cursor,
 };
-use crate::inline_menu::{active_inline_menu, TuiInlineMenu, TuiInlineMenuAccepted};
+use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted, active_inline_menu};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{
@@ -108,6 +108,10 @@ pub fn init(app: &mut AppContext) {
 pub enum TuiInputViewEvent {
     /// The user pressed Enter to submit the current input. Contains the final text.
     Submitted(String),
+    /// The terminal delivered one complete bracketed-paste payload.
+    Pasted(String),
+    /// Backspace was pressed with an empty normal input.
+    BackspaceAtEmptyInput,
     /// The user selected a slash command menu item.
     AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
     /// The user selected a conversation menu item.
@@ -175,6 +179,8 @@ pub struct TuiInputView {
     keyboard_enhancement_supported: bool,
     /// Consults the owner live before Shift+Up leaves the first visual row.
     can_move_focus_up: Rc<dyn Fn(&AppContext) -> bool>,
+    /// Consults the owner live before an inline-menu Enter can accept an item.
+    can_accept_inline_menu: Rc<dyn Fn(&AppContext) -> bool>,
 }
 
 impl Entity for TuiInputView {
@@ -265,7 +271,16 @@ impl TuiInputView {
             transcript,
             keyboard_enhancement_supported: false,
             can_move_focus_up: Rc::new(can_move_focus_up),
+            can_accept_inline_menu: Rc::new(|_| true),
         }
+    }
+
+    pub(crate) fn with_inline_menu_actions_allowed(
+        mut self,
+        can_accept_inline_menu: impl Fn(&AppContext) -> bool + 'static,
+    ) -> Self {
+        self.can_accept_inline_menu = Rc::new(can_accept_inline_menu);
+        self
     }
 
     pub(crate) fn with_keyboard_enhancement_supported(
@@ -369,6 +384,19 @@ impl TuiInputView {
         ctx.notify();
     }
 
+    /// Inserts a paste payload after the parent declines to consume it as
+    /// structured input.
+    pub(crate) fn insert_pasted_text(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        apply_editor_action(
+            &self.model,
+            &TuiEditorAction::PasteText(text.to_owned()),
+            self.editor_behavior,
+            ctx,
+        );
+        self.follow_cursor(ctx);
+        ctx.notify();
+    }
+
     /// Composes the shell-mode input row: the accent-styled `!` affordance in a
     /// two-column gutter (glyph plus one column of right padding), then the
     /// editor filling the remaining width. The gutter is outside the editable
@@ -456,6 +484,10 @@ impl TypedActionView for TuiInputView {
         }
         let outcome = match action {
             TuiInputAction::Editor(editor_action) => {
+                if let TuiEditorAction::PasteText(text) = editor_action {
+                    ctx.emit(TuiInputViewEvent::Pasted(text.clone()));
+                    return;
+                }
                 // A `!` typed at the very start of the input enters shell mode
                 // instead of inserting (matching the GUI's typed-only trigger).
                 if matches!(editor_action, TuiEditorAction::InsertChar('!'))
@@ -509,6 +541,12 @@ impl TypedActionView for TuiInputView {
                     && self.is_cursor_at_start(ctx)
                 {
                     self.exit_shell_mode(ctx);
+                    TuiEditorInteractionOutcome::FollowCursor
+                } else if matches!(*command, TuiEditorCommand::Backspace)
+                    && self.plain_text(ctx).is_empty()
+                    && self.is_cursor_at_start(ctx)
+                {
+                    ctx.emit(TuiInputViewEvent::BackspaceAtEmptyInput);
                     TuiEditorInteractionOutcome::FollowCursor
                 } else {
                     self.editor_state.apply_command(
@@ -681,6 +719,13 @@ impl TuiInputView {
         let Some(inline_menu) = self.active_inline_menu(ctx) else {
             return false;
         };
+        if matches!(action, TuiInputAction::Submit) && !(self.can_accept_inline_menu)(ctx) {
+            // The session can render a disabled editor while the shell is still
+            // bootstrapping. Consume Enter without accepting a hidden menu item;
+            // otherwise the accepted-menu event bypasses the session's normal
+            // submission guard and can execute or clear the draft.
+            return true;
+        }
 
         match action {
             TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp) => {

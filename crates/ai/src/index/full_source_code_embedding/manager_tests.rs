@@ -11,9 +11,9 @@ use super::{
     BuildSource, CodebaseIndexFinishedStatus, CodebaseIndexManager, CodebaseIndexManagerConfig,
     CodebaseIndexStatus, CodebaseIndexStatusEventKey, CodebaseIndexingError, SyncProgress,
 };
-use crate::index::full_source_code_embedding::store_client::MockStoreClient;
 #[cfg(feature = "local_fs")]
 use crate::index::full_source_code_embedding::SnapshotStorage;
+use crate::index::full_source_code_embedding::store_client::MockStoreClient;
 use crate::workspace::WorkspaceMetadata;
 
 fn workspace_metadata(path: impl Into<PathBuf>) -> WorkspaceMetadata {
@@ -328,8 +328,10 @@ fn build_and_sync_is_noop_when_indexing_disabled() {
         });
 
         manager.update(&mut app, |manager, ctx| {
-            assert!(!manager
-                .build_and_sync_codebase_index(BuildSource::FromPath(Path::new("repo")), ctx));
+            assert!(
+                !manager
+                    .build_and_sync_codebase_index(BuildSource::FromPath(Path::new("repo")), ctx)
+            );
             assert_eq!(manager.num_active_indices(), 0);
         });
     });

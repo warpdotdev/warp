@@ -15,8 +15,8 @@ use async_channel::Sender;
 #[cfg(feature = "local_tty")]
 use command_executor::remote_server_executor::RemoteServerCommandExecutor;
 pub use command_executor::*;
-use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use instant::Instant;
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
@@ -26,10 +26,10 @@ use version_compare::Version;
 use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
-use warp_errors::{register_error, ErrorExt};
+use warp_errors::{ErrorExt, register_error};
 use warp_util::path::{
-    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
-    ShellFamily,
+    ShellFamily, convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path,
+    msys2_exe_to_root,
 };
 use warpui::platform::OperatingSystem;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -409,11 +409,9 @@ impl Sessions {
                 session_info.session_type,
                 BootstrapSessionType::WarpifiedRemote
             )
+            && let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
         {
-            if let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
-            {
-                session.set_remote_host_id(Some(host_id.clone()));
-            }
+            session.set_remote_host_id(Some(host_id.clone()));
         }
 
         let bootstrap_duration_seconds =
@@ -526,12 +524,11 @@ impl Sessions {
         event: ExecutedExecutorCommandEvent,
     ) {
         if let Some(in_band_command_output_tx) = self.in_band_command_output_tx_map.get(&session_id)
+            && let Err(e) = in_band_command_output_tx.try_send(event)
         {
-            if let Err(e) = in_band_command_output_tx.try_send(event) {
-                log::warn!(
-                    "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor: {e:#}"
-                );
-            }
+            log::warn!(
+                "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor: {e:#}"
+            );
         }
     }
 
@@ -1648,11 +1645,11 @@ impl Session {
                     );
                     return vec![];
                 };
-                let res = output_string
+
+                output_string
                     .lines()
                     .map(|s| s.trim().to_string())
-                    .collect();
-                res
+                    .collect()
             }
             _ => {
                 log::warn!("failed to get git_branches_for_command_corrections");
@@ -1930,7 +1927,9 @@ pub mod testing {
                 .set(external_commands_with_values(commands))
                 .is_err()
             {
-                log::warn!("Ignored call to set_external_commands, as external commands had already been set!");
+                log::warn!(
+                    "Ignored call to set_external_commands, as external commands had already been set!"
+                );
             };
         }
 

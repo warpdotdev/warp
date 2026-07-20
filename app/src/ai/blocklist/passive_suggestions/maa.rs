@@ -18,8 +18,8 @@ use crate::ai::agent::{
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::{
-    apply_edits, BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind,
-    SessionContext,
+    BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind, SessionContext,
+    apply_edits,
 };
 use crate::ai::paths::host_native_absolute_path;
 use crate::auth::auth_state::AuthStateProvider;
@@ -374,10 +374,10 @@ impl PassiveSuggestionsModel {
                     self.abort_pending_requests(ctx);
                     return;
                 }
-                if let BlockType::User(block_completed) = &after_block_completed_event.block_type {
-                    if !block_completed.was_part_of_agent_interaction {
-                        self.handle_user_block_completed(block_completed, ctx);
-                    }
+                if let BlockType::User(block_completed) = &after_block_completed_event.block_type
+                    && !block_completed.was_part_of_agent_interaction
+                {
+                    self.handle_user_block_completed(block_completed, ctx);
                 }
             }
             _ => {}
@@ -508,69 +508,70 @@ impl PassiveSuggestionsModel {
 
         // If passive code diffs are enabled, check for any files that were read.
         #[cfg(feature = "local_fs")]
-        if is_passive_code_diffs_enabled {
-            if let Some(current_working_directory) = block_completed.serialized_block.pwd.clone() {
-                let block_contents =
-                    format!("{}\n{}", &block_context.command, &block_context.output);
-                let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
-                let shell_for_detection = shell.clone();
-                let current_working_directory_for_detection = current_working_directory.clone();
-                let terminal_view_id = self.terminal_view_id;
+        if is_passive_code_diffs_enabled
+            && let Some(current_working_directory) = block_completed.serialized_block.pwd.clone()
+        {
+            let block_contents = format!("{}\n{}", &block_context.command, &block_context.output);
+            let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
+            let shell_for_detection = shell.clone();
+            let current_working_directory_for_detection = current_working_directory.clone();
+            let terminal_view_id = self.terminal_view_id;
 
-                self.pending_file_read_handle = Some(ctx.spawn(
-                    async move {
-                        match tokio::task::spawn_blocking(move || {
-                            detect_relevant_file_paths_for_block(
-                                &block_contents,
-                                &current_working_directory_for_detection,
-                                shell_for_detection.as_ref(),
-                            )
-                        })
-                        .await
-                        {
-                            Ok(paths) => paths,
-                            Err(err) => {
-                                log::warn!(
-                                    "[passive-suggestions] failed to detect relevant file paths: {err}"
-                                );
-                                vec![]
-                            }
+            self.pending_file_read_handle = Some(ctx.spawn(
+                async move {
+                    match tokio::task::spawn_blocking(move || {
+                        detect_relevant_file_paths_for_block(
+                            &block_contents,
+                            &current_working_directory_for_detection,
+                            shell_for_detection.as_ref(),
+                        )
+                    })
+                    .await
+                    {
+                        Ok(paths) => paths,
+                        Err(err) => {
+                            log::warn!(
+                                "[passive-suggestions] failed to detect relevant file paths: {err}"
+                            );
+                            vec![]
                         }
-                    },
-                    move |me, candidate_paths, ctx| {
-                        let Some(file_locations) = get_allowed_file_locations_for_paths(
-                            candidate_paths,
-                            conversation_id.as_ref(),
-                            terminal_view_id,
+                    }
+                },
+                move |me, candidate_paths, ctx| {
+                    let Some(file_locations) = get_allowed_file_locations_for_paths(
+                        candidate_paths,
+                        conversation_id.as_ref(),
+                        terminal_view_id,
+                        ctx,
+                    ) else {
+                        me.pending_file_read_handle = None;
+                        me.send_shell_command_completed_request(
+                            conversation_id,
+                            block_context,
+                            vec![],
+                            supported_tools,
                             ctx,
-                        ) else {
+                        );
+                        return;
+                    };
+
+                    me.pending_file_read_handle = Some(ctx.spawn(
+                        read_files(file_locations, current_working_directory, shell),
+                        move |me, relevant_files, ctx| {
                             me.pending_file_read_handle = None;
+                            supported_tools.push(warp_multi_agent_api::ToolType::ApplyFileDiffs);
                             me.send_shell_command_completed_request(
                                 conversation_id,
                                 block_context,
-                                vec![],
+                                relevant_files,
                                 supported_tools,
                                 ctx,
                             );
-                            return;
-                        };
-
-                        me.pending_file_read_handle =
-                            Some(ctx.spawn(read_files(file_locations, current_working_directory, shell), move |me, relevant_files, ctx| {
-                                me.pending_file_read_handle = None;
-                                supported_tools.push(warp_multi_agent_api::ToolType::ApplyFileDiffs);
-                                me.send_shell_command_completed_request(
-                                    conversation_id,
-                                    block_context,
-                                    relevant_files,
-                                    supported_tools,
-                                    ctx,
-                                );
-                            }));
-                    },
-                ));
-                return;
-            }
+                        },
+                    ));
+                },
+            ));
+            return;
         }
 
         if !supported_tools.is_empty() {

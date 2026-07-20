@@ -21,9 +21,9 @@ use warpui::{
 
 use super::event_loop::SharedSessionInitialLoadMode;
 use super::network::{
-    agent_prompt_failure_reason_string, command_execution_failure_reason_string,
-    control_action_failure_reason_string, session_ended_reason_string,
-    viewer_removed_reason_string, write_to_pty_failure_reason_string, Network, NetworkEvent,
+    Network, NetworkEvent, agent_prompt_failure_reason_string,
+    command_execution_failure_reason_string, control_action_failure_reason_string,
+    session_ended_reason_string, viewer_removed_reason_string, write_to_pty_failure_reason_string,
 };
 use super::orchestration_viewer_model::OrchestrationViewerModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -40,31 +40,31 @@ use crate::context_chips::prompt_snapshot::PromptSnapshot;
 use crate::context_chips::prompt_type::PromptType;
 use crate::features::FeatureFlag;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-use crate::pane_group::pane::DetachType;
 use crate::pane_group::TerminalViewResources;
+use crate::pane_group::pane::DetachType;
 use crate::settings::{InputModeSettings, WarpPromptSeparator};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::input::CommandExecutionSource;
-use crate::terminal::model::session::Sessions;
 use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shared_session::shared_handlers::{
-    apply_auto_approve_agent_actions_update, apply_cli_agent_state_update, apply_input_mode_update,
-    apply_selected_agent_model_update, apply_selected_conversation_update,
-    build_selected_conversation_update, ActiveRemoteUpdate, RemoteUpdateGuard,
+    ActiveRemoteUpdate, RemoteUpdateGuard, apply_auto_approve_agent_actions_update,
+    apply_cli_agent_state_update, apply_input_mode_update, apply_selected_agent_model_update,
+    apply_selected_conversation_update, build_selected_conversation_update,
 };
-use crate::terminal::shared_session::SharedSessionStatus;
-use crate::terminal::terminal_manager::{compute_block_size, terminal_colors_list, BlockSpacing};
-use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
+use crate::terminal::terminal_manager::{BlockSpacing, compute_block_size, terminal_colors_list};
 use crate::terminal::view::ExecuteCommandEvent;
+use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::{
-    Event as TerminalViewEvent, TerminalModel, TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE,
+    Event as TerminalViewEvent, PTY_READS_BROADCAST_CHANNEL_SIZE, TerminalModel, TerminalView,
 };
 use crate::view_components::ToastFlavor;
 
@@ -844,8 +844,7 @@ impl TerminalManager {
 
                 if enable_orchestration_polling
                     && orchestration_viewer_model.lock().is_none()
-                {
-                    if let Some(task_id) = ambient_task_id {
+                    && let Some(task_id) = ambient_task_id {
                         let terminal_view_id = view.id();
                         let weak_view_handle_for_orch = weak_view_handle.clone();
                         let orchestration_viewer_model_slot =
@@ -860,7 +859,6 @@ impl TerminalManager {
                         });
                         *orchestration_viewer_model_slot.lock() = Some(model);
                     }
-                }
 
                 let session_id = network.as_ref(ctx).session_id();
                 Manager::handle(ctx).update(ctx, |manager, ctx| {
