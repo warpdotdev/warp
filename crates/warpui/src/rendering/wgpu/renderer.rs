@@ -4,6 +4,10 @@ mod image;
 mod rect;
 mod util;
 
+#[cfg(test)]
+#[path = "renderer/wgpu30_api_tests.rs"]
+mod wgpu30_api_tests;
+
 use frame::Frame;
 use pathfinder_geometry::vector::Vector2F;
 use util::with_error_scope;
