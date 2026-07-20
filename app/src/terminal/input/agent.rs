@@ -30,8 +30,8 @@ use crate::editor::position_id_for_cursor;
 use crate::features::FeatureFlag;
 use crate::settings::InputModeSettings;
 use crate::terminal::settings::TerminalSettings;
-use crate::terminal::view::ambient_agent::HostSelector;
 use crate::terminal::view::TerminalAction;
+use crate::terminal::view::ambient_agent::HostSelector;
 
 pub(super) const CLOUD_MODE_V2_MAX_WIDTH: f32 = 720.;
 
