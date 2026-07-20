@@ -1,25 +1,21 @@
+use libtest_mimic::{Arguments, Trial};
+
 const TEST_NAME: &str = "services_main_dispatch_queue";
 
 fn main() {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.iter().any(|arg| arg == "--list") {
-        if cfg!(target_os = "macos") && !args.iter().any(|arg| arg == "--ignored") {
-            println!("{TEST_NAME}: test");
-        }
-        return;
-    }
+    let mut args = Arguments::from_args();
+    // This test must run on the process main thread to service the macOS run loop.
+    args.test_threads = Some(1);
 
     #[cfg(target_os = "macos")]
-    {
-        if let Some(exact_index) = args.iter().position(|arg| arg == "--exact")
-            && args
-                .get(exact_index + 1)
-                .is_some_and(|name| name != TEST_NAME)
-        {
-            return;
-        }
-        macos::services_main_dispatch_queue();
-    }
+    let tests = vec![Trial::test(TEST_NAME, || {
+        macos::services_main_dispatch_queue().map_err(|error| format!("{error:#}").into())
+    })];
+
+    #[cfg(not(target_os = "macos"))]
+    let tests = Vec::<Trial>::new();
+
+    libtest_mimic::run(&args, tests).exit();
 }
 
 #[cfg(target_os = "macos")]
@@ -36,14 +32,14 @@ mod macos {
     use warpui::platform::TerminationMode;
     use warpui::platform::app::{AppBuilder, AppCallbacks};
 
-    pub(super) fn services_main_dispatch_queue() {
+    pub(super) fn services_main_dispatch_queue() -> anyhow::Result<()> {
         objc2::MainThreadMarker::new()
             .expect("the custom test harness must run on the process main thread");
         let process_main_thread = thread::current().id();
         let dispatched_on_main = Arc::new(AtomicBool::new(false));
         let worker_returned = Arc::new(AtomicBool::new(false));
 
-        let result = AppBuilder::new_headless(AppCallbacks::default(), Box::new(()), None).run({
+        AppBuilder::new_headless(AppCallbacks::default(), Box::new(()), None).run({
             let dispatched_on_main = dispatched_on_main.clone();
             let worker_returned = worker_returned.clone();
             move |ctx| {
@@ -92,8 +88,6 @@ mod macos {
                     })
                     .detach();
             }
-        });
-
-        result.expect("headless main-thread dispatch test failed");
+        })
     }
 }
