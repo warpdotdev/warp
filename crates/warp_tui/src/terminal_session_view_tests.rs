@@ -4,8 +4,8 @@ use warp::settings::TuiUsageDisplayMode;
 use warp::tui_export::{
     AIConversationId, AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel,
     ConversationStatus, ConversationUsageTotals, Harness, InputType, PtyIntent, PtyIntentEvent,
-    SizeInfo, SizeUpdate, export_conversation_markdown, register_tui_session_view_test_singletons,
-    slash_commands,
+    SizeInfo, SizeUpdate, TranscriptScope, export_conversation_markdown,
+    register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warp_editor::model::CoreEditorModel;
@@ -212,6 +212,74 @@ fn bootstrap_renders_starting_shell_above_input() {
             .map(|(index, _)| index)
             .expect("bootstrap input border should render below the status");
         assert!(status_index < input_index);
+    });
+}
+
+/// The input child's rendered element is cached by the presenter, and
+/// transcript emptiness can flip without any input-owned event (a terminal
+/// block landing via the PTY wakeup path only invalidates the session view).
+/// The placeholder hint must still switch off the zero-state copy because the
+/// provider re-resolves on every layout pass.
+#[test]
+fn agent_hint_tracks_transcript_emptiness_without_input_invalidation() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let mut presenter = TuiPresenter::new();
+
+        // Initial full present: every child renders once and is cached.
+        let lines = app.update(|ctx| {
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(view.id());
+            invalidation
+                .updated
+                .extend(view.as_ref(ctx).child_view_ids(ctx));
+            presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
+            presenter
+                .present(ctx, &view, TuiRect::new(0, 0, 100, 40))
+                .buffer
+                .to_lines()
+        });
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("← for conversations")),
+            "zero state should show the zero-state hint:\n{}",
+            lines.join("\n")
+        );
+
+        // A finished terminal block lands without any input-owned event; only
+        // the session view is invalidated, mirroring the PTY wakeup path.
+        view.update(&mut app, |view, _| {
+            let mut model = view.terminal_model.lock();
+            model
+                .block_list_mut()
+                .set_transcript_scope(TranscriptScope::Unfiltered);
+            model.simulate_block("echo hi", "hi\r\n");
+        });
+        let lines = app.update(|ctx| {
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(view.id());
+            presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
+            presenter
+                .present(ctx, &view, TuiRect::new(0, 0, 100, 40))
+                .buffer
+                .to_lines()
+        });
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("← for conversations")),
+            "the cached input element must drop the zero-state hint:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Ask the agent anything")),
+            "the started-conversation hint should render:\n{}",
+            lines.join("\n")
+        );
     });
 }
 

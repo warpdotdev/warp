@@ -151,6 +151,50 @@ fn slash_command_argument_hint_renders_after_menu_closes() {
     });
 }
 
+#[test]
+fn agent_mode_placeholder_hint_renders_only_while_empty() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            let buffer = render_input_buffer(&view, ctx);
+            let line = &buffer.to_lines()[0];
+            // One pad cell separates the cursor from the hint.
+            assert!(
+                line.starts_with(&format!(" {}", crate::input_hints::ZERO_STATE_AGENT_HINT)),
+                "unexpected line: {line:?}"
+            );
+            let expected = TuiUiBuilder::from_app(ctx)
+                .muted_text_style()
+                .fg
+                .expect("placeholder hint has a foreground");
+            assert_eq!(buffer[(1, 0)].fg, expected);
+
+            type_str(&view, ctx, "x");
+            let buffer = render_input_buffer(&view, ctx);
+            let line = &buffer.to_lines()[0];
+            assert!(line.starts_with('x'), "unexpected line: {line:?}");
+            assert!(!line.contains("for conversations"));
+        });
+    });
+}
+
+#[test]
+fn shell_mode_renders_no_placeholder_hint() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::Editor(TuiEditorAction::InsertChar('!'))],
+            );
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            let buffer = render_input_buffer(&view, ctx);
+            assert_eq!(buffer.to_lines()[0].trim_end(), "");
+        });
+    });
+}
+
 fn render_input_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> TuiBuffer {
     let mut element = view.as_ref(ctx).render_element(ctx);
     let mut rendered_views = EntityIdMap::default();

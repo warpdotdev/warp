@@ -46,6 +46,7 @@ use crate::editor_interaction::{
     apply_editor_action, follow_editor_cursor,
 };
 use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted, active_inline_menu};
+use crate::input_hints;
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{
@@ -353,7 +354,28 @@ impl TuiInputView {
         {
             element = element.with_trailing_ghost_text(hint_text, builder.dim_text_style());
         }
-        element
+        // Empty-buffer placeholder hints depend on state that changes without
+        // this view re-rendering (transcript emptiness flips when blocks land
+        // via history events or PTY wakeups), so the hint is resolved by a
+        // provider on every layout pass instead of being snapshotted here.
+        // Shell mode gets its own copy in a follow-up, so it renders no
+        // placeholder yet.
+        let input_mode = self.input_mode.clone();
+        let transcript = self.transcript.clone();
+        element.with_placeholder_ghost_text(move |app| {
+            if input_mode_policy::is_shell_mode(input_mode.as_ref(app)) {
+                return None;
+            }
+            // Inputs constructed without a transcript (isolated tests) count
+            // as zero-state.
+            let transcript_is_empty = transcript
+                .as_ref()
+                .is_none_or(|transcript| transcript.as_ref(app).is_empty());
+            Some((
+                input_hints::agent_input_hint(transcript_is_empty).to_owned(),
+                TuiUiBuilder::from_app(app).muted_text_style(),
+            ))
+        })
     }
     /// Collapses the current text selection to its head without changing text.
     pub(crate) fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {

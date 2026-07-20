@@ -31,6 +31,7 @@ mod editor_interaction;
 mod editor_view;
 mod exit_confirmation;
 mod inline_menu;
+mod input_hints;
 mod input_mode_policy;
 mod input_suggestions_mode;
 mod keybindings;
