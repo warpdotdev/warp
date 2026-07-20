@@ -69,11 +69,10 @@ Warp GUI.
    to the shared session via `TerminalDriver::add_share_requests`, mapping
    `:view` → `Role::Reader` and `:edit` → `Role::Executor`, and `team` /
    `public` / `<email>` to the corresponding `ShareSubject` — identical to the
-   ambient-agent path. Passing `--share` with no value shares with the caller's
-   default (bare `--share`, i.e. `team:view`, matching `ShareArgs` semantics);
-   passing no `--share` flag at all still shares the session (sharing is the
-   whole point of the command) with the default recipient set. (Exact default is
-   resolved in Q2.)
+   ambient-agent path. When no recipients are specified — the `--share` flag is
+   omitted, or passed bare with no value — the session is shared **owner-only**
+   (share-with-self): the invoking user already has access and no additional ACL
+   is applied. Recipients are added only when explicitly passed. (See Q2.)
 5. **Blocks until the session exits.** The command runs (does not return) while
    the session is live, and returns only when the underlying session/shell PTY
    exits (e.g. a guest with edit access runs `exit`, or the process receives
@@ -235,10 +234,12 @@ Warp GUI.
   session ends when the shared shell PTY exits or the process is interrupted, not
   when a locally-attached user types `exit`).
 - **Q2 — What is the default recipient when `--share` is omitted or bare?**
-  Resolved to match `ShareArgs` semantics already used by `warp agent run`: bare
-  `--share` → `team:view`; the session is always shared (that is the command's
-  purpose). Implementation reuses `ShareArgs`/`ShareRequest` unchanged so the CLI
-  surface is identical to the existing `--share` flag; no new defaulting logic is
+  Resolved (per reviewer clarification) to **owner-only / share-with-self**: when
+  no recipients are specified the session is still shared, but only the invoking
+  user has access and no team/public/user ACL is applied. Both an omitted
+  `--share` and a bare `--share` (no value) collapse to an empty recipient list.
+  Implementation reuses `ShareArgs`/`ShareRequest` unchanged so the CLI surface
+  is identical to the existing `--share` flag; no new defaulting logic is
   introduced.
 - **Q3 — GUI coupling / headless bootstrap risk (triage's main risk).**
   Resolved: no new runtime is needed. Dispatch already runs inside a headless

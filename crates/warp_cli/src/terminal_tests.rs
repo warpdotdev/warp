@@ -23,10 +23,27 @@ fn parse_terminal_share(args: &[&str]) -> TerminalShareArgs {
 #[test]
 fn terminal_share_parses_with_default_share() {
     let args = parse_terminal_share(&["terminal", "share"]);
-    // No `--share` flag: the session is still shared with the default recipient
-    // set (resolved at runtime), so no explicit requests are parsed here.
+    // No `--share` flag parses to `None`. At runtime this shares the session
+    // owner-only (share-with-self) — no recipient ACL is applied (spec
+    // Behavior #4). See `run_share` in `app/src/ai/agent_sdk/terminal.rs`.
     assert!(args.share.share.is_none());
     assert!(args.working_dir.is_none());
+}
+
+#[test]
+fn terminal_share_bare_flag_parses_to_empty_recipients() {
+    let args = parse_terminal_share(&["terminal", "share", "--share"]);
+    // A bare `--share` (no value) parses to `Some(vec![])`. Like an omitted
+    // flag, this collapses to no recipients at runtime, i.e. owner-only
+    // sharing (spec Behavior #4 / Q2).
+    let requests = args
+        .share
+        .share
+        .expect("bare --share should parse to Some(empty)");
+    assert!(
+        requests.is_empty(),
+        "bare --share should carry no recipients"
+    );
 }
 
 #[test]

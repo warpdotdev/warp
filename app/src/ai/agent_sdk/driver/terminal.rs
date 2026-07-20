@@ -109,6 +109,10 @@ pub(crate) struct TerminalDriverOptions {
     pub working_dir: PathBuf,
     pub env_vars: HashMap<OsString, OsString>,
     pub should_share: bool,
+    /// How to attribute the shared session when `should_share` is true (e.g. a
+    /// user-initiated `warp terminal share` vs. an ambient-agent session).
+    /// Ignored when `should_share` is false.
+    pub share_source: SharedSessionSource,
     pub task_id: Option<AmbientAgentTaskId>,
     pub conversation_restoration: Option<ConversationRestorationInNewPaneType>,
 }
@@ -167,7 +171,7 @@ fn create_terminal_view(
 ) -> Result<ViewHandle<TerminalView>, AgentDriverError> {
     let is_shared_session_creator = if options.should_share {
         IsSharedSessionCreator::Yes {
-            source: SharedSessionSource::ambient_agent(options.task_id.map(|t| t.to_string())),
+            source: options.share_source,
         }
     } else {
         IsSharedSessionCreator::No

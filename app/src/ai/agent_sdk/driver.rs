@@ -94,6 +94,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::model::BlockId;
+use crate::terminal::shared_session::SharedSessionSource;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 
 pub(crate) mod attachments;
@@ -711,6 +712,7 @@ impl AgentDriver {
                 working_dir: working_dir.clone(),
                 env_vars: HashMap::clone(&resolved_env_vars),
                 should_share,
+                share_source: SharedSessionSource::ambient_agent(task_id.map(|t| t.to_string())),
                 task_id,
                 conversation_restoration,
             },

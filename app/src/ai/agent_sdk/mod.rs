@@ -227,7 +227,7 @@ fn dispatch_command(
             if !FeatureFlag::TerminalShareCommand.is_enabled() {
                 return Err(anyhow::anyhow!("invalid value 'terminal'"));
             }
-            terminal::run(ctx, global_options, terminal_cmd)
+            terminal::run(ctx, terminal_cmd)
         }
     }
 }

@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use anyhow::Context as _;
-use warp_cli::GlobalOptions;
 use warp_cli::share::ShareRequest;
 use warp_cli::terminal::{TerminalCommand, TerminalShareArgs};
 use warpui::platform::TerminationMode;
@@ -22,14 +21,11 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 use super::driver::AgentDriverError;
 use super::driver::terminal::{TerminalDriver, TerminalDriverEvent, TerminalDriverOptions};
 use super::report_fatal_error;
+use crate::terminal::shared_session::SharedSessionSource;
 use crate::terminal::view::Event;
 
 /// Dispatch a `warp terminal ...` command.
-pub(crate) fn run(
-    ctx: &mut AppContext,
-    _global_options: GlobalOptions,
-    command: TerminalCommand,
-) -> anyhow::Result<()> {
+pub(crate) fn run(ctx: &mut AppContext, command: TerminalCommand) -> anyhow::Result<()> {
     match command {
         TerminalCommand::Share(args) => run_share(ctx, args),
     }
@@ -41,6 +37,11 @@ fn run_share(ctx: &mut AppContext, args: TerminalShareArgs) -> anyhow::Result<()
         Some(dir) => dir,
         None => std::env::current_dir().context("Failed to determine the current directory")?,
     };
+    // Recipients from `--share`. When the flag is omitted (`None`) or passed
+    // bare with no value (`Some(vec![])`), this resolves to an empty list, which
+    // shares the session owner-only (share-with-self): the invoking user retains
+    // access and no additional team/public/user ACL is applied. Recipients are
+    // added only when explicitly requested. This matches spec Behavior #4.
     let share_requests = args.share.share.unwrap_or_default();
 
     let terminal_driver = TerminalDriver::create(
@@ -48,6 +49,9 @@ fn run_share(ctx: &mut AppContext, args: TerminalShareArgs) -> anyhow::Result<()
             working_dir,
             env_vars: HashMap::new(),
             should_share: true,
+            // A `warp terminal share` session is user-initiated, not an ambient
+            // agent session, so attribute its share source to the user.
+            share_source: SharedSessionSource::user(None),
             task_id: None,
             conversation_restoration: None,
         },
@@ -67,9 +71,14 @@ fn run_share(ctx: &mut AppContext, args: TerminalShareArgs) -> anyhow::Result<()
 /// shared session exits.
 struct TerminalShareRunner {
     terminal_driver: ModelHandle<TerminalDriver>,
-    /// Set once the session has bootstrapped, so a subsequent shell exit is
-    /// treated as a clean session end rather than a bootstrap failure.
-    bootstrapped: bool,
+    /// Set synchronously once the shared session is established and the join
+    /// link has been printed. Only after this is a shell-PTY exit treated as a
+    /// clean session end; before it, an exit is surfaced as a bootstrap/share
+    /// failure by the drive loop (or the share timeout). Recording it in the
+    /// same synchronous event turn that prints the link — rather than on a
+    /// later async hop — avoids a race where an `Event::Exited` arriving in the
+    /// gap would be dropped, hanging the process.
+    shared_session_established: bool,
 }
 
 impl Entity for TerminalShareRunner {
@@ -86,9 +95,12 @@ impl TerminalShareRunner {
         share_requests: Vec<ShareRequest>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        // Print the join link to stdout once the shared session is established.
-        ctx.subscribe_to_model(&terminal_driver, |_, _, event, _| match event {
+        // Print the join link to stdout once the shared session is established,
+        // and record establishment in the same synchronous turn so a subsequent
+        // shell exit is reliably treated as a clean session end.
+        ctx.subscribe_to_model(&terminal_driver, |me, _, event, _| match event {
             TerminalDriverEvent::EstablishedSharedSession { join_url, .. } => {
+                me.shared_session_established = true;
                 print_join_link(join_url);
             }
             TerminalDriverEvent::SlowBootstrap => {
@@ -97,11 +109,14 @@ impl TerminalShareRunner {
         });
 
         // Terminate the process cleanly when the shared shell PTY exits. Only
-        // acts post-bootstrap; a pre-bootstrap exit is surfaced as a bootstrap
-        // failure by the drive loop below.
+        // acts once the shared session is established and the join link has been
+        // printed, so a shell that exits during bootstrap or before sharing
+        // completes never yields a spurious exit-0 with no link — those paths
+        // are surfaced as failures by the drive loop below (or the share
+        // timeout).
         let terminal_view = terminal_driver.as_ref(ctx).terminal_view().clone();
         ctx.subscribe_to_view(&terminal_view, |me, _, event, ctx| {
-            if me.bootstrapped && matches!(event, Event::Exited) {
+            if me.shared_session_established && matches!(event, Event::Exited) {
                 ctx.terminate_app(TerminationMode::ForceTerminate, None);
             }
         });
@@ -134,17 +149,10 @@ impl TerminalShareRunner {
                     }));
                 }
 
-                // Record bootstrap completion so a subsequent shell exit is
-                // treated as a clean session end.
-                if foreground
-                    .spawn(|me, _| me.bootstrapped = true)
-                    .await
-                    .is_err()
-                {
-                    return Ok(());
-                }
-
-                // Wait for session sharing to be established.
+                // Wait for session sharing to be established. When it succeeds,
+                // the `EstablishedSharedSession` event prints the join link and
+                // records establishment (see the subscription above); only then
+                // does a shell exit terminate the process cleanly.
                 let Ok(shared) = foreground
                     .spawn(|me, ctx| {
                         me.terminal_driver
@@ -169,7 +177,7 @@ impl TerminalShareRunner {
 
         Self {
             terminal_driver,
-            bootstrapped: false,
+            shared_session_established: false,
         }
     }
 }
