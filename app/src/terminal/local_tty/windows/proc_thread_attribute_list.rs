@@ -12,7 +12,7 @@ pub struct ProcThreadAttributeList {
 }
 
 impl ProcThreadAttributeList {
-    pub unsafe fn new() -> windows::core::Result<Self> {
+    pub unsafe fn new() -> windows::core::Result<Self> { unsafe {
         let num_attributes = 1;
         let mut bytes_required: usize = 0;
 
@@ -33,7 +33,7 @@ impl ProcThreadAttributeList {
         Ok(Self {
             data: attribute_list,
         })
-    }
+    }}
 
     pub fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
         LPPROC_THREAD_ATTRIBUTE_LIST(self.data.as_mut_ptr() as *mut _)

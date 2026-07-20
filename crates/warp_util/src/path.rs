@@ -589,10 +589,10 @@ pub fn to_relative_path(is_wsl: bool, absolute_path: &Path, cwd: &Path) -> Optio
         });
 
         // If both paths have drive prefixes but they're different, return None
-        if let (Some(abs_prefix), Some(cwd_prefix)) = (abs_drive, cwd_drive) {
-            if abs_prefix != cwd_prefix {
-                return None;
-            }
+        if let (Some(abs_prefix), Some(cwd_prefix)) = (abs_drive, cwd_drive)
+            && abs_prefix != cwd_prefix
+        {
+            return None;
         }
     }
 

@@ -180,14 +180,13 @@ pub(super) fn check_and_report_update_errors(ctx: &mut AppContext) {
     // Fired when taskkill returned non-zero after the mutex timeout.
     // Exit code 128 means "no matching process found" — the process was already
     // gone when taskkill ran — so suppress that harmless race condition.
-    if let Some(exit_code) = parse_forcekill_exit_code(&contents_lowercase) {
-        if exit_code != 128 {
+    if let Some(exit_code) = parse_forcekill_exit_code(&contents_lowercase)
+        && exit_code != 128 {
             crate::send_telemetry_sync_from_app_ctx!(
                 TelemetryEvent::AutoupdateForcekillFailed { exit_code },
                 ctx
             );
         }
-    }
 
     // Fired when the PowerShell cleanup of the orphaned minidump server process
     // returned a non-zero exit code.

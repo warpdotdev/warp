@@ -47,12 +47,12 @@ impl Clipboard for WindowsClipboard {
 
         // Some environments provide HTML but do not provide a plaintext representation.
         // If that happens, derive a best-effort plaintext fallback from the HTML.
-        if content.plain_text.trim().is_empty() {
-            if let Some(html) = content.html.as_ref() {
-                let derived = crate::clipboard_utils::strip_html_to_plain_text(html);
-                if !derived.trim().is_empty() {
-                    content.plain_text = derived;
-                }
+        if content.plain_text.trim().is_empty()
+            && let Some(html) = content.html.as_ref()
+        {
+            let derived = crate::clipboard_utils::strip_html_to_plain_text(html);
+            if !derived.trim().is_empty() {
+                content.plain_text = derived;
             }
         }
 

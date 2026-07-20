@@ -6,13 +6,11 @@ pub fn is_running_in_windows_parallels_vm() -> bool {
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
 
-    if let Ok(system_key) = hklm.open_subkey(r"HARDWARE\DESCRIPTION\System\BIOS") {
-        if let Ok(bios_version) = system_key.get_value::<String, _>("SystemManufacturer") {
-            if bios_version.to_lowercase().contains("parallels") {
+    if let Ok(system_key) = hklm.open_subkey(r"HARDWARE\DESCRIPTION\System\BIOS")
+        && let Ok(bios_version) = system_key.get_value::<String, _>("SystemManufacturer")
+            && bios_version.to_lowercase().contains("parallels") {
                 return true;
             }
-        }
-    }
 
     false
 }
