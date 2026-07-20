@@ -512,7 +512,11 @@ fn serialize_node_to_literal(node: &Rc<Node>) -> String {
 
 fn serialize_node_into(node: &Rc<Node>, out: &mut String) {
     match &node.data {
-        NodeData::Text { contents } => out.push_str(&contents.borrow()),
+        // html5ever decodes entities while parsing, so this text is already DECODED (e.g. source
+        // `&lt;img&gt;` arrives here as `<img>`). Re-escape it: the literal fragment is plain text
+        // that must display the original source and must never round-trip decoded markup back into
+        // something re-parseable as HTML (issue #14029, [SECURITY]).
+        NodeData::Text { contents } => push_escaped_text(&contents.borrow(), out),
         NodeData::Element { name, attrs, .. } => {
             let tag = name.local.as_ref();
             out.push('<');
@@ -521,7 +525,9 @@ fn serialize_node_into(node: &Rc<Node>, out: &mut String) {
                 out.push(' ');
                 out.push_str(&attr.name.local);
                 out.push_str("=\"");
-                out.push_str(&attr.value);
+                // Attribute values are likewise decoded; escape so quotes/brackets in a value can't
+                // break out of `attr="…"` and inject new markup into the literal.
+                push_escaped_attr_value(&attr.value, out);
                 out.push('"');
             }
             out.push('>');
@@ -538,6 +544,37 @@ fn serialize_node_into(node: &Rc<Node>, out: &mut String) {
             for child in node.children.borrow().iter() {
                 serialize_node_into(child, out);
             }
+        }
+    }
+}
+
+/// Escape a decoded text node for the literal-bail serializer.
+///
+/// Escapes the three characters that could otherwise re-parse as markup or an entity when the
+/// literal fragment is treated as HTML source: `&` (entity start), `<` and `>` (tag delimiters).
+fn push_escaped_text(text: &str, out: &mut String) {
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+}
+
+/// Escape a decoded attribute value for the literal-bail serializer.
+///
+/// Same as [`push_escaped_text`], plus `"` (which would otherwise close the reconstructed
+/// double-quoted attribute and let the remainder break out into new markup).
+fn push_escaped_attr_value(value: &str, out: &mut String) {
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
         }
     }
 }
