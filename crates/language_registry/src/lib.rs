@@ -129,12 +129,17 @@ fn resolve_parts_matching(
         return Some(entry);
     }
 
-    resolve_first_line(first_line)
+    resolve_first_line(first_line, &matches_consumer)
 }
 
-fn resolve_first_line(first_line: Option<&str>) -> Option<&'static LanguageEntry> {
+fn resolve_first_line(
+    first_line: Option<&str>,
+    matches_consumer: &impl Fn(&LanguageEntry) -> bool,
+) -> Option<&'static LanguageEntry> {
     first_line?;
-    // Reserved for shebang/first-line detection in a later change.
+    // Reserved for shebang/first-line detection in a later change. Keep the
+    // consumer filter at this boundary so future matches cannot bypass it.
+    let _ = matches_consumer;
     None
 }
 
