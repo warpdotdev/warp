@@ -8,7 +8,7 @@ use warpui::elements::{
     PositioningAxis, Radius, SavePosition, Stack, XAxisAnchor, YAxisAnchor,
 };
 use warpui::presenter::ChildView;
-use warpui::{AppContext, SingletonEntity as _};
+use warpui::{AppContext, SingletonEntity as _, ViewHandle};
 
 use super::common::{
     add_command_xray_overlay, add_input_suggestions_overlays, add_voltron_overlay,
@@ -30,6 +30,7 @@ use crate::editor::position_id_for_cursor;
 use crate::features::FeatureFlag;
 use crate::settings::InputModeSettings;
 use crate::terminal::settings::TerminalSettings;
+use crate::terminal::view::ambient_agent::HostSelector;
 use crate::terminal::view::TerminalAction;
 
 pub(super) const CLOUD_MODE_V2_MAX_WIDTH: f32 = 720.;
@@ -570,16 +571,17 @@ impl Input {
         Some(ChildView::new(view).finish())
     }
 
-    /// Whether to show the Execution host dropdown: a default host is set or a
-    /// self-hosted worker is connected. Composer-only.
-    pub(super) fn should_show_host_selector(&self, app: &AppContext) -> bool {
-        let Some(host_selector) = self.host_selector() else {
-            return false;
-        };
-        host_selector.as_ref(app).has_default_host()
+    /// Returns the composer-only Execution host dropdown when it should be shown.
+    pub(super) fn visible_host_selector(
+        &self,
+        app: &AppContext,
+    ) -> Option<&ViewHandle<HostSelector>> {
+        let host_selector = self.host_selector()?;
+        let should_show = host_selector.as_ref(app).has_default_host()
             || !ConnectedSelfHostedWorkersModel::as_ref(app)
                 .worker_hosts_excluding(None)
-                .is_empty()
+                .is_empty();
+        should_show.then_some(host_selector)
     }
 
     fn render_cloud_mode_v2_top_row(&self, app: &AppContext) -> Box<dyn Element> {
@@ -588,10 +590,8 @@ impl Input {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(CLOUD_MODE_V2_TOP_ROW_INNER_GAP);
 
-        if self.should_show_host_selector(app) {
-            if let Some(host) = self.host_selector() {
-                row.add_child(ChildView::new(host).finish());
-            }
+        if let Some(host) = self.visible_host_selector(app) {
+            row.add_child(ChildView::new(host).finish());
         }
         if let Some(harness_selector) = self.harness_selector() {
             row.add_child(ChildView::new(harness_selector).finish());

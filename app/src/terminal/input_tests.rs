@@ -1607,7 +1607,7 @@ fn cloud_mode_host_selector_shown_when_connected_workers_present() {
                 "the cloud composer must build the host selector"
             );
             assert!(
-                !input.should_show_host_selector(ctx),
+                input.visible_host_selector(ctx).is_none(),
                 "host selector must be hidden with no default host and no connected workers"
             );
         });
@@ -1619,7 +1619,7 @@ fn cloud_mode_host_selector_shown_when_connected_workers_present() {
 
         input.read(&app, |input, ctx| {
             assert!(
-                input.should_show_host_selector(ctx),
+                input.visible_host_selector(ctx).is_some(),
                 "host selector must be shown once a self-hosted worker is connected"
             );
         });

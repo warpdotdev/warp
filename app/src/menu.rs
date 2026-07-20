@@ -1280,17 +1280,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
                 }
                 label_row.add_child(Shrinkable::new(1., content_column.finish()).finish());
             } else {
-                // When the label is clipped and has a right-side element (badge,
-                // shortcut, timestamp, icon, or submenu chevron), let the label fill
-                // the remaining width so it ellipsizes and the right-side element
-                // stays pinned to the right instead of being pushed past the edge.
-                let has_right_side_element = self.has_submenu
-                    || self.right_side_label.is_some()
-                    || self.key_shortcut_label.is_some()
-                    || self.timestamp.is_some()
-                    || self.right_side_icon.is_some();
-                if self.clip_config.is_some() && has_right_side_element {
-                    label_row.add_child(Expanded::new(1.0, label_element).finish());
+                // Keep a clipped label from pushing its right-side label out of bounds.
+                if self.clip_config.is_some() && self.right_side_label.is_some() {
+                    label_row.add_child(Expanded::new(1., label_element).finish());
                 } else {
                     label_row.add_child(label_element);
                 }
