@@ -638,10 +638,10 @@ impl RunAgentsCardView {
                 .orchestration_edit_state
                 .orchestration_config_state
                 .execution_mode,
-        ) {
-            if new_runner.is_empty() && !current_runner.is_empty() {
-                *new_runner = current_runner.clone();
-            }
+        ) && new_runner.is_empty()
+            && !current_runner.is_empty()
+        {
+            *new_runner = current_runner.clone();
         }
         if self.config_state() != new_state {
             let harness_or_model_changed = self
