@@ -1016,7 +1016,11 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::BackslashEscape(ch) | InlineToken::HtmlEntity(ch) => {
                 state.push_text(ch);
             }
-            InlineToken::Delimiter { kind, count } => {
+            InlineToken::Delimiter {
+                kind,
+                count,
+                literal,
+            } => {
                 let node_index = state.nodes.len();
                 let preceding_char = state
                     .nodes
@@ -1024,8 +1028,14 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                     .and_then(|fragment| fragment.text.chars().last());
                 let following_char = remaining.chars().next();
 
-                let delimiter =
-                    Delimiter::new(node_index, kind, count, preceding_char, following_char);
+                let delimiter = Delimiter::new(
+                    node_index,
+                    kind,
+                    count,
+                    literal,
+                    preceding_char,
+                    following_char,
+                );
                 state.push_closed_node(FormattedTextFragment::plain_text(delimiter.to_text()));
                 state.delimiters.push(delimiter);
             }
@@ -1766,6 +1776,7 @@ fn parse_inline_token_link_start<'a, E: ContextError<&'a str> + ParseError<&'a s
         map(tag("["), |_| InlineToken::Delimiter {
             kind: DelimiterKind::LinkStart,
             count: 1,
+            literal: None,
         }),
     )(input)
 }
@@ -1777,15 +1788,44 @@ fn parse_inline_token_link_end<'a, E: ContextError<&'a str> + ParseError<&'a str
     context("link_end", map(tag("]"), |_| InlineToken::LinkEnd))(input)
 }
 
-/// Parse an underline-start delimiter.
+/// Recognize an inline HTML start tag `<name …>` whose attributes are ignored, returning the
+/// verbatim matched slice (tag name, any attributes, and the angle brackets).
+///
+/// Per HTML syntax, an attribute must be separated from the tag name by whitespace, so only
+/// `<name>` and `<name<whitespace>…>` match; `<namex>` is a different element and does not.
+/// Attribute content is consumed up to the first `>`; a `>` inside a quoted attribute value
+/// (`<u title="a>b">`) would split early, matching how the rest of this tokenizer treats tags and
+/// not a case the viewer needs to round-trip. The closing form `</name>` never matches here because
+/// its second character is `/`, not the tag name.
+fn parse_html_start_tag<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    name: &'static str,
+) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str, E> {
+    move |input: &'a str| {
+        recognize(tuple((
+            char('<'),
+            tag(name),
+            alt((
+                // Bare tag: name immediately followed by `>`.
+                recognize(char('>')),
+                // Attributed tag: whitespace, then any attribute text up to the closing `>`.
+                recognize(tuple((space1, take_until(">"), char('>')))),
+            )),
+        )))(input)
+    }
+}
+
+/// Parse an underline-start delimiter (`<u>`, attributes ignored).
 fn parse_inline_token_underline_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, InlineToken<'a>, E> {
     context(
         "underline_start",
-        map(tag("<u>"), |_| InlineToken::Delimiter {
-            kind: DelimiterKind::UnderlineStart,
-            count: 1,
+        map(parse_html_start_tag("u"), |literal| {
+            InlineToken::Delimiter {
+                kind: DelimiterKind::UnderlineStart,
+                count: 1,
+                literal: Some(literal),
+            }
         }),
     )(input)
 }
@@ -1800,15 +1840,18 @@ fn parse_inline_token_underline_end<'a, E: ContextError<&'a str> + ParseError<&'
     )(input)
 }
 
-/// Parse a subscript-start delimiter (`<sub>`).
+/// Parse a subscript-start delimiter (`<sub>`, attributes ignored).
 fn parse_inline_token_sub_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, InlineToken<'a>, E> {
     context(
         "sub_start",
-        map(tag("<sub>"), |_| InlineToken::Delimiter {
-            kind: DelimiterKind::SubStart,
-            count: 1,
+        map(parse_html_start_tag("sub"), |literal| {
+            InlineToken::Delimiter {
+                kind: DelimiterKind::SubStart,
+                count: 1,
+                literal: Some(literal),
+            }
         }),
     )(input)
 }
@@ -1820,15 +1863,18 @@ fn parse_inline_token_sub_end<'a, E: ContextError<&'a str> + ParseError<&'a str>
     context("sub_end", map(tag("</sub>"), |_| InlineToken::SubEnd))(input)
 }
 
-/// Parse a superscript-start delimiter (`<sup>`).
+/// Parse a superscript-start delimiter (`<sup>`, attributes ignored).
 fn parse_inline_token_sup_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, InlineToken<'a>, E> {
     context(
         "sup_start",
-        map(tag("<sup>"), |_| InlineToken::Delimiter {
-            kind: DelimiterKind::SupStart,
-            count: 1,
+        map(parse_html_start_tag("sup"), |literal| {
+            InlineToken::Delimiter {
+                kind: DelimiterKind::SupStart,
+                count: 1,
+                literal: Some(literal),
+            }
         }),
     )(input)
 }
@@ -1846,7 +1892,11 @@ fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 ) -> impl FnMut(&'a str) -> IResult<&'a str, InlineToken<'a>, E> {
     map(
         fold_many1(tag(kind.as_str()), || 0, |counter, _| counter + 1),
-        move |count| InlineToken::Delimiter { kind, count },
+        move |count| InlineToken::Delimiter {
+            kind,
+            count,
+            literal: None,
+        },
     )
 }
 
@@ -1869,7 +1919,16 @@ fn parse_code_span<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InlineToken<'a> {
     /// A run of `count` delimiter characters of `kind`.
-    Delimiter { kind: DelimiterKind, count: usize },
+    ///
+    /// `literal` carries the exact matched source slice for HTML-tag delimiters whose written
+    /// form can vary (e.g. `<sub class="foo">`, whose attributes are semantically ignored but must
+    /// survive verbatim in the literal-fallback path). It is `None` for fixed-spelling delimiters
+    /// (`*`, `_`, `~`, `[`), whose literal text is reconstructed from `kind`/`count`.
+    Delimiter {
+        kind: DelimiterKind,
+        count: usize,
+        literal: Option<&'a str>,
+    },
     /// A run of non-delimiter text.
     Text(&'a str),
     /// A backslash-escaped character.
@@ -1920,6 +1979,12 @@ struct Delimiter {
     /// baseline shift) still reads as a plausible-but-wrong formula. Showing the whole thing as
     /// source text is the only rendering that can't be misread as a real (if odd) formula.
     vertical_align_poisoned: bool,
+    /// The exact matched source text, when it can differ from the canonical spelling of `kind`.
+    /// Set for HTML-tag delimiters carrying attributes (e.g. `<sub class="foo">`): the attributes
+    /// are ignored when the tag renders styled, but must be reproduced verbatim if the tag instead
+    /// degrades to literal text. `None` for fixed-spelling delimiters, whose literal is rebuilt
+    /// from `kind`/`count` by [`Delimiter::to_text`].
+    literal: Option<String>,
 }
 
 impl Delimiter {
@@ -1931,6 +1996,7 @@ impl Delimiter {
         node_index: usize,
         kind: DelimiterKind,
         count: usize,
+        literal: Option<&str>,
         preceding_char: Option<char>,
         following_char: Option<char>,
     ) -> Self {
@@ -1991,12 +2057,20 @@ impl Delimiter {
             active: true,
             node_index,
             vertical_align_poisoned: false,
+            literal: literal.map(str::to_owned),
         }
     }
 
     /// Convert this delimiter to literal text.
+    ///
+    /// Prefers the verbatim matched source (`literal`) when present — e.g. an attributed
+    /// `<sub class="foo">` degrades to exactly that string, not a normalized `<sub>`. Falls back to
+    /// the canonical spelling repeated `count` times for fixed-form delimiters.
     fn to_text(&self) -> String {
-        self.kind.as_str().repeat(self.count)
+        match &self.literal {
+            Some(literal) => literal.clone(),
+            None => self.kind.as_str().repeat(self.count),
+        }
     }
 
     /// Whether or not this delimiter can open for the given closing delimiter.

@@ -2144,14 +2144,53 @@ fn test_parse_nested_vertical_align_opposite_direction_bails_whole_span_to_liter
 
 #[test]
 fn test_parse_subscript_ignores_attributes() {
-    // Invariant 9: `<sub>` with attributes is not recognized by the file-viewer inline
-    // tokenizer (only the bare tag is), so it degrades to literal text rather than
-    // mis-parsing the attribute. (The paste path's HTML parser handles attributes; this
-    // tokenizer intentionally matches only the exact `<sub>`/`<sup>` literals.)
+    // Invariant 9: only the `<sub>`/`<sup>` tag semantics carry meaning; any attributes
+    // (`class`, `style`, `id`, …) are parsed and discarded, matching how other inline HTML
+    // tags are handled. `<sub class="foo">2</sub>` renders styled, exactly as bare `<sub>`.
     assert_eq!(
         parse_all("<sub class=\"foo\">2</sub>", parse_inline),
+        vec![FormattedTextFragment::subscript("2")]
+    );
+}
+
+#[test]
+fn test_parse_superscript_ignores_attributes() {
+    // Invariant 9 for `<sup>`: attributes are parsed and discarded; render is styled.
+    assert_eq!(
+        parse_all("x<sup id=\"note-1\" data-ref='7'>2</sup>", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("x"),
+            FormattedTextFragment::superscript("2"),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_unclosed_attributed_subscript_falls_back_to_verbatim_literal() {
+    // When an attributed start tag has no matching close, it degrades to literal text — and
+    // the literal must reproduce the ORIGINAL source verbatim (attributes and all), not a
+    // normalized bare `<sub>`. Otherwise the attribute silently vanishes from the fallback.
+    assert_eq!(
+        parse_all("H<sub class=\"foo\">2 and more", parse_inline),
         vec![FormattedTextFragment::plain_text(
-            "<sub class=\"foo\">2</sub>"
+            "H<sub class=\"foo\">2 and more"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_underline_ignores_attributes() {
+    // Sibling sweep of the sub/sup attribute miss-cause (#13948): the `<u>` start tag shares
+    // the exact-literal blind spot, so `<u class="…">` must also parse-and-discard attributes
+    // and render styled, with an unclosed attributed `<u>` degrading to a verbatim literal.
+    assert_eq!(
+        parse_all("<u class=\"hl\">text</u>", parse_inline),
+        vec![FormattedTextFragment::underline("text")]
+    );
+    assert_eq!(
+        parse_all("<u data-x=\"1\">unclosed", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<u data-x=\"1\">unclosed"
         )]
     );
 }
