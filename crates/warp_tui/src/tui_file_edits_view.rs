@@ -26,7 +26,8 @@ use ai::diff_validation::{DiffDelta, DiffType};
 use itertools::Itertools;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    AIAgentActionId, BlocklistAIActionEvent, BlocklistAIActionModel, DiffSessionType, FileDiff,
+    AIActionStatus, AIAgentActionId, AIConversationId, BlocklistAIActionEvent,
+    BlocklistAIActionModel, CancellationReason, DiffSessionType, FileDiff,
 };
 use warp_editor::content::buffer::InitialBufferState;
 use warpui_core::elements::MouseStateHandle;
@@ -34,12 +35,17 @@ use warpui_core::elements::tui::{
     Modifier, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiStyle, TuiText,
     tui_collapsible,
 };
-use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
+use warpui_core::{
+    AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
+};
 
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
 use crate::tool_call_labels::{ToolCallDisplayState, tool_call_display_state};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageEvent, TuiDiffStorageHandle};
+use crate::tui_permission_prompt::{
+    TuiPermissionPrompt, TuiPermissionPromptEvent, render_permission_card,
+};
 
 /// Unchanged context lines rendered on each side of a hunk.
 const CONTEXT_LINES: usize = 3;
@@ -54,6 +60,8 @@ pub(super) struct TuiFileEditsView {
     /// Consulted for the action's status (header state) and terminal result
     /// (fallback label when the storage was never seeded).
     action_model: ModelHandle<BlocklistAIActionModel>,
+    conversation_id: AIConversationId,
+    permission_prompt: ViewHandle<TuiPermissionPrompt>,
     /// One section per resolved file diff, in storage order; empty until the
     /// executor seeds the storage.
     sections: Vec<FileSection>,
@@ -63,7 +71,9 @@ pub(super) struct TuiFileEditsView {
 }
 /// Events emitted to the owning agent block.
 pub(super) enum TuiFileEditsViewEvent {
+    BlockingStateChanged,
     LayoutChanged,
+    ReplacementGuidanceSubmitted(String),
 }
 
 /// User interactions handled by the file-edits view.
@@ -120,22 +130,29 @@ struct SectionStates {
 }
 
 /// UI state for a single collapsible section.
-#[derive(Default)]
 struct SectionUiState {
     collapsed: bool,
     /// Hover state for the header row. Owned here so it survives element-tree
     /// rebuilds (the GUI `MouseStateHandle` pattern).
     hover_state: MouseStateHandle,
 }
+impl Default for SectionUiState {
+    fn default() -> Self {
+        Self {
+            collapsed: true,
+            hover_state: MouseStateHandle::default(),
+        }
+    }
+}
 
 impl SectionStates {
-    /// Whether the keyed section is collapsed (default: expanded).
+    /// Whether the keyed section is collapsed (default: collapsed).
     fn is_collapsed(&self, key: SectionKey) -> bool {
         self.states
             .borrow()
             .get(&key)
             .map(|state| state.collapsed)
-            .unwrap_or(false)
+            .unwrap_or(true)
     }
 
     /// Flips the collapse state of the keyed section.
@@ -159,6 +176,7 @@ impl SectionStates {
 impl TuiFileEditsView {
     pub(super) fn new(
         action_id: AIAgentActionId,
+        conversation_id: AIConversationId,
         action_model: &ModelHandle<BlocklistAIActionModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -194,10 +212,33 @@ impl TuiFileEditsView {
             });
         }
 
+        let prompt_action_id = action_id.clone();
+        let prompt_action_model = action_model.clone();
+        let permission_prompt = ctx.add_typed_action_tui_view(move |ctx| {
+            TuiPermissionPrompt::new(prompt_action_model, prompt_action_id, false, ctx)
+        });
+        ctx.subscribe_to_view(&permission_prompt, |view, _, event, ctx| match event {
+            TuiPermissionPromptEvent::AcceptRequested => view.accept(ctx),
+            TuiPermissionPromptEvent::ReplacementGuidanceSubmitted(text) => {
+                ctx.emit(TuiFileEditsViewEvent::ReplacementGuidanceSubmitted(
+                    text.clone(),
+                ));
+            }
+            TuiPermissionPromptEvent::RejectRequested => view.reject(ctx),
+            TuiPermissionPromptEvent::BlockingStateChanged => {
+                ctx.emit(TuiFileEditsViewEvent::BlockingStateChanged);
+                view.invalidate_layout(ctx);
+            }
+            TuiPermissionPromptEvent::LayoutChanged => view.invalidate_layout(ctx),
+            TuiPermissionPromptEvent::EditBodyRequested => {}
+        });
+
         Self {
             storage,
             action_id,
             action_model: action_model.clone(),
+            conversation_id,
+            permission_prompt,
             sections: Vec::new(),
             section_states: SectionStates::default(),
         }
@@ -492,13 +533,70 @@ fn verb_and_name(diff: &FileDiff) -> (&'static str, String) {
 impl Entity for TuiFileEditsView {
     type Event = TuiFileEditsViewEvent;
 }
+impl TuiFileEditsView {
+    pub(super) fn active_permission_prompt(
+        &self,
+        app: &AppContext,
+    ) -> Option<ViewHandle<TuiPermissionPrompt>> {
+        self.permission_prompt
+            .as_ref(app)
+            .is_active(app)
+            .then(|| self.permission_prompt.clone())
+    }
 
+    fn accept(&self, ctx: &mut ViewContext<Self>) {
+        let action_id = self.action_id.clone();
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.execute_action(&action_id, self.conversation_id, ctx);
+        });
+    }
+
+    fn reject(&self, ctx: &mut ViewContext<Self>) {
+        let action_id = self.action_id.clone();
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.cancel_action_with_id(
+                self.conversation_id,
+                &action_id,
+                CancellationReason::ManuallyCancelled,
+                ctx,
+            );
+        });
+    }
+
+    fn invalidate_layout(&self, ctx: &mut ViewContext<Self>) {
+        ctx.emit(TuiFileEditsViewEvent::LayoutChanged);
+        ctx.notify();
+    }
+}
 impl TuiView for TuiFileEditsView {
     fn ui_name() -> &'static str {
         "TuiFileEditsView"
     }
+    fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
+        vec![self.permission_prompt.id()]
+    }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
+        let content = self.render_diff_content(app);
+        let status = self
+            .action_model
+            .as_ref(app)
+            .get_action_status(&self.action_id);
+        if !matches!(status, Some(AIActionStatus::Blocked)) {
+            return content;
+        }
+
+        render_permission_card(
+            &self.permission_prompt,
+            "Is it OK if I make these file edits?",
+            content,
+            app,
+        )
+    }
+}
+
+impl TuiFileEditsView {
+    fn render_diff_content(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
 
         if self.sections.is_empty() {

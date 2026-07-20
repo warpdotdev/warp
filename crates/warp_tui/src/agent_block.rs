@@ -489,11 +489,22 @@ impl TuiAIBlock {
                 continue;
             }
             let view_action_id = action_id.clone();
+            let conversation_id = self.conversation_id;
             let view = ctx.add_typed_action_tui_view(move |ctx| {
-                TuiFileEditsView::new(view_action_id, action_model, ctx)
+                TuiFileEditsView::new(view_action_id, conversation_id, action_model, ctx)
             });
             ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
+                TuiFileEditsViewEvent::BlockingStateChanged => {
+                    ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
+                    me.invalidate_layout(ctx);
+                }
                 TuiFileEditsViewEvent::LayoutChanged => me.invalidate_layout(ctx),
+                TuiFileEditsViewEvent::ReplacementGuidanceSubmitted(text) => {
+                    ctx.emit(TuiAIBlockEvent::ReplacementGuidanceSubmitted {
+                        conversation_id: me.conversation_id,
+                        text: text.clone(),
+                    });
+                }
             });
             self.action_views
                 .insert(action_id, TuiToolCallView::FileEdits(view));
@@ -649,9 +660,12 @@ impl TuiAIBlock {
                 .as_ref(ctx)
                 .active_permission_prompt(ctx)
                 .map(TuiBlockingChild::Permission),
+            TuiToolCallView::FileEdits(view) => view
+                .as_ref(ctx)
+                .active_permission_prompt(ctx)
+                .map(TuiBlockingChild::Permission),
             // These tool views render inline and never replace the input.
             TuiToolCallView::AskQuestion(_)
-            | TuiToolCallView::FileEdits(_)
             | TuiToolCallView::Plan(_)
             | TuiToolCallView::ShellCommand(_) => None,
         }
