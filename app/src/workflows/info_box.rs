@@ -659,13 +659,14 @@ impl WorkflowsMoreInfoView {
         )];
 
         if let Some(workflow_source) = workflow.source_url()
-            && !workflow_source.is_empty() {
-                title_line.push(WorkflowsMoreInfoView::render_workflow_source(
-                    self,
-                    workflow_source.to_string(),
-                    appearance,
-                ));
-            }
+            && !workflow_source.is_empty()
+        {
+            title_line.push(WorkflowsMoreInfoView::render_workflow_source(
+                self,
+                workflow_source.to_string(),
+                appearance,
+            ));
+        }
 
         let collapse_button = self.render_collapse_button(appearance);
 
@@ -774,9 +775,9 @@ impl WorkflowsMoreInfoView {
         if self.workflow.should_show_env_var_selection()
             && let Some(environment_variables_selection) =
                 self.render_environment_variables_selection(appearance, app)
-            {
-                children.push(Clipped::new(environment_variables_selection).finish());
-            }
+        {
+            children.push(Clipped::new(environment_variables_selection).finish());
+        }
 
         if !self.show_shift_tab_treatment {
             children.push(self.render_command_edited_menu(appearance));

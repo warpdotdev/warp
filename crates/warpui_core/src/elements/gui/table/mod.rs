@@ -1422,16 +1422,17 @@ impl SelectableElement for Table {
             if let Some(selectable_child) = header.content.as_selectable_element()
                 && let Some(child_fragments) =
                     selectable_child.get_selection(selection_start, selection_end, is_rect)
+            {
+                if !header_fragments.is_empty()
+                    && let Some(last_fragment) = header_fragments.last()
                 {
-                    if !header_fragments.is_empty()
-                        && let Some(last_fragment) = header_fragments.last() {
-                            header_fragments.push(SelectionFragment {
-                                text: "\t".to_string(),
-                                origin: last_fragment.origin,
-                            });
-                        }
-                    header_fragments.extend(child_fragments);
+                    header_fragments.push(SelectionFragment {
+                        text: "\t".to_string(),
+                        origin: last_fragment.origin,
+                    });
                 }
+                header_fragments.extend(child_fragments);
+            }
         }
 
         if !header_fragments.is_empty() {
@@ -1468,25 +1469,25 @@ impl SelectableElement for Table {
                 if let Some(selectable_child) = cell.as_selectable_element()
                     && let Some(child_fragments) =
                         selectable_child.get_selection(selection_start, selection_end, is_rect)
+                {
+                    if !row_fragments.is_empty()
+                        && let Some(last_fragment) = row_fragments.last()
                     {
-                        if !row_fragments.is_empty()
-                            && let Some(last_fragment) = row_fragments.last() {
-                                row_fragments.push(SelectionFragment {
-                                    text: "\t".to_string(),
-                                    origin: last_fragment.origin,
-                                });
-                            }
-                        row_fragments.extend(child_fragments);
-                    }
-            }
-            if !row_fragments.is_empty() {
-                if had_prior_row
-                    && let Some(last_fragment) = selection_fragments.last() {
-                        selection_fragments.push(SelectionFragment {
-                            text: "\n".to_string(),
+                        row_fragments.push(SelectionFragment {
+                            text: "\t".to_string(),
                             origin: last_fragment.origin,
                         });
                     }
+                    row_fragments.extend(child_fragments);
+                }
+            }
+            if !row_fragments.is_empty() {
+                if had_prior_row && let Some(last_fragment) = selection_fragments.last() {
+                    selection_fragments.push(SelectionFragment {
+                        text: "\n".to_string(),
+                        origin: last_fragment.origin,
+                    });
+                }
                 selection_fragments.extend(row_fragments);
                 had_prior_row = true;
             }
@@ -1515,14 +1516,15 @@ impl SelectableElement for Table {
                     direction,
                     unit,
                     word_boundaries_policy,
-                ) {
-                    match direction {
-                        SelectionDirection::Backward => return Some(selection),
-                        SelectionDirection::Forward => {
-                            expanded_selection = Some(selection);
-                        }
+                )
+            {
+                match direction {
+                    SelectionDirection::Backward => return Some(selection),
+                    SelectionDirection::Forward => {
+                        expanded_selection = Some(selection);
                     }
                 }
+            }
         }
 
         for row_elements in &self.children {
@@ -1533,14 +1535,15 @@ impl SelectableElement for Table {
                         direction,
                         unit,
                         word_boundaries_policy,
-                    ) {
-                        match direction {
-                            SelectionDirection::Backward => return Some(selection),
-                            SelectionDirection::Forward => {
-                                expanded_selection = Some(selection);
-                            }
+                    )
+                {
+                    match direction {
+                        SelectionDirection::Backward => return Some(selection),
+                        SelectionDirection::Forward => {
+                            expanded_selection = Some(selection);
                         }
                     }
+                }
             }
         }
 
@@ -1556,9 +1559,9 @@ impl SelectableElement for Table {
             if let Some(selectable_child) = header.content.as_selectable_element()
                 && let Some(result) = selectable_child
                     .is_point_semantically_before(absolute_point, absolute_point_other)
-                {
-                    return Some(result);
-                }
+            {
+                return Some(result);
+            }
         }
 
         for row_elements in &self.children {
@@ -1566,9 +1569,9 @@ impl SelectableElement for Table {
                 if let Some(selectable_child) = cell.as_selectable_element()
                     && let Some(result) = selectable_child
                         .is_point_semantically_before(absolute_point, absolute_point_other)
-                    {
-                        return Some(result);
-                    }
+                {
+                    return Some(result);
+                }
             }
         }
 
@@ -1584,9 +1587,9 @@ impl SelectableElement for Table {
             if let Some(selectable_child) = header.content.as_selectable_element()
                 && let Some(selection) =
                     selectable_child.smart_select(absolute_point, smart_select_fn)
-                {
-                    return Some(selection);
-                }
+            {
+                return Some(selection);
+            }
         }
 
         for row_elements in &self.children {
@@ -1594,9 +1597,9 @@ impl SelectableElement for Table {
                 if let Some(selectable_child) = cell.as_selectable_element()
                     && let Some(selection) =
                         selectable_child.smart_select(absolute_point, smart_select_fn)
-                    {
-                        return Some(selection);
-                    }
+                {
+                    return Some(selection);
+                }
             }
         }
 

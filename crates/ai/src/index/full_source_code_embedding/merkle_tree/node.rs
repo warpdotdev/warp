@@ -489,17 +489,18 @@ impl MerkleNode {
 
                 for dir_path in dir_paths {
                     if let Some(parent_path) = dir_path.parent()
-                        && let Some(child_dir) = created_dirs.remove(&dir_path) {
-                            // Skip if parent is the root directory
-                            if parent_path != absolute_path {
-                                if let Some(parent_dir) = created_dirs.get_mut(parent_path) {
-                                    // Now we have the completed child directory with all its children
-                                    parent_dir.children.push(Entry::Directory(child_dir));
-                                }
-                            } else {
-                                entries_to_create.push(Entry::Directory(child_dir));
+                        && let Some(child_dir) = created_dirs.remove(&dir_path)
+                    {
+                        // Skip if parent is the root directory
+                        if parent_path != absolute_path {
+                            if let Some(parent_dir) = created_dirs.get_mut(parent_path) {
+                                // Now we have the completed child directory with all its children
+                                parent_dir.children.push(Entry::Directory(child_dir));
                             }
+                        } else {
+                            entries_to_create.push(Entry::Directory(child_dir));
                         }
+                    }
                 }
 
                 for entry in entries_to_create {

@@ -889,17 +889,17 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         if let crate::ai::agent::AIAgentInput::ActionResult { result, .. } = input
             && let crate::ai::agent::AIAgentActionResultType::RequestCommandOutput(command_result) =
                 &result.result
-            {
-                match command_result {
-                    crate::ai::agent::RequestCommandOutputResult::CancelledBeforeExecution => {
-                        found_cancelled = true;
-                    }
-                    crate::ai::agent::RequestCommandOutputResult::Completed { .. } => {
-                        found_successful += 1;
-                    }
-                    _ => {}
+        {
+            match command_result {
+                crate::ai::agent::RequestCommandOutputResult::CancelledBeforeExecution => {
+                    found_cancelled = true;
                 }
+                crate::ai::agent::RequestCommandOutputResult::Completed { .. } => {
+                    found_successful += 1;
+                }
+                _ => {}
             }
+        }
     }
 
     assert!(

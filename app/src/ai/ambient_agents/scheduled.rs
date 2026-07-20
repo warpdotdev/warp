@@ -164,34 +164,33 @@ impl ScheduledAgentManager {
     ) {
         if let UpdateManagerEvent::ObjectOperationComplete { result } = event
             && let ObjectOperation::Delete { .. } = result.operation
-                && let Some(server_id) = result.server_id {
-                    let sync_id = SyncId::ServerId(server_id);
-                    if let Some(tx) = self.pending_deletes.remove(&sync_id) {
-                        match result.success_type {
-                            OperationSuccessType::Success => {
-                                let _ = tx.send(Ok(()));
-                            }
-                            OperationSuccessType::Failure => {
-                                let _ = tx.send(Err(anyhow::anyhow!(
-                                    "Failed to delete scheduled ambient agent"
-                                )));
-                            }
-                            OperationSuccessType::Denied(ref message) => {
-                                let _ =
-                                    tx.send(Err(anyhow::anyhow!("Deletion denied: {}", message)));
-                            }
-                            OperationSuccessType::Rejection => {
-                                let _ =
-                                    tx.send(Err(anyhow::anyhow!("Deletion rejected by server")));
-                            }
-                            OperationSuccessType::FeatureNotAvailable => {
-                                let _ = tx.send(Err(anyhow::anyhow!(
-                                    "Scheduled ambient agents not available"
-                                )));
-                            }
-                        }
+            && let Some(server_id) = result.server_id
+        {
+            let sync_id = SyncId::ServerId(server_id);
+            if let Some(tx) = self.pending_deletes.remove(&sync_id) {
+                match result.success_type {
+                    OperationSuccessType::Success => {
+                        let _ = tx.send(Ok(()));
+                    }
+                    OperationSuccessType::Failure => {
+                        let _ = tx.send(Err(anyhow::anyhow!(
+                            "Failed to delete scheduled ambient agent"
+                        )));
+                    }
+                    OperationSuccessType::Denied(ref message) => {
+                        let _ = tx.send(Err(anyhow::anyhow!("Deletion denied: {}", message)));
+                    }
+                    OperationSuccessType::Rejection => {
+                        let _ = tx.send(Err(anyhow::anyhow!("Deletion rejected by server")));
+                    }
+                    OperationSuccessType::FeatureNotAvailable => {
+                        let _ = tx.send(Err(anyhow::anyhow!(
+                            "Scheduled ambient agents not available"
+                        )));
                     }
                 }
+            }
+        }
     }
 
     /// Create a new scheduled ambient agent.

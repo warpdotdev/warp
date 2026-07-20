@@ -172,9 +172,11 @@ impl DirectoryWatcher {
             let wt_std = StandardizedPath::from_local_canonicalized(wt_dir.as_path()).ok();
             for repo_handle in self.directories.values() {
                 if let Some(ext) = repo_handle.as_ref(ctx).external_git_directory()
-                    && wt_std.as_ref() == Some(ext) && !affected.iter().any(|r| r == repo_handle) {
-                        affected.push(repo_handle.clone());
-                    }
+                    && wt_std.as_ref() == Some(ext)
+                    && !affected.iter().any(|r| r == repo_handle)
+                {
+                    affected.push(repo_handle.clone());
+                }
             }
         } else if is_remote_tracking_ref(git_path) {
             log::debug!(
@@ -198,17 +200,18 @@ impl DirectoryWatcher {
             let standardized = StandardizedPath::from_local_canonicalized(git_path).ok();
             if let Some(ref std_path) = standardized {
                 if let Some(repo) = self.find_containing_directory(std_path)
-                    && !affected.iter().any(|r| r == &repo) {
-                        affected.push(repo);
-                    }
+                    && !affected.iter().any(|r| r == &repo)
+                {
+                    affected.push(repo);
+                }
                 for repo_handle in self.directories.values() {
                     let common = repo_handle.read(ctx, |repo, _| repo.common_git_dir());
                     if let Ok(common_std) = StandardizedPath::try_from_local(common.as_path())
                         && std_path.starts_with(&common_std)
-                            && !affected.iter().any(|r| r == repo_handle)
-                        {
-                            affected.push(repo_handle.clone());
-                        }
+                        && !affected.iter().any(|r| r == repo_handle)
+                    {
+                        affected.push(repo_handle.clone());
+                    }
                 }
             }
         } else if is_common_git_config(git_path) {
@@ -234,9 +237,10 @@ impl DirectoryWatcher {
             );
             let standardized = StandardizedPath::from_local_canonicalized(git_path).ok();
             if let Some(ref std_path) = standardized
-                && let Some(repo) = self.find_containing_directory(std_path) {
-                    affected.push(repo);
-                }
+                && let Some(repo) = self.find_containing_directory(std_path)
+            {
+                affected.push(repo);
+            }
         }
 
         let repo_roots: Vec<_> = affected

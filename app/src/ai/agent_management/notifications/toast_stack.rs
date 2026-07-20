@@ -192,9 +192,10 @@ impl AgentNotificationToastStack {
     /// Pauses the auto-dismiss timer for a toast (e.g. while the user is hovering over it).
     fn cancel_dismissal_timeout(&mut self, id: &NotificationId) {
         if let Some(entry) = self.toasts.iter_mut().find(|e| e.notification_id == *id)
-            && let Some(handle) = entry.abort_handle.take() {
-                handle.abort();
-            }
+            && let Some(handle) = entry.abort_handle.take()
+        {
+            handle.abort();
+        }
     }
 
     fn create_artifact_buttons_view_from_artifacts(

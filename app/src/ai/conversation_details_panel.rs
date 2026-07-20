@@ -1497,24 +1497,25 @@ impl ConversationDetailsPanel {
 
         // Add GitHub source link if we have enough info to construct it.
         if let (Some(org), Some(repo)) = (&skill_spec.org, &skill_spec.repo)
-            && skill_spec.is_full_path() {
-                let github_url = format!(
-                    "https://github.com/{}/{}/blob/-/{}",
-                    org, repo, skill_spec.skill_identifier
-                );
-                let source_link = appearance
-                    .ui_builder()
-                    .link(
-                        "Open in GitHub".to_string(),
-                        Some(github_url),
-                        None,
-                        self.mouse_states.skill_source_link.clone(),
-                    )
-                    .build()
-                    .finish();
-                row.add_child(separator());
-                row.add_child(Shrinkable::new(1., source_link).finish());
-            }
+            && skill_spec.is_full_path()
+        {
+            let github_url = format!(
+                "https://github.com/{}/{}/blob/-/{}",
+                org, repo, skill_spec.skill_identifier
+            );
+            let source_link = appearance
+                .ui_builder()
+                .link(
+                    "Open in GitHub".to_string(),
+                    Some(github_url),
+                    None,
+                    self.mouse_states.skill_source_link.clone(),
+                )
+                .build()
+                .finish();
+            row.add_child(separator());
+            row.add_child(Shrinkable::new(1., source_link).finish());
+        }
 
         Some(row.finish())
     }

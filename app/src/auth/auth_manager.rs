@@ -422,12 +422,12 @@ impl AuthManager {
                                 email: self.auth_state.user_email().unwrap_or_default(),
                             },
                         })
-                    {
-                        report_error!(
-                            anyhow::Error::new(e)
-                                .context("Error persisting user information to database")
-                        );
-                    };
+                {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Error persisting user information to database")
+                    );
+                };
 
                 // Fetch the user's privacy settings from the server if any or update the server settings.
                 let privacy_settings_handle = PrivacySettings::handle(ctx);

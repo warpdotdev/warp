@@ -208,21 +208,22 @@ fn test_retry_menu_item_logic() {
         CloudModel::handle(&app).update(&mut app, |cloud_model, ctx| {
             if let CloudObjectTypeAndId::Workflow(SyncId::ClientId(client_id)) =
                 cloud_object_type_and_id
-                && let SyncId::ServerId(server_id) = new_sync_id {
-                    let server_creation_info = ServerCreationInfo {
-                        server_id_and_type: ServerIdAndType {
-                            id: server_id,
-                            id_type: ObjectIdType::Workflow,
-                        },
-                        creator_uid: None,
-                        permissions: ServerPermissions::mock_personal(),
-                    };
-                    cloud_model.update_object_after_server_creation(
-                        client_id,
-                        server_creation_info,
-                        ctx,
-                    );
-                }
+                && let SyncId::ServerId(server_id) = new_sync_id
+            {
+                let server_creation_info = ServerCreationInfo {
+                    server_id_and_type: ServerIdAndType {
+                        id: server_id,
+                        id_type: ObjectIdType::Workflow,
+                    },
+                    creator_uid: None,
+                    permissions: ServerPermissions::mock_personal(),
+                };
+                cloud_model.update_object_after_server_creation(
+                    client_id,
+                    server_creation_info,
+                    ctx,
+                );
+            }
         });
 
         index.update(&mut app, |index, ctx| {

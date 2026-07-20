@@ -291,10 +291,9 @@ impl BillingCycleUsageSectionView {
             .finish(),
         );
 
-        if is_admin
-            && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance) {
-                column.add_child(Container::new(banner).with_margin_top(16.).finish());
-            }
+        if is_admin && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance) {
+            column.add_child(Container::new(banner).with_margin_top(16.).finish());
+        }
 
         column.add_child(
             Container::new(render_rows(

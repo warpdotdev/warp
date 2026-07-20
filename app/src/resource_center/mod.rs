@@ -300,9 +300,11 @@ impl TipsCompleted {
 
         // Check if all gamified tips are completed
         if let Some(total_tips) = self.gamified_tips_count
-            && is_new_value && self.features_used.len() == total_tips {
-                self.skipped_or_completed = true;
-            }
+            && is_new_value
+            && self.features_used.len() == total_tips
+        {
+            self.skipped_or_completed = true;
+        }
 
         is_new_value
     }

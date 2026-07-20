@@ -1327,9 +1327,10 @@ impl Buffer {
         self.start_undo_redo_batch();
 
         if let Some((ops, selections)) = self.local_undo_stack.undo()
-            && let Err(e) = self.local_undo_or_redo(ops, selections) {
-                log::warn!("Failed to perform local undo: {e}");
-            }
+            && let Err(e) = self.local_undo_or_redo(ops, selections)
+        {
+            log::warn!("Failed to perform local undo: {e}");
+        }
 
         self.end_batch(ctx);
     }
@@ -1338,9 +1339,10 @@ impl Buffer {
         self.start_undo_redo_batch();
 
         if let Some((ops, selections)) = self.local_undo_stack.redo()
-            && let Err(e) = self.local_undo_or_redo(ops, selections) {
-                log::warn!("Failed to perform local redo: {e}");
-            }
+            && let Err(e) = self.local_undo_or_redo(ops, selections)
+        {
+            log::warn!("Failed to perform local redo: {e}");
+        }
 
         self.end_batch(ctx);
     }
@@ -2275,9 +2277,10 @@ impl Buffer {
                 // that the cursor is parked at, we should seek to the next splice's start range
                 // and push all the fragments in between into the new tree (they are untouched).
                 if let Some(cur_range) = cur_range.as_ref()
-                    && cur_range.start > chars_to_fragment_end {
-                        new_fragments.push_tree(cursor.slice(&cur_range.start, SeekBias::Right));
-                    }
+                    && cur_range.start > chars_to_fragment_end
+                {
+                    new_fragments.push_tree(cursor.slice(&cur_range.start, SeekBias::Right));
+                }
             }
         }
 
@@ -2476,9 +2479,10 @@ impl Buffer {
                 // that the cursor is parked at, we should seek to the next splice's start range
                 // and push all the fragments in between into the new tree.
                 if let Some(cur_range) = cur_range.as_ref()
-                    && cur_range.start > chars_to_fragment_end {
-                        new_fragments.push_tree(cursor.slice(&cur_range.start, SeekBias::Right));
-                    }
+                    && cur_range.start > chars_to_fragment_end
+                {
+                    new_fragments.push_tree(cursor.slice(&cur_range.start, SeekBias::Right));
+                }
             }
         }
 

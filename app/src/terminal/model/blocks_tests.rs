@@ -2218,9 +2218,9 @@ pub fn test_emits_after_block_completed_event() {
         if let Event::AfterBlockCompleted(event) = event
             && (matches!(event.block_type, BlockType::InBandCommand)
                 || matches!(event.block_type, BlockType::User(..)))
-            {
-                after_block_completed_events.push(event);
-            }
+        {
+            after_block_completed_events.push(event);
+        }
     }
     assert_eq!(after_block_completed_events.len(), 2);
     assert!(matches!(

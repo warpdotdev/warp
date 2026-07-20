@@ -46,9 +46,10 @@ pub(crate) fn parse_markdown_content(content: &str) -> Result<ParsedMarkdown> {
                     .iter()
                     .filter_map(|(key, value)| {
                         if let Value::String(key_str) = key
-                            && let Value::String(value_str) = value {
-                                return Some((key_str.clone(), value_str.clone()));
-                            }
+                            && let Value::String(value_str) = value
+                        {
+                            return Some((key_str.clone(), value_str.clone()));
+                        }
 
                         None
                     })

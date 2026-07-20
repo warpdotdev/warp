@@ -116,16 +116,16 @@ pub(in crate::terminal::view) fn resolve_cloud_conversation_continuation_ui_stat
     if let Some(conversation_token) = conversation_token.as_ref()
         && let Some(metadata) =
             history_model.get_server_conversation_metadata_by_server_token(conversation_token)
-        {
-            return continuation_ui_state_for_harness_and_access(
-                metadata.harness,
-                conversation_access(metadata, app),
-                terminal_view_id,
-                Some(conversation_token),
-                task_id,
-                history_model,
-            );
-        }
+    {
+        return continuation_ui_state_for_harness_and_access(
+            metadata.harness,
+            conversation_access(metadata, app),
+            terminal_view_id,
+            Some(conversation_token),
+            task_id,
+            history_model,
+        );
+    }
 
     let access = task_creator_access(&task, app);
     if access == ConversationAccess::Edit {

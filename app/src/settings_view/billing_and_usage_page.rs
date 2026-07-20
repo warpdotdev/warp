@@ -926,18 +926,18 @@ impl TypedActionView for BillingAndUsagePageView {
                             .settings
                             .addon_credits_settings
                             .auto_reload_enabled
-                            && let Some(option) = self
-                                .addon_credits_options
-                                .get(self.selected_addon_denomination)
-                            {
-                                user_workspaces.update_addon_credits_settings(
-                                    team_uid,
-                                    None,
-                                    None,
-                                    Some(option.credits),
-                                    ctx,
-                                );
-                            }
+                        && let Some(option) = self
+                            .addon_credits_options
+                            .get(self.selected_addon_denomination)
+                    {
+                        user_workspaces.update_addon_credits_settings(
+                            team_uid,
+                            None,
+                            None,
+                            Some(option.credits),
+                            ctx,
+                        );
+                    }
                 });
                 ctx.notify();
             }
@@ -2240,8 +2240,9 @@ impl BillingAndUsagePageView {
             || matches!(divisor, Some(Divisor::Limit(limit)) if used >= limit);
 
         if let Some(info) = prorated_request_limits_info
-            && info.is_request_limit_prorated {
-                row.add_child(render_info_icon(
+            && info.is_request_limit_prorated
+        {
+            row.add_child(render_info_icon(
                 appearance,
                 AdditionalInfo::<BillingAndUsagePageAction> {
                     mouse_state: info.mouse_state,
@@ -2253,7 +2254,7 @@ impl BillingAndUsagePageView {
                     },
                 },
             ))
-            }
+        }
 
         if show_alert {
             row.add_child(
@@ -2904,18 +2905,18 @@ impl BillingAndUsagePageView {
         // as this is not applicable to them
         if let Some(t) = team
             && t.billing_metadata.customer_type == CustomerType::Enterprise
-                && t.billing_metadata
-                    .tier
-                    .warp_ai_policy
-                    .is_some_and(|p| p.limit == 0)
-            {
-                usage.add_child(self.render_enterprise_usage_card(
-                    t.uid,
-                    has_admin_permissions,
-                    appearance,
-                ));
-                return usage.finish();
-            }
+            && t.billing_metadata
+                .tier
+                .warp_ai_policy
+                .is_some_and(|p| p.limit == 0)
+        {
+            usage.add_child(self.render_enterprise_usage_card(
+                t.uid,
+                has_admin_permissions,
+                appearance,
+            ));
+            return usage.finish();
+        }
 
         // Show a summed "Team total" row first.
         let num_team_members = workspace_team_members.len();
@@ -3218,26 +3219,27 @@ impl BillingAndUsagePageView {
 
         let workspaces = UserWorkspaces::as_ref(app);
         if let Some(team) = workspaces.current_team()
-            && team.billing_metadata.is_usage_based_pricing_toggleable() {
-                let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
+            && team.billing_metadata.is_usage_based_pricing_toggleable()
+        {
+            let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
 
-                let enabled = self
-                    .usage_based_pricing_toggle_override
-                    .unwrap_or(usage_based_pricing_settings.enabled);
+            let enabled = self
+                .usage_based_pricing_toggle_override
+                .unwrap_or(usage_based_pricing_settings.enabled);
 
-                usage.add_child(
-                    Container::new(self.render_usage_based_pricing_section(
-                        enabled,
-                        team,
-                        appearance,
-                        app,
-                        has_admin_permissions,
-                        self.usage_based_pricing_toggle_loading,
-                    ))
-                    .with_margin_bottom(16.)
-                    .finish(),
-                );
-            }
+            usage.add_child(
+                Container::new(self.render_usage_based_pricing_section(
+                    enabled,
+                    team,
+                    appearance,
+                    app,
+                    has_admin_permissions,
+                    self.usage_based_pricing_toggle_loading,
+                ))
+                .with_margin_bottom(16.)
+                .finish(),
+            );
+        }
 
         usage.finish()
     }

@@ -464,9 +464,10 @@ fn codex_warp_marketplace_config(codex_dir: &Path) -> Option<CodexWarpMarketplac
 /// Checks `CODEX_HOME` first, falls back to `~/.codex`.
 fn codex_home_dir() -> io::Result<PathBuf> {
     if let Ok(codex_home) = env::var(CODEX_HOME_ENV)
-        && !codex_home.is_empty() {
-            return Ok(PathBuf::from(codex_home));
-        }
+        && !codex_home.is_empty()
+    {
+        return Ok(PathBuf::from(codex_home));
+    }
     dirs::home_dir()
         .map(|home| home.join(CODEX_CONFIG_DIR))
         .ok_or_else(|| {

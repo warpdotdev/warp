@@ -3871,9 +3871,10 @@ impl Input {
 
         #[cfg(feature = "local_fs")]
         if let Some(db_url) = database_file_path_for_current_scope().to_str()
-            && let Ok(conn) = establish_ro_connection(db_url) {
-                input.conn = Some(Arc::new(Mutex::new(conn)));
-            }
+            && let Ok(conn) = establish_ro_connection(db_url)
+        {
+            input.conn = Some(Arc::new(Mutex::new(conn)));
+        }
 
         if input.model.lock().shared_session_status().is_viewer() {
             input.editor.update(ctx, |editor, ctx| {
@@ -6425,16 +6426,17 @@ impl Input {
             (InputType::AI, _) => {
                 if let Some(conversation) =
                     self.ai_context_model.as_ref(app).selected_conversation(app)
-                    && conversation.is_child_agent_conversation() {
-                        let agent_name = conversation.agent_name().unwrap_or("child");
-                        if conversation.status().is_in_progress() {
-                            if is_queue_next_prompt_enabled {
-                                return format!("Queue a follow up for the {agent_name} agent");
-                            }
-                            return format!("Steer the {agent_name} agent");
+                    && conversation.is_child_agent_conversation()
+                {
+                    let agent_name = conversation.agent_name().unwrap_or("child");
+                    if conversation.status().is_in_progress() {
+                        if is_queue_next_prompt_enabled {
+                            return format!("Queue a follow up for the {agent_name} agent");
                         }
-                        return format!("Ask the {agent_name} agent a follow up");
+                        return format!("Steer the {agent_name} agent");
                     }
+                    return format!("Ask the {agent_name} agent a follow up");
+                }
 
                 // Follow the `agent_indicator` pattern (see `app/src/tab.rs`):
                 //  * `None` (no conversation, empty, passive, or untitled) => new conversation => "Warp anything"
@@ -7487,44 +7489,41 @@ impl Input {
                     history_based_autosuggestion_state,
                     request_duration_ms,
                 }) = zerostate_next_command_suggestion_info
-                {
-                    self.last_intelligent_autosuggestion_result =
-                        Some(IntelligentAutosuggestionResult {
-                            was_suggestion_accepted: self.was_intelligent_autosuggestion_accepted,
-                            is_from_ai,
-                            predicted_command: response.most_likely_action.clone(),
-                        });
+            {
+                self.last_intelligent_autosuggestion_result =
+                    Some(IntelligentAutosuggestionResult {
+                        was_suggestion_accepted: self.was_intelligent_autosuggestion_accepted,
+                        is_from_ai,
+                        predicted_command: response.most_likely_action.clone(),
+                    });
 
-                    let should_collect_ugc = should_collect_ai_ugc_telemetry(
-                        ctx,
-                        PrivacySettings::as_ref(ctx).is_telemetry_enabled,
-                    );
-                    send_telemetry_from_ctx!(
-                        TelemetryEvent::AgentModePrediction {
-                            was_suggestion_accepted: self.was_intelligent_autosuggestion_accepted,
-                            request_duration_ms,
-                            is_from_ai,
-                            does_actual_command_match_prediction: response.most_likely_action
-                                == command,
-                            does_actual_command_match_history_prediction:
-                                history_based_autosuggestion_state.history_command_prediction
-                                    == command,
-                            history_prediction_likelihood: history_based_autosuggestion_state
-                                .history_command_prediction_likelihood,
-                            total_history_count: history_based_autosuggestion_state
-                                .total_history_count,
-                            actual_next_command_run: should_collect_ugc
-                                .then_some(command.to_string()),
-                            history_based_autosuggestion_state: should_collect_ugc
-                                .then_some(history_based_autosuggestion_state.clone()),
-                            generate_ai_input_suggestions_request: should_collect_ugc
-                                .then_some(*request),
-                            generate_ai_input_suggestions_response: should_collect_ugc
-                                .then(|| response.clone())
-                        },
-                        ctx
-                    );
-                }
+                let should_collect_ugc = should_collect_ai_ugc_telemetry(
+                    ctx,
+                    PrivacySettings::as_ref(ctx).is_telemetry_enabled,
+                );
+                send_telemetry_from_ctx!(
+                    TelemetryEvent::AgentModePrediction {
+                        was_suggestion_accepted: self.was_intelligent_autosuggestion_accepted,
+                        request_duration_ms,
+                        is_from_ai,
+                        does_actual_command_match_prediction: response.most_likely_action
+                            == command,
+                        does_actual_command_match_history_prediction:
+                            history_based_autosuggestion_state.history_command_prediction == command,
+                        history_prediction_likelihood: history_based_autosuggestion_state
+                            .history_command_prediction_likelihood,
+                        total_history_count: history_based_autosuggestion_state.total_history_count,
+                        actual_next_command_run: should_collect_ugc.then_some(command.to_string()),
+                        history_based_autosuggestion_state: should_collect_ugc
+                            .then_some(history_based_autosuggestion_state.clone()),
+                        generate_ai_input_suggestions_request: should_collect_ugc
+                            .then_some(*request),
+                        generate_ai_input_suggestions_response: should_collect_ugc
+                            .then(|| response.clone())
+                    },
+                    ctx
+                );
+            }
             // Reset state for whether the user accepted the intelligent autosuggestion.
             self.was_intelligent_autosuggestion_accepted = false;
 
@@ -7793,9 +7792,10 @@ impl Input {
 
         // The vim status bar should be shown and hidden immediately upon toggling.
         if settings.as_ref(ctx).vim_mode_enabled()
-            && let AppEditorSettingsChangedEvent::VimStatusBar { .. } = evt {
-                ctx.notify();
-            }
+            && let AppEditorSettingsChangedEvent::VimStatusBar { .. } = evt
+        {
+            ctx.notify();
+        }
     }
 
     pub fn set_autosuggestion(
@@ -8794,33 +8794,33 @@ impl Input {
                 original_input_type,
                 ..
             } = self.suggestions_mode_model.as_ref(ctx).mode()
-            {
-                let original_buffer = original_buffer.clone();
-                let original_cursor_point = *original_cursor_point;
-                let original_input_was_locked = *original_input_was_locked;
-                let original_input_type = *original_input_type;
-                // If the user closes the input suggestions menu, we want to reset the AI input mode
-                // to the exact same state it was originally, which includes the mode itself and
-                // whether it was locked to that mode.
-                self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                    ai_input_model.set_input_config(
-                        InputConfig {
-                            input_type: original_input_type,
-                            is_locked: original_input_was_locked,
-                        },
-                        original_buffer.is_empty(),
-                        Some(InputTypeAutoDetectionSource::RestoreSavedConfig),
-                        ctx,
-                    );
-                });
+        {
+            let original_buffer = original_buffer.clone();
+            let original_cursor_point = *original_cursor_point;
+            let original_input_was_locked = *original_input_was_locked;
+            let original_input_type = *original_input_type;
+            // If the user closes the input suggestions menu, we want to reset the AI input mode
+            // to the exact same state it was originally, which includes the mode itself and
+            // whether it was locked to that mode.
+            self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+                ai_input_model.set_input_config(
+                    InputConfig {
+                        input_type: original_input_type,
+                        is_locked: original_input_was_locked,
+                    },
+                    original_buffer.is_empty(),
+                    Some(InputTypeAutoDetectionSource::RestoreSavedConfig),
+                    ctx,
+                );
+            });
 
-                self.editor.update(ctx, |editor, ctx| {
-                    editor.set_buffer_text_ignoring_undo(&original_buffer, ctx);
-                    if let Some(original_cursor_point) = original_cursor_point {
-                        editor.reset_selections_to_point(&original_cursor_point, ctx);
-                    }
-                });
-            }
+            self.editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text_ignoring_undo(&original_buffer, ctx);
+                if let Some(original_cursor_point) = original_cursor_point {
+                    editor.reset_selections_to_point(&original_cursor_point, ctx);
+                }
+            });
+        }
         self.close_input_suggestions(/*should_focus_input=*/ should_focus_input, ctx);
     }
 
@@ -8905,12 +8905,13 @@ impl Input {
 
     pub fn focus_input_box(&self, ctx: &mut ViewContext<Self>) {
         if self.should_show_auth_secret_ftux(ctx)
-            && let Some(ftux_view) = self.auth_secret_ftux_view().cloned() {
-                ftux_view.update(ctx, |view, ctx| {
-                    view.focus_dropdown_editor(ctx);
-                });
-                return;
-            }
+            && let Some(ftux_view) = self.auth_secret_ftux_view().cloned()
+        {
+            ftux_view.update(ctx, |view, ctx| {
+                view.focus_dropdown_editor(ctx);
+            });
+            return;
+        }
         ctx.focus_self();
     }
 
@@ -8989,13 +8990,14 @@ impl Input {
         }
 
         if let Some(selector) = self.auth_secret_selector()
-            && selector.as_ref(ctx).is_menu_open() {
-                let selector = selector.clone();
-                selector.update(ctx, |selector, ctx| {
-                    selector.select_previous(ctx);
-                });
-                return;
-            }
+            && selector.as_ref(ctx).is_menu_open()
+        {
+            let selector = selector.clone();
+            selector.update(ctx, |selector, ctx| {
+                selector.select_previous(ctx);
+            });
+            return;
+        }
 
         if self.is_editing_queued_prompt(ctx) {
             return;
@@ -9613,52 +9615,51 @@ impl Input {
                     if let Some(conn) = conn
                         && let Some(last_user_block_completed) =
                             &completer_data.last_user_block_completed
-                        {
-                            let similar_history_contexts = {
-                                let mut conn = conn.lock();
-                                NextCommandModel::get_similar_history_context(
-                                    &mut conn,
-                                    last_user_block_completed,
-                                    0,
-                                )
-                            };
-                            if !similar_history_contexts.is_empty() {
-                                let mut history_next_command_counts =
-                                    counter::Counter::<String>::new();
-                                // Find the most likely next command after a similar context, out of those that have a matching prefix and aren't ignored.
-                                for history_context in &similar_history_contexts {
-                                    if history_context
-                                        .next_command
-                                        .command
-                                        .starts_with(&buffer_text)
-                                        && !ignored_suggestions
-                                            .contains(&history_context.next_command.command)
-                                    {
-                                        history_next_command_counts
-                                            [&history_context.next_command.command] += 1;
-                                    }
-                                }
-
-                                for (most_likely_next_command, _) in
-                                    history_next_command_counts.k_most_common_ordered(5)
+                    {
+                        let similar_history_contexts = {
+                            let mut conn = conn.lock();
+                            NextCommandModel::get_similar_history_context(
+                                &mut conn,
+                                last_user_block_completed,
+                                0,
+                            )
+                        };
+                        if !similar_history_contexts.is_empty() {
+                            let mut history_next_command_counts = counter::Counter::<String>::new();
+                            // Find the most likely next command after a similar context, out of those that have a matching prefix and aren't ignored.
+                            for history_context in &similar_history_contexts {
+                                if history_context
+                                    .next_command
+                                    .command
+                                    .starts_with(&buffer_text)
+                                    && !ignored_suggestions
+                                        .contains(&history_context.next_command.command)
                                 {
-                                    if is_command_valid(
-                                        &most_likely_next_command,
-                                        completion_context.as_ref(),
-                                        session_env_vars.as_ref(),
-                                    )
-                                    .await
-                                    {
-                                        return AutoSuggestionResult {
-                                            buffer_text,
-                                            autosuggestion_result: Some(
-                                                most_likely_next_command.clone(),
-                                            ),
-                                        };
-                                    }
+                                    history_next_command_counts
+                                        [&history_context.next_command.command] += 1;
+                                }
+                            }
+
+                            for (most_likely_next_command, _) in
+                                history_next_command_counts.k_most_common_ordered(5)
+                            {
+                                if is_command_valid(
+                                    &most_likely_next_command,
+                                    completion_context.as_ref(),
+                                    session_env_vars.as_ref(),
+                                )
+                                .await
+                                {
+                                    return AutoSuggestionResult {
+                                        buffer_text,
+                                        autosuggestion_result: Some(
+                                            most_likely_next_command.clone(),
+                                        ),
+                                    };
                                 }
                             }
                         }
+                    }
 
                     // If we have no suggestion from similar historical context, fallback to the most recent
                     // command with a matching prefix run in the same pwd (if exists, otherwise just most recent command anywhere with matching prefix).
@@ -9775,9 +9776,9 @@ impl Input {
             && let Some(abbr_value) = session_context
                 .session
                 .abbreviation_value(&first_token.item)
-            {
-                return Some((first_token, abbr_value));
-            }
+        {
+            return Some((first_token, abbr_value));
+        }
 
         // We only expand aliases if the user has turned the setting on.
         if self.should_expand_aliases(ctx) {
@@ -10969,9 +10970,10 @@ impl Input {
                     }
                     CommandXRayAnchor::Hover(mouse_position) => {
                         if let Some(offset) = self.start_byte_index_at_point(mouse_position, ctx)
-                            && !self.suggestions_mode_model.as_ref(ctx).is_visible() {
-                                self.start_xray_at_offset(offset, CommandXRayTrigger::Hover, ctx);
-                            }
+                            && !self.suggestions_mode_model.as_ref(ctx).is_visible()
+                        {
+                            self.start_xray_at_offset(offset, CommandXRayTrigger::Hover, ctx);
+                        }
                     }
                 }
             }
@@ -11798,7 +11800,6 @@ impl Input {
             return Vec::new();
         };
 
-        
         // TODO: append viewer's local shell history
         history_model
             .as_ref(ctx)
@@ -12087,9 +12088,10 @@ impl Input {
         };
 
         if self.is_completions_while_typing_turned_on(ctx)
-            && let Some(last_abort_handle) = self.completions_abort_handle.take() {
-                last_abort_handle.abort();
-            }
+            && let Some(last_abort_handle) = self.completions_abort_handle.take()
+        {
+            last_abort_handle.abort();
+        }
 
         let input_type = self.ai_input_model.as_ref(ctx).input_type();
 
@@ -12416,30 +12418,31 @@ impl Input {
                                         )
                                     })
                                     .map(|suggestion| suggestion.replacement()),
-                            ) {
-                                // Insert the common prefix if it is longer than what the user has
-                                // already typed. This check is necessary because the suggestions
-                                // are case-insensitive, while the common prefix is necessarily
-                                // case-sensitive. That can lead to the common prefix being shorter
-                                // than the input, causing confusing behavior where the input is
-                                // truncated. Also, only fill in the common prefix if the
-                                // replacement itself is a prefix of the common prefix. If there
-                                // are only fuzzy completions, then it's possible this is not the
-                                // case, and we don't want to fill in the common prefix in that
-                                // case.
-                                let replacement_start = results.replacement_span.start();
-                                let current_word = &buffer_text_original[replacement_start
-                                    ..self.start_byte_index_of_last_selection(ctx).as_usize()];
-                                if common_prefix.len() > results.replacement_span.distance()
-                                    && common_prefix.starts_with(current_word)
-                                {
-                                    self.insert_completion_prefix_into_editor(
-                                        ctx,
-                                        common_prefix,
-                                        results.replacement_span.start(),
-                                    );
-                                }
+                            )
+                        {
+                            // Insert the common prefix if it is longer than what the user has
+                            // already typed. This check is necessary because the suggestions
+                            // are case-insensitive, while the common prefix is necessarily
+                            // case-sensitive. That can lead to the common prefix being shorter
+                            // than the input, causing confusing behavior where the input is
+                            // truncated. Also, only fill in the common prefix if the
+                            // replacement itself is a prefix of the common prefix. If there
+                            // are only fuzzy completions, then it's possible this is not the
+                            // case, and we don't want to fill in the common prefix in that
+                            // case.
+                            let replacement_start = results.replacement_span.start();
+                            let current_word = &buffer_text_original[replacement_start
+                                ..self.start_byte_index_of_last_selection(ctx).as_usize()];
+                            if common_prefix.len() > results.replacement_span.distance()
+                                && common_prefix.starts_with(current_word)
+                            {
+                                self.insert_completion_prefix_into_editor(
+                                    ctx,
+                                    common_prefix,
+                                    results.replacement_span.start(),
+                                );
                             }
+                        }
 
                         // If not using completions as you type, then
                         // clear any autosuggestions when tab completions are open.
@@ -13038,9 +13041,10 @@ impl Input {
                             // newline after a backtick if the character preceding
                             // the backtick is whitespace.
                             if let Some(c) = preceding_chars.next()
-                                && !c.is_ascii_whitespace() {
-                                    return false;
-                                }
+                                && !c.is_ascii_whitespace()
+                            {
+                                return false;
+                            }
                             return true;
                         }
                     }
@@ -13048,9 +13052,10 @@ impl Input {
                         if c == '\\' {
                             // Continue if there are more \ characters
                             if let Some(c) = preceding_chars.next()
-                                && c == '\\' {
-                                    continue;
-                                }
+                                && c == '\\'
+                            {
+                                continue;
+                            }
                             // Odd number of \ characters
                             return true;
                         }
@@ -13378,16 +13383,17 @@ impl Input {
                 }
 
                 if self.is_cloud_mode_input_v2_composing(ctx)
-                    && let Some(ambient_agent_view_model) = self.ambient_agent_view_model() {
-                        let needs_env_modal = ambient_agent_view_model
-                            .as_ref(ctx)
-                            .selected_environment_id()
-                            .is_none();
-                        if needs_env_modal {
-                            ctx.emit(Event::OpenCloudModeV2EnvironmentCreationModal);
-                            return;
-                        }
+                    && let Some(ambient_agent_view_model) = self.ambient_agent_view_model()
+                {
+                    let needs_env_modal = ambient_agent_view_model
+                        .as_ref(ctx)
+                        .selected_environment_id()
+                        .is_none();
+                    if needs_env_modal {
+                        ctx.emit(Event::OpenCloudModeV2EnvironmentCreationModal);
+                        return;
                     }
+                }
 
                 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
                 let attachments = self
@@ -14304,24 +14310,25 @@ impl Input {
         ctx.emit(Event::ExecuteAIQuery);
 
         if let Some(workflow_state) = self.workflows_state.selected_workflow_state.as_ref()
-            && let WorkflowType::Cloud(workflow) = &workflow_state.workflow_type {
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::ExecutedWarpDrivePrompt {
-                        id: workflow.id.into_server().map(Into::into),
-                        selection_source: workflow_state.workflow_selection_source,
-                    },
-                    ctx
-                );
+            && let WorkflowType::Cloud(workflow) = &workflow_state.workflow_type
+        {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::ExecutedWarpDrivePrompt {
+                    id: workflow.id.into_server().map(Into::into),
+                    selection_source: workflow_state.workflow_selection_source,
+                },
+                ctx
+            );
 
-                UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
-                    update_manager.record_object_action(
-                        workflow.cloud_object_type_and_id(),
-                        ObjectActionType::Execute,
-                        None,
-                        ctx,
-                    )
-                });
-            }
+            UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
+                update_manager.record_object_action(
+                    workflow.cloud_object_type_and_id(),
+                    ObjectActionType::Execute,
+                    None,
+                    ctx,
+                )
+            });
+        }
     }
 
     /// Send the given query to the session sharer for them to execute on their machine.
@@ -14342,9 +14349,10 @@ impl Input {
             .slash_command_model
             .as_ref(ctx)
             .detect_command(&prompt, ctx)
-            && !slash_command_is_submitted_as_prompt(&detected.command) {
-                return false;
-            }
+            && !slash_command_is_submitted_as_prompt(&detected.command)
+        {
+            return false;
+        }
 
         // We're committed to sending the prompt, so finalize any in-flight image-attachment
         // processing. This drops images that haven't finished processing; already-processed ones
@@ -14696,30 +14704,30 @@ impl Input {
         // If the buffer is non-empty, we should kick off the autodetection process, in case the
         // classification doesn't match the previous locked mode.
         if !buffer_text.is_empty()
-            && let Some(completion_context) = self.completion_session_context(ctx) {
-                let ai_input_model = self.ai_input_model.clone();
+            && let Some(completion_context) = self.completion_session_context(ctx)
+        {
+            let ai_input_model = self.ai_input_model.clone();
 
-                ctx.spawn(
-                    async move {
-                        (
-                            parse_current_commands_and_tokens(buffer_text, &completion_context)
-                                .await,
+            ctx.spawn(
+                async move {
+                    (
+                        parse_current_commands_and_tokens(buffer_text, &completion_context).await,
+                        completion_context,
+                    )
+                },
+                move |_input, (parsed_tokens, completion_context), ctx| {
+                    let session_id = completion_context.session.id();
+                    ai_input_model.update(ctx, |model, ctx| {
+                        model.detect_and_set_input_type(
+                            parsed_tokens,
                             completion_context,
-                        )
-                    },
-                    move |_input, (parsed_tokens, completion_context), ctx| {
-                        let session_id = completion_context.session.id();
-                        ai_input_model.update(ctx, |model, ctx| {
-                            model.detect_and_set_input_type(
-                                parsed_tokens,
-                                completion_context,
-                                Some(session_id),
-                                ctx,
-                            );
-                        });
-                    },
-                );
-            }
+                            Some(session_id),
+                            ctx,
+                        );
+                    });
+                },
+            );
+        }
     }
 
     /// Set input mode to Agent Mode (AI input)
@@ -15286,11 +15294,14 @@ impl Input {
         };
 
         if let Some(block) = block
-            && !is_udi && block.honor_ps1() && model.block_list().is_bootstrapped() {
-                // PS1 mode: capture the raw prompt grid so the command palette
-                // can render it with full fidelity (CORE-1683).
-                prompt_elements.ps1_prompt_grid = Some(block.prompt_grid().clone());
-            }
+            && !is_udi
+            && block.honor_ps1()
+            && model.block_list().is_bootstrapped()
+        {
+            // PS1 mode: capture the raw prompt grid so the command palette
+            // can render it with full fidelity (CORE-1683).
+            prompt_elements.ps1_prompt_grid = Some(block.prompt_grid().clone());
+        }
 
         // Always capture a chip snapshot as the fallback prompt representation.
         // This covers both UDI mode and any edge cases where PS1 is not available
@@ -16145,9 +16156,10 @@ impl View for Input {
         }
 
         if let Some(workflow) = self.workflows_state.selected_workflow_state.clone()
-            && workflow.should_show_more_info_view {
-                ctx.set.insert("WorkflowInfoBox");
-            }
+            && workflow.should_show_more_info_view
+        {
+            ctx.set.insert("WorkflowInfoBox");
+        }
 
         let is_profile_model_selector_open = self.should_show_universal_developer_input(app)
             && self

@@ -269,14 +269,15 @@ impl CloudModel {
     ) {
         if let Some(object) = self.objects_by_id.get_mut(uid)
             && let Some(conflicting_revision) = object.conflicting_object_revision()
-                && let Some(current_revision) = object.metadata().revision.clone() {
-                    // If the pending conflict is out of date compared to the current revision, clear it.
-                    // If we received the RTC update for an edit before the server response, the
-                    // conflict's revision may be the same as the current revision.
-                    if conflicting_revision <= current_revision {
-                        object.clear_conflict_status();
-                    }
-                }
+            && let Some(current_revision) = object.metadata().revision.clone()
+        {
+            // If the pending conflict is out of date compared to the current revision, clear it.
+            // If we received the RTC update for an edit before the server response, the
+            // conflict's revision may be the same as the current revision.
+            if conflicting_revision <= current_revision {
+                object.clear_conflict_status();
+            }
+        }
         ctx.notify();
     }
 
@@ -447,12 +448,13 @@ impl CloudModel {
             // Object existed and was updated — emit ObjectUpdated if no conflict.
             let uid = server_object.id.uid();
             if let Some(object) = self.get_by_uid(&uid)
-                && !object.has_conflicting_changes() {
-                    ctx.emit(CloudModelEvent::ObjectUpdated {
-                        type_and_id: object.cloud_object_type_and_id(),
-                        source: UpdateSource::Server,
-                    });
-                }
+                && !object.has_conflicting_changes()
+            {
+                ctx.emit(CloudModelEvent::ObjectUpdated {
+                    type_and_id: object.cloud_object_type_and_id(),
+                    source: UpdateSource::Server,
+                });
+            }
         }
         ctx.notify();
     }
@@ -621,11 +623,12 @@ impl CloudModel {
                         // For example, changes to current editor of a notebook or parent folder of an object
                         let notebook: Option<&mut CloudNotebook> = object.into();
                         if let Some(notebook) = notebook
-                            && new_editor != old_editor {
-                                ctx.emit(CloudModelEvent::NotebookEditorChangedFromServer {
-                                    notebook_id: notebook.id,
-                                });
-                            }
+                            && new_editor != old_editor
+                        {
+                            ctx.emit(CloudModelEvent::NotebookEditorChangedFromServer {
+                                notebook_id: notebook.id,
+                            });
+                        }
                         if new_folder_id != old_folder_id {
                             ctx.emit(CloudModelEvent::ObjectMoved {
                                 type_and_id: object.cloud_object_type_and_id(),
@@ -680,10 +683,11 @@ impl CloudModel {
             let mut changed = false;
 
             if let Some(new_owner) = new_owner
-                && new_owner != object.permissions().owner {
-                    object.permissions_mut().owner = new_owner;
-                    changed = true;
-                }
+                && new_owner != object.permissions().owner
+            {
+                object.permissions_mut().owner = new_owner;
+                changed = true;
+            }
 
             if new_folder != old_folder {
                 object.metadata_mut().folder_id = new_folder;
@@ -783,9 +787,10 @@ impl CloudModel {
                 && let Err(e) = model_event_sender.send(ModelEvent::UpdateObjectMetadata {
                     id: object.hashed_sqlite_id(),
                     metadata: object.metadata().clone(),
-                }) {
-                    report_error!(anyhow::Error::new(e).context("Error saving to cache"));
-                }
+                })
+            {
+                report_error!(anyhow::Error::new(e).context("Error saving to cache"));
+            }
             ctx.notify();
         }
     }
@@ -898,9 +903,10 @@ impl CloudModel {
 
             let folder_clone = folder.clone();
             if let Some(model_event_sender) = &self.model_event_sender
-                && let Err(e) = model_event_sender.send(folder_clone.upsert_event()) {
-                    report_error!(anyhow::Error::new(e).context("Error persisting folder"));
-                }
+                && let Err(e) = model_event_sender.send(folder_clone.upsert_event())
+            {
+                report_error!(anyhow::Error::new(e).context("Error persisting folder"));
+            }
 
             ctx.notify();
         }
@@ -1728,13 +1734,14 @@ impl CloudModel {
         if let Some(object) = self.get_by_uid(&object_id.uid()) {
             let folder: Option<&CloudFolder> = object.into();
             if let Some(folder) = folder
-                && folder.metadata().is_welcome_object {
-                    // Doing this as a nested check as a slight optimization
-                    if should_auto_open_welcome_folder(ctx) {
-                        self.set_folder_open_state(folder.id, FolderOpenState::Open, ctx);
-                        write_has_auto_opened_welcome_folder_to_user_defaults(ctx);
-                    }
+                && folder.metadata().is_welcome_object
+            {
+                // Doing this as a nested check as a slight optimization
+                if should_auto_open_welcome_folder(ctx) {
+                    self.set_folder_open_state(folder.id, FolderOpenState::Open, ctx);
+                    write_has_auto_opened_welcome_folder_to_user_defaults(ctx);
                 }
+            }
         }
     }
 
@@ -1781,9 +1788,10 @@ impl CloudModel {
                     .iter()
                     .map(|object| object.upsert_params(object.object_type()))
                     .collect(),
-            )) {
-                report_error!(anyhow::Error::new(e).context("Error saving team objects to cache"));
-            }
+            ))
+        {
+            report_error!(anyhow::Error::new(e).context("Error saving team objects to cache"));
+        }
     }
 
     /// Whether the next object sync should force a refresh on all cloud objects

@@ -507,13 +507,14 @@ impl AskUserQuestionView {
         }
 
         if draft.is_some_and(|draft| draft.is_other_input_active)
-            && let Some(input) = other_text_input {
-                return Some(number_shortcut_buttons::inline_input_shortcut_button(
-                    number,
-                    input.clone(),
-                    MouseStateHandle::default(),
-                ));
-            }
+            && let Some(input) = other_text_input
+        {
+            return Some(number_shortcut_buttons::inline_input_shortcut_button(
+                number,
+                input.clone(),
+                MouseStateHandle::default(),
+            ));
+        }
 
         let accepted_text = draft
             .and_then(|draft| draft.other_text.as_deref())

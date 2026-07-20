@@ -298,13 +298,14 @@ impl PaneContent for TerminalPane {
         });
 
         if SyncedInputState::as_ref(ctx).should_sync_this_pane_group(ctx.view_id(), ctx.window_id())
-            && let Some(active_pane_view) = group.active_session_view(ctx) {
-                let event = active_pane_view
-                    .as_ref(ctx)
-                    .create_sync_event_based_on_terminal_state(ctx);
+            && let Some(active_pane_view) = group.active_session_view(ctx)
+        {
+            let event = active_pane_view
+                .as_ref(ctx)
+                .create_sync_event_based_on_terminal_state(ctx);
 
-                group.send_sync_event_to_session(terminal_pane_id, &event, ctx);
-            }
+            group.send_sync_event_to_session(terminal_pane_id, &event, ctx);
+        }
 
         let terminal_view_id = self.terminal_view(ctx).id();
         let manager_model = Manager::handle(ctx);
@@ -367,13 +368,14 @@ impl PaneContent for TerminalPane {
                 display_mode,
                 ..
             } = event
-                && display_mode.is_fullscreen() {
-                    group.restore_missing_child_agent_panes_for_parent(
-                        *conversation_id,
-                        terminal_pane_id.into(),
-                        ctx,
-                    );
-                }
+                && display_mode.is_fullscreen()
+            {
+                group.restore_missing_child_agent_panes_for_parent(
+                    *conversation_id,
+                    terminal_pane_id.into(),
+                    ctx,
+                );
+            }
         });
         let active_session = terminal_view.as_ref(ctx).active_session().clone();
         let active_stack_view = pane_stack.as_ref(ctx).active_view().clone();
@@ -602,12 +604,13 @@ impl PaneContent for TerminalPane {
                 .as_ref(ctx)
                 .all_live_conversations_for_terminal_surface(terminal_view_id)
                 .next()
-                && let Some(token) = conversation.server_conversation_token() {
-                    let url_string = token.conversation_link();
-                    if let Ok(url) = url::Url::parse(&url_string) {
-                        return Ok(ShareableLink::Pane { url });
-                    }
+                && let Some(token) = conversation.server_conversation_token()
+            {
+                let url_string = token.conversation_link();
+                if let Ok(url) = url::Url::parse(&url_string) {
+                    return Ok(ShareableLink::Pane { url });
                 }
+            }
 
             // If we can't get the conversation link yet (still loading or not available),
             // return Expected error to preserve the current browser URL
@@ -811,12 +814,12 @@ fn discard_child_agent_pane_for_conversation(
     }
     if let Some(split_off_pane_group) = pane_group_hosting_split_off_child(conversation_id, ctx)
         && split_off_pane_group.id() != ctx.view_id()
-            && split_off_pane_group.update(ctx, |pane_group, ctx| {
-                pane_group.discard_child_agent_pane_for_conversation(conversation_id, ctx)
-            })
-        {
-            return true;
-        }
+        && split_off_pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.discard_child_agent_pane_for_conversation(conversation_id, ctx)
+        })
+    {
+        return true;
+    }
 
     let Some(owner_terminal_view_id) = owner_terminal_view_id else {
         return false;
@@ -848,18 +851,19 @@ fn kill_agent_conversation(
     });
 
     if let Some(state) = state
-        && state.is_in_progress {
-            if state.is_cloud_cancel_candidate {
-                cancel_cloud_agent_task(state.task_id, conversation_id, false, ctx);
-            } else {
-                stop_local_agent_conversation(
-                    group,
-                    state.owner_terminal_view_id,
-                    conversation_id,
-                    ctx,
-                );
-            }
+        && state.is_in_progress
+    {
+        if state.is_cloud_cancel_candidate {
+            cancel_cloud_agent_task(state.task_id, conversation_id, false, ctx);
+        } else {
+            stop_local_agent_conversation(
+                group,
+                state.owner_terminal_view_id,
+                conversation_id,
+                ctx,
+            );
         }
+    }
 
     let owner_terminal_view_id = state
         .map(|state| state.owner_terminal_view_id)
@@ -999,30 +1003,31 @@ fn handle_terminal_view_event(
                     Some(pane) => {
                         if *GeneralSettings::as_ref(ctx).restore_session
                             && AppExecutionMode::as_ref(ctx).can_save_session()
-                            && let Some(sender) = &group.model_event_sender {
-                                let block_completed_event = ModelEvent::SaveBlock(BlockCompleted {
-                                    pane_id: pane.session_uuid(),
-                                    block: block.clone(),
-                                    is_local: *is_local,
-                                });
+                            && let Some(sender) = &group.model_event_sender
+                        {
+                            let block_completed_event = ModelEvent::SaveBlock(BlockCompleted {
+                                pane_id: pane.session_uuid(),
+                                block: block.clone(),
+                                is_local: *is_local,
+                            });
 
-                                let sender_clone = sender.clone();
-                                let _ = ctx.spawn(
-                                    async move {
-                                        // Sending over a sync sender can block the current thread, so we do this async.
-                                        sender_clone.send(block_completed_event)
-                                    },
-                                    move |_, res, _| {
-                                        if let Err(err) = res {
-                                            report_error!(
-                                                anyhow::Error::new(err)
-                                                    .context("Error sending block completed event"),
-                                                extra: { "terminal_pane_id" => ?terminal_pane_id }
-                                            );
-                                        }
-                                    },
-                                );
-                            }
+                            let sender_clone = sender.clone();
+                            let _ = ctx.spawn(
+                                async move {
+                                    // Sending over a sync sender can block the current thread, so we do this async.
+                                    sender_clone.send(block_completed_event)
+                                },
+                                move |_, res, _| {
+                                    if let Err(err) = res {
+                                        report_error!(
+                                            anyhow::Error::new(err)
+                                                .context("Error sending block completed event"),
+                                            extra: { "terminal_pane_id" => ?terminal_pane_id }
+                                        );
+                                    }
+                                },
+                            );
+                        }
                         ctx.emit(pane_group::Event::ActiveSessionChanged);
                     }
                     None => {
@@ -1392,14 +1397,14 @@ fn handle_terminal_view_event(
                     && let Some(conversation_id) =
                         crate::ai::document::ai_document_model::AIDocumentModel::as_ref(ctx)
                             .get_conversation_id_for_document_id(document_id)
-                    {
-                        group.open_ai_document_pane(
-                            conversation_id,
-                            *document_id,
-                            *document_version,
-                            ctx,
-                        );
-                    }
+                {
+                    group.open_ai_document_pane(
+                        conversation_id,
+                        *document_id,
+                        *document_version,
+                        ctx,
+                    );
+                }
             }
             Event::OpenAgentProfileEditor { profile_id } => {
                 ctx.emit(pane_group::Event::OpenAgentProfileEditor {

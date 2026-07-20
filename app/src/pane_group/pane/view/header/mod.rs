@@ -618,8 +618,6 @@ impl<P: BackingView> PaneHeader<P> {
         );
         let should_display_overflow_menu_button = !self.overflow_menu.as_ref(app).is_empty();
 
-        
-
         (Hoverable::new(
             self.mouse_state_handles.header_hover_handle.clone(),
             |hover_state| {
@@ -667,16 +665,14 @@ impl<P: BackingView> PaneHeader<P> {
                 title_row.add_child(Shrinkable::new(1., title_text).finish());
 
                 if let Some(secondary) = &title_secondary
-                    && !secondary.is_empty() {
-                        let secondary_text = Text::new_inline(
-                            secondary.clone(),
-                            appearance.ui_font_family(),
-                            font_size,
-                        )
-                        .with_color(font_color.into())
-                        .finish();
-                        title_row.add_child(secondary_text);
-                    }
+                    && !secondary.is_empty()
+                {
+                    let secondary_text =
+                        Text::new_inline(secondary.clone(), appearance.ui_font_family(), font_size)
+                            .with_color(font_color.into())
+                            .finish();
+                    title_row.add_child(secondary_text);
+                }
 
                 // If a max width is set, constrain the title to that width.
                 let title_element = if let Some(max_width) = title_max_width {

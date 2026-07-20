@@ -384,10 +384,12 @@ impl super::TerminalView {
         // If the mouse is still on top of the previous highlighted link and that link is
         // still valid, we can keep highlighting it.
         if let Some(link) = self.highlighted_link.as_ref()
-            && link.contains(position) && !self.highlighted_link.is_invalidated() {
-                // If already hovering on a highlighted link, return.
-                return;
-            }
+            && link.contains(position)
+            && !self.highlighted_link.is_invalidated()
+        {
+            // If already hovering on a highlighted link, return.
+            return;
+        }
 
         // Updating the cursor shape repeatedly can cause flashing, so we only set it once, and only
         // when necessary.

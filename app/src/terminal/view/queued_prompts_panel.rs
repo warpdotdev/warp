@@ -659,14 +659,15 @@ impl QueuedPromptsPanelView {
             model.commit_edit(conv_id, new_text, ctx);
         });
         if let Some(origin) = origin
-            && !was_empty {
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::QueuedPromptEdited {
-                        origin: origin.into(),
-                    },
-                    ctx
-                );
-            }
+            && !was_empty
+        {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::QueuedPromptEdited {
+                    origin: origin.into(),
+                },
+                ctx
+            );
+        }
         ctx.emit(QueuedPromptsPanelEvent::EditEnded);
     }
 
@@ -856,16 +857,17 @@ impl TypedActionView for QueuedPromptsPanelView {
                 let origin = to_index.map(|idx| queue[idx].origin());
                 if let (Some(from_index), Some(to_index), Some(origin)) =
                     (from_index, to_index, origin)
-                    && from_index != to_index {
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::QueuedPromptReordered {
-                                origin: origin.into(),
-                                from_index,
-                                to_index,
-                            },
-                            ctx
-                        );
-                    }
+                    && from_index != to_index
+                {
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::QueuedPromptReordered {
+                            origin: origin.into(),
+                            from_index,
+                            to_index,
+                        },
+                        ctx
+                    );
+                }
                 ctx.notify();
             }
         }
@@ -1000,20 +1002,22 @@ fn updated_index_from_vertical_drag(
     let dragged_midpoint_y = (drag_position.min_y() + drag_position.max_y()) / 2.;
 
     if current_index > 0
-        && let Some(neighbor_rect) = item_rect(current_index - 1) {
-            let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
-            if dragged_midpoint_y < neighbor_midpoint_y {
-                return current_index - 1;
-            }
+        && let Some(neighbor_rect) = item_rect(current_index - 1)
+    {
+        let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
+        if dragged_midpoint_y < neighbor_midpoint_y {
+            return current_index - 1;
         }
+    }
 
     if current_index + 1 < item_count
-        && let Some(neighbor_rect) = item_rect(current_index + 1) {
-            let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
-            if dragged_midpoint_y > neighbor_midpoint_y {
-                return current_index + 1;
-            }
+        && let Some(neighbor_rect) = item_rect(current_index + 1)
+    {
+        let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
+        if dragged_midpoint_y > neighbor_midpoint_y {
+            return current_index + 1;
         }
+    }
 
     current_index
 }

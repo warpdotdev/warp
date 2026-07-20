@@ -383,11 +383,12 @@ impl CodeFooterView {
 
             // Update button label based on initial status (handles cached results)
             if let Some(enable_button) = &enable_lsp_button
-                && let Some(label) = Self::button_label_for_status(&status) {
-                    enable_button.update(ctx, |button, ctx| {
-                        button.set_label(label, ctx);
-                    });
-                }
+                && let Some(label) = Self::button_label_for_status(&status)
+            {
+                enable_button.update(ctx, |button, ctx| {
+                    button.set_label(label, ctx);
+                });
+            }
 
             // Subscribe to InstallStatusUpdate events from PersistedWorkspace
             let persisted = PersistedWorkspace::handle(ctx);
@@ -1551,9 +1552,10 @@ impl CodeFooterView {
                     && matches!(
                         server_ref.state(),
                         LspModelState::Starting | LspModelState::Available { .. }
-                    ) {
-                        return (Some(msg), false);
-                    }
+                    )
+                {
+                    return (Some(msg), false);
+                }
             }
             // Then check stopped
             for server in &live {
@@ -1754,16 +1756,15 @@ impl View for CodeFooterView {
                 );
             }
 
-            if should_show_enable_button
-                && let Some(enable_lsp) = &self.enable_lsp_button {
-                    // Left margin only to separate from status text; right margin removed
-                    // to tighten padding between elements
-                    footer_content.add_child(
-                        Container::new(ChildView::new(enable_lsp).finish())
-                            .with_margin_left(ICON_MARGIN)
-                            .finish(),
-                    );
-                }
+            if should_show_enable_button && let Some(enable_lsp) = &self.enable_lsp_button {
+                // Left margin only to separate from status text; right margin removed
+                // to tighten padding between elements
+                footer_content.add_child(
+                    Container::new(ChildView::new(enable_lsp).finish())
+                        .with_margin_left(ICON_MARGIN)
+                        .finish(),
+                );
+            }
         }
 
         let mut container = Container::new(

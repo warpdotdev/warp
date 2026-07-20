@@ -176,19 +176,20 @@ fn new_command_executor_for_local_tty_session(
     // `RemoteCommandExecutor` below. This preserves the fallback behavior
     // described in specs/APP-3797.
     if FeatureFlag::SshRemoteServer.is_enabled()
-        && let IsSSHWrapperSession::Yes { .. } = &session_info.is_ssh_wrapper_session {
-            let session_id = session_info.session_id;
-            let maybe_client = RemoteServerManager::handle(ctx)
-                .read(ctx, |mgr, _| mgr.client_for_session(session_id).cloned());
-            if let Some(client) = maybe_client {
-                log::info!("creating a remote server executor for session {session_id:?}");
-                return Arc::new(RemoteServerCommandExecutor::new(session_id, client));
-            }
-            log::info!(
-                "SshRemoteServer flag on but no connected client for session {session_id:?}; \
-                 falling back to ControlMaster executor"
-            );
+        && let IsSSHWrapperSession::Yes { .. } = &session_info.is_ssh_wrapper_session
+    {
+        let session_id = session_info.session_id;
+        let maybe_client = RemoteServerManager::handle(ctx)
+            .read(ctx, |mgr, _| mgr.client_for_session(session_id).cloned());
+        if let Some(client) = maybe_client {
+            log::info!("creating a remote server executor for session {session_id:?}");
+            return Arc::new(RemoteServerCommandExecutor::new(session_id, client));
         }
+        log::info!(
+            "SshRemoteServer flag on but no connected client for session {session_id:?}; \
+                 falling back to ControlMaster executor"
+        );
+    }
 
     let debug_settings = DebugSettings::as_ref(ctx);
     let are_in_band_generators_for_all_sessions_enabled_debug_setting = debug_settings

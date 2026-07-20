@@ -189,9 +189,10 @@ fn toolbelt_tooltip_keybinding(binding_names: &[&'static str], app: &AppContext)
     // Preserve caller-provided ordering so we can prioritize specific bindings.
     for binding_name in binding_names {
         if let Some(displayed) = keybinding_name_to_display_string(binding_name, app)
-            && seen.insert(displayed.clone()) {
-                parts.push(displayed);
-            }
+            && seen.insert(displayed.clone())
+        {
+            parts.push(displayed);
+        }
     }
 
     (!parts.is_empty()).then(|| parts.join(", "))
@@ -597,9 +598,10 @@ impl LeftPanelView {
         self.active_pane_group = Some(pane_group.downgrade());
 
         if let Some(previous_pane_group_id) = previous_pane_group_id
-            && previous_pane_group_id != pane_group_id {
-                self.deactivate_file_tree_view_for_pane_group(previous_pane_group_id, ctx);
-            }
+            && previous_pane_group_id != pane_group_id
+        {
+            self.deactivate_file_tree_view_for_pane_group(previous_pane_group_id, ctx);
+        }
 
         // Query the current state from the model
         let active_directories: Vec<WorkingDirectory> =

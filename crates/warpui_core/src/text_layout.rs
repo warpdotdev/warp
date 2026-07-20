@@ -733,13 +733,14 @@ impl TextFrame {
 
                     let mut soft_wrapped = false;
                     if let Some(prev_id) = prev_hyperlink_id
-                        && prev_id == curr_hyperlink_id {
-                            positions
-                                .last_mut()
-                                .expect("Positions should be non-empty")
-                                .push(curr_rectangle);
-                            soft_wrapped = true;
-                        }
+                        && prev_id == curr_hyperlink_id
+                    {
+                        positions
+                            .last_mut()
+                            .expect("Positions should be non-empty")
+                            .push(curr_rectangle);
+                        soft_wrapped = true;
+                    }
 
                     if !soft_wrapped {
                         positions.push(vec![curr_rectangle]);
@@ -1330,21 +1331,22 @@ impl Line {
 
         // Draw a strikethrough through text if boolean flag is set.
         if run.styles.show_strikethrough
-            && let Some(first_glyph) = run.glyphs.first() {
-                let mut strikethrough_origin = origin + first_glyph.position_along_baseline;
-                strikethrough_origin
-                    .set_y(strikethrough_origin.y() - self.font_size / STRIKETHROUGH_FONT_OFFSET);
-                let strikethrough_rect = RectF::new(
-                    strikethrough_origin,
-                    vec2f(run.width, STRIKETHROUGH_THICKNESSS),
-                );
+            && let Some(first_glyph) = run.glyphs.first()
+        {
+            let mut strikethrough_origin = origin + first_glyph.position_along_baseline;
+            strikethrough_origin
+                .set_y(strikethrough_origin.y() - self.font_size / STRIKETHROUGH_FONT_OFFSET);
+            let strikethrough_rect = RectF::new(
+                strikethrough_origin,
+                vec2f(run.width, STRIKETHROUGH_THICKNESSS),
+            );
 
-                if let Some(clipped_rect) = strikethrough_rect.intersection(visible_bounds) {
-                    scene
-                        .draw_rect_without_hit_recording(clipped_rect)
-                        .with_background(Fill::Solid(glyph_color));
-                }
+            if let Some(clipped_rect) = strikethrough_rect.intersection(visible_bounds) {
+                scene
+                    .draw_rect_without_hit_recording(clipped_rect)
+                    .with_background(Fill::Solid(glyph_color));
             }
+        }
     }
 
     /// Paints the line of text using given parameters. Uses default baseline offset calculation for a Line.

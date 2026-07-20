@@ -699,11 +699,12 @@ impl BlocklistAIPermissions {
                 temp_permissions
                     .iter()
                     .any(|allowed| path.starts_with(allowed))
-            }) {
-                return FileReadPermission::Allowed(
-                    FileReadPermissionAllowedReason::AlreadyReadInConvo,
-                );
-            }
+            })
+        {
+            return FileReadPermission::Allowed(
+                FileReadPermissionAllowedReason::AlreadyReadInConvo,
+            );
+        }
 
         match self.get_read_files_setting(ctx, terminal_view_id) {
             ActionPermission::AgentDecides | ActionPermission::Unknown => {

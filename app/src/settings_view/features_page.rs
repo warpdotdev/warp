@@ -1737,22 +1737,21 @@ impl TypedActionView for FeaturesPageView {
                     .buffer_text(ctx);
 
                 if let Ok(long_running_threshold) = user_input.parse::<f32>()
-                    && long_running_threshold > 0.0 {
-                        // TODO: use try_from_secs_32 in the future to avoid previous cmp
-                        let current_settings =
-                            SessionSettings::as_ref(ctx).notifications.value().clone();
-                        SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                            let new_settings = NotificationsSettings {
-                                long_running_threshold: Duration::from_secs_f32(
-                                    long_running_threshold,
-                                ),
-                                ..current_settings
-                            };
-                            if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
-                                report_error!(e.context("Error persisting notifications setting"));
-                            }
-                        });
-                    }
+                    && long_running_threshold > 0.0
+                {
+                    // TODO: use try_from_secs_32 in the future to avoid previous cmp
+                    let current_settings =
+                        SessionSettings::as_ref(ctx).notifications.value().clone();
+                    SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+                        let new_settings = NotificationsSettings {
+                            long_running_threshold: Duration::from_secs_f32(long_running_threshold),
+                            ..current_settings
+                        };
+                        if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
+                            report_error!(e.context("Error persisting notifications setting"));
+                        }
+                    });
+                }
             }
             TogglePasswordPromptNotifications => {
                 let current_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
@@ -2153,18 +2152,19 @@ impl TypedActionView for FeaturesPageView {
                     .buffer_text(ctx);
 
                 if let Ok(duration_secs) = user_input.parse::<u64>()
-                    && duration_secs > 0 {
-                        SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                            if let Err(e) = settings
-                                .notification_toast_duration_secs
-                                .set_value(duration_secs, ctx)
-                            {
-                                report_error!(
-                                    e.context("Error persisting notification toast duration")
-                                );
-                            }
-                        });
-                    }
+                    && duration_secs > 0
+                {
+                    SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+                        if let Err(e) = settings
+                            .notification_toast_duration_secs
+                            .set_value(duration_secs, ctx)
+                        {
+                            report_error!(
+                                e.context("Error persisting notification toast duration")
+                            );
+                        }
+                    });
+                }
             }
             MakeWarpDefaultTerminal => {
                 DefaultTerminal::handle(ctx).update(ctx, |default_terminal, ctx| {
@@ -3267,11 +3267,12 @@ impl FeaturesPageView {
                     .buffer_text(ctx);
 
                 if let Ok(input) = buffer_text.parse::<usize>()
-                    && (MIN_MAX_GRID_SIZE..=max_max_grid_size()).contains(&input) {
-                        self.valid_max_block_size = true;
-                        ctx.notify();
-                        return;
-                    }
+                    && (MIN_MAX_GRID_SIZE..=max_max_grid_size()).contains(&input)
+                {
+                    self.valid_max_block_size = true;
+                    ctx.notify();
+                    return;
+                }
                 self.valid_max_block_size = false;
                 ctx.notify();
             }

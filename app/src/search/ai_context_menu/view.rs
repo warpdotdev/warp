@@ -1623,9 +1623,11 @@ impl AIContextMenu {
     ) -> Box<dyn Element> {
         #[cfg(not(target_family = "wasm"))]
         if let Some(cat) = category
-            && *cat == AIContextMenuCategory::Code && is_code_symbols_indexing(app) {
-                return self.render_code_symbols_indexing(app);
-            }
+            && *cat == AIContextMenuCategory::Code
+            && is_code_symbols_indexing(app)
+        {
+            return self.render_code_symbols_indexing(app);
+        }
 
         if self.mixer.as_ref(app).is_loading() {
             self.render_loading_results(app)
@@ -1687,17 +1689,18 @@ impl View for AIContextMenu {
                 self.selected_result_renderer(app),
                 self.offset_positioning_for_details_panel(app),
             )
-                && let Some(details) = selected_result_renderer.render_details(app) {
-                    // QueryResultRenderer already applies styling, padding, border, etc.
-                    // Just add some margin for spacing from the main menu
-                    stack.add_positioned_overlay_child(
-                        Container::new(details)
-                            .with_margin_bottom(DETAILS_PANEL_MARGIN)
-                            .with_margin_right(DETAILS_PANEL_MARGIN)
-                            .finish(),
-                        details_panel_positioning,
-                    );
-                }
+            && let Some(details) = selected_result_renderer.render_details(app)
+        {
+            // QueryResultRenderer already applies styling, padding, border, etc.
+            // Just add some margin for spacing from the main menu
+            stack.add_positioned_overlay_child(
+                Container::new(details)
+                    .with_margin_bottom(DETAILS_PANEL_MARGIN)
+                    .with_margin_right(DETAILS_PANEL_MARGIN)
+                    .finish(),
+                details_panel_positioning,
+            );
+        }
 
         // Use proper keybinding handling instead of event handlers
         Dismiss::new(stack.finish())

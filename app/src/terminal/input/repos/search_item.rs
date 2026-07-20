@@ -119,12 +119,13 @@ impl SearchItem for RepoSearchItem {
 
         // Highlight fuzzy match indices on the name portion.
         if let Some(match_result) = &self.name_match_result
-            && !match_result.matched_indices.is_empty() {
-                name_text = name_text.with_single_highlight(
-                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
-                    match_result.matched_indices.clone(),
-                );
-            }
+            && !match_result.matched_indices.is_empty()
+        {
+            name_text = name_text.with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                match_result.matched_indices.clone(),
+            );
+        }
 
         // Style branch suffix in secondary color.
         let branch_end = name_len + branch_suffix.len();

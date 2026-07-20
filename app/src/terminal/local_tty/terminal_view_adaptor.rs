@@ -668,11 +668,11 @@ impl TerminalManager<TerminalView> {
         if let Some(network) = session_sharer.borrow().as_ref()
             && let Some(update) =
                 build_selected_conversation_update(agent_view_controller, ai_context_model, ctx)
-            {
-                network.update(ctx, |network, _| {
-                    network.send_universal_developer_input_context_update(update)
-                });
-            }
+        {
+            network.update(ctx, |network, _| {
+                network.send_universal_developer_input_context_update(update)
+            });
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

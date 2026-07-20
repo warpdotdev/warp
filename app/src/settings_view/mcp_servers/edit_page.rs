@@ -712,12 +712,12 @@ impl MCPServersEditPageView {
                         mcp_server_uuid: mcp_server.uuid.as_bytes().to_vec(),
                         environment_variables: env_vars_string,
                     })
-                {
-                    report_error!(
-                        anyhow::Error::new(e)
-                            .context("Error persisting MCP server env vars to database")
-                    );
-                };
+            {
+                report_error!(
+                    anyhow::Error::new(e)
+                        .context("Error persisting MCP server env vars to database")
+                );
+            };
         }
     }
 

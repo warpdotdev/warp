@@ -250,9 +250,10 @@ pub(super) fn parent_bridge_root() -> Result<PathBuf> {
         LEGACY_MESSAGE_LISTENER_STATE_ROOT_ENV,
     ] {
         if let Ok(dir) = std::env::var(env_name)
-            && !dir.is_empty() {
-                return Ok(PathBuf::from(dir));
-            }
+            && !dir.is_empty()
+        {
+            return Ok(PathBuf::from(dir));
+        }
     }
     dirs::home_dir()
         .map(|home| home.join(PARENT_BRIDGE_DEFAULT_STATE_ROOT))

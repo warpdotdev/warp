@@ -373,9 +373,10 @@ impl View for RuleEditorView {
             .with_child(self.render_form(appearance));
 
         if let Some(ai_fact) = &self.ai_fact
-            && is_delete_allowed(ai_fact.clone(), app) {
-                col.add_child(ChildView::new(&self.delete_button).finish());
-            }
+            && is_delete_allowed(ai_fact.clone(), app)
+        {
+            col.add_child(ChildView::new(&self.delete_button).finish());
+        }
         col.finish()
     }
 }

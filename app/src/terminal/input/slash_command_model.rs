@@ -309,9 +309,10 @@ impl SlashCommandModel {
         match self.data_source.as_ref(ctx).parse_input(new, ctx) {
             ParsedSlashCommandInput::SlashCommand(detected_command) => {
                 if let SlashCommandEntryState::SlashCommand(old_detected_command) = &self.state
-                    && *old_detected_command == detected_command {
-                        return;
-                    }
+                    && *old_detected_command == detected_command
+                {
+                    return;
+                }
 
                 if !FeatureFlag::AgentView.is_enabled()
                     || detected_command.command.auto_enter_ai_mode
@@ -335,9 +336,10 @@ impl SlashCommandModel {
             }
             ParsedSlashCommandInput::SkillCommand(detected_skill) => {
                 if let SlashCommandEntryState::SkillCommand(old_detected_skill) = &self.state
-                    && *old_detected_skill == detected_skill {
-                        return;
-                    }
+                    && *old_detected_skill == detected_skill
+                {
+                    return;
+                }
 
                 // Skill commands always require AI mode
                 self.ai_input_model.update(ctx, |input_model, ctx| {

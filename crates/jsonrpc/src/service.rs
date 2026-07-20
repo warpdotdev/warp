@@ -291,9 +291,10 @@ impl JsonRpcService {
             && let Err(e) = subscription.try_send(ServerNotificationEvent {
                 method: method.to_string(),
                 params,
-            }) {
-                report_error!(anyhow::Error::new(e).context("Failed to send notification"));
-            }
+            })
+        {
+            report_error!(anyhow::Error::new(e).context("Failed to send notification"));
+        }
     }
 
     /// Returns the next available request ID

@@ -772,28 +772,26 @@ impl EditorModel {
             });
         }
 
-        if can_select
-            && let Some(change_selection) = edit.change_selections_callback {
-                change_selection(self, ctx);
-            }
+        if can_select && let Some(change_selection) = edit.change_selections_callback {
+            change_selection(self, ctx);
+        }
 
         if let Some(before_buffer_edit) = edit.before_buffer_edit_callback {
             before_buffer_edit(self, ctx);
         }
 
         let prev_state = self.consecutive_autocomplete_insertion_edits_counter;
-        if can_edit
-            && let Some(update_buffer) = edit.update_buffer {
-                (update_buffer.callback)(self, ctx);
-            }
+        if can_edit && let Some(update_buffer) = edit.update_buffer {
+            (update_buffer.callback)(self, ctx);
+        }
         let next_state = self.consecutive_autocomplete_insertion_edits_counter;
 
         if can_select
             && let Some(post_buffer_edit_change_selection) =
                 edit.post_buffer_edit_change_selections_callback
-            {
-                post_buffer_edit_change_selection(self, ctx);
-            }
+        {
+            post_buffer_edit_change_selection(self, ctx);
+        }
 
         // Only emit a11y content for pure selection changes because edits
         // have their own a11y content already.
@@ -2384,54 +2382,57 @@ impl EditorModel {
                     *direction,
                     *bound,
                     *word_type,
-                ) {
-                    let mut word_boundary = boundaries
-                        .take(word_count as usize)
-                        .last()
-                        .unwrap_or(initial_offset);
-                    let (new_start, new_end) = match direction {
-                        // Account for vim word motion quirks across newlines.
-                        Direction::Forward => {
-                            // `de`, unlike other word motions, will include character it lands on
-                            // in the operation.
-                            if *bound == WordBound::End {
-                                if let Ok(point) = (word_boundary + 1).to_char_offset(buffer) {
-                                    word_boundary = point;
-                                }
-                            } else if *bound == WordBound::Start && word_count == 1 {
-                                // `dw`, can not traverse a newline unless the count > 1. We have
-                                // to check this range for newlines and cut the range short in that
-                                // case.
-                                if let Ok(mut text) =
-                                    buffer.chars_for_range(initial_offset..word_boundary)
-                                    && let Some((i, _)) = text.find_position(|c| *c == '\n') {
-                                        word_boundary = initial_offset + i;
-                                    }
+                )
+            {
+                let mut word_boundary = boundaries
+                    .take(word_count as usize)
+                    .last()
+                    .unwrap_or(initial_offset);
+                let (new_start, new_end) = match direction {
+                    // Account for vim word motion quirks across newlines.
+                    Direction::Forward => {
+                        // `de`, unlike other word motions, will include character it lands on
+                        // in the operation.
+                        if *bound == WordBound::End {
+                            if let Ok(point) = (word_boundary + 1).to_char_offset(buffer) {
+                                word_boundary = point;
                             }
-                            (initial_offset, word_boundary)
+                        } else if *bound == WordBound::Start && word_count == 1 {
+                            // `dw`, can not traverse a newline unless the count > 1. We have
+                            // to check this range for newlines and cut the range short in that
+                            // case.
+                            if let Ok(mut text) =
+                                buffer.chars_for_range(initial_offset..word_boundary)
+                                && let Some((i, _)) = text.find_position(|c| *c == '\n')
+                            {
+                                word_boundary = initial_offset + i;
+                            }
                         }
-                        Direction::Backward => {
-                            // `db` will traverse *but not delete* a newline if the count is 1 and
-                            // the cursor starts on column zero and the line above is not empty.
-                            let mut end = initial_offset;
-                            if *bound == WordBound::Start && word_count == 1
-                                && let Ok(mut char_iter) = buffer.chars_rev_at(initial_offset)
-                                    && char_iter.next().is_some_and(|c| c == '\n')
-                                        && char_iter.next().is_some_and(|c| c != '\n')
-                                    {
-                                        end -= 1;
-                                    }
-                            (word_boundary, end)
+                        (initial_offset, word_boundary)
+                    }
+                    Direction::Backward => {
+                        // `db` will traverse *but not delete* a newline if the count is 1 and
+                        // the cursor starts on column zero and the line above is not empty.
+                        let mut end = initial_offset;
+                        if *bound == WordBound::Start
+                            && word_count == 1
+                            && let Ok(mut char_iter) = buffer.chars_rev_at(initial_offset)
+                            && char_iter.next().is_some_and(|c| c == '\n')
+                            && char_iter.next().is_some_and(|c| c != '\n')
+                        {
+                            end -= 1;
                         }
-                    };
+                        (word_boundary, end)
+                    }
+                };
 
-                    if let Ok(anchor_start) = buffer.anchor_before(new_start) {
-                        selection.set_start(anchor_start);
-                    }
-                    if let Ok(anchor_end) = buffer.anchor_before(new_end) {
-                        selection.set_end(anchor_end);
-                    }
+                if let Ok(anchor_start) = buffer.anchor_before(new_start) {
+                    selection.set_start(anchor_start);
                 }
+                if let Ok(anchor_end) = buffer.anchor_before(new_end) {
+                    selection.set_end(anchor_end);
+                }
+            }
         });
         self.change_selections(new_selections, ctx);
     }
@@ -3188,13 +3189,14 @@ impl EditorModel {
 
             // If that's not possible, attempt to select the newline before the line text.
             } else if start_newline
-                && let Ok(point) = start.saturating_sub(&1.into()).to_point(buffer) {
-                    selection.set_start(
-                        buffer
-                            .anchor_before(point)
-                            .expect("valid point should be valid anchor"),
-                    );
-                }
+                && let Ok(point) = start.saturating_sub(&1.into()).to_point(buffer)
+            {
+                selection.set_start(
+                    buffer
+                        .anchor_before(point)
+                        .expect("valid point should be valid anchor"),
+                );
+            }
         });
         self.change_selections(new_selections, ctx);
     }

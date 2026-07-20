@@ -953,9 +953,10 @@ fn split_loading_env_loads_all_global_loads_subset() {
                         id: RepositoryIdentifier::Local(path),
                     } = event
                         && *path == env_repo_for_event
-                            && let Some(tx) = tx_cell.borrow_mut().take() {
-                                let _ = tx.send(());
-                            }
+                        && let Some(tx) = tx_cell.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
+                    }
                 },
             );
         });
@@ -1073,9 +1074,10 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
                         id: RepositoryIdentifier::Local(path),
                     } = event
                         && *path == shared_repo_for_event
-                            && let Some(tx) = tx_cell.borrow_mut().take() {
-                                let _ = tx.send(());
-                            }
+                        && let Some(tx) = tx_cell.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
+                    }
                 },
             );
         });

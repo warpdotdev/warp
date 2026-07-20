@@ -248,9 +248,10 @@ impl DebounceEventHandler for WatcherEventHandler {
             Ok(debounce_events) => {
                 if let Ok(config_event) =
                     deduplicate_and_merge_raw_notifier_events(&debounce_events)
-                    && let Err(e) = self.tx.try_send(config_event) {
-                        log::warn!("Failed to send WatcherEvent: {e:?}");
-                    }
+                    && let Err(e) = self.tx.try_send(config_event)
+                {
+                    log::warn!("Failed to send WatcherEvent: {e:?}");
+                }
             }
             Err(e) => {
                 log::warn!("Received error in repo watcher: {e:?}");

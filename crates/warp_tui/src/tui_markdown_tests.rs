@@ -229,9 +229,10 @@ fn fenced_markdown_code_block_applies_syntax_colors_to_exact_cells() {
             let mut tx = Some(tx);
             ctx.subscribe_to_view(&code_view, move |_, event, _| {
                 if matches!(event, TuiCodeBlockViewEvent::SyntaxUpdated)
-                    && let Some(tx) = tx.take() {
-                        let _ = tx.send(());
-                    }
+                    && let Some(tx) = tx.take()
+                {
+                    let _ = tx.send(());
+                }
             });
             code_view.update(ctx, |view, ctx| {
                 view.sync(TuiCodeBlockPayload::new(code.code, Some(code.lang)), ctx);

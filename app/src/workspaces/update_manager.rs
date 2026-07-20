@@ -171,10 +171,9 @@ impl TeamUpdateManager {
                 // Only signal once there are no more retries left.
                 let is_final = !request_state.has_pending_retries();
                 update_manager.handle_workspace_metadata_with_request_state(request_state, ctx);
-                if is_final
-                    && let Some(sender) = tx.take() {
-                        let _ = sender.send(());
-                    }
+                if is_final && let Some(sender) = tx.take() {
+                    let _ = sender.send(());
+                }
             },
         );
         rx
@@ -360,9 +359,10 @@ impl TeamUpdateManager {
                 // If it's not, then set the current workspace to the first workspace in the list.
                 if let Some(current_workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
                     if !workspaces.iter().any(|w| w.uid == current_workspace.uid)
-                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
-                            self.set_current_workspace_uid(workspace_uid, ctx);
-                        };
+                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid)
+                    {
+                        self.set_current_workspace_uid(workspace_uid, ctx);
+                    };
                 } else if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
                     self.set_current_workspace_uid(workspace_uid, ctx);
                 }
@@ -478,9 +478,10 @@ impl TeamUpdateManager {
                 // If it's not, then set the current workspace to the first workspace in the list.
                 if let Some(current_workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
                     if !workspaces.iter().any(|w| w.uid == current_workspace.uid)
-                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
-                            self.set_current_workspace_uid(workspace_uid, ctx);
-                        };
+                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid)
+                    {
+                        self.set_current_workspace_uid(workspace_uid, ctx);
+                    };
                 } else if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
                     self.set_current_workspace_uid(workspace_uid, ctx);
                 }

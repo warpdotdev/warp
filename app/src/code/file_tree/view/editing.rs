@@ -256,9 +256,10 @@ impl FileTreeView {
             });
             // Only remove placeholder in the create-new-file flow.
             if pending_edit.kind == PendingEditKind::CreateNewFile
-                && let Some(root_dir) = self.root_directories.get_mut(&id.root) {
-                    root_dir.items.remove(id.index);
-                }
+                && let Some(root_dir) = self.root_directories.get_mut(&id.root)
+            {
+                root_dir.items.remove(id.index);
+            }
         }
         ctx.notify();
     }

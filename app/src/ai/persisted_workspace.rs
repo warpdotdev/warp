@@ -530,15 +530,16 @@ impl PersistedWorkspace {
         for workspace_path in workspace_paths {
             if !skip_cached
                 && let Some(workspace) = self.workspaces.get(&workspace_path)
-                    && !workspace.language_servers.is_empty() {
-                        let servers: Vec<LSPServerType> =
-                            workspace.language_servers.keys().copied().collect();
-                        ctx.emit(PersistedWorkspaceEvent::AvailableServersDetected {
-                            workspace_path,
-                            servers,
-                        });
-                        continue;
-                    }
+                && !workspace.language_servers.is_empty()
+            {
+                let servers: Vec<LSPServerType> =
+                    workspace.language_servers.keys().copied().collect();
+                ctx.emit(PersistedWorkspaceEvent::AvailableServersDetected {
+                    workspace_path,
+                    servers,
+                });
+                continue;
+            }
             paths_to_scan.push(workspace_path);
         }
 

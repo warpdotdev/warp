@@ -136,11 +136,12 @@ impl EventStore {
                         user_id: user_id.clone(),
                         anonymous_id: anonymous_id.clone(),
                     }
-            }) {
-                last_event.timestamp = timestamp;
-                self.last_event_timestamp_seen = self.last_event_timestamp_seen.max(timestamp);
-                return;
-            }
+            })
+        {
+            last_event.timestamp = timestamp;
+            self.last_event_timestamp_seen = self.last_event_timestamp_seen.max(timestamp);
+            return;
+        }
 
         let session_created_at = if self.is_session_stale(timestamp) {
             self.current_session_created_at = timestamp;

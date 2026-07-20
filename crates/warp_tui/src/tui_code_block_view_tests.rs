@@ -130,9 +130,10 @@ fn syntax_highlights_apply_only_to_the_latest_editor_revision() {
             let mut tx = Some(tx);
             ctx.subscribe_to_view(&view, move |_, event, _| {
                 if matches!(event, TuiCodeBlockViewEvent::SyntaxUpdated)
-                    && let Some(tx) = tx.take() {
-                        let _ = tx.send(());
-                    }
+                    && let Some(tx) = tx.take()
+                {
+                    let _ = tx.send(());
+                }
             });
             view.update(ctx, |view, ctx| {
                 view.sync(

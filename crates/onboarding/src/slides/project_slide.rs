@@ -102,14 +102,14 @@ impl ProjectSlide {
                 initialize_projects_automatically,
                 ..
             } = settings
-            {
-                children.push(
-                    Align::new(
-                        self.render_project_options(*initialize_projects_automatically, appearance),
-                    )
-                    .finish(),
-                );
-            }
+        {
+            children.push(
+                Align::new(
+                    self.render_project_options(*initialize_projects_automatically, appearance),
+                )
+                .finish(),
+            );
+        }
 
         let bottom_nav = Align::new(self.render_bottom_nav(appearance, settings)).finish();
         slide_content::onboarding_slide_content(

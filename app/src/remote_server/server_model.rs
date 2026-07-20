@@ -2136,9 +2136,9 @@ impl ServerModel {
                             && let Some(sent_roots) = me
                                 .snapshot_sent_roots_by_connection
                                 .get_mut(&conn_id_for_response)
-                            {
-                                sent_roots.insert(root_path);
-                            }
+                        {
+                            sent_roots.insert(root_path);
+                        }
                     }
                 }
             },
@@ -2437,34 +2437,32 @@ impl ServerModel {
         // to avoid a spurious BufferLoaded event that would consume the pending
         // request before ServerLocalBufferUpdated can use it for exclusion.
         if msg.force_reload
-            && let Some(file_id) = self.buffers.file_id_for_path(&msg.path) {
-                self.buffers.add_connection(file_id, conn_id);
-                let gbm = GlobalBufferModel::handle(ctx);
+            && let Some(file_id) = self.buffers.file_id_for_path(&msg.path)
+        {
+            self.buffers.add_connection(file_id, conn_id);
+            let gbm = GlobalBufferModel::handle(ctx);
 
-                self.buffers.insert_pending(
-                    file_id,
-                    request_id.clone(),
-                    conn_id,
-                    PendingBufferRequestKind::OpenBuffer,
-                );
-                if let Err(e) =
-                    gbm.update(ctx, |gbm, ctx| gbm.force_reload_server_local(file_id, ctx))
-                {
-                    self.buffers
-                        .take_pending_by_kind(&file_id, PendingBufferRequestKind::OpenBuffer);
-                    return HandlerOutcome::Sync(server_message::Message::OpenBufferResponse(
-                        OpenBufferResponse {
-                            result: Some(
-                                remote_server::proto::open_buffer_response::Result::Error(
-                                    FileOperationError { message: e },
-                                ),
-                            ),
-                        },
-                    ));
-                }
-                return HandlerOutcome::Async(None);
+            self.buffers.insert_pending(
+                file_id,
+                request_id.clone(),
+                conn_id,
+                PendingBufferRequestKind::OpenBuffer,
+            );
+            if let Err(e) = gbm.update(ctx, |gbm, ctx| gbm.force_reload_server_local(file_id, ctx))
+            {
+                self.buffers
+                    .take_pending_by_kind(&file_id, PendingBufferRequestKind::OpenBuffer);
+                return HandlerOutcome::Sync(server_message::Message::OpenBufferResponse(
+                    OpenBufferResponse {
+                        result: Some(remote_server::proto::open_buffer_response::Result::Error(
+                            FileOperationError { message: e },
+                        )),
+                    },
+                ));
             }
-            // Buffer not yet tracked — fall through to open_server_local below.
+            return HandlerOutcome::Async(None);
+        }
+        // Buffer not yet tracked — fall through to open_server_local below.
 
         let path = PathBuf::from(&msg.path);
         let gbm = GlobalBufferModel::handle(ctx);
@@ -3615,10 +3613,9 @@ impl ServerModel {
         };
         let already_tracked = self.github_repo_models.contains_key(&std_path);
         self.subscribe_to_github_info_updates(&std_path, ctx);
-        if already_tracked
-            && let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
-                handle.update(ctx, |model, ctx| model.refresh_pr_info(ctx));
-            }
+        if already_tracked && let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
+            handle.update(ctx, |model, ctx| model.refresh_pr_info(ctx));
+        }
     }
 
     /// Handles the `UpdateGitHubRepoInfo` notification (fire-and-forget).
@@ -3638,10 +3635,9 @@ impl ServerModel {
         };
         let already_tracked = self.github_repo_models.contains_key(&std_path);
         self.subscribe_to_github_info_updates(&std_path, ctx);
-        if already_tracked
-            && let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
-                handle.update(ctx, |model, ctx| model.refresh_repository_info(ctx));
-            }
+        if already_tracked && let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
+            handle.update(ctx, |model, ctx| model.refresh_repository_info(ctx));
+        }
     }
 
     fn push_github_pr_info(&mut self, repo_path: &StandardizedPath, ctx: &mut ModelContext<Self>) {

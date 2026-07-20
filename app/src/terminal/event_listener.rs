@@ -69,9 +69,10 @@ impl ChannelEventListener {
         // Note that we don't simply close the sending side since receivers
         // might come alive at some point in the future.
         if self.pty_reads_tx.receiver_count() > 0
-            && let Err(e) = self.pty_reads_tx.try_broadcast(Arc::new(bytes.to_vec())) {
-                log::warn!("Failed to send pty read event: {e:?}");
-            }
+            && let Err(e) = self.pty_reads_tx.try_broadcast(Arc::new(bytes.to_vec()))
+        {
+            log::warn!("Failed to send pty read event: {e:?}");
+        }
     }
 }
 

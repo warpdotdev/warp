@@ -372,9 +372,9 @@ impl HarnessAvailabilityModel {
             && let Err(e) = ctx
                 .private_user_preferences()
                 .write_value(CACHE_KEY, serialized)
-            {
-                report_error!(anyhow::anyhow!(e).context("Failed to cache available harnesses"));
-            }
+        {
+            report_error!(anyhow::anyhow!(e).context("Failed to cache available harnesses"));
+        }
     }
 }
 

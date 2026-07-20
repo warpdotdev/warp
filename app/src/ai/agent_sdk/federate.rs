@@ -105,12 +105,12 @@ fn issue_gcp_token(ctx: &mut AppContext, args: IssueGcpTokenArgs) -> Result<()> 
 
                 // If we can't cache the token, report an error but don't fail the command.
                 if let Some(output_path) = output_file
-                    && let Err(err) = std::fs::write(&output_path, &output) {
-                        report_error!(
-                            anyhow!(err)
-                                .context(format!("Error writing GCP token to {output_path}"))
-                        );
-                    }
+                    && let Err(err) = std::fs::write(&output_path, &output)
+                {
+                    report_error!(
+                        anyhow!(err).context(format!("Error writing GCP token to {output_path}"))
+                    );
+                }
 
                 println!("{output}");
                 ctx.terminate_app(TerminationMode::ForceTerminate, None);

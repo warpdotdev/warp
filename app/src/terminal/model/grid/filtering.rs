@@ -1059,22 +1059,24 @@ fn trim_context_lines(
     right_bound: Option<usize>,
 ) {
     if let Some(left_bound) = left_bound
-        && let Some(first_rows) = displayed_rows.first_mut() {
-            if left_bound >= *first_rows.range.end() {
-                displayed_rows.remove(0);
-            } else if first_rows.range.contains(&left_bound) {
-                first_rows.range = (left_bound + 1)..=*first_rows.range.end();
-            }
+        && let Some(first_rows) = displayed_rows.first_mut()
+    {
+        if left_bound >= *first_rows.range.end() {
+            displayed_rows.remove(0);
+        } else if first_rows.range.contains(&left_bound) {
+            first_rows.range = (left_bound + 1)..=*first_rows.range.end();
         }
+    }
 
     if let Some(right_bound) = right_bound
-        && let Some(last_rows) = displayed_rows.last_mut() {
-            if right_bound <= *last_rows.range.start() {
-                displayed_rows.pop();
-            } else if last_rows.range.contains(&right_bound) {
-                last_rows.range = *last_rows.range.start()..=(right_bound - 1);
-            }
+        && let Some(last_rows) = displayed_rows.last_mut()
+    {
+        if right_bound <= *last_rows.range.start() {
+            displayed_rows.pop();
+        } else if last_rows.range.contains(&right_bound) {
+            last_rows.range = *last_rows.range.start()..=(right_bound - 1);
         }
+    }
 }
 
 #[cfg(test)]

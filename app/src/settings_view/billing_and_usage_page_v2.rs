@@ -2046,23 +2046,23 @@ impl TypedActionView for BillingAndUsagePageV2View {
                     let team_uid = ws.current_team_uid();
                     if let Some((workspace, team_uid)) = ws.current_workspace().zip(team_uid)
                         && has_admin_permissions
-                            && workspace
-                                .settings
-                                .addon_credits_settings
-                                .auto_reload_enabled
-                            && let Some(opt) = self
-                                .addon_credits
-                                .options
-                                .get(self.addon_credits.selected_denomination)
-                            {
-                                ws.update_addon_credits_settings(
-                                    team_uid,
-                                    None,
-                                    None,
-                                    Some(opt.credits),
-                                    ctx,
-                                );
-                            }
+                        && workspace
+                            .settings
+                            .addon_credits_settings
+                            .auto_reload_enabled
+                        && let Some(opt) = self
+                            .addon_credits
+                            .options
+                            .get(self.addon_credits.selected_denomination)
+                    {
+                        ws.update_addon_credits_settings(
+                            team_uid,
+                            None,
+                            None,
+                            Some(opt.credits),
+                            ctx,
+                        );
+                    }
                 });
                 ctx.notify();
             }

@@ -173,9 +173,10 @@ impl TuiFileEditsView {
         // actions also update their header glyph from this event.
         ctx.subscribe_to_model(action_model, |me, _, event, ctx| {
             if let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event
-                && *action_id == me.action_id {
-                    ctx.notify();
-                }
+                && *action_id == me.action_id
+            {
+                ctx.notify();
+            }
         });
 
         // An already-resolved action (e.g. on a restored transcript) renders

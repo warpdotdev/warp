@@ -605,9 +605,9 @@ impl CrossWindowTabDrag {
             && let DragSource::MultiTabWindow {
                 source_tab_index, ..
             } = &mut drag.source
-            {
-                *source_tab_index = index;
-            }
+        {
+            *source_tab_index = index;
+        }
     }
 
     pub fn on_drag(
@@ -1144,18 +1144,18 @@ impl CrossWindowTabDrag {
                 target_insertion_index,
                 ..
             } = drag.phase
-            {
-                let target = AttachTarget {
-                    window_id: target_window_id,
-                    insertion_index: target_insertion_index,
-                };
-                log::info!(
-                    "tab_drag: on_drop GhostInTarget -> DropResult::DropInto target_wid={} insertion_index={}",
-                    target.window_id,
-                    target.insertion_index
-                );
-                return DropResult::DropInto { target };
-            }
+        {
+            let target = AttachTarget {
+                window_id: target_window_id,
+                insertion_index: target_insertion_index,
+            };
+            log::info!(
+                "tab_drag: on_drop GhostInTarget -> DropResult::DropInto target_wid={} insertion_index={}",
+                target.window_id,
+                target.insertion_index
+            );
+            return DropResult::DropInto { target };
+        }
 
         // Source-reorder drop: the detached placeholder is already positioned
         // in the source, so put the real tab back exactly where it sits.
@@ -1163,18 +1163,19 @@ impl CrossWindowTabDrag {
         // `cross_window_attach_target`) so it still works now that the source
         // is focused and in front of the preview.
         if let Some(drag) = self.active_drag.as_ref()
-            && drag.reordering_in_source {
-                let target = AttachTarget {
-                    window_id: drag.source_window_id,
-                    insertion_index: drag.source_tab_index(),
-                };
-                log::info!(
-                    "tab_drag: on_drop ReorderInSource -> DropResult::DropInto target_wid={} insertion_index={}",
-                    target.window_id,
-                    target.insertion_index
-                );
-                return DropResult::DropInto { target };
-            }
+            && drag.reordering_in_source
+        {
+            let target = AttachTarget {
+                window_id: drag.source_window_id,
+                insertion_index: drag.source_tab_index(),
+            };
+            log::info!(
+                "tab_drag: on_drop ReorderInSource -> DropResult::DropInto target_wid={} insertion_index={}",
+                target.window_id,
+                target.insertion_index
+            );
+            return DropResult::DropInto { target };
+        }
 
         let (phase_name, has_dedicated_preview, drop_resolution_attempted_before) =
             match &self.active_drag {
@@ -1913,33 +1914,34 @@ fn cross_window_attach_target(
         };
 
     if source_window_id != preview_window_id
-        && let Some(window_bounds) = ctx.window_bounds(&source_window_id) {
-            for tab_bar_position in tab_bar_rects_for_window(source_window_id, ctx) {
-                let tab_bar_position_on_screen = RectF::new(
-                    vec2f(
-                        window_bounds.min_x() + tab_bar_position.min_x(),
-                        window_bounds.min_y() + tab_bar_position.min_y(),
-                    ),
-                    tab_bar_position.size(),
-                );
-                if !expanded_rect(tab_bar_position_on_screen, TAB_BAR_HIT_MARGIN)
-                    .contains_point(cursor_position_on_screen)
-                {
-                    continue;
-                }
-                let insertion_index = compute_insertion_index_for_window(
-                    source_window_id,
-                    caller_window_id,
-                    cursor_position_on_screen,
-                    ctx,
-                );
-                update_best_target(
-                    source_window_id,
-                    insertion_index,
-                    tab_bar_position_on_screen,
-                );
+        && let Some(window_bounds) = ctx.window_bounds(&source_window_id)
+    {
+        for tab_bar_position in tab_bar_rects_for_window(source_window_id, ctx) {
+            let tab_bar_position_on_screen = RectF::new(
+                vec2f(
+                    window_bounds.min_x() + tab_bar_position.min_x(),
+                    window_bounds.min_y() + tab_bar_position.min_y(),
+                ),
+                tab_bar_position.size(),
+            );
+            if !expanded_rect(tab_bar_position_on_screen, TAB_BAR_HIT_MARGIN)
+                .contains_point(cursor_position_on_screen)
+            {
+                continue;
             }
+            let insertion_index = compute_insertion_index_for_window(
+                source_window_id,
+                caller_window_id,
+                cursor_position_on_screen,
+                ctx,
+            );
+            update_best_target(
+                source_window_id,
+                insertion_index,
+                tab_bar_position_on_screen,
+            );
         }
+    }
 
     for (window_id, workspace) in WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx) {
         if window_id == preview_window_id || window_id == source_window_id {
@@ -1989,15 +1991,16 @@ fn compute_insertion_index_for_window(
     ctx: &AppContext,
 ) -> usize {
     if target_window_id == caller_window_id
-        && let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(caller_window_id, ctx) {
-            return ws.read(ctx, |workspace, ctx| {
-                workspace.tab_insertion_index_for_cursor(
-                    target_window_id,
-                    cursor_position_on_screen,
-                    ctx,
-                )
-            });
-        }
+        && let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(caller_window_id, ctx)
+    {
+        return ws.read(ctx, |workspace, ctx| {
+            workspace.tab_insertion_index_for_cursor(
+                target_window_id,
+                cursor_position_on_screen,
+                ctx,
+            )
+        });
+    }
 
     match WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx) {
         Some(ws) => ws.read(ctx, |workspace, ctx| {

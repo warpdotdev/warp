@@ -4278,7 +4278,7 @@ fn statuses_after_stream_error(
         });
     });
     // Two steps: a tail-expression `lock()` temporary would outlive `derived` (E0597).
-    
+
     std::mem::take(&mut *derived.lock().unwrap())
 }
 
@@ -4459,7 +4459,7 @@ fn has_dangling_subagent_pair(task: &warp_multi_agent_api::Task) -> bool {
         .filter_map(|m| m.tool_call_result().map(|r| r.tool_call_id.as_str()))
         .collect();
     // A sub-agent call without its result.
-    
+
     // A result for a sub-agent call that no longer exists. (Non-sub-agent tool
     // results, e.g. run_shell_command, are not tracked in `subagent_call_ids`
     // and so are correctly ignored here.)

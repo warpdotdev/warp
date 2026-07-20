@@ -156,30 +156,30 @@ pub fn render_agent_shortcuts_view(
     // Code review is not available for cloud agents.
     if !context.is_cloud_agent
         && let Some(keystroke) = keybinding_name_to_keystroke(TOGGLE_RIGHT_PANEL_BINDING_NAME, app)
-        {
-            shortcuts.push(render_shortcut(
-                ShortcutProps {
-                    keystroke,
-                    text: "open code review".into(),
-                    ..Default::default()
-                },
-                app,
-            ));
-        }
+    {
+        shortcuts.push(render_shortcut(
+            ShortcutProps {
+                keystroke,
+                text: "open code review".into(),
+                ..Default::default()
+            },
+            app,
+        ));
+    }
 
     if FeatureFlag::AgentViewConversationListView.is_enabled()
         && let Some(keystroke) =
             keybinding_name_to_keystroke(TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME, app)
-        {
-            shortcuts.push(render_shortcut(
-                ShortcutProps {
-                    keystroke,
-                    text: "toggle conversation list".into(),
-                    ..Default::default()
-                },
-                app,
-            ));
-        }
+    {
+        shortcuts.push(render_shortcut(
+            ShortcutProps {
+                keystroke,
+                text: "toggle conversation list".into(),
+                ..Default::default()
+            },
+            app,
+        ));
+    }
 
     shortcuts.push(render_shortcut(
         ShortcutProps {
@@ -209,16 +209,16 @@ pub fn render_agent_shortcuts_view(
     if !hide_cloud_zero_state_items
         && let Some(keystroke) =
             keybinding_name_to_keystroke(TOGGLE_AUTOEXECUTE_MODE_KEYBINDING, app)
-        {
-            shortcuts.push(render_shortcut(
-                ShortcutProps {
-                    keystroke,
-                    text: "toggle auto-accept".into(),
-                    ..Default::default()
-                },
-                app,
-            ));
-        }
+    {
+        shortcuts.push(render_shortcut(
+            ShortcutProps {
+                keystroke,
+                text: "toggle auto-accept".into(),
+                ..Default::default()
+            },
+            app,
+        ));
+    }
 
     shortcuts.push(render_shortcut(
         ShortcutProps {

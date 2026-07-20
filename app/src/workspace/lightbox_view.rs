@@ -118,11 +118,12 @@ impl LightboxView {
         let asset_cache = AssetCache::as_ref(ctx);
         if let AssetState::Loading { handle } =
             asset_cache.load_asset::<ImageType>(asset_source.clone())
-            && let Some(future) = handle.when_loaded(asset_cache) {
-                ctx.spawn(future, |_me, (), ctx| {
-                    ctx.notify();
-                });
-            }
+            && let Some(future) = handle.when_loaded(asset_cache)
+        {
+            ctx.spawn(future, |_me, (), ctx| {
+                ctx.notify();
+            });
+        }
     }
 }
 

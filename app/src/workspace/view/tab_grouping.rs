@@ -152,9 +152,9 @@ impl Workspace {
                 .tabs
                 .iter()
                 .position(|tab| tab.pane_group.id() == active_id)
-            {
-                self.active_tab_index = new_index;
-            }
+        {
+            self.active_tab_index = new_index;
+        }
     }
 
     /// Context-aware "create group" entry point used by the

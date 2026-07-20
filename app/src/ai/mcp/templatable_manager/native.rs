@@ -865,9 +865,9 @@ impl TemplatableMCPServerManager {
             if cli_server.cwd_parameter.is_none()
                 && let Some(spawn_root) =
                     FileBasedMCPManager::as_ref(ctx).spawn_root_for_installation(installation_uuid)
-                {
-                    cli_server.cwd_parameter = Some(spawn_root.to_string_lossy().into_owned());
-                }
+            {
+                cli_server.cwd_parameter = Some(spawn_root.to_string_lossy().into_owned());
+            }
         }
 
         let executor = ctx.background_executor().clone();
@@ -1468,15 +1468,14 @@ impl TemplatableMCPServerManager {
 
         self.delete_templatable_mcp_server_installation(installation_uuid, ctx);
 
-        if reuse_variable_values
-            && let Some(existing_variable_values) = existing_variable_values {
-                self.install_from_template(
-                    templatable_mcp_server.clone(),
-                    existing_variable_values,
-                    true,
-                    ctx,
-                );
-            }
+        if reuse_variable_values && let Some(existing_variable_values) = existing_variable_values {
+            self.install_from_template(
+                templatable_mcp_server.clone(),
+                existing_variable_values,
+                true,
+                ctx,
+            );
+        }
     }
 
     pub fn is_authorized_editor(&self, template_uuid: Uuid, ctx: &AppContext) -> bool {
@@ -1639,22 +1638,21 @@ impl TemplatableMCPServerManager {
         let team_uid = TemplatableMCPServerManager::get_first_team_space_id(ctx);
 
         if let Some(sync_id) = sync_id
-            && let Some(team_uid) = team_uid {
-                let object_type_and_id = CloudObjectTypeAndId::GenericStringObject {
-                    object_type: GenericStringObjectFormat::Json(
-                        JsonObjectType::TemplatableMCPServer,
-                    ),
-                    id: sync_id,
-                };
-                UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
-                    update_manager.move_object_to_location(
-                        object_type_and_id,
-                        CloudObjectLocation::Space(Space::Team { team_uid }),
-                        ctx,
-                    );
-                });
-                send_telemetry_from_ctx!(TelemetryEvent::MCPTemplateShared, ctx);
-            }
+            && let Some(team_uid) = team_uid
+        {
+            let object_type_and_id = CloudObjectTypeAndId::GenericStringObject {
+                object_type: GenericStringObjectFormat::Json(JsonObjectType::TemplatableMCPServer),
+                id: sync_id,
+            };
+            UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
+                update_manager.move_object_to_location(
+                    object_type_and_id,
+                    CloudObjectLocation::Space(Space::Team { team_uid }),
+                    ctx,
+                );
+            });
+            send_telemetry_from_ctx!(TelemetryEvent::MCPTemplateShared, ctx);
+        }
     }
 
     pub fn share_templatable_mcp_server_installation(

@@ -307,9 +307,10 @@ pub(crate) fn extract_paths_from_conversation(
         // call). Covers `RunShellCommand` cwds without walking action results.
         if let Some(cwd) = cwd
             && let Ok(sp) = StandardizedPath::try_new(cwd)
-                && seen.insert(sp.clone()) {
-                    paths.push(sp);
-                }
+            && seen.insert(sp.clone())
+        {
+            paths.push(sp);
+        }
 
         let Some(output) = exchange.output_status.output() else {
             continue;

@@ -688,9 +688,10 @@ impl CodeEditorModel {
 
     pub fn maybe_click_on_hovered_link(&self, offset: &CharOffset, ctx: &mut ModelContext<Self>) {
         if let Some(link) = self.hovered_symbol_range()
-            && link.range().contains(offset) {
-                link.trigger_on_click(ctx);
-            }
+            && link.range().contains(offset)
+        {
+            link.trigger_on_click(ctx);
+        }
     }
 
     pub fn max_character_offset(&self, ctx: &AppContext) -> CharOffset {
@@ -2960,13 +2961,14 @@ impl CodeEditorModel {
                             // `db` will traverse *but not delete* a newline if the count is 1 and
                             // the cursor starts on column zero and the line above is not empty.
                             let mut actual_start = start_offset;
-                            if *bound == WordBound::Start && word_count == 1
+                            if *bound == WordBound::Start
+                                && word_count == 1
                                 && let Ok(mut char_iter) = buffer.chars_rev_at(start_offset)
-                                    && char_iter.next().is_some_and(|c| c == '\n')
-                                        && char_iter.next().is_some_and(|c| c != '\n')
-                                    {
-                                        actual_start -= 1;
-                                    }
+                                && char_iter.next().is_some_and(|c| c == '\n')
+                                && char_iter.next().is_some_and(|c| c != '\n')
+                            {
+                                actual_start -= 1;
+                            }
                             (target_pos, actual_start)
                         }
                     }

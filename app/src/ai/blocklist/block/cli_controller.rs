@@ -488,16 +488,15 @@ impl CLISubagentController {
         // finishes or the user hands control back. We do NOT use ManuallyCancelled here
         // because that would mark the conversation (and ambient task) as cancelled,
         // which is incorrect since the conversation is still proceeding.
-        if should_cancel_conversation
-            && let Some(conversation_id) = conversation_id {
-                self.controller.update(ctx, |controller, ctx| {
-                    controller.cancel_conversation_progress(
-                        conversation_id,
-                        CancellationReason::CLISubagentUserTakeover,
-                        ctx,
-                    );
-                });
-            }
+        if should_cancel_conversation && let Some(conversation_id) = conversation_id {
+            self.controller.update(ctx, |controller, ctx| {
+                controller.cancel_conversation_progress(
+                    conversation_id,
+                    CancellationReason::CLISubagentUserTakeover,
+                    ctx,
+                );
+            });
+        }
 
         ctx.emit(CLISubagentEvent::UpdatedControl {
             block_id: block_id.clone(),
@@ -548,12 +547,13 @@ impl CLISubagentController {
                         conversation_id,
                         AgentViewEntryOrigin::LongRunningCommand,
                         ctx,
-                    ) {
-                        report_error!(
-                            anyhow::Error::new(e)
-                                .context("Failed to enter inline agent view for LRC handoff")
-                        );
-                    }
+                    )
+                {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Failed to enter inline agent view for LRC handoff")
+                    );
+                }
             });
         }
 

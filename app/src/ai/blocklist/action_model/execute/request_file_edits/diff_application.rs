@@ -637,23 +637,25 @@ async fn apply_search_replace<F, Fut>(
             // Add warnings from the failure info - the `DiffMatchFailures` type includes both
             // fatal and non-fatal errors.
             if let Some(failures) = fuzzy_match_diffs.failures.as_ref()
-                && failures.missing_line_numbers > 0 {
-                    result.warnings.push(DiffWarning::MissingLineNumbers {
-                        count: failures.missing_line_numbers,
-                    });
-                }
+                && failures.missing_line_numbers > 0
+            {
+                result.warnings.push(DiffWarning::MissingLineNumbers {
+                    count: failures.missing_line_numbers,
+                });
+            }
 
             if fuzzy_match_diffs.warrants_failure()
-                && let Some(failures) = fuzzy_match_diffs.failures.as_ref() {
-                    safe_warn!(
-                        safe: ("Failure(s) applying diff: {failures:?}"),
-                        full: ("Failure(s) applying diff for {absolute_path:?}: {failures:?}")
-                    );
-                    result.errors.push(DiffApplicationError::UnmatchedDiffs {
-                        file: file_path.clone(),
-                        match_failures: *failures,
-                    });
-                }
+                && let Some(failures) = fuzzy_match_diffs.failures.as_ref()
+            {
+                safe_warn!(
+                    safe: ("Failure(s) applying diff: {failures:?}"),
+                    full: ("Failure(s) applying diff for {absolute_path:?}: {failures:?}")
+                );
+                result.errors.push(DiffApplicationError::UnmatchedDiffs {
+                    file: file_path.clone(),
+                    match_failures: *failures,
+                });
+            }
             result.diffs.push(fuzzy_match_diffs);
         }
     }
@@ -803,16 +805,17 @@ async fn apply_v4a_update<F, Fut>(
         // Normal case: no rename or rename to non-existent file
         let diffs = fuzzy_match_v4a_diffs(&file_path, &deltas, rename_to, file_content);
         if diffs.warrants_failure()
-            && let Some(failures) = diffs.failures.as_ref() {
-                safe_warn!(
-                    safe: ("Failure(s) applying V4A diff: {failures:?}"),
-                    full: ("Failure(s) applying V4A diff for {absolute_path:?}: {failures:?}")
-                );
-                result.errors.push(DiffApplicationError::UnmatchedDiffs {
-                    file: file_path.clone(),
-                    match_failures: *failures,
-                });
-            }
+            && let Some(failures) = diffs.failures.as_ref()
+        {
+            safe_warn!(
+                safe: ("Failure(s) applying V4A diff: {failures:?}"),
+                full: ("Failure(s) applying V4A diff for {absolute_path:?}: {failures:?}")
+            );
+            result.errors.push(DiffApplicationError::UnmatchedDiffs {
+                file: file_path.clone(),
+                match_failures: *failures,
+            });
+        }
         result.diffs.push(diffs);
     }
 }

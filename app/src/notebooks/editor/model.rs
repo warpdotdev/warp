@@ -419,10 +419,11 @@ impl NotebooksEditorModel {
 
     fn handle_content_model_event(&mut self, event: &BufferEvent, ctx: &mut ModelContext<Self>) {
         if let Some(window_id) = self.rte_window_id
-            && !ctx.is_window_open(window_id) {
-                log::debug!("Ignoring content event for closed window");
-                return;
-            }
+            && !ctx.is_window_open(window_id)
+        {
+            log::debug!("Ignoring content event for closed window");
+            return;
+        }
 
         let can_edit = matches!(self.interaction_state(ctx), InteractionState::Editable);
         match event {

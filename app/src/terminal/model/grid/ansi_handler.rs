@@ -1177,11 +1177,12 @@ impl ansi::Handler for GridHandler {
         };
 
         if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(base64)
-            && let Ok(text) = String::from_utf8(bytes) {
-                self.ansi_handler_state
-                    .event_proxy
-                    .send_terminal_event(Event::ClipboardStore(clipboard_type, text));
-            }
+            && let Ok(text) = String::from_utf8(bytes)
+        {
+            self.ansi_handler_state
+                .event_proxy
+                .send_terminal_event(Event::ClipboardStore(clipboard_type, text));
+        }
     }
 
     fn clipboard_load(&mut self, clipboard: u8, terminator: &str) {
@@ -1297,14 +1298,16 @@ impl ansi::Handler for GridHandler {
         }
 
         if let Some((width, _)) = image.metadata.desired_width
-            && width == 0 {
-                return;
-            }
+            && width == 0
+        {
+            return;
+        }
 
         if let Some((height, _)) = image.metadata.desired_height
-            && height == 0 {
-                return;
-            }
+            && height == 0
+        {
+            return;
+        }
 
         let mut desired_width_px = image.metadata.image_size.x();
         let mut desired_height_px = image.metadata.image_size.y();

@@ -162,9 +162,10 @@ impl EnvVarCollectionManager {
                         .get_env_var_collection(env_var_collection_id)
                         .cloned();
                     if let Some(env_var_collection) = env_var_collection
-                        && let Some(data) = pane_data.handle.upgrade(ctx) {
-                            data.update(ctx, |view, ctx| view.load(env_var_collection, ctx));
-                        }
+                        && let Some(data) = pane_data.handle.upgrade(ctx)
+                    {
+                        data.update(ctx, |view, ctx| view.load(env_var_collection, ctx));
+                    }
                 }
             }
             _ => log::warn!("Can only reload existing environment variable collection"),

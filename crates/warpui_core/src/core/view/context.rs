@@ -226,29 +226,30 @@ impl<'a, T: Entity> ViewContext<'a, T> {
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
         if let Some(ref mut pending) = self.app.pending_unsubscribes
-            && pending.entity_id == target_entity {
-                pending
-                    .keys
-                    .insert(SubscriptionKey::View(self.window_id, self.view_id));
+            && pending.entity_id == target_entity
+        {
+            pending
+                .keys
+                .insert(SubscriptionKey::View(self.window_id, self.view_id));
 
-                // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
-                if let std::collections::hash_map::Entry::Occupied(mut entry) =
-                    self.app.subscriptions.entry(target_entity)
-                {
-                    entry.get_mut().retain(|subscription| match subscription {
-                        Subscription::FromModel { .. } | Subscription::FromApp { .. } => true,
-                        Subscription::FromView {
-                            window_id, view_id, ..
-                        } => *window_id != self.window_id || *view_id != self.view_id,
-                    });
+            // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.app.subscriptions.entry(target_entity)
+            {
+                entry.get_mut().retain(|subscription| match subscription {
+                    Subscription::FromModel { .. } | Subscription::FromApp { .. } => true,
+                    Subscription::FromView {
+                        window_id, view_id, ..
+                    } => *window_id != self.window_id || *view_id != self.view_id,
+                });
 
-                    if entry.get().is_empty() {
-                        entry.remove();
-                    }
+                if entry.get().is_empty() {
+                    entry.remove();
                 }
-
-                return;
             }
+
+            return;
+        }
 
         // Otherwise process immediately.
         self.app
@@ -272,29 +273,30 @@ impl<'a, T: Entity> ViewContext<'a, T> {
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
         if let Some(ref mut pending) = self.app.pending_unsubscribes
-            && pending.entity_id == target_entity {
-                pending
-                    .keys
-                    .insert(SubscriptionKey::View(self.window_id, self.view_id));
+            && pending.entity_id == target_entity
+        {
+            pending
+                .keys
+                .insert(SubscriptionKey::View(self.window_id, self.view_id));
 
-                // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
-                if let std::collections::hash_map::Entry::Occupied(mut entry) =
-                    self.app.subscriptions.entry(target_entity)
-                {
-                    entry.get_mut().retain(|subscription| match subscription {
-                        Subscription::FromModel { .. } | Subscription::FromApp { .. } => true,
-                        Subscription::FromView {
-                            window_id, view_id, ..
-                        } => *window_id != self.window_id || *view_id != self.view_id,
-                    });
+            // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.app.subscriptions.entry(target_entity)
+            {
+                entry.get_mut().retain(|subscription| match subscription {
+                    Subscription::FromModel { .. } | Subscription::FromApp { .. } => true,
+                    Subscription::FromView {
+                        window_id, view_id, ..
+                    } => *window_id != self.window_id || *view_id != self.view_id,
+                });
 
-                    if entry.get().is_empty() {
-                        entry.remove();
-                    }
+                if entry.get().is_empty() {
+                    entry.remove();
                 }
-
-                return;
             }
+
+            return;
+        }
 
         // Otherwise process immediately.
         self.app

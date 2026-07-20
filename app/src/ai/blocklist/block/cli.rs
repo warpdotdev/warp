@@ -1127,31 +1127,35 @@ impl View for CLISubagentView {
                             .as_ref(app)
                             .get_action_status(&action.id)
                             .is_some_and(|status| status.is_cancelled());
-                        if blocked_action.is_none() && !is_cancelled && !should_hide_responses
+                        if blocked_action.is_none()
+                            && !is_cancelled
+                            && !should_hide_responses
                             && let Some(rendered_action) = render_action(action.action.clone(), app)
-                            {
-                                result.add_child(
-                                    render_scrollable_container(
-                                        ScrollableContainerProps {
-                                            scroll_state: self
-                                                .state_handles
-                                                .action_scroll_state
-                                                .clone(),
-                                            child: rendered_action,
-                                            background_color: internal_colors::neutral_2(
-                                                appearance.theme(),
-                                            ),
-                                            border: Some(Border::all(1.).with_border_fill(
+                        {
+                            result.add_child(
+                                render_scrollable_container(
+                                    ScrollableContainerProps {
+                                        scroll_state: self
+                                            .state_handles
+                                            .action_scroll_state
+                                            .clone(),
+                                        child: rendered_action,
+                                        background_color: internal_colors::neutral_2(
+                                            appearance.theme(),
+                                        ),
+                                        border: Some(
+                                            Border::all(1.).with_border_fill(
                                                 internal_colors::neutral_3(theme),
-                                            )),
-                                            max_height: resizable_height,
-                                        },
-                                        app,
-                                    )
-                                    .with_margin_bottom(8.)
-                                    .finish(),
-                                );
-                            }
+                                            ),
+                                        ),
+                                        max_height: resizable_height,
+                                    },
+                                    app,
+                                )
+                                .with_margin_bottom(8.)
+                                .finish(),
+                            );
+                        }
                     }
                     AIAgentOutputMessageType::WebSearch(WebSearchStatus::Searching { query }) => {
                         if !should_hide_responses {
@@ -2152,18 +2156,19 @@ fn render_blocked_action(props: BlockedActionProps<'_>, app: &AppContext) -> Box
     );
 
     if props.is_allow_menu_open
-        && let Some(allow_menu) = props.allow_menu {
-            stack.add_positioned_child(
-                ChildView::new(allow_menu).finish(),
-                OffsetPositioning::offset_from_save_position_element(
-                    ALLOW_ACTION_POSITION_ID.to_string(),
-                    vec2f(0., 8.),
-                    PositionedElementOffsetBounds::WindowByPosition,
-                    PositionedElementAnchor::BottomRight,
-                    ChildAnchor::TopRight,
-                ),
-            );
-        }
+        && let Some(allow_menu) = props.allow_menu
+    {
+        stack.add_positioned_child(
+            ChildView::new(allow_menu).finish(),
+            OffsetPositioning::offset_from_save_position_element(
+                ALLOW_ACTION_POSITION_ID.to_string(),
+                vec2f(0., 8.),
+                PositionedElementOffsetBounds::WindowByPosition,
+                PositionedElementAnchor::BottomRight,
+                ChildAnchor::TopRight,
+            ),
+        );
+    }
 
     Expanded::new(
         1.0,

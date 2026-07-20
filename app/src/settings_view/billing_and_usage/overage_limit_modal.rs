@@ -169,9 +169,10 @@ impl SpendingLimitModal {
         match event {
             EditorEvent::Enter => {
                 if self.input_error_state.is_none()
-                    && let Some(amount_cents) = self.parse_amount(ctx) {
-                        ctx.emit(SpendingLimitModalEvent::Update { amount_cents });
-                    }
+                    && let Some(amount_cents) = self.parse_amount(ctx)
+                {
+                    ctx.emit(SpendingLimitModalEvent::Update { amount_cents });
+                }
             }
             EditorEvent::Escape => {
                 ctx.emit(SpendingLimitModalEvent::Close);

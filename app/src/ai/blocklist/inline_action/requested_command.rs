@@ -1024,9 +1024,10 @@ impl RequestedCommandView {
             return;
         }
         if let Some(command) = action_result.result.command_str()
-            && !command.is_empty() {
-                self.command_text = command.to_string();
-            }
+            && !command.is_empty()
+        {
+            self.command_text = command.to_string();
+        }
     }
 
     /// Apply a streamed update from the server.
@@ -1092,9 +1093,10 @@ impl RequestedCommandView {
     pub fn selected_text(&self, ctx: &AppContext) -> Option<String> {
         // Check MCP content selection first, then fall back to editor selection.
         if let Ok(mcp_selection) = self.mcp_content_selected_text.read()
-            && mcp_selection.is_some() {
-                return mcp_selection.clone();
-            }
+            && mcp_selection.is_some()
+        {
+            return mcp_selection.clone();
+        }
         self.editor
             .as_ref()
             .and_then(|editor| editor.as_ref(ctx).selected_text(ctx))
@@ -1933,25 +1935,24 @@ impl View for RequestedCommandView {
         }
 
         if self.mcp_context_menu_open
-            && let Some(anchor_id) = &self.mcp_context_menu_anchor_id {
-                root_stack.add_positioned_child(
-                    Dismiss::new(ChildView::new(&self.mcp_context_menu).finish())
-                        .on_dismiss(|ctx, _app| {
-                            ctx.dispatch_typed_action(
-                                RequestedCommandViewAction::CloseMcpContextMenu,
-                            );
-                        })
-                        .prevent_interaction_with_other_elements()
-                        .finish(),
-                    OffsetPositioning::offset_from_save_position_element(
-                        anchor_id.as_str(),
-                        vec2f(0., 0.),
-                        PositionedElementOffsetBounds::WindowByPosition,
-                        PositionedElementAnchor::BottomLeft,
-                        ChildAnchor::TopLeft,
-                    ),
-                );
-            }
+            && let Some(anchor_id) = &self.mcp_context_menu_anchor_id
+        {
+            root_stack.add_positioned_child(
+                Dismiss::new(ChildView::new(&self.mcp_context_menu).finish())
+                    .on_dismiss(|ctx, _app| {
+                        ctx.dispatch_typed_action(RequestedCommandViewAction::CloseMcpContextMenu);
+                    })
+                    .prevent_interaction_with_other_elements()
+                    .finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    anchor_id.as_str(),
+                    vec2f(0., 0.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
 
         root_stack.finish()
     }

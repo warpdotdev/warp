@@ -106,25 +106,26 @@ impl<'a, T: Entity> ModelContext<'a, T> {
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
         if let Some(ref mut pending) = self.app.pending_unsubscribes
-            && pending.entity_id == target_entity {
-                pending.keys.insert(SubscriptionKey::Model(self.model_id));
+            && pending.entity_id == target_entity
+        {
+            pending.keys.insert(SubscriptionKey::Model(self.model_id));
 
-                // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
-                if let std::collections::hash_map::Entry::Occupied(mut entry) =
-                    self.app.subscriptions.entry(target_entity)
-                {
-                    entry.get_mut().retain(|subscription| match subscription {
-                        Subscription::FromView { .. } | Subscription::FromApp { .. } => true,
-                        Subscription::FromModel { model_id, .. } => *model_id != self.model_id,
-                    });
+            // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.app.subscriptions.entry(target_entity)
+            {
+                entry.get_mut().retain(|subscription| match subscription {
+                    Subscription::FromView { .. } | Subscription::FromApp { .. } => true,
+                    Subscription::FromModel { model_id, .. } => *model_id != self.model_id,
+                });
 
-                    if entry.get().is_empty() {
-                        entry.remove();
-                    }
+                if entry.get().is_empty() {
+                    entry.remove();
                 }
-
-                return;
             }
+
+            return;
+        }
 
         // Otherwise process immediately.
         self.app
@@ -170,25 +171,26 @@ impl<'a, T: Entity> ModelContext<'a, T> {
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
         if let Some(ref mut pending) = self.app.pending_unsubscribes
-            && pending.entity_id == target_entity {
-                pending.keys.insert(SubscriptionKey::Model(self.model_id));
+            && pending.entity_id == target_entity
+        {
+            pending.keys.insert(SubscriptionKey::Model(self.model_id));
 
-                // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
-                if let std::collections::hash_map::Entry::Occupied(mut entry) =
-                    self.app.subscriptions.entry(target_entity)
-                {
-                    entry.get_mut().retain(|subscription| match subscription {
-                        Subscription::FromView { .. } | Subscription::FromApp { .. } => true,
-                        Subscription::FromModel { model_id, .. } => *model_id != self.model_id,
-                    });
+            // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.app.subscriptions.entry(target_entity)
+            {
+                entry.get_mut().retain(|subscription| match subscription {
+                    Subscription::FromView { .. } | Subscription::FromApp { .. } => true,
+                    Subscription::FromModel { model_id, .. } => *model_id != self.model_id,
+                });
 
-                    if entry.get().is_empty() {
-                        entry.remove();
-                    }
+                if entry.get().is_empty() {
+                    entry.remove();
                 }
-
-                return;
             }
+
+            return;
+        }
 
         // Otherwise process immediately.
         self.app
@@ -248,9 +250,10 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         // If the last effect is a model notification for this model,
         // don't add another one.
         if let Some(Effect::ModelNotification { model_id }) = self.app.pending_effects.back()
-            && *model_id == self.model_id {
-                return;
-            }
+            && *model_id == self.model_id
+        {
+            return;
+        }
 
         self.app
             .pending_effects

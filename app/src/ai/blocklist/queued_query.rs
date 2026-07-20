@@ -763,12 +763,13 @@ impl QueuedQueryModel {
         }
         let prev_edit = state.editing.replace(query_id);
         if let Some(prev) = prev_edit
-            && prev != query_id {
-                ctx.emit(QueuedQueryEvent::EditCancelled {
-                    conversation_id,
-                    query_id: prev,
-                });
-            }
+            && prev != query_id
+        {
+            ctx.emit(QueuedQueryEvent::EditCancelled {
+                conversation_id,
+                query_id: prev,
+            });
+        }
         ctx.emit(QueuedQueryEvent::EditEntered {
             conversation_id,
             query_id,

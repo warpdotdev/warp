@@ -599,8 +599,6 @@ impl TerminalDriver {
         let bootstrap_rx = self.bootstrap_rx.take();
 
         async move {
-            
-
             if let Some(rx) = bootstrap_rx {
                 // Map channel cancellation (sender dropped without sending)
                 // to InternalError — this shouldn't happen in practice.

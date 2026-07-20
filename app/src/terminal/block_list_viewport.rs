@@ -796,9 +796,9 @@ impl<'a> ViewportState<'a> {
                 if let ScrollPosition::FixedAtPosition { scroll_lines } = self.scroll_position
                     && scroll_lines.scroll_top(self.block_list, self.content_element_height_lines())
                         > max_scroll_top
-                    {
-                        return ScrollPosition::FollowsBottomOfMostRecentBlock;
-                    }
+                {
+                    return ScrollPosition::FollowsBottomOfMostRecentBlock;
+                }
                 self.scroll_position
             }
             ScrollPositionUpdate::AfterClear => self.scroll_position_after_clear(),

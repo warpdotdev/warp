@@ -1269,19 +1269,19 @@ impl BlocklistAIController {
                 .get()
                 .model_event_sender
                 .as_ref()
-            {
-                for (block_id, agent_view_visibility) in promoted_blocks {
-                    if let Err(e) = sender.send(ModelEvent::UpdateBlockAgentViewVisibility {
-                        block_id: block_id.to_string(),
-                        agent_view_visibility: agent_view_visibility.into(),
-                    }) {
-                        report_error!(
-                            anyhow::Error::new(e)
-                                .context("Error sending UpdateBlockAgentViewVisibility event")
-                        );
-                    }
+        {
+            for (block_id, agent_view_visibility) in promoted_blocks {
+                if let Err(e) = sender.send(ModelEvent::UpdateBlockAgentViewVisibility {
+                    block_id: block_id.to_string(),
+                    agent_view_visibility: agent_view_visibility.into(),
+                }) {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Error sending UpdateBlockAgentViewVisibility event")
+                    );
                 }
             }
+        }
 
         let participant_id = participant_id.or_else(|| self.get_sharer_participant_id());
         self.send_query(
@@ -1635,9 +1635,11 @@ impl BlocklistAIController {
                     "a subagent is currently active"
                 }
             );
-        } else if let Some((event_inputs, task_id)) = OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
-            svc.drain_events_for_request(conversation_id, ctx)
-        }) {
+        } else if let Some((event_inputs, task_id)) = OrchestrationEventService::handle(ctx)
+            .update(ctx, |svc, ctx| {
+                svc.drain_events_for_request(conversation_id, ctx)
+            })
+        {
             has_piggybacked_events = true;
             request_input
                 .input_messages

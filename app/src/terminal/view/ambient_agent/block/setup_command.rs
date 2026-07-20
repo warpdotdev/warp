@@ -70,21 +70,22 @@ impl CloudModeSetupCommandBlock {
 
         ctx.subscribe_to_model(model_events, |me, model_events, event, ctx| {
             if let ModelEvent::BlockCompleted(BlockCompletedEvent { block_id, .. }) = event
-                && *block_id == me.block_id {
-                    if me
-                        .terminal_model
-                        .lock()
-                        .block_list()
-                        .block_with_id(block_id)
-                        .is_some_and(|block| block.exit_code().was_successful())
-                    {
-                        me.status = Status::Completed { is_success: true };
-                    } else {
-                        me.status = Status::Completed { is_success: false };
-                    }
-                    ctx.unsubscribe_to_model(&model_events);
-                    ctx.notify();
+                && *block_id == me.block_id
+            {
+                if me
+                    .terminal_model
+                    .lock()
+                    .block_list()
+                    .block_with_id(block_id)
+                    .is_some_and(|block| block.exit_code().was_successful())
+                {
+                    me.status = Status::Completed { is_success: true };
+                } else {
+                    me.status = Status::Completed { is_success: false };
                 }
+                ctx.unsubscribe_to_model(&model_events);
+                ctx.notify();
+            }
         });
 
         let command = terminal_model

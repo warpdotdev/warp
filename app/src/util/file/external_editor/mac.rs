@@ -340,9 +340,10 @@ pub fn open_file_path_with_line_and_col(
         };
 
         if let Some(editor) = editor
-            && editor.open(line_column_number, full_path, ctx) {
-                return;
-            }
+            && editor.open(line_column_number, full_path, ctx)
+        {
+            return;
+        }
 
         // NSWorkspace's default-app routing can hand files to a sibling
         // Warp channel (e.g. Stable handling files while Preview is running).

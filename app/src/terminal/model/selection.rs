@@ -485,21 +485,21 @@ impl Selection {
         is_reversed: bool,
     ) -> SelectionRange {
         if start == end
-            && let Some(matching) = grid_handler.bracket_search(start) {
-                if (matching.row == start.row && matching.col < start.col)
-                    || (matching.row > start.row)
-                {
-                    start = matching;
-                } else {
-                    end = matching;
-                }
-
-                return SelectionRange {
-                    start,
-                    end,
-                    is_reversed,
-                };
+            && let Some(matching) = grid_handler.bracket_search(start)
+        {
+            if (matching.row == start.row && matching.col < start.col) || (matching.row > start.row)
+            {
+                start = matching;
+            } else {
+                end = matching;
             }
+
+            return SelectionRange {
+                start,
+                end,
+                is_reversed,
+            };
+        }
 
         // first, get the bounds for normal, non-smart-selection
         let mut range_start =

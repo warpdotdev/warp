@@ -100,12 +100,13 @@ impl MSYS2CommandExecutor {
             // Compgen can take over a minute to run locally otherwise. We retrieve the
             // Windows executables by using a Windows-native shell.
             if command.contains("compgen")
-                && let Some(path) = environment_variables.get_mut("PATH") {
-                    *path = path
-                        .split(":")
-                        .filter(|path| !path.starts_with("/c/"))
-                        .join(":");
-                }
+                && let Some(path) = environment_variables.get_mut("PATH")
+            {
+                *path = path
+                    .split(":")
+                    .filter(|path| !path.starts_with("/c/"))
+                    .join(":");
+            }
             command_process.envs(environment_variables);
         }
 

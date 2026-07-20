@@ -157,7 +157,7 @@ impl TuiConversationMenuModel {
         if !self.is_open(ctx) {
             return None;
         }
-        
+
         match &self.state {
             TuiConversationMenuState::Open { list } => list.selected_row().map(|row| row.id),
             TuiConversationMenuState::Closed => None,

@@ -664,9 +664,10 @@ impl Element for AltScreenElement {
 
         // We want to make sure to call after_layout on each of the elements that were actually laid out.
         if let Some(cli_subagent_view) = &mut self.cli_subagent_view
-            && cli_subagent_view.size().is_some() {
-                cli_subagent_view.after_layout(ctx, app);
-            }
+            && cli_subagent_view.size().is_some()
+        {
+            cli_subagent_view.after_layout(ctx, app);
+        }
     }
 
     fn paint(&mut self, origin: Vector2F, ctx: &mut PaintContext, app: &AppContext) {
@@ -820,9 +821,10 @@ impl Element for AltScreenElement {
         app: &AppContext,
     ) -> bool {
         if let Some(cli_subagent_view) = &mut self.cli_subagent_view
-            && cli_subagent_view.dispatch_event(event, ctx, app) {
-                return true;
-            }
+            && cli_subagent_view.dispatch_event(event, ctx, app)
+        {
+            return true;
+        }
 
         let bounds = self
             .bounds

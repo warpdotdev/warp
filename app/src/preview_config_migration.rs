@@ -65,13 +65,14 @@ pub(crate) fn migrate_config_dir_via_symlinks(old_dir: &Path, new_dir: &Path) {
     // Create the new directory. If this fails because it already exists
     // (race with another process), that's fine.
     if let Err(err) = std::fs::create_dir(new_dir)
-        && err.kind() != std::io::ErrorKind::AlreadyExists {
-            log::warn!(
-                "Failed to create config directory {}: {err}",
-                new_dir.display()
-            );
-            return;
-        }
+        && err.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        log::warn!(
+            "Failed to create config directory {}: {err}",
+            new_dir.display()
+        );
+        return;
+    }
 
     let entries = match std::fs::read_dir(old_dir) {
         Ok(entries) => entries,

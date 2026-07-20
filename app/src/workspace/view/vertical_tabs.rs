@@ -2443,15 +2443,16 @@ fn render_tab_group_internal(
                     workspace.hovered_tab_index,
                     insert_after_index,
                     tab.group_id,
-                ) {
-                    add_vertical_tab_insertion_target_overlay(
-                        &mut stack,
-                        tab.group_id,
-                        ParentAnchor::BottomLeft,
-                        ChildAnchor::BottomLeft,
-                        theme,
-                    );
-                }
+                )
+            {
+                add_vertical_tab_insertion_target_overlay(
+                    &mut stack,
+                    tab.group_id,
+                    ParentAnchor::BottomLeft,
+                    ChildAnchor::BottomLeft,
+                    theme,
+                );
+            }
         }
         // Pane view inside a tab group: the group container adds
         // `GROUP_HORIZONTAL_PADDING` of right padding and the member wrapper
@@ -5328,31 +5329,30 @@ fn render_terminal_right_badges(
         .with_spacing(4.);
     let mut has_badges = false;
 
-    if show_diff_stats
-        && let Some(git_line_changes) = terminal_view.current_diff_line_changes(app) {
-            right_badges.add_child(render_terminal_diff_stats_badge(
-                &git_line_changes,
-                pane_group_id,
-                pane_id,
-                entrypoint,
-                badge_mouse_states.diff_stats.clone(),
-                appearance,
-            ));
-            has_badges = true;
-        }
+    if show_diff_stats && let Some(git_line_changes) = terminal_view.current_diff_line_changes(app)
+    {
+        right_badges.add_child(render_terminal_diff_stats_badge(
+            &git_line_changes,
+            pane_group_id,
+            pane_id,
+            entrypoint,
+            badge_mouse_states.diff_stats.clone(),
+            appearance,
+        ));
+        has_badges = true;
+    }
 
-    if show_pr_link
-        && let Some(pull_request_url) = terminal_view.current_pull_request_url(app) {
-            let label = terminal_pull_request_badge_label(&pull_request_url);
-            right_badges.add_child(render_terminal_pull_request_badge(
-                label,
-                pull_request_url,
-                entrypoint,
-                badge_mouse_states.pull_request.clone(),
-                appearance,
-            ));
-            has_badges = true;
-        }
+    if show_pr_link && let Some(pull_request_url) = terminal_view.current_pull_request_url(app) {
+        let label = terminal_pull_request_badge_label(&pull_request_url);
+        right_badges.add_child(render_terminal_pull_request_badge(
+            label,
+            pull_request_url,
+            entrypoint,
+            badge_mouse_states.pull_request.clone(),
+            appearance,
+        ));
+        has_badges = true;
+    }
 
     has_badges.then(|| right_badges.finish())
 }

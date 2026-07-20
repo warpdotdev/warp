@@ -139,12 +139,13 @@ impl RecordingController {
     pub fn record_action(&mut self, conversation_id: AIConversationId, labels: Vec<String>) {
         if !labels.is_empty()
             && let RecordingState::Active(recording) = &mut self.state
-                && recording.conversation_id == conversation_id {
-                    recording.actions.push(computer_use::ActionLogEntry {
-                        offset: recording.started_at.elapsed(),
-                        labels,
-                    });
-                }
+            && recording.conversation_id == conversation_id
+        {
+            recording.actions.push(computer_use::ActionLogEntry {
+                offset: recording.started_at.elapsed(),
+                labels,
+            });
+        }
     }
 
     pub fn abort_start(&mut self, conversation_id: AIConversationId) {

@@ -1532,21 +1532,22 @@ impl AgentManagementView {
 
             let mut stack = Stack::new().with_child(container.finish());
             if state.is_hovered()
-                && let Some(tooltip_text) = tooltip_text_opt {
-                    let tooltip = ui_builder
-                        .tool_tip(tooltip_text.to_string())
-                        .build()
-                        .finish();
-                    stack.add_positioned_overlay_child(
-                        tooltip,
-                        OffsetPositioning::offset_from_parent(
-                            vec2f(0., -4.),
-                            ParentOffsetBounds::WindowByPosition,
-                            ParentAnchor::TopMiddle,
-                            ChildAnchor::BottomMiddle,
-                        ),
-                    );
-                }
+                && let Some(tooltip_text) = tooltip_text_opt
+            {
+                let tooltip = ui_builder
+                    .tool_tip(tooltip_text.to_string())
+                    .build()
+                    .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., -4.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomMiddle,
+                    ),
+                );
+            }
             stack.finish()
         })
         .finish()
@@ -1804,28 +1805,30 @@ impl AgentManagementView {
 
         let availability = HarnessAvailabilityModel::as_ref(app);
         if availability.should_show_harness_selector()
-            && let Some(harness) = entry.display.harness {
-                metadata_parts.push(format!(
-                    "Harness: {}",
-                    availability.display_name_for(harness)
-                ));
-            }
+            && let Some(harness) = entry.display.harness
+        {
+            metadata_parts.push(format!(
+                "Harness: {}",
+                availability.display_name_for(harness)
+            ));
+        }
 
         if let Some(executor) = &entry.display.executor {
             let same_as_creator =
                 executor.uid.is_some() && executor.uid == entry.display.creator.uid;
             if !same_as_creator
-                && let Some(name) = executor.name.as_deref().or(executor.uid.as_deref()) {
-                    let label = if executor
-                        .principal_type
-                        .is_some_and(|pt| pt.is_service_account())
-                    {
-                        "Agent"
-                    } else {
-                        "Executor"
-                    };
-                    metadata_parts.push(format!("{label}: {name}"));
-                }
+                && let Some(name) = executor.name.as_deref().or(executor.uid.as_deref())
+            {
+                let label = if executor
+                    .principal_type
+                    .is_some_and(|pt| pt.is_service_account())
+                {
+                    "Agent"
+                } else {
+                    "Executor"
+                };
+                metadata_parts.push(format!("{label}: {name}"));
+            }
         }
 
         if let Some(run_time) = &entry.display.run_time {

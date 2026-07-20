@@ -55,13 +55,13 @@ impl Input {
         if matches!(input_mode, InputMode::PinnedToBottom | InputMode::Waterfall)
             && let Some(banner) =
                 self.render_input_banner(appearance, app, input_mode, is_compact_mode)
-            {
-                column.add_child(
-                    Container::new(banner)
-                        .with_margin_top(spacing::UDI_CHIP_MARGIN)
-                        .finish(),
-                );
-            }
+        {
+            column.add_child(
+                Container::new(banner)
+                    .with_margin_top(spacing::UDI_CHIP_MARGIN)
+                    .finish(),
+            );
+        }
 
         column.add_child(prompt_row.finish());
 
@@ -69,13 +69,14 @@ impl Input {
 
         if FeatureFlag::ImageAsContext.is_enabled()
             && matches!(ai_input_model.input_type(), InputType::AI)
-            && let Some(images) = self.render_attachment_chips(appearance) {
-                column.add_child(
-                    Container::new(images)
-                        .with_margin_top(spacing::UDI_CHIP_MARGIN)
-                        .finish(),
-                );
-            }
+            && let Some(images) = self.render_attachment_chips(appearance)
+        {
+            column.add_child(
+                Container::new(images)
+                    .with_margin_top(spacing::UDI_CHIP_MARGIN)
+                    .finish(),
+            );
+        }
 
         let terminal_spacing = TerminalSettings::as_ref(app)
             .terminal_input_spacing(appearance.line_height_ratio(), app);
@@ -92,20 +93,21 @@ impl Input {
         if matches!(input_mode, InputMode::PinnedToTop)
             && let Some(banner) =
                 self.render_input_banner(appearance, app, input_mode, is_compact_mode)
-            {
-                column.add_child(
-                    Container::new(banner)
-                        .with_margin_bottom(spacing::UDI_CHIP_MARGIN)
-                        .finish(),
-                );
-            }
+        {
+            column.add_child(
+                Container::new(banner)
+                    .with_margin_bottom(spacing::UDI_CHIP_MARGIN)
+                    .finish(),
+            );
+        }
 
         if let Some(vim_state) = vim_state.as_ref()
-            && show_vim_status {
-                add_vim_status_to_stack(
-                    &mut stack, vim_state, appearance, true, // use adjusted padding for UDI
-                );
-            }
+            && show_vim_status
+        {
+            add_vim_status_to_stack(
+                &mut stack, vim_state, appearance, true, // use adjusted padding for UDI
+            );
+        }
 
         stack.add_child(wrap_input_with_terminal_padding_and_focus_handler(
             self.is_active_session(app),
@@ -114,14 +116,15 @@ impl Input {
         ));
 
         if let Some(selected_workflow_state) = self.workflows_state.selected_workflow_state.as_ref()
-            && selected_workflow_state.should_show_more_info_view {
-                add_workflow_info_overlay(
-                    &mut stack,
-                    selected_workflow_state,
-                    self.size_info(app).pane_height_px().as_f32(),
-                    menu_positioning,
-                );
-            }
+            && selected_workflow_state.should_show_more_info_view
+        {
+            add_workflow_info_overlay(
+                &mut stack,
+                selected_workflow_state,
+                self.size_info(app).pane_height_px().as_f32(),
+                menu_positioning,
+            );
+        }
 
         if self.is_voltron_open && self.is_pane_focused(app) {
             add_voltron_overlay(&mut stack, &self.voltron_view, menu_positioning);

@@ -640,9 +640,10 @@ impl TerminalView {
         {
             let command_trimmed = command.trim();
             if let Some(auth_cmd) = auth_check_command_for(selected_harness)
-                && auth_cmd.trim() == command_trimmed {
-                    return false;
-                }
+                && auth_cmd.trim() == command_trimmed
+            {
+                return false;
+            }
         }
         match selected_harness {
             Harness::Oz => false,

@@ -593,9 +593,10 @@ impl LocalCodeEditorView {
         // Early return if user is not moving away from the active hovered range.
         let active_hovered_range = self.editor().as_ref(ctx).hovered_symbol_range(ctx);
         if let Some(range) = active_hovered_range
-            && range.contains(&offset) {
-                return;
-            }
+            && range.contains(&offset)
+        {
+            return;
+        }
 
         let lsp_position = self
             .editor()
@@ -603,9 +604,10 @@ impl LocalCodeEditorView {
             .offset_to_lsp_position(offset, ctx);
 
         if cfg!(debug_assertions)
-            && let (Some(file_path), Some(lsp_server)) = (self.file_path(), &self.lsp_server) {
-                let buffer_version = self.editor().as_ref(ctx).buffer_version(ctx).as_usize();
-                lsp_server.as_ref(ctx).log_to_server_log(
+            && let (Some(file_path), Some(lsp_server)) = (self.file_path(), &self.lsp_server)
+        {
+            let buffer_version = self.editor().as_ref(ctx).buffer_version(ctx).as_usize();
+            lsp_server.as_ref(ctx).log_to_server_log(
                     lsp::LspServerLogLevel::Info,
                     format!(
                         "lsp-sync: gotoDefinition -> server file={} buffer_version={buffer_version} position={}:{}",
@@ -614,7 +616,7 @@ impl LocalCodeEditorView {
                         lsp_position.column,
                     ),
                 );
-            }
+        }
 
         // Only fetch definition on hover (fast path).
         // Find references is fetched lazily on click as a fallback when at the definition.
@@ -811,20 +813,21 @@ impl LocalCodeEditorView {
                 };
 
                 if let Some(ref_view) = &me.find_references_view
-                    && let Some(reference) = ref_view.as_ref(ctx).get_reference(*index) {
-                        ctx.emit(LocalCodeEditorEvent::GotoDefinition {
-                            path: reference.file_path.clone(),
-                            line: reference.line_number.saturating_sub(1), // Convert 1-based to 0-based
-                            column: reference.column,
-                            source_server_id,
-                        });
-                        // Close the card after navigation
-                        me.find_references_view = None;
-                        me.editor.update(ctx, |editor, _ctx| {
-                            editor.set_find_references_anchor_offset(None);
-                        });
-                        ctx.notify();
-                    }
+                    && let Some(reference) = ref_view.as_ref(ctx).get_reference(*index)
+                {
+                    ctx.emit(LocalCodeEditorEvent::GotoDefinition {
+                        path: reference.file_path.clone(),
+                        line: reference.line_number.saturating_sub(1), // Convert 1-based to 0-based
+                        column: reference.column,
+                        source_server_id,
+                    });
+                    // Close the card after navigation
+                    me.find_references_view = None;
+                    me.editor.update(ctx, |editor, _ctx| {
+                        editor.set_find_references_anchor_offset(None);
+                    });
+                    ctx.notify();
+                }
             }
             FindReferencesViewEvent::CloseRequested => {
                 me.close_find_references_card(ctx);
@@ -969,9 +972,10 @@ impl LocalCodeEditorView {
         ctx.subscribe_to_model(&lsp_server, |me, _, event, ctx| {
             if let LspEvent::DiagnosticsUpdated { path: updated_path } = event
                 && let Some(file_path) = me.file_path()
-                    && file_path == updated_path {
-                        me.refresh_diagnostics(ctx);
-                    }
+                && file_path == updated_path
+            {
+                me.refresh_diagnostics(ctx);
+            }
         });
 
         // Store the server reference.
@@ -1794,9 +1798,10 @@ impl LocalCodeEditorView {
 
         // Ensure parent directories exist before registering file watcher / LSP.
         if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
-            }
+            && !parent.as_os_str().is_empty()
+        {
+            let _ = std::fs::create_dir_all(parent);
+        }
 
         let buffer = me.editor.as_ref(ctx).model.as_ref(ctx).buffer().clone();
         let buffer_state = GlobalBufferModel::handle(ctx)

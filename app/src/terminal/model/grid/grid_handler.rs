@@ -1127,13 +1127,13 @@ impl GridHandler {
                 let mut obfuscated_char = false;
                 if should_show_secrets
                     && let Some((handle, _)) = self.secret_at_original_point(Point::new(row, col))
-                        && self
-                            .secret_by_handle(handle)
-                            .is_some_and(Secret::is_obfuscated)
-                        {
-                            text.push('*');
-                            obfuscated_char = true;
-                        }
+                    && self
+                        .secret_by_handle(handle)
+                        .is_some_and(Secret::is_obfuscated)
+                {
+                    text.push('*');
+                    obfuscated_char = true;
+                }
 
                 // If it's not obfuscated, push cell's primary character.
                 if !obfuscated_char {
@@ -1171,9 +1171,10 @@ impl GridHandler {
                 .is_some_and(|cell| cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER))
             && include_wrapped_wide
             && let Some(row) = self.row(row - 1)
-                && let Some(cell) = row.get(0) {
-                    text.push(cell.c);
-                }
+            && let Some(cell) = row.get(0)
+        {
+            text.push(cell.c);
+        }
 
         Some(text)
     }

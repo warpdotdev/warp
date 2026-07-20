@@ -63,9 +63,10 @@ pub fn filter_skills_by_spec(
 
     for spec in specs {
         if let Some(path) = matching_skill_path(repo_path, &skills_by_path, spec)
-            && seen_paths.insert(path.clone()) {
-                selected_paths.push(path);
-            }
+            && seen_paths.insert(path.clone())
+        {
+            selected_paths.push(path);
+        }
     }
 
     let selected_paths = selected_paths.into_iter().collect::<HashSet<_>>();

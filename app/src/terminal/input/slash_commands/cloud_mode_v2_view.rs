@@ -516,9 +516,10 @@ impl CloudModeV2SlashCommandView {
         if let MenuState::NoSearchActive {
             expanded_sections, ..
         } = &mut self.menu_state
-            && !expanded_sections.insert(section) {
-                expanded_sections.remove(&section);
-            }
+            && !expanded_sections.insert(section)
+        {
+            expanded_sections.remove(&section);
+        }
         clamp_browsing_selection(&mut self.menu_state);
         ctx.notify();
     }
@@ -614,11 +615,12 @@ impl CloudModeV2SlashCommandView {
             selected_idx,
         } = &mut self.menu_state
             && let Some(item) = results.get(idx)
-                && !item.search_result.is_disabled() {
-                    *selected_idx = Some(idx);
-                    self.scroll_selected_into_view(idx);
-                    ctx.notify();
-                }
+            && !item.search_result.is_disabled()
+        {
+            *selected_idx = Some(idx);
+            self.scroll_selected_into_view(idx);
+            ctx.notify();
+        }
     }
 }
 

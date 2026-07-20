@@ -221,9 +221,10 @@ fn finish_link(
     style: TuiStyle,
 ) {
     if let Some((url, display)) = link
-        && url != display {
-            push_span(spans, format!(" ({url})"), style);
-        }
+        && url != display
+    {
+        push_span(spans, format!(" ({url})"), style);
+    }
 }
 
 fn fragment_style(
@@ -262,10 +263,11 @@ fn push_span(spans: &mut Vec<(String, TuiStyle)>, text: String, style: TuiStyle)
         return;
     }
     if let Some((previous, previous_style)) = spans.last_mut()
-        && *previous_style == style {
-            previous.push_str(&text);
-            return;
-        }
+        && *previous_style == style
+    {
+        previous.push_str(&text);
+        return;
+    }
     spans.push((text, style));
 }
 

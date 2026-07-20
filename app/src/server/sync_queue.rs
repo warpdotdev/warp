@@ -589,12 +589,12 @@ impl SyncQueue {
                 .in_flight_bulk_create_objects
                 .get(&queue_item_id)
                 .is_some_and(|client_ids| client_ids.contains(&client_id))
-            {
-                return QueueDependency::BulkCreateGenericStringObject {
-                    queue_item_id,
-                    client_id,
-                };
-            }
+        {
+            return QueueDependency::BulkCreateGenericStringObject {
+                queue_item_id,
+                client_id,
+            };
+        }
 
         QueueDependency::QueueItem(queue_item_id)
     }

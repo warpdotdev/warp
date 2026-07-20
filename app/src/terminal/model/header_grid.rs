@@ -1249,24 +1249,25 @@ impl ansi::Handler for HeaderGrid {
 
     fn prompt_only_precmd(&mut self, data: PromptMetadata) {
         if let Some(honor_ps1) = data.honor_ps1
-            && honor_ps1 != self.honor_ps1 {
-                log::debug!(
-                    "Honor PS1 value changed from {} to {}",
-                    self.honor_ps1,
-                    honor_ps1
-                );
-                // We send a terminal event which will result in bindkeys being issued to the shell session, to
-                // switch the prompt mode via the $WARP_HONOR_PS1 environment variable.
-                self.event_proxy
-                    .send_terminal_event(Event::HonorPS1OutOfSync);
+            && honor_ps1 != self.honor_ps1
+        {
+            log::debug!(
+                "Honor PS1 value changed from {} to {}",
+                self.honor_ps1,
+                honor_ps1
+            );
+            // We send a terminal event which will result in bindkeys being issued to the shell session, to
+            // switch the prompt mode via the $WARP_HONOR_PS1 environment variable.
+            self.event_proxy
+                .send_terminal_event(Event::HonorPS1OutOfSync);
 
-                // We synchronize the state of our `honor_ps1` setting with the value passed from the shell.
-                // Note that we ALWAYS want this to be synced properly since the shell determines the prompt
-                // to be emitted. This may be de-synced from Warp settings in particular niche cases (which are
-                // bugs), however, we still want consistent behavior for the prompt in the blocklist (we want to
-                // avoid double prompt or empty prompt issues).
-                self.honor_ps1 = honor_ps1;
-            }
+            // We synchronize the state of our `honor_ps1` setting with the value passed from the shell.
+            // Note that we ALWAYS want this to be synced properly since the shell determines the prompt
+            // to be emitted. This may be de-synced from Warp settings in particular niche cases (which are
+            // bugs), however, we still want consistent behavior for the prompt in the blocklist (we want to
+            // avoid double prompt or empty prompt issues).
+            self.honor_ps1 = honor_ps1;
+        }
 
         if let Some(ps1) = data.ps1 {
             if ps1.is_empty() {

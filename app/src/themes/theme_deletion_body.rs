@@ -76,38 +76,38 @@ impl ThemeDeletionBody {
         // Check if the theme directory exists
         if fs::metadata(&dir).is_ok()
             && let Some(ThemeKind::Custom(custom_theme)) = &self.theme_kind
-                && let Ok(theme_from_yaml) = from_yaml::<WarpTheme>(custom_theme.path()) {
-                    // If theme has an image
-                    if let Some(image) = theme_from_yaml.background_image() {
-                        // Only delete the image if it is in the ./warp/themes directory.
-                        // We don't want to delete images from other parts of the user's filesystem.
-                        match image.source() {
-                            AssetSource::LocalFile { path, .. } => {
-                                let image_path_in_themes_dir = dir.join(path.as_str());
-                                let _ = remove_file(image_path_in_themes_dir);
-                            }
-                            _ => {
-                                log::warn!(
-                                    "Attempted to delete a custom theme image with an unexpected image source"
-                                );
-                            }
-                        }
+            && let Ok(theme_from_yaml) = from_yaml::<WarpTheme>(custom_theme.path())
+        {
+            // If theme has an image
+            if let Some(image) = theme_from_yaml.background_image() {
+                // Only delete the image if it is in the ./warp/themes directory.
+                // We don't want to delete images from other parts of the user's filesystem.
+                match image.source() {
+                    AssetSource::LocalFile { path, .. } => {
+                        let image_path_in_themes_dir = dir.join(path.as_str());
+                        let _ = remove_file(image_path_in_themes_dir);
                     }
-
-                    // Even if image can't be deleted, delete the theme .yaml file
-                    if remove_file(custom_theme.path()).is_ok() {
-                        let current_theme = active_theme_kind(ThemeSettings::as_ref(ctx), ctx);
-                        if matches!(current_theme, ThemeKind::Custom(theme) if &theme == custom_theme)
-                        {
-                            // Reset theme to Dark if we are deleting the current theme
-                            ctx.emit(ThemeDeletionBodyEvent::DeleteCurrentTheme)
-                        }
-                        errored = false;
-                        send_telemetry_from_ctx!(TelemetryEvent::DeleteCustomTheme, ctx);
-                        self.close(ctx);
-                        ctx.notify();
+                    _ => {
+                        log::warn!(
+                            "Attempted to delete a custom theme image with an unexpected image source"
+                        );
                     }
                 }
+            }
+
+            // Even if image can't be deleted, delete the theme .yaml file
+            if remove_file(custom_theme.path()).is_ok() {
+                let current_theme = active_theme_kind(ThemeSettings::as_ref(ctx), ctx);
+                if matches!(current_theme, ThemeKind::Custom(theme) if &theme == custom_theme) {
+                    // Reset theme to Dark if we are deleting the current theme
+                    ctx.emit(ThemeDeletionBodyEvent::DeleteCurrentTheme)
+                }
+                errored = false;
+                send_telemetry_from_ctx!(TelemetryEvent::DeleteCustomTheme, ctx);
+                self.close(ctx);
+                ctx.notify();
+            }
+        }
         if errored {
             self.send_error_toast("Something went wrong", ctx);
         }

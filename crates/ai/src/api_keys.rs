@@ -657,12 +657,13 @@ impl ApiKeyManager {
                 None => ctx.secure_storage().remove_value(GROK_SECURE_STORAGE_KEY),
             };
             if let Err(e) = result
-                && !matches!(e, secure_storage::Error::NotFound) {
-                    report_error!(
-                        anyhow::Error::new(e)
-                            .context("Failed to persist Grok tokens to secure storage")
-                    );
-                }
+                && !matches!(e, secure_storage::Error::NotFound)
+            {
+                report_error!(
+                    anyhow::Error::new(e)
+                        .context("Failed to persist Grok tokens to secure storage")
+                );
+            }
         });
     }
 }

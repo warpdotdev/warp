@@ -255,39 +255,39 @@ fn render_command_context(
     let command_row_font_size = appearance.monospace_font_size() - 2.;
 
     if let Some(command_text) = command_render_info.command_text
-        && !command_text.is_empty() {
-            let running_command_text_color =
-                item_highlight_state.main_text_fill(appearance).into_solid();
+        && !command_text.is_empty()
+    {
+        let running_command_text_color =
+            item_highlight_state.main_text_fill(appearance).into_solid();
 
-            let mut running_command_text =
-                appearance
-                    .ui_builder()
-                    .span(command_text)
-                    .with_style(UiComponentStyles {
-                        font_family_id: Some(appearance.monospace_font_family()),
-                        font_size: Some(command_row_font_size),
-                        font_color: Some(running_command_text_color),
-                        ..Default::default()
-                    });
+        let mut running_command_text =
+            appearance
+                .ui_builder()
+                .span(command_text)
+                .with_style(UiComponentStyles {
+                    font_family_id: Some(appearance.monospace_font_family()),
+                    font_size: Some(command_row_font_size),
+                    font_color: Some(running_command_text_color),
+                    ..Default::default()
+                });
 
-            if let Some(command_indices) = command_indices {
-                let highlight = Highlight::new()
-                    .with_properties(Properties::default().weight(Weight::Bold))
-                    .with_foreground_color(running_command_text_color);
-                running_command_text =
-                    running_command_text.with_highlights(command_indices, highlight);
-            }
-
-            command_row.add_child(
-                Shrinkable::new(
-                    1.,
-                    Container::new(running_command_text.build().finish())
-                        .with_margin_right(command_render_info.row_spacing)
-                        .finish(),
-                )
-                .finish(),
-            );
+        if let Some(command_indices) = command_indices {
+            let highlight = Highlight::new()
+                .with_properties(Properties::default().weight(Weight::Bold))
+                .with_foreground_color(running_command_text_color);
+            running_command_text = running_command_text.with_highlights(command_indices, highlight);
         }
+
+        command_row.add_child(
+            Shrinkable::new(
+                1.,
+                Container::new(running_command_text.build().finish())
+                    .with_margin_right(command_render_info.row_spacing)
+                    .finish(),
+            )
+            .finish(),
+        );
+    }
 
     let hint_font_color = item_highlight_state.sub_text_fill(appearance).into_solid();
 

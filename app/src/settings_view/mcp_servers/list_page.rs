@@ -1533,9 +1533,10 @@ impl MCPServersListPageView {
     fn file_based_root_chip_text(root_path: &PathBuf) -> Option<String> {
         // If the path is the user's home directory, set the text to "global".
         if let Some(home_dir) = dirs::home_dir()
-            && root_path == &home_dir {
-                return Some("global".to_string());
-            }
+            && root_path == &home_dir
+        {
+            return Some("global".to_string());
+        }
 
         // If the path is the Warp data directory (e.g. ~/.warp or ~/.warp_dev), set the text to
         // "global". The Warp provider stores its data directory as the root path rather than the

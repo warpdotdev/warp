@@ -858,9 +858,9 @@ impl LLMPreferences {
             if let Some(llm_id) = raw_override
                 && let Some(llm_info) =
                     self.model_info_for_id(&self.models_by_feature.agent_mode, llm_id, app)
-                {
-                    return llm_info;
-                }
+            {
+                return llm_info;
+            }
         }
 
         // In the TUI, the file-backed `agents.model` setting is the default
@@ -1227,9 +1227,10 @@ impl LLMPreferences {
         let mut seen = HashSet::new();
         for id in [base_id, coding_id] {
             if let Some(entry) = self.custom_router_proto_entry(id)
-                && seen.insert(entry.config_key.clone()) {
-                    models.push(entry);
-                }
+                && seen.insert(entry.config_key.clone())
+            {
+                models.push(entry);
+            }
         }
         api::request::settings::CustomModelRouters { routers: models }
     }
@@ -1632,10 +1633,10 @@ impl LLMPreferences {
             && matches!(
                 &*update.popup_visibility_state.lock(),
                 UpdatePopupVisibilityState::WaitingToBeShown
-            ) {
-                *update.popup_visibility_state.lock() =
-                    UpdatePopupVisibilityState::Visible(view_id);
-            }
+            )
+        {
+            *update.popup_visibility_state.lock() = UpdatePopupVisibilityState::Visible(view_id);
+        }
     }
 
     pub fn hide_llm_popup(&self, view_id: EntityId) {
@@ -1866,9 +1867,9 @@ impl LLMPreferences {
                             .get_computer_use_available()
                             .usable_info_for_id(preferred_llm_id, ctx)
                             .is_none()
-                        {
-                            profiles.set_computer_use_model(profile_id, None, ctx);
-                        }
+                    {
+                        profiles.set_computer_use_model(profile_id, None, ctx);
+                    }
                 }
             }
         });

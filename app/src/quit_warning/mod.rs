@@ -522,14 +522,15 @@ impl<'a> QuitWarningDialog<'a> {
         }
 
         if let Some(callback) = on_show_processes
-            && state.total_long_running_commands > 0 {
-                buttons.push(ModalButton::for_app(
-                    "Show running processes".to_string(),
-                    move |app| {
-                        callback(app);
-                    },
-                ))
-            }
+            && state.total_long_running_commands > 0
+        {
+            buttons.push(ModalButton::for_app(
+                "Show running processes".to_string(),
+                move |app| {
+                    callback(app);
+                },
+            ))
+        }
 
         if let Some(callback) = on_cancel {
             buttons.push(ModalButton::for_app("Cancel".to_string(), callback));

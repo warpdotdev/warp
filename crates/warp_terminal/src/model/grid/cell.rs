@@ -301,11 +301,12 @@ impl Cell {
     #[inline]
     pub fn drop_extra(&mut self) {
         if let Some(extra) = self.extra.take()
-            && let Some(end_of_prompt_marker) = extra.end_of_prompt {
-                // If we had a end of prompt marker, we preserve it (re-insert into extras).
-                self.mark_end_of_prompt(end_of_prompt_marker.has_extra_trailing_newline);
-            }
-            // If `end_of_prompt` is None, `extra` is dropped here and not put back.
+            && let Some(end_of_prompt_marker) = extra.end_of_prompt
+        {
+            // If we had a end of prompt marker, we preserve it (re-insert into extras).
+            self.mark_end_of_prompt(end_of_prompt_marker.has_extra_trailing_newline);
+        }
+        // If `end_of_prompt` is None, `extra` is dropped here and not put back.
     }
 }
 

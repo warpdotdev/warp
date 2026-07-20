@@ -303,9 +303,10 @@ impl ResponseStream {
                                     .grok_tokens()
                                     .and_then(|tokens| tokens.access_token_for_request())
                                     .map(str::to_owned)
-                                    && let Some(keys) = me.params.api_keys.as_mut() {
-                                        keys.grok_oauth_access_token = access_token;
-                                    }
+                                    && let Some(keys) = me.params.api_keys.as_mut()
+                                {
+                                    keys.grok_oauth_access_token = access_token;
+                                }
                                 Self::spawn_generate(
                                     request_id,
                                     me.params.clone(),

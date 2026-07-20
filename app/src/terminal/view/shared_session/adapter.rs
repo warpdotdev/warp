@@ -338,16 +338,16 @@ impl Adapter {
             && let Some(mouse_state_handle) = self
                 .sharer()
                 .map(|s| s.block_selection_mouse_state_handle.clone())
-            {
-                avatars.insert(
-                    sharer.id().clone(),
-                    participant_avatar_for_selected_block(
-                        ParticipantAvatarParams::new(sharer, is_self_reconnecting),
-                        mouse_state_handle,
-                        app,
-                    ),
-                );
-            }
+        {
+            avatars.insert(
+                sharer.id().clone(),
+                participant_avatar_for_selected_block(
+                    ParticipantAvatarParams::new(sharer, is_self_reconnecting),
+                    mouse_state_handle,
+                    app,
+                ),
+            );
+        }
 
         avatars
     }

@@ -78,9 +78,9 @@ impl TerminalView {
                     if let Some(openable_path) = maybe_match
                         && (renders_in_warp_notebook_viewer(&openable_path.path)
                             || matches!(openable_path.file_type, OpenableFileType::Code))
-                        {
-                            view.suggest_open_in_warp(openable_path, session, ctx);
-                        }
+                    {
+                        view.suggest_open_in_warp(openable_path, session, ctx);
+                    }
                 },
             );
         }

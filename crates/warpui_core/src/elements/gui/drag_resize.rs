@@ -131,10 +131,11 @@ impl Element for DragResizeElement {
                 // Check if the click is within our bounds.
                 if let (Some(origin), Some(size)) = (self.origin, self.size())
                     && let Some(rect) = ctx.visible_rect(origin, size)
-                        && rect.contains_point(*position) {
-                            self.state().begin(position.y());
-                            return true;
-                        }
+                    && rect.contains_point(*position)
+                {
+                    self.state().begin(position.y());
+                    return true;
+                }
                 false
             }
             Event::LeftMouseDragged { position, .. } => {

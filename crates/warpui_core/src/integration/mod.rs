@@ -194,9 +194,10 @@ impl TestSetupUtils {
 
         let res = fs::create_dir_all(test_dir);
         if let Err(err_code) = res
-            && err_code.kind() != ErrorKind::AlreadyExists {
-                panic!("Failed to create directory {test_dir:?}");
-            }
+            && err_code.kind() != ErrorKind::AlreadyExists
+        {
+            panic!("Failed to create directory {test_dir:?}");
+        }
     }
 
     /// Configures the home directory path for the test.

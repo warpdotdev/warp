@@ -243,18 +243,19 @@ impl LaunchConfigSaveModal {
         use crate::util::openable_file_type::resolve_file_target;
 
         if let SaveState::Success = &self.save_state
-            && let Some(file_name) = &self.file_name {
-                let file_path = launch_configs_dir().join(file_name);
-                // Resolve target and emit event - workspace will handle all cases
-                let settings = EditorSettings::as_ref(ctx);
-                let target = resolve_file_target(&file_path, settings, None);
-                ctx.emit(LaunchConfigModalEvent::OpenFileWithTarget {
-                    path: file_path,
-                    target,
-                    line_col: None,
-                });
-                send_telemetry_from_ctx!(TelemetryEvent::OpenLaunchConfigFile, ctx);
-            }
+            && let Some(file_name) = &self.file_name
+        {
+            let file_path = launch_configs_dir().join(file_name);
+            // Resolve target and emit event - workspace will handle all cases
+            let settings = EditorSettings::as_ref(ctx);
+            let target = resolve_file_target(&file_path, settings, None);
+            ctx.emit(LaunchConfigModalEvent::OpenFileWithTarget {
+                path: file_path,
+                target,
+                line_col: None,
+            });
+            send_telemetry_from_ctx!(TelemetryEvent::OpenLaunchConfigFile, ctx);
+        }
     }
 
     #[cfg(feature = "local_fs")]

@@ -508,24 +508,24 @@ impl ShowBlocksView {
     pub fn confirm_unshare(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(selected_index) = self.pending_unshared_block_index.take()
             && let GetBlocksForUserRequestState::Done(blocks) = &mut self.get_blocks_for_user_status
-            {
-                // Only attempt to unshare if there isn't already an inflight request to unshare
-                // the block.
-                let user_block = &mut blocks[selected_index];
-                if !matches!(
-                    user_block.unshare_request_status,
-                    UnshareBlockRequestState::InFlight
-                ) {
-                    user_block.unshare_request_status = UnshareBlockRequestState::InFlight;
+        {
+            // Only attempt to unshare if there isn't already an inflight request to unshare
+            // the block.
+            let user_block = &mut blocks[selected_index];
+            if !matches!(
+                user_block.unshare_request_status,
+                UnshareBlockRequestState::InFlight
+            ) {
+                user_block.unshare_request_status = UnshareBlockRequestState::InFlight;
 
-                    let block_client = self.block_client.clone();
-                    let block_id = user_block.id.clone();
-                    let _ = ctx.spawn(
-                        async move { (block_client.unshare_block(block_id).await, selected_index) },
-                        Self::on_block_unshare_complete,
-                    );
-                }
+                let block_client = self.block_client.clone();
+                let block_id = user_block.id.clone();
+                let _ = ctx.spawn(
+                    async move { (block_client.unshare_block(block_id).await, selected_index) },
+                    Self::on_block_unshare_complete,
+                );
             }
+        }
         ctx.notify();
     }
 

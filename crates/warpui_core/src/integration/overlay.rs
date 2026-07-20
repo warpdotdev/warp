@@ -224,10 +224,11 @@ impl OverlayState {
             .retain(|&(_, t)| timestamp.duration_since(t) < KEY_DISPLAY_DURATION);
 
         if let Some(end_t) = self.drag_ended_at
-            && timestamp.duration_since(end_t) >= DRAG_TRAIL_FADE_DURATION {
-                self.drag_trail.clear();
-                self.drag_ended_at = None;
-            }
+            && timestamp.duration_since(end_t) >= DRAG_TRAIL_FADE_DURATION
+        {
+            self.drag_trail.clear();
+            self.drag_ended_at = None;
+        }
     }
 
     pub fn render_onto(

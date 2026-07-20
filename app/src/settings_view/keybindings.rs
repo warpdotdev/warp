@@ -110,9 +110,10 @@ struct ConflictMap {
 impl ConflictMap {
     fn update(&mut self, old: &Option<Keystroke>, new: Option<Keystroke>) {
         if let Some(old) = old
-            && let Some(old_conflict_count) = self.map.get_mut(old) {
-                *old_conflict_count = old_conflict_count.saturating_sub(1);
-            }
+            && let Some(old_conflict_count) = self.map.get_mut(old)
+        {
+            *old_conflict_count = old_conflict_count.saturating_sub(1);
+        }
 
         if let Some(new) = new {
             let new_conflict_count = self.map.entry(new).or_default();

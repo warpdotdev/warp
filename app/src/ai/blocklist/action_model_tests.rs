@@ -19,9 +19,10 @@ fn count_startable_actions_for_pass(phases: &[(RunningActionPhase, bool)]) -> us
 
     for (phase, can_autoexecute) in phases {
         if let Some(current_phase) = current_phase
-            && !can_start_action_with_current_phase(current_phase, *phase, *can_autoexecute) {
-                break;
-            }
+            && !can_start_action_with_current_phase(current_phase, *phase, *can_autoexecute)
+        {
+            break;
+        }
 
         count += 1;
         current_phase = Some(*phase);

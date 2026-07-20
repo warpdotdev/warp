@@ -1388,10 +1388,12 @@ fn collect_renderable_image_group<'a>(
         // Skip whitespace-only plain text sections (e.g. blank lines between images)
         // so that adjacent images separated only by blank lines are grouped together.
         if let AIAgentTextSection::PlainText { text } = section
-            && !images.is_empty() && text.text().trim().is_empty() {
-                section_offset += 1;
-                continue;
-            }
+            && !images.is_empty()
+            && text.text().trim().is_empty()
+        {
+            section_offset += 1;
+            continue;
+        }
         let AIAgentTextSection::Image { image } = section else {
             break;
         };
@@ -1602,14 +1604,15 @@ pub(super) fn render_rich_text_output_text_section(
 
         let secret_redaction = get_secret_obfuscation_mode(app);
         if secret_redaction.should_redact_secret()
-            && let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location) {
-                frame = redact_secrets_in_element(
-                    frame,
-                    secrets,
-                    location,
-                    secret_redaction.is_visually_obfuscated(),
-                );
-            }
+            && let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location)
+        {
+            frame = redact_secrets_in_element(
+                frame,
+                secrets,
+                location,
+                secret_redaction.is_visually_obfuscated(),
+            );
+        }
         frame
     });
 
@@ -3645,9 +3648,10 @@ pub(super) fn query_prefix_highlight_len(
     if let AIAgentInput::UserQuery {
         user_query_mode, ..
     } = input
-        && let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode) {
-            return Some(prefix_len);
-        }
+        && let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode)
+    {
+        return Some(prefix_len);
+    }
 
     if displayed_query.starts_with(commands::CREATE_ENVIRONMENT.name) {
         Some(commands::CREATE_ENVIRONMENT.name.len())

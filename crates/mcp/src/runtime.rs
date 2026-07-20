@@ -387,9 +387,10 @@ async fn determine_transport(
             let emit_authenticated_notification = async move || {
                 if did_require_login
                     && let Some(authenticated_callback) = authenticated_callback
-                        && let Err(err) = authenticated_callback(server_name).await {
-                            log::warn!("Failed to emit MCP authenticated notification: {err:?}");
-                        }
+                    && let Err(err) = authenticated_callback(server_name).await
+                {
+                    log::warn!("Failed to emit MCP authenticated notification: {err:?}");
+                }
             };
 
             match send_initialize_request(url, headers, Some(&client)).await? {
@@ -569,9 +570,10 @@ impl<T: rmcp::transport::Transport<R>, R: rmcp::service::ServiceRole> rmcp::tran
         async move {
             let result = self.transport.receive().await;
             if let Some(item) = &result
-                && let Ok(json) = serde_json::to_string(item) {
-                    logger.log(format!("[info] MCP: Received response: {json}"));
-                }
+                && let Ok(json) = serde_json::to_string(item)
+            {
+                logger.log(format!("[info] MCP: Received response: {json}"));
+            }
             result
         }
     }

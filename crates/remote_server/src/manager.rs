@@ -1400,9 +1400,10 @@ impl RemoteServerManager {
         preferred_session: Option<SessionId>,
     ) -> Option<Arc<RemoteServerClient>> {
         if let Some(session_id) = preferred_session
-            && let Some(client) = self.client_for_session(session_id) {
-                return Some(client.clone());
-            }
+            && let Some(client) = self.client_for_session(session_id)
+        {
+            return Some(client.clone());
+        }
         self.client_for_host(host_id).cloned()
     }
 
@@ -3723,16 +3724,17 @@ impl RemoteServerManager {
         // registers an executor for this session. This fires on both the
         // initial connect and every reconnect.
         if let Some(info) = self.session_bootstrap_info.get(&session_id)
-            && let Some(client) = self.client_for_session(session_id) {
-                log::info!(
-                    "Remote server sending SessionBootstrapped notification: session={session_id:?}"
-                );
-                client.notify_session_bootstrapped(
-                    session_id,
-                    &info.shell_type,
-                    info.shell_path.as_deref(),
-                );
-            }
+            && let Some(client) = self.client_for_session(session_id)
+        {
+            log::info!(
+                "Remote server sending SessionBootstrapped notification: session={session_id:?}"
+            );
+            client.notify_session_bootstrapped(
+                session_id,
+                &info.shell_type,
+                info.shell_path.as_deref(),
+            );
+        }
     }
 
     /// Captures the exit status from a `Child` process, if available.

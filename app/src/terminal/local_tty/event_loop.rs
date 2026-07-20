@@ -465,11 +465,13 @@ where
                             }
                         }
 
-                        if state.needs_write() && can_write
-                            && let Err(err) = self.pty_write(&mut state, &mut can_write) {
-                                error!("Error writing to PTY in event loop: {err}");
-                                break 'event_loop;
-                            }
+                        if state.needs_write()
+                            && can_write
+                            && let Err(err) = self.pty_write(&mut state, &mut can_write)
+                        {
+                            error!("Error writing to PTY in event loop: {err}");
+                            break 'event_loop;
+                        }
                     }
                 }
 

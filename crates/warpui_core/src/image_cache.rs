@@ -934,11 +934,12 @@ impl ImageCache {
                 let cache = if should_cache_rendered_image {
                     let cache = self.images.upgradable_read();
                     if let Some(inner_map) = cache.get(&cache_key)
-                        && let Some(image) = inner_map.get(&rendered_image_cache_key) {
-                            return AssetState::Loaded {
-                                data: image.clone(),
-                            };
-                        }
+                        && let Some(image) = inner_map.get(&rendered_image_cache_key)
+                    {
+                        return AssetState::Loaded {
+                            data: image.clone(),
+                        };
+                    }
                     Some(cache)
                 } else {
                     None

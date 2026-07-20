@@ -187,9 +187,10 @@ impl Transport for ProcessTransport {
         // Joining it ensures that clone is dropped before restart so the same
         // log path can be registered again without colliding with a stale entry.
         if let Some(stderr_task) = self.stderr_task.lock().await.take()
-            && let Err(e) = stderr_task.await {
-                log::warn!("LSP: Failed to join stderr task: {e}");
-            }
+            && let Err(e) = stderr_task.await
+        {
+            log::warn!("LSP: Failed to join stderr task: {e}");
+        }
         log::info!("LSP: Server shut down.");
         Ok(())
     }

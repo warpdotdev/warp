@@ -546,25 +546,26 @@ impl TypedActionView for PrivacyPageView {
                             .collect();
 
                     if let Some(regex) = recommended_regexes.get(*idx)
-                        && let Ok(pattern) = Regex::new(regex.pattern) {
-                            let mut new_user_secret_regex_list =
-                                privacy_settings.user_secret_regex_list.to_vec();
-                            new_user_secret_regex_list.push(CustomSecretRegex {
-                                pattern,
-                                name: Some(regex.name.to_string()),
-                            });
+                        && let Ok(pattern) = Regex::new(regex.pattern)
+                    {
+                        let mut new_user_secret_regex_list =
+                            privacy_settings.user_secret_regex_list.to_vec();
+                        new_user_secret_regex_list.push(CustomSecretRegex {
+                            pattern,
+                            name: Some(regex.name.to_string()),
+                        });
 
-                            if privacy_settings
-                                .user_secret_regex_list
-                                .set_value(new_user_secret_regex_list, ctx)
-                                .is_err()
-                            {
-                                report_error!(
-                                    "Failed to add recommended regex to custom secret regex list"
-                                );
-                            }
-                            ctx.notify();
+                        if privacy_settings
+                            .user_secret_regex_list
+                            .set_value(new_user_secret_regex_list, ctx)
+                            .is_err()
+                        {
+                            report_error!(
+                                "Failed to add recommended regex to custom secret regex list"
+                            );
                         }
+                        ctx.notify();
+                    }
                 });
             }
             PrivacyPageAction::ToggleSafeMode => self.toggle_safe_mode(ctx),

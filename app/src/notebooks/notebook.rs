@@ -761,10 +761,11 @@ impl NotebookView {
             }
             CloudModelEvent::ObjectMoved { type_and_id, .. } => {
                 if self.as_active_notebook_id(type_and_id, ctx).is_some()
-                    && let Some(space) = self.active_notebook_data.as_ref(ctx).space(ctx) {
-                        self.input
-                            .update(ctx, |editor, ctx| editor.set_space(space, ctx));
-                    }
+                    && let Some(space) = self.active_notebook_data.as_ref(ctx).space(ctx)
+                {
+                    self.input
+                        .update(ctx, |editor, ctx| editor.set_space(space, ctx));
+                }
             }
             CloudModelEvent::ObjectCreated { type_and_id, .. } => {
                 if self.as_active_notebook_id(type_and_id, ctx).is_some() {
@@ -1431,14 +1432,15 @@ impl NotebookView {
                 .value()
                 == UserAppInstallStatus::Detected
             && let Some(link) = self.notebook_link(ctx)
-                && let Ok(url) = Url::parse(&link) {
-                    menu_items.push(
-                        MenuItemFields::new("Open on Desktop")
-                            .with_on_select_action(NotebookAction::OpenLinkOnDesktop(url))
-                            .with_icon(icons::Icon::Laptop)
-                            .into_item(),
-                    );
-                }
+            && let Ok(url) = Url::parse(&link)
+        {
+            menu_items.push(
+                MenuItemFields::new("Open on Desktop")
+                    .with_on_select_action(NotebookAction::OpenLinkOnDesktop(url))
+                    .with_icon(icons::Icon::Laptop)
+                    .into_item(),
+            );
+        }
 
         // Add "Duplicate" to menu
         if active_notebook_data.space(ctx) != Some(Space::Shared) {

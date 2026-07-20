@@ -798,9 +798,10 @@ fn test_run_command_from_text_selection() {
                 .clone();
             ctx.subscribe_to_model(&render_state, move |_, event, _ctx| {
                 if let RenderEvent::LayoutUpdated = event
-                    && let Some(tx) = tx.take() {
-                        tx.send(()).unwrap();
-                    }
+                    && let Some(tx) = tx.take()
+                {
+                    tx.send(()).unwrap();
+                }
             });
         });
 

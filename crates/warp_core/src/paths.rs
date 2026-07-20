@@ -260,9 +260,10 @@ pub fn cache_dir() -> PathBuf {
 pub fn home_relative_path(path: &Path) -> String {
     #[cfg(unix)]
     if let Some(base_dirs) = directories::BaseDirs::new()
-        && let Ok(relative_path) = path.strip_prefix(base_dirs.home_dir()) {
-            return format!("~/{}", relative_path.display());
-        };
+        && let Ok(relative_path) = path.strip_prefix(base_dirs.home_dir())
+    {
+        return format!("~/{}", relative_path.display());
+    };
 
     path.display().to_string()
 }
@@ -332,12 +333,13 @@ pub fn app_group_container_path() -> Option<PathBuf> {
         // macOS returning a path that may not exist, processes may list the container directory without
         // having permissions to read to or write from it.
         if let Some(url) = fm.containerURLForSecurityApplicationGroupIdentifier(&group_id)
-            && let Some(ns_path) = url.path() {
-                let path = PathBuf::from(ns_path.to_string());
-                if tempfile::tempfile_in(&path).is_ok() {
-                    return Some(path);
-                }
+            && let Some(ns_path) = url.path()
+        {
+            let path = PathBuf::from(ns_path.to_string());
+            if tempfile::tempfile_in(&path).is_ok() {
+                return Some(path);
             }
+        }
 
         None
     });

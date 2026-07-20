@@ -637,9 +637,10 @@ fn validate_request(request: &RunAgentsRequest) -> Result<(), String> {
     }
     if matches!(request.execution_mode, RunAgentsExecutionMode::Local)
         && let Some(harness) = Harness::parse_local_child_harness(&request.harness_type)
-            && let Some(message) = local_harness_product_disabled_message(harness) {
-                return Err(message.to_string());
-            }
+        && let Some(message) = local_harness_product_disabled_message(harness)
+    {
+        return Err(message.to_string());
+    }
     if matches!(
         request.execution_mode,
         RunAgentsExecutionMode::Remote { .. }
@@ -700,9 +701,10 @@ pub fn run_agents_to_start_agent_mode(
                 })
             } else {
                 if let Some(harness) = Harness::parse_local_child_harness(trimmed)
-                    && let Some(message) = local_harness_product_disabled_message(harness) {
-                        return Err(message.to_string());
-                    }
+                    && let Some(message) = local_harness_product_disabled_message(harness)
+                {
+                    return Err(message.to_string());
+                }
                 Ok(StartAgentExecutionMode::Local {
                     harness_type: Some(trimmed.to_string()),
                     model_id,

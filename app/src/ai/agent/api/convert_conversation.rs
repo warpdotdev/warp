@@ -533,9 +533,9 @@ impl ConvertToExchanges for &api::Task {
                         task_id: &TaskId::new(api_message.task_id.clone()),
                         skill_path_origin: &SkillPathOrigin::Unavailable,
                     })
-                {
-                    current_outputs.push(output_msg);
-                }
+            {
+                current_outputs.push(output_msg);
+            }
         }
 
         // At the end, if we have remaining inputs or outputs, create the last exchange.

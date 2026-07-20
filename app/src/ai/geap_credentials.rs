@@ -200,9 +200,11 @@ fn refresh_geap_credentials_with_options(
             minted_for: current_binding,
             ..
         } = manager.geap_credentials_state()
-            && *current_binding == minted_for && !credentials.needs_refresh() {
-                return;
-            }
+        && *current_binding == minted_for
+        && !credentials.needs_refresh()
+    {
+        return;
+    }
     let previous = match manager.geap_credentials_state() {
         GeapCredentialsState::Loaded {
             credentials,

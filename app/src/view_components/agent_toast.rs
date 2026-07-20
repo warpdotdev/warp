@@ -112,9 +112,10 @@ impl AgentToastStack {
     /// Cancel the dismissal timeout for a toast
     pub fn cancel_dismissal_timeout(&mut self, uuid: &Uuid) {
         if let Some(toast_data) = self.toasts.iter_mut().find(|toast| toast.uuid == *uuid)
-            && let Some(abort_handle) = toast_data.abort_handle.take() {
-                abort_handle.abort();
-            }
+            && let Some(abort_handle) = toast_data.abort_handle.take()
+        {
+            abort_handle.abort();
+        }
     }
 
     /// Start a new dismissal timeout for a toast
@@ -223,13 +224,14 @@ impl TypedActionView for AgentToastStack {
                     ctx.windows().show_window_and_focus_app(window_id);
 
                     if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
-                        && let Some(handle) = workspaces.first() {
-                            ctx.dispatch_typed_action_for_view(
-                                window_id,
-                                handle.id(),
-                                &WorkspaceAction::ActivateTab(tab_id),
-                            );
-                        }
+                        && let Some(handle) = workspaces.first()
+                    {
+                        ctx.dispatch_typed_action_for_view(
+                            window_id,
+                            handle.id(),
+                            &WorkspaceAction::ActivateTab(tab_id),
+                        );
+                    }
                     ctx.dispatch_typed_action_for_view(
                         window_id,
                         terminal_view_id,

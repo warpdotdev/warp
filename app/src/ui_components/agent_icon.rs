@@ -67,16 +67,17 @@ pub(crate) fn terminal_view_agent_icon_variant(
 
     // Defer to the card helper when we have task data and no CLI session takes precedence.
     if cli_agent_session.is_none()
-        && let Some(task) = task_data.as_ref() {
-            let status = AgentRunDisplayStatus::from_task(task, app).to_conversation_status();
-            let harness = task
-                .agent_config_snapshot
-                .as_ref()
-                .and_then(|config| config.harness.as_ref())
-                .map(|harness| harness.harness_type)
-                .unwrap_or(Harness::Oz);
-            return Some(agent_icon_variant_for_run(harness, status, is_cloud));
-        }
+        && let Some(task) = task_data.as_ref()
+    {
+        let status = AgentRunDisplayStatus::from_task(task, app).to_conversation_status();
+        let harness = task
+            .agent_config_snapshot
+            .as_ref()
+            .and_then(|config| config.harness.as_ref())
+            .map(|harness| harness.harness_type)
+            .unwrap_or(Harness::Oz);
+        return Some(agent_icon_variant_for_run(harness, status, is_cloud));
+    }
 
     let inputs = TerminalIconInputs {
         is_ambient: is_cloud,
@@ -165,13 +166,13 @@ fn agent_icon_variant_from_terminal_inputs(
         && let Some(agent) = inputs
             .selected_third_party_cli_agent
             .filter(|agent| !matches!(agent, CLIAgent::Unknown))
-        {
-            return Some(IconWithStatusVariant::CLIAgent {
-                agent,
-                status: inputs.selected_conversation_status.clone(),
-                is_ambient: true,
-            });
-        }
+    {
+        return Some(IconWithStatusVariant::CLIAgent {
+            agent,
+            status: inputs.selected_conversation_status.clone(),
+            is_ambient: true,
+        });
+    }
 
     // 3. Selected conversation OR ambient (Oz) terminal: Oz agent variant.
     if inputs.has_selected_conversation || inputs.is_ambient {

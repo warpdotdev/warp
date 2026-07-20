@@ -787,9 +787,10 @@ pub async fn is_command_valid(
     if let Some(flags) = shell_command.args.flags {
         for flag in flags.iter() {
             if let FlagType::Argument { value } = &flag.flag_type
-                && !is_arg_valid(&expanded_command_line, value, ctx, session_env_vars).await {
-                    return false;
-                }
+                && !is_arg_valid(&expanded_command_line, value, ctx, session_env_vars).await
+            {
+                return false;
+            }
         }
     }
     true

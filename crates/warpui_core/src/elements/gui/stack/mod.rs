@@ -354,9 +354,9 @@ impl SelectableElement for Stack {
             if let Some(selectable_child) = child.element.as_selectable_element()
                 && let Some(child_fragments) =
                     selectable_child.get_selection(selection_start, selection_end, is_rect)
-                {
-                    selection_fragments.extend(child_fragments);
-                }
+            {
+                selection_fragments.extend(child_fragments);
+            }
         }
         if !selection_fragments.is_empty() {
             return Some(selection_fragments);
@@ -378,9 +378,10 @@ impl SelectableElement for Stack {
                     direction,
                     unit,
                     word_boundaries_policy,
-                ) {
-                    return Some(selection);
-                }
+                )
+            {
+                return Some(selection);
+            }
         }
         None
     }
@@ -394,9 +395,9 @@ impl SelectableElement for Stack {
             if let Some(selectable_child) = child.element.as_selectable_element()
                 && let Some(is_point_semantically_before) = selectable_child
                     .is_point_semantically_before(absolute_point, absolute_point_other)
-                {
-                    return Some(is_point_semantically_before);
-                }
+            {
+                return Some(is_point_semantically_before);
+            }
         }
         None
     }
@@ -410,9 +411,9 @@ impl SelectableElement for Stack {
             if let Some(selectable_child) = child.element.as_selectable_element()
                 && let Some(selection) =
                     selectable_child.smart_select(absolute_point, smart_select_fn)
-                {
-                    return Some(selection);
-                }
+            {
+                return Some(selection);
+            }
         }
         None
     }

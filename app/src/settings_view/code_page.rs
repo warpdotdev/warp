@@ -1966,77 +1966,75 @@ impl CodePageWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(4.);
         if let Some(refresh_action) = presentation.refresh_action
-            && let Some(action_target) = action_target.clone() {
-                buttons_row.add_child(
-                    icon_button(appearance, Icon::Refresh, false, manual_resync_mouse_state)
-                        .with_active_styles(UiComponentStyles {
-                            background: Some(theme.surface_1().into()),
-                            ..Default::default()
-                        })
-                        .build()
-                        .on_click(move |ctx, _, _| match (&action_target, &refresh_action) {
-                            (
-                                LocalOrRemotePath::Local(codebase_path),
-                                IndexingRefreshAction::Resync,
-                            ) => {
-                                ctx.dispatch_typed_action(CodeSettingsPageAction::ManualResync(
-                                    codebase_path.clone(),
-                                ));
-                            }
-                            (LocalOrRemotePath::Local(_), IndexingRefreshAction::RequestRemote) => {
-                            }
-                            #[cfg(not(target_family = "wasm"))]
-                            (
-                                LocalOrRemotePath::Remote(remote_path),
-                                IndexingRefreshAction::Resync,
-                            ) => {
-                                ctx.dispatch_typed_action(
-                                    CodeSettingsPageAction::ManualResyncRemote(remote_path.clone()),
-                                );
-                            }
-                            #[cfg(not(target_family = "wasm"))]
-                            (
-                                LocalOrRemotePath::Remote(remote_path),
-                                IndexingRefreshAction::RequestRemote,
-                            ) => {
-                                ctx.dispatch_typed_action(
-                                    CodeSettingsPageAction::RequestRemoteIndex(remote_path.clone()),
-                                );
-                            }
-                            #[cfg(target_family = "wasm")]
-                            (LocalOrRemotePath::Remote(_), _) => {}
-                        })
-                        .finish(),
-                );
-            }
+            && let Some(action_target) = action_target.clone()
+        {
+            buttons_row.add_child(
+                icon_button(appearance, Icon::Refresh, false, manual_resync_mouse_state)
+                    .with_active_styles(UiComponentStyles {
+                        background: Some(theme.surface_1().into()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .on_click(move |ctx, _, _| match (&action_target, &refresh_action) {
+                        (
+                            LocalOrRemotePath::Local(codebase_path),
+                            IndexingRefreshAction::Resync,
+                        ) => {
+                            ctx.dispatch_typed_action(CodeSettingsPageAction::ManualResync(
+                                codebase_path.clone(),
+                            ));
+                        }
+                        (LocalOrRemotePath::Local(_), IndexingRefreshAction::RequestRemote) => {}
+                        #[cfg(not(target_family = "wasm"))]
+                        (LocalOrRemotePath::Remote(remote_path), IndexingRefreshAction::Resync) => {
+                            ctx.dispatch_typed_action(CodeSettingsPageAction::ManualResyncRemote(
+                                remote_path.clone(),
+                            ));
+                        }
+                        #[cfg(not(target_family = "wasm"))]
+                        (
+                            LocalOrRemotePath::Remote(remote_path),
+                            IndexingRefreshAction::RequestRemote,
+                        ) => {
+                            ctx.dispatch_typed_action(CodeSettingsPageAction::RequestRemoteIndex(
+                                remote_path.clone(),
+                            ));
+                        }
+                        #[cfg(target_family = "wasm")]
+                        (LocalOrRemotePath::Remote(_), _) => {}
+                    })
+                    .finish(),
+            );
+        }
 
         if presentation.show_delete
-            && let Some(action_target) = action_target {
-                buttons_row.add_child(
-                    icon_button(appearance, Icon::Trash, false, delete_mouse_state)
-                        .with_active_styles(UiComponentStyles {
-                            background: Some(theme.surface_1().into()),
-                            ..Default::default()
-                        })
-                        .build()
-                        .on_click(move |ctx, _, _| match &action_target {
-                            LocalOrRemotePath::Local(codebase_path) => {
-                                ctx.dispatch_typed_action(CodeSettingsPageAction::DeleteIndex(
-                                    codebase_path.clone(),
-                                ));
-                            }
-                            #[cfg(not(target_family = "wasm"))]
-                            LocalOrRemotePath::Remote(remote_path) => {
-                                ctx.dispatch_typed_action(
-                                    CodeSettingsPageAction::DeleteRemoteIndex(remote_path.clone()),
-                                );
-                            }
-                            #[cfg(target_family = "wasm")]
-                            LocalOrRemotePath::Remote(_) => {}
-                        })
-                        .finish(),
-                );
-            }
+            && let Some(action_target) = action_target
+        {
+            buttons_row.add_child(
+                icon_button(appearance, Icon::Trash, false, delete_mouse_state)
+                    .with_active_styles(UiComponentStyles {
+                        background: Some(theme.surface_1().into()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .on_click(move |ctx, _, _| match &action_target {
+                        LocalOrRemotePath::Local(codebase_path) => {
+                            ctx.dispatch_typed_action(CodeSettingsPageAction::DeleteIndex(
+                                codebase_path.clone(),
+                            ));
+                        }
+                        #[cfg(not(target_family = "wasm"))]
+                        LocalOrRemotePath::Remote(remote_path) => {
+                            ctx.dispatch_typed_action(CodeSettingsPageAction::DeleteRemoteIndex(
+                                remote_path.clone(),
+                            ));
+                        }
+                        #[cfg(target_family = "wasm")]
+                        LocalOrRemotePath::Remote(_) => {}
+                    })
+                    .finish(),
+            );
+        }
 
         (label_row.finish(), buttons_row.finish())
     }
@@ -2346,31 +2344,30 @@ impl CodePageWidget {
             .with_spacing(8.)
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        if is_failed
-            && let Some(server_handle) = server_model.cloned() {
-                let server_for_action = server_handle.clone();
-                let restart_button = ui_builder
-                    .button(ButtonVariant::Secondary, mouse_states.restart)
-                    .with_style(UiComponentStyles {
-                        font_size: Some(12.),
-                        ..Default::default()
-                    })
-                    .with_hovered_styles(UiComponentStyles {
-                        background: Some(theme.surface_3().into()),
-                        ..Default::default()
-                    })
-                    .with_text_label("Restart server".to_owned())
-                    .build()
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(CodeSettingsPageAction::RestartLspServer {
-                            server: server_for_action.clone(),
-                        });
-                    })
-                    .finish();
+        if is_failed && let Some(server_handle) = server_model.cloned() {
+            let server_for_action = server_handle.clone();
+            let restart_button = ui_builder
+                .button(ButtonVariant::Secondary, mouse_states.restart)
+                .with_style(UiComponentStyles {
+                    font_size: Some(12.),
+                    ..Default::default()
+                })
+                .with_hovered_styles(UiComponentStyles {
+                    background: Some(theme.surface_3().into()),
+                    ..Default::default()
+                })
+                .with_text_label("Restart server".to_owned())
+                .build()
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeSettingsPageAction::RestartLspServer {
+                        server: server_for_action.clone(),
+                    });
+                })
+                .finish();
 
-                right_content.add_child(restart_button);
-            }
+            right_content.add_child(restart_button);
+        }
 
         // Show "View logs" when the server has been started (Available, Starting/Busy, or Failed)
         #[cfg(not(target_family = "wasm"))]

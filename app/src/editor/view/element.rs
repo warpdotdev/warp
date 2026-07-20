@@ -478,15 +478,16 @@ impl EditorElement {
 
         let mut state_guard = self.mouse_state.lock().expect("mouse state lock");
         if let Some(state) = &mut *state_guard
-            && state.user_dismissed {
-                if (state.hover_point - position).length() < COMMAND_X_RAY_HOVER_THRESHOLD_PX {
-                    // Early exit if some user action has caused the x-ray tooltip to be dismissed
-                    // and the mouse hasn't moved.
-                    return false;
-                } else {
-                    return self.reset_x_ray(&mut state_guard, Some(position), ctx);
-                }
+            && state.user_dismissed
+        {
+            if (state.hover_point - position).length() < COMMAND_X_RAY_HOVER_THRESHOLD_PX {
+                // Early exit if some user action has caused the x-ray tooltip to be dismissed
+                // and the mouse hasn't moved.
+                return false;
+            } else {
+                return self.reset_x_ray(&mut state_guard, Some(position), ctx);
             }
+        }
 
         if !paint.rect.contains_point(position) {
             // Mouse is outside of the editor, so clear any pending x-ray and exit early
@@ -857,23 +858,23 @@ impl EditorElement {
             if !is_local
                 && let Some(drawable_selections_data) =
                     remote_selections_data.get_mut(&cursor.replica_id)
-                {
-                    // Offset for avatar's x origin is calculated based on avatar's size, border and cursor width.
-                    // We include half of the cursor's width to ensure the avatar is centered with the cursor's center
-                    // and not just the cursor's x origin.
-                    let avatar_size = view_snapshot.cursor_avatar_size() + 2.;
-                    let avatar_offset = avatar_size / 2. - cursor_width / 2.;
-                    let avatar_origin = vec2f(
-                        cursor.origin.x() - avatar_offset,
-                        cursor.origin.y() - cursor_height,
-                    );
-                    // New layer is started so avatars are rendered over text and prompt
-                    ctx.scene.start_layer(warpui::ClipBounds::None);
-                    drawable_selections_data
-                        .avatar
-                        .paint(avatar_origin, ctx, app);
-                    ctx.scene.stop_layer();
-                }
+            {
+                // Offset for avatar's x origin is calculated based on avatar's size, border and cursor width.
+                // We include half of the cursor's width to ensure the avatar is centered with the cursor's center
+                // and not just the cursor's x origin.
+                let avatar_size = view_snapshot.cursor_avatar_size() + 2.;
+                let avatar_offset = avatar_size / 2. - cursor_width / 2.;
+                let avatar_origin = vec2f(
+                    cursor.origin.x() - avatar_offset,
+                    cursor.origin.y() - cursor_height,
+                );
+                // New layer is started so avatars are rendered over text and prompt
+                ctx.scene.start_layer(warpui::ClipBounds::None);
+                drawable_selections_data
+                    .avatar
+                    .paint(avatar_origin, ctx, app);
+                ctx.scene.stop_layer();
+            }
 
             if let Some(element) = voice_input_icon {
                 let icon_size = view_snapshot.voice_input_icon_size();
@@ -1170,9 +1171,9 @@ impl EditorElement {
                                 && let Some(end) = layout
                                     .frame_layouts
                                     .to_soft_wrap_point(end.point, end.clamp_direction)
-                                {
-                                    visual_range = start..end;
-                                }
+                            {
+                                visual_range = start..end;
+                            }
                         }
                     }
 
@@ -1327,26 +1328,26 @@ impl EditorElement {
             if paint_autosuggestion_here
                 && let Some(suggestion_line) =
                     layout.placeholder_suggestion_text_line_layouts.first()
-                {
-                    let line_origin = line_origin + vec2f(line.width, 0.);
+            {
+                let line_origin = line_origin + vec2f(line.width, 0.);
 
-                    suggestion_line.paint_with_baseline_position(
-                        RectF::from_points(
-                            line_origin,
-                            self.bounds()
-                                .expect("layout() should have been called before paint()")
-                                .lower_right(),
-                        ),
-                        &Default::default(),
-                        self.text_colors.hint_color.into(),
-                        ctx.font_cache,
-                        ctx.scene,
-                        &baseline_position_fn,
-                    );
-                    if let Some(pos) = last_autosuggestion_glyph_position {
-                        *pos = line_origin + vec2f(suggestion_line.width, 0.);
-                    }
+                suggestion_line.paint_with_baseline_position(
+                    RectF::from_points(
+                        line_origin,
+                        self.bounds()
+                            .expect("layout() should have been called before paint()")
+                            .lower_right(),
+                    ),
+                    &Default::default(),
+                    self.text_colors.hint_color.into(),
+                    ctx.font_cache,
+                    ctx.scene,
+                    &baseline_position_fn,
+                );
+                if let Some(pos) = last_autosuggestion_glyph_position {
+                    *pos = line_origin + vec2f(suggestion_line.width, 0.);
                 }
+            }
         }
     }
 
@@ -2071,30 +2072,37 @@ impl Element for EditorElement {
         // These icons have tooltips in overlay layers, so they need to be dispatched before checking event.at_z_index below.
         // This is because event.at_z_index will filter the event due to the overlay layer above.
         if let Some(icon) = &mut self.autosuggestion_shortcut_icon
-            && icon.bounds().is_some() && icon.dispatch_event(event, ctx, app) {
-                return true;
-            }
+            && icon.bounds().is_some()
+            && icon.dispatch_event(event, ctx, app)
+        {
+            return true;
+        }
 
         if let Some(ignore_icon) = &mut self.autosuggestion_ignore_icon
-            && ignore_icon.bounds().is_some() && ignore_icon.dispatch_event(event, ctx, app) {
-                return true;
-            }
+            && ignore_icon.bounds().is_some()
+            && ignore_icon.dispatch_event(event, ctx, app)
+        {
+            return true;
+        }
 
         // Since editor decorator elements may be clickable, we need to prioritize dispatching events from them.
         if let Some(top_section) = &mut self.editor_decorator_elements.top_section
-            && top_section.dispatch_event(event, ctx, app) {
-                return true;
-            }
+            && top_section.dispatch_event(event, ctx, app)
+        {
+            return true;
+        }
 
         if let Some(left_notch) = &mut self.editor_decorator_elements.left_notch
-            && left_notch.dispatch_event(event, ctx, app) {
-                return true;
-            }
+            && left_notch.dispatch_event(event, ctx, app)
+        {
+            return true;
+        }
 
         if let Some(right_notch) = &mut self.editor_decorator_elements.right_notch
-            && right_notch.dispatch_event(event, ctx, app) {
-                return true;
-            }
+            && right_notch.dispatch_event(event, ctx, app)
+        {
+            return true;
+        }
 
         let Some(event_at_z_index) = event.at_z_index(z_index, ctx) else {
             return false;
@@ -2119,25 +2127,28 @@ impl Element for EditorElement {
                 .top_section
                 .as_mut()
                 .filter(|n| n.z_index().is_some())
-                && top_section.dispatch_event(event, ctx, app) {
-                    return true;
-                }
+                && top_section.dispatch_event(event, ctx, app)
+            {
+                return true;
+            }
             if let Some(left_notch) = self
                 .editor_decorator_elements
                 .left_notch
                 .as_mut()
                 .filter(|n| n.z_index().is_some())
-                && left_notch.dispatch_event(event, ctx, app) {
-                    return true;
-                }
+                && left_notch.dispatch_event(event, ctx, app)
+            {
+                return true;
+            }
             if let Some(right_notch) = self
                 .editor_decorator_elements
                 .right_notch
                 .as_mut()
                 .filter(|n| n.z_index().is_some())
-                && right_notch.dispatch_event(event, ctx, app) {
-                    return true;
-                }
+                && right_notch.dispatch_event(event, ctx, app)
+            {
+                return true;
+            }
         }
 
         match event_at_z_index {

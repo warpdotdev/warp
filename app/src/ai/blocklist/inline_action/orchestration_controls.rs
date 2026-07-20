@@ -32,12 +32,11 @@ use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::ai::orchestration::{
-    AUTH_SECRET_INHERIT_LABEL, AUTH_SECRET_INHERIT_LABEL, OptionBadge, OptionBadge, OptionFooter,
-    OptionFooter, OptionRow, OptionRow, OptionSnapshot, OptionSnapshot, OptionSourceStatus,
-    OptionSourceStatus, api_key_snapshot, api_key_snapshot, build_runner_snapshot,
-    environment_snapshot, environment_snapshot, harness_snapshot, harness_snapshot, host_snapshot,
-    host_snapshot, model_snapshot, model_snapshot, persist_auth_secret_selection,
-    persist_auth_secret_selection,
+    AUTH_SECRET_INHERIT_LABEL, OptionBadge, OptionBadge, OptionFooter, OptionFooter, OptionRow,
+    OptionRow, OptionSnapshot, OptionSnapshot, OptionSourceStatus, OptionSourceStatus,
+    api_key_snapshot, api_key_snapshot, build_runner_snapshot, environment_snapshot,
+    environment_snapshot, harness_snapshot, harness_snapshot, host_snapshot, host_snapshot,
+    model_snapshot, model_snapshot, persist_auth_secret_selection, persist_auth_secret_selection,
 };
 pub use crate::ai::orchestration::{
     AuthSecretSelection, ORCHESTRATION_WARP_WORKER_HOST, ORCHESTRATION_WARP_WORKER_HOST,
@@ -723,10 +722,12 @@ pub fn apply_harness_change<A: OrchestrationControlAction, V: View>(
     orchestration_edit_state.apply_harness_change(new_harness_type, fallback_base_model_id, ctx);
     let state = &orchestration_edit_state.orchestration_config_state;
     let is_local = !state.execution_mode.is_remote();
-    if is_local && state.harness_type != new_harness_type
-        && let Some(handle) = &handles.harness_picker {
-            populate_harness_picker(handle, &state.harness_type, true, ctx);
-        }
+    if is_local
+        && state.harness_type != new_harness_type
+        && let Some(handle) = &handles.harness_picker
+    {
+        populate_harness_picker(handle, &state.harness_type, true, ctx);
+    }
     if let Some(handle) = &handles.model_picker {
         populate_model_picker_for_harness(
             handle,

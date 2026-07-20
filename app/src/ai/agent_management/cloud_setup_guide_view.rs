@@ -695,15 +695,16 @@ fn tokens_to_highlight_ranges(
 
     // Handle slash commands: if code starts with '/', highlight the command prefix in magenta
     if code.starts_with('/')
-        && let Some(space_idx) = code.find(' ') {
-            let color = AnsiColorIdentifier::Magenta.to_ansi_color(terminal_colors);
-            highlights.push(HighlightedRange {
-                highlight: Highlight::new()
-                    .with_text_style(TextStyle::new().with_foreground_color(color.into())),
-                highlight_indices: (0..space_idx).collect(),
-            });
-            return highlights;
-        }
+        && let Some(space_idx) = code.find(' ')
+    {
+        let color = AnsiColorIdentifier::Magenta.to_ansi_color(terminal_colors);
+        highlights.push(HighlightedRange {
+            highlight: Highlight::new()
+                .with_text_style(TextStyle::new().with_foreground_color(color.into())),
+            highlight_indices: (0..space_idx).collect(),
+        });
+        return highlights;
+    }
 
     // Highlight commands in the code block (converting bytes to char indexes as we go).
     let mut char_counter = CharCounter::new(code);

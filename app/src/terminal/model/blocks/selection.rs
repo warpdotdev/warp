@@ -1000,14 +1000,12 @@ impl BlockList {
                             if let Some(active_window_id) = app.windows().active_window()
                                 && let Some(ssh_block) = app
                                     .view_with_id::<WarpifySuccessBlock>(active_window_id, *view_id)
-                                {
-                                    let warpify_success_block = app.view(&ssh_block);
-                                    if let Some(selected_text) =
-                                        warpify_success_block.selected_text()
-                                    {
-                                        selected_texts.push(selected_text);
-                                    }
+                            {
+                                let warpify_success_block = app.view(&ssh_block);
+                                if let Some(selected_text) = warpify_success_block.selected_text() {
+                                    selected_texts.push(selected_text);
                                 }
+                            }
                         }
                         BlockHeightItem::Gap(_)
                         | BlockHeightItem::RestoredBlockSeparator { .. }
@@ -1205,42 +1203,44 @@ impl BlockList {
                 mem::swap(&mut start, &mut end);
             }
             if start.in_same_block_and_grid(&active_block_location)
-                && let Some(selection) = self.selection.as_mut() {
-                    // If the start of the selection is at the first row of the grid, clamp the
-                    // selection to the first point in the grid so that that a previous grid
-                    // (which wasn't previously selected) is not selected.
-                    if start.get().row == 0 {
-                        selection.start_anchor().point.column = 0;
-                    } else {
-                        selection.start_anchor().point.row = max(
-                            selection.start_anchor().point.row - 1.into_lines(),
-                            Lines::zero(),
-                        );
-                    }
-                }
-
-            if end.in_same_block_and_grid(&active_block_location)
-                && let Some(mut selection) = self.selection.take() {
-                    selection.end_anchor().point.row = max(
-                        selection.end_anchor().point.row - 1.into_lines(),
+                && let Some(selection) = self.selection.as_mut()
+            {
+                // If the start of the selection is at the first row of the grid, clamp the
+                // selection to the first point in the grid so that that a previous grid
+                // (which wasn't previously selected) is not selected.
+                if start.get().row == 0 {
+                    selection.start_anchor().point.column = 0;
+                } else {
+                    selection.start_anchor().point.row = max(
+                        selection.start_anchor().point.row - 1.into_lines(),
                         Lines::zero(),
                     );
+                }
+            }
 
-                    // If the selection is at the first row in the grid, clear the selection if
-                    // the start was already truncated by linefeed (since the selection contents
-                    // have been truncated away entirely). If the start was not truncated by
-                    // linefeed already, this means the start is in a prior block, so the set
-                    // the end of the selection to be at the last column of the previous block
-                    // grid.
-                    if end.get().row == 0 {
-                        if !start.in_same_block_and_grid(&end) {
-                            selection.end_anchor().point.column = self.size.columns() - 1;
-                            self.set_selection(selection);
-                        }
-                    } else {
+            if end.in_same_block_and_grid(&active_block_location)
+                && let Some(mut selection) = self.selection.take()
+            {
+                selection.end_anchor().point.row = max(
+                    selection.end_anchor().point.row - 1.into_lines(),
+                    Lines::zero(),
+                );
+
+                // If the selection is at the first row in the grid, clear the selection if
+                // the start was already truncated by linefeed (since the selection contents
+                // have been truncated away entirely). If the start was not truncated by
+                // linefeed already, this means the start is in a prior block, so the set
+                // the end of the selection to be at the last column of the previous block
+                // grid.
+                if end.get().row == 0 {
+                    if !start.in_same_block_and_grid(&end) {
+                        selection.end_anchor().point.column = self.size.columns() - 1;
                         self.set_selection(selection);
                     }
+                } else {
+                    self.set_selection(selection);
                 }
+            }
         }
     }
 
@@ -1336,13 +1336,13 @@ impl BlockList {
                     }
                     if let Some(smart_select_override) = &block_list_selection.smart_select_override
                         && start_grid_point.in_same_block_and_grid(smart_select_override.start())
-                            && start_grid_point.in_same_block_and_grid(smart_select_override.end())
-                        {
-                            selection.set_smart_select_override(
-                                *smart_select_override.start().get()
-                                    ..=*smart_select_override.end().get(),
-                            );
-                        }
+                        && start_grid_point.in_same_block_and_grid(smart_select_override.end())
+                    {
+                        selection.set_smart_select_override(
+                            *smart_select_override.start().get()
+                                ..=*smart_select_override.end().get(),
+                        );
+                    }
                     selection.update(*end_grid_point.get(), end.side);
 
                     let grid = self.grid_at_location(&start_grid_point);
@@ -1372,12 +1372,12 @@ impl BlockList {
                             &block_list_selection.smart_select_override
                             && start_grid_point
                                 .in_same_block_and_grid(smart_select_override.start())
-                            {
-                                selection.set_smart_select_override(
-                                    *smart_select_override.start().get()
-                                        ..=*smart_select_override.end().get(),
-                                );
-                            }
+                        {
+                            selection.set_smart_select_override(
+                                *smart_select_override.start().get()
+                                    ..=*smart_select_override.end().get(),
+                            );
+                        }
 
                         let grid = self.grid_at_location(&start_grid_point);
 
@@ -1410,12 +1410,13 @@ impl BlockList {
 
                         if let Some(smart_select_override) =
                             &block_list_selection.smart_select_override
-                            && end_grid_point.in_same_block_and_grid(smart_select_override.end()) {
-                                selection.set_smart_select_override(
-                                    *smart_select_override.start().get()
-                                        ..=*smart_select_override.end().get(),
-                                );
-                            }
+                            && end_grid_point.in_same_block_and_grid(smart_select_override.end())
+                        {
+                            selection.set_smart_select_override(
+                                *smart_select_override.start().get()
+                                    ..=*smart_select_override.end().get(),
+                            );
+                        }
 
                         let grid = self.grid_at_location(&end_grid_point);
                         let selection_range =

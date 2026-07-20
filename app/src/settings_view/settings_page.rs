@@ -1625,16 +1625,17 @@ impl<V: warpui::View> PageType<V> {
             FilteredPageType::Monolith { widget, title, .. } => {
                 let mut page = Empty::new().finish();
                 if let Some(widget) = widget
-                    && widget.should_render(app) {
-                        if let Some(title) = title {
-                            let col = Flex::column()
-                                .with_child(render_page_title(title, HEADER_FONT_SIZE, appearance))
-                                .with_child(widget.render_widget(view, false, appearance, app));
-                            page = col.finish();
-                        } else {
-                            page = widget.render_widget(view, false, appearance, app);
-                        }
+                    && widget.should_render(app)
+                {
+                    if let Some(title) = title {
+                        let col = Flex::column()
+                            .with_child(render_page_title(title, HEADER_FONT_SIZE, appearance))
+                            .with_child(widget.render_widget(view, false, appearance, app));
+                        page = col.finish();
+                    } else {
+                        page = widget.render_widget(view, false, appearance, app);
                     }
+                }
                 page
             }
             FilteredPageType::Uncategorized {

@@ -120,9 +120,10 @@ impl TuiText {
             // `split` always yields at least one part; parts after the first
             // are each preceded by a newline, i.e. a completed line.
             if let Some(first) = parts.next()
-                && !first.is_empty() {
-                    current_line.push(Span::styled(first, *style));
-                }
+                && !first.is_empty()
+            {
+                current_line.push(Span::styled(first, *style));
+            }
             for part in parts {
                 lines.push(Line::from(mem::take(&mut current_line)));
                 if !part.is_empty() {
@@ -143,9 +144,10 @@ impl TuiText {
         for (content, style) in &self.spans {
             let mut parts = content.split('\n');
             if let Some(first) = parts.next()
-                && !first.is_empty() {
-                    current_line.push((first.to_owned(), *style));
-                }
+                && !first.is_empty()
+            {
+                current_line.push((first.to_owned(), *style));
+            }
             for part in parts {
                 source_lines.push(mem::take(&mut current_line));
                 if !part.is_empty() {

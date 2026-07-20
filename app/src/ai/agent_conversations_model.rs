@@ -1449,29 +1449,28 @@ impl AgentConversationsModel {
         }
 
         if let Some(conversation_id) = entry.identity.local_conversation_id
-            && active_views_model.is_conversation_open(conversation_id, app) {
-                if let Some(nav_data) = self
-                    .conversations
-                    .get(&conversation_id)
-                    .map(|metadata| &metadata.nav_data)
-                {
-                    return Some(WorkspaceAction::RestoreOrNavigateToConversation {
-                        conversation_id,
-                        window_id: nav_data.window_id,
-                        pane_view_locator: nav_data.pane_view_locator,
-                        terminal_view_id: nav_data.terminal_view_id,
-                        restore_layout,
-                    });
-                }
-
-                if let Some(terminal_view_id) =
-                    active_views_model.get_terminal_view_id_for_conversation(conversation_id, app)
-                {
-                    return Some(WorkspaceAction::FocusTerminalViewInWorkspace {
-                        terminal_view_id,
-                    });
-                }
+            && active_views_model.is_conversation_open(conversation_id, app)
+        {
+            if let Some(nav_data) = self
+                .conversations
+                .get(&conversation_id)
+                .map(|metadata| &metadata.nav_data)
+            {
+                return Some(WorkspaceAction::RestoreOrNavigateToConversation {
+                    conversation_id,
+                    window_id: nav_data.window_id,
+                    pane_view_locator: nav_data.pane_view_locator,
+                    terminal_view_id: nav_data.terminal_view_id,
+                    restore_layout,
+                });
             }
+
+            if let Some(terminal_view_id) =
+                active_views_model.get_terminal_view_id_for_conversation(conversation_id, app)
+            {
+                return Some(WorkspaceAction::FocusTerminalViewInWorkspace { terminal_view_id });
+            }
+        }
 
         if let Some(conversation_id) = entry.identity.local_conversation_id {
             let nav_data = self
@@ -1513,9 +1512,10 @@ impl AgentConversationsModel {
                             .map(ToString::to_string)
                     })
                     .flatten()
-            }) {
-                return Some(session_link);
-            }
+            })
+        {
+            return Some(session_link);
+        }
 
         entry
             .identity

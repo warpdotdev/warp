@@ -1349,34 +1349,35 @@ impl<A: Action + Clone> MenuItemFields<A> {
 
             // Render tooltip if present and hovered
             if let Some(tooltip_text) = &self.tooltip
-                && state.is_hovered() {
-                    let tooltip_element = appearance
-                        .ui_builder()
-                        .tool_tip(tooltip_text.clone())
-                        .build()
-                        .finish();
-                    let positioning = match self.tooltip_position {
-                        MenuTooltipPosition::Right => OffsetPositioning::offset_from_parent(
-                            vec2f(4., 0.),
-                            ParentOffsetBounds::WindowByPosition,
-                            ParentAnchor::MiddleRight,
-                            ChildAnchor::MiddleLeft,
-                        ),
-                        MenuTooltipPosition::Above => OffsetPositioning::offset_from_parent(
-                            vec2f(0., -4.),
-                            ParentOffsetBounds::WindowByPosition,
-                            ParentAnchor::TopMiddle,
-                            ChildAnchor::BottomMiddle,
-                        ),
-                    };
-                    let mut stack = Stack::new();
-                    stack.add_child(container_element);
-                    // Use add_positioned_child instead of add_positioned_overlay_child
-                    // to prevent the tooltip from intercepting mouse events and causing
-                    // hover state flickering on the parent menu item.
-                    stack.add_positioned_child(tooltip_element, positioning);
-                    return stack.finish();
-                }
+                && state.is_hovered()
+            {
+                let tooltip_element = appearance
+                    .ui_builder()
+                    .tool_tip(tooltip_text.clone())
+                    .build()
+                    .finish();
+                let positioning = match self.tooltip_position {
+                    MenuTooltipPosition::Right => OffsetPositioning::offset_from_parent(
+                        vec2f(4., 0.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::MiddleRight,
+                        ChildAnchor::MiddleLeft,
+                    ),
+                    MenuTooltipPosition::Above => OffsetPositioning::offset_from_parent(
+                        vec2f(0., -4.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomMiddle,
+                    ),
+                };
+                let mut stack = Stack::new();
+                stack.add_child(container_element);
+                // Use add_positioned_child instead of add_positioned_overlay_child
+                // to prevent the tooltip from intercepting mouse events and causing
+                // hover state flickering on the parent menu item.
+                stack.add_positioned_child(tooltip_element, positioning);
+                return stack.finish();
+            }
 
             container_element
         });
@@ -1947,13 +1948,13 @@ impl<A: Action + Clone> SubMenu<A> {
         if matches!(
             selection_source,
             MenuSelectionSource::KeyboardOrProgrammatic
-        )
-            && let MenuVariant::Scrollable(scroll_state) = &self.menu_variant {
-                scroll_state.scroll_to_position(ScrollTarget {
-                    position_id: Self::save_position_id(self.depth),
-                    mode: ScrollToPositionMode::FullyIntoView,
-                });
-            }
+        ) && let MenuVariant::Scrollable(scroll_state) = &self.menu_variant
+        {
+            scroll_state.scroll_to_position(ScrollTarget {
+                position_id: Self::save_position_id(self.depth),
+                mode: ScrollToPositionMode::FullyIntoView,
+            });
+        }
         ctx.emit(Event::ItemSelected);
         ctx.notify();
     }
@@ -2680,12 +2681,13 @@ impl<A: Action + Clone> TypedActionView for Menu<A> {
 
     fn handle_action(&mut self, action: &MenuAction, ctx: &mut ViewContext<Self>) {
         if let MenuAction::HoverSubmenuLeafNode { position, .. } = action
-            && let Some(st) = &mut self.safe_triangle {
-                if st.should_suppress_hover(*position) {
-                    return;
-                }
-                st.update_position(*position);
+            && let Some(st) = &mut self.safe_triangle
+        {
+            if st.should_suppress_hover(*position) {
+                return;
             }
+            st.update_position(*position);
+        }
 
         self.menu
             .handle_action(action, self.dispatch_item_actions, ctx)

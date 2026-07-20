@@ -293,15 +293,11 @@ impl ModelSelector {
                         m.id == saved.model_id && m.reasoning_level == saved.reasoning_level
                     })
                 })
-            {
-                ambient_model.update(ctx, |model, ctx| {
-                    model.set_harness_model_selection(
-                        Some(saved.model_id),
-                        saved.reasoning_level,
-                        ctx,
-                    );
-                });
-            }
+        {
+            ambient_model.update(ctx, |model, ctx| {
+                model.set_harness_model_selection(Some(saved.model_id), saved.reasoning_level, ctx);
+            });
+        }
     }
 
     fn active_harness(&self, app: &AppContext) -> Option<Harness> {
@@ -671,19 +667,20 @@ impl TypedActionView for ModelSelector {
             } => {
                 let is_default = model_id.is_empty();
                 if let Some(ambient_agent_model) = self.ambient_agent_model.clone()
-                    && ambient_agent_model.as_ref(ctx).selected_harness() == *harness {
-                        ambient_agent_model.update(ctx, |model, ctx| {
-                            model.set_harness_model_selection(
-                                (!is_default).then(|| model_id.clone()),
-                                if is_default {
-                                    None
-                                } else {
-                                    reasoning_level.clone()
-                                },
-                                ctx,
-                            );
-                        });
-                    }
+                    && ambient_agent_model.as_ref(ctx).selected_harness() == *harness
+                {
+                    ambient_agent_model.update(ctx, |model, ctx| {
+                        model.set_harness_model_selection(
+                            (!is_default).then(|| model_id.clone()),
+                            if is_default {
+                                None
+                            } else {
+                                reasoning_level.clone()
+                            },
+                            ctx,
+                        );
+                    });
+                }
                 // Persist the selection per-harness to settings for next time.
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.persist_harness_model_selection(

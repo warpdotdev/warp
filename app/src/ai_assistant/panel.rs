@@ -456,9 +456,10 @@ impl AIAssistantPanelView {
                     .input_suggestions_view
                     .as_ref(ctx)
                     .get_selected_item_text()
-                    && selected_text == self.editor.as_ref(ctx).buffer_text(ctx) {
-                        return;
-                    }
+                    && selected_text == self.editor.as_ref(ctx).buffer_text(ctx)
+                {
+                    return;
+                }
                 self.input_suggestions_mode = InputSuggestionsMode::Closed;
             }
             EditorEvent::CmdUpOnFirstRow => {

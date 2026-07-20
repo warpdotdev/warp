@@ -58,9 +58,10 @@ impl TelemetryExt for warpui::telemetry::Event {
                 // redaction is a defence-in-depth measure for data leaving the
                 // device. See `secret_redaction.rs` for details.
                 if self.contains_ugc
-                    && let Some(value) = value.as_mut() {
-                        redact_secrets_in_value(value);
-                    }
+                    && let Some(value) = value.as_mut()
+                {
+                    redact_secrets_in_value(value);
+                }
                 form_rudder_track_message(
                     user_id.map(|uid| UserUid::new(uid.as_str())),
                     anonymous_id,

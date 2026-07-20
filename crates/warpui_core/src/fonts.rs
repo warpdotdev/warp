@@ -317,9 +317,9 @@ impl Cache {
                         available_system_fonts.iter_mut().find(|(family_id, data)| {
                             data.family_name == font_family && family_id.is_none()
                         })
-                    {
-                        entry.0 = Some(id);
-                    }
+                {
+                    entry.0 = Some(id);
+                }
                 Ok(id)
             }
             None => self.load_system_font(font_family),

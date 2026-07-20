@@ -375,14 +375,15 @@ where
 {
     let window_id = ctx.window_id();
     if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
-        && let Some(workspace) = workspaces.into_iter().next() {
-            workspace.update(ctx, |workspace, ctx| {
-                let pane_group = workspace.active_tab_pane_group();
-                pane_group.update(ctx, |pane_group, ctx| {
-                    if let Some(active_terminal) = pane_group.active_session_view(ctx) {
-                        active_terminal.update(ctx, func);
-                    }
-                });
+        && let Some(workspace) = workspaces.into_iter().next()
+    {
+        workspace.update(ctx, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group();
+            pane_group.update(ctx, |pane_group, ctx| {
+                if let Some(active_terminal) = pane_group.active_session_view(ctx) {
+                    active_terminal.update(ctx, func);
+                }
             });
-        }
+        });
+    }
 }

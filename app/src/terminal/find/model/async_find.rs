@@ -772,14 +772,14 @@ impl AsyncFindController {
         if let (Some(current_config), Some(new_query)) =
             (&self.current_config, options.query.as_ref())
             && !options.is_regex_enabled
-                && !current_config.is_regex_enabled
-                && options.is_case_sensitive == current_config.is_case_sensitive
-                && is_query_refinement(&current_config.query, new_query)
-            {
-                // New query is a refinement of the old query — filter existing results.
-                self.filter_results_for_refinement(options, block_sort_direction, ctx);
-                return;
-            }
+            && !current_config.is_regex_enabled
+            && options.is_case_sensitive == current_config.is_case_sensitive
+            && is_query_refinement(&current_config.query, new_query)
+        {
+            // New query is a refinement of the old query — filter existing results.
+            self.filter_results_for_refinement(options, block_sort_direction, ctx);
+            return;
+        }
 
         // Create new config.
         let Some(config) = AsyncFindConfig::from_options(options, block_sort_direction) else {
@@ -929,29 +929,30 @@ impl AsyncFindController {
             } => {
                 // Scan AI block on main thread.
                 if let Some(view) = self.rich_content_views.get(&view_id)
-                    && let Some(config) = &self.current_config {
-                        let options = FindOptions {
-                            query: Some(config.query.clone()),
-                            is_case_sensitive: config.is_case_sensitive,
-                            is_regex_enabled: config.is_regex_enabled,
-                            blocks_to_include_in_results: None,
-                        };
-                        let start = instant::Instant::now();
-                        let match_ids = view.run_find(&options, ctx);
-                        let elapsed = start.elapsed();
-                        log::trace!(
-                            "[async_find] AI block scan took {}ms for view_id={:?}",
-                            elapsed.as_millis(),
-                            view_id
-                        );
-                        if !match_ids.is_empty() {
-                            self.block_results.ai_matches.insert(view_id, match_ids);
-                            self.block_results
-                                .ai_total_indices
-                                .insert(view_id, total_index);
-                            self.clamp_focused_match_index();
-                        }
+                    && let Some(config) = &self.current_config
+                {
+                    let options = FindOptions {
+                        query: Some(config.query.clone()),
+                        is_case_sensitive: config.is_case_sensitive,
+                        is_regex_enabled: config.is_regex_enabled,
+                        blocks_to_include_in_results: None,
+                    };
+                    let start = instant::Instant::now();
+                    let match_ids = view.run_find(&options, ctx);
+                    let elapsed = start.elapsed();
+                    log::trace!(
+                        "[async_find] AI block scan took {}ms for view_id={:?}",
+                        elapsed.as_millis(),
+                        view_id
+                    );
+                    if !match_ids.is_empty() {
+                        self.block_results.ai_matches.insert(view_id, match_ids);
+                        self.block_results
+                            .ai_total_indices
+                            .insert(view_id, total_index);
+                        self.clamp_focused_match_index();
                     }
+                }
             }
             FindTaskMessage::Done => {
                 self.status = AsyncFindStatus::Complete;
@@ -1262,9 +1263,10 @@ impl AsyncFindController {
             result_rx,
             move |me, msg, ctx| {
                 if let Some(controller) = &mut me.async_find_controller
-                    && controller.generation == generation {
-                        controller.process_message(msg, ctx);
-                    }
+                    && controller.generation == generation
+                {
+                    controller.process_message(msg, ctx);
+                }
             },
             |_me, _ctx| {},
         );

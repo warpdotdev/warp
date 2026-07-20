@@ -870,9 +870,10 @@ impl BlocklistAIHistoryModel {
             if let Some(old_token) = old_token
                 && let Entry::Occupied(entry) =
                     self.server_token_to_conversation_id.entry(old_token)
-                    && *entry.get() == conversation_id {
-                        entry.remove();
-                    }
+                && *entry.get() == conversation_id
+            {
+                entry.remove();
+            }
 
             conversation.set_server_conversation_token(token);
         }
@@ -1091,9 +1092,10 @@ impl BlocklistAIHistoryModel {
             && !self
                 .ambient_agent_terminal_surface_ids
                 .contains(&terminal_surface_id)
-            && let Some((text, start_ts)) = new_prompt {
-                self.append_session_prompt(text, start_ts);
-            }
+            && let Some((text, start_ts)) = new_prompt
+        {
+            self.append_session_prompt(text, start_ts);
+        }
         Ok(())
     }
 
@@ -1984,9 +1986,10 @@ impl BlocklistAIHistoryModel {
         time_to_first_token_ms: i64,
     ) {
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id)
-            && let Ok(exchange) = conversation.get_exchange_to_update(exchange_id) {
-                exchange.time_to_first_token_ms = Some(time_to_first_token_ms);
-            }
+            && let Ok(exchange) = conversation.get_exchange_to_update(exchange_id)
+        {
+            exchange.time_to_first_token_ms = Some(time_to_first_token_ms);
+        }
     }
 
     pub fn mark_response_stream_cancelled(
@@ -2004,12 +2007,9 @@ impl BlocklistAIHistoryModel {
                 {
                     log::warn!("Failed to mark exchange as cancelled: {e}");
                 }
-            } else if let Err(e) = conversation.mark_request_cancelled(
-                stream_id,
-                terminal_surface_id,
-                reason,
-                ctx,
-            ) {
+            } else if let Err(e) =
+                conversation.mark_request_cancelled(stream_id, terminal_surface_id, reason, ctx)
+            {
                 log::warn!("Failed to mark exchange as cancelled: {e}");
             }
         }
@@ -2035,9 +2035,10 @@ impl BlocklistAIHistoryModel {
                 recovery_pending,
                 terminal_surface_id,
                 ctx,
-            ) {
-                log::warn!("Failed to mark exchange as completed with error: {e}");
-            }
+            )
+        {
+            log::warn!("Failed to mark exchange as completed with error: {e}");
+        }
     }
 
     /// Handle clearing the blocklist for a terminal surface.
@@ -2167,17 +2168,19 @@ impl BlocklistAIHistoryModel {
                 self.agent_id_to_conversation_id.remove(&key);
             }
             if let Some(token) = conversation.server_conversation_token()
-                && self.server_token_to_conversation_id.get(token) == Some(&conversation_id) {
-                    self.server_token_to_conversation_id.remove(token);
-                }
+                && self.server_token_to_conversation_id.get(token) == Some(&conversation_id)
+            {
+                self.server_token_to_conversation_id.remove(token);
+            }
         }
         // Also clean up the token index entry that might have been installed
         // via the metadata path (no live conversation present).
         if let Some(metadata) = self.all_conversations_metadata.get(&conversation_id)
             && let Some(token) = &metadata.server_conversation_token
-                && self.server_token_to_conversation_id.get(token) == Some(&conversation_id) {
-                    self.server_token_to_conversation_id.remove(token);
-                }
+            && self.server_token_to_conversation_id.get(token) == Some(&conversation_id)
+        {
+            self.server_token_to_conversation_id.remove(token);
+        }
 
         self.all_conversations_metadata.remove(&conversation_id);
         self.conversations_by_id.remove(&conversation_id);
@@ -2550,9 +2553,10 @@ impl BlocklistAIHistoryModel {
     ) -> Option<&ServerAIConversationMetadata> {
         // Check if conversation exists in memory and has server metadata
         if let Some(conversation) = self.conversation(conversation_id)
-            && let Some(m) = conversation.server_metadata() {
-                return Some(m);
-            }
+            && let Some(m) = conversation.server_metadata()
+        {
+            return Some(m);
+        }
 
         // Fall back to conversation metadata
         if let Some(metadata) = self.get_conversation_metadata(conversation_id) {

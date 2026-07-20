@@ -1045,9 +1045,10 @@ impl Network {
     ) {
         // Skip update if nothing would change
         if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context
-            && !update.changes_cached_context(cached) {
-                return;
-            }
+            && !update.changes_cached_context(cached)
+        {
+            return;
+        }
 
         self.apply_context_update_to_cache(update.clone());
         self.send_message_to_server(UpstreamMessage::UpdateUniversalDeveloperInputContext(

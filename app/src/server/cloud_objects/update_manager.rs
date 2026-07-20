@@ -1509,19 +1509,19 @@ impl UpdateManager {
                             if matches!(
                                 fetch_single_object_option,
                                 FetchSingleObjectOption::ForceOverwrite
-                            )
-                                && let Some(object) = cloud_model.get_mut_by_uid(&uid) {
-                                    let had_conflict = object.has_conflicting_changes();
-                                    object.replace_object_with_conflict();
-                                    // If there was a conflict, `upsert_from_server_cloud_object` won't
-                                    // have emitted an update event. Do it here instead.
-                                    if had_conflict {
-                                        ctx.emit(CloudModelEvent::ObjectUpdated {
-                                            type_and_id: object.cloud_object_type_and_id(),
-                                            source: UpdateSource::Server,
-                                        });
-                                    }
+                            ) && let Some(object) = cloud_model.get_mut_by_uid(&uid)
+                            {
+                                let had_conflict = object.has_conflicting_changes();
+                                object.replace_object_with_conflict();
+                                // If there was a conflict, `upsert_from_server_cloud_object` won't
+                                // have emitted an update event. Do it here instead.
+                                if had_conflict {
+                                    ctx.emit(CloudModelEvent::ObjectUpdated {
+                                        type_and_id: object.cloud_object_type_and_id(),
+                                        source: UpdateSource::Server,
+                                    });
                                 }
+                            }
 
                             Self::save_in_memory_object_to_sqlite(
                                 me,
@@ -1573,9 +1573,10 @@ impl UpdateManager {
         let cloud_model = CloudModel::as_ref(ctx);
         if let Some(object) = cloud_model.get_by_uid(object_uid)
             && let Some(current_timestamp) = object.permissions().permissions_last_updated_ts
-                && current_timestamp >= last_updated_at {
-                    return true;
-                }
+            && current_timestamp >= last_updated_at
+        {
+            return true;
+        }
         false
     }
 
@@ -3661,9 +3662,9 @@ impl UpdateManager {
             let cloud_model = CloudModel::as_ref(ctx);
             if let Some(object) = cloud_model.get_object_of_type::<K, M>(&object_id)
                 && let Some(queue_item) = object.create_object_queue_item(entrypoint, initiated_by)
-                {
-                    sync_queue.enqueue(queue_item, ctx);
-                };
+            {
+                sync_queue.enqueue(queue_item, ctx);
+            };
         });
     }
 

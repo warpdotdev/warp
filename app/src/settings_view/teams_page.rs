@@ -2582,48 +2582,48 @@ impl TeamsWidget {
             Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
         if let Some(policy) = team.billing_metadata.tier.shared_notebooks_policy
-            && !policy.is_unlimited {
-                let mut shared_notebooks_column = Flex::column();
-                shared_notebooks_column.add_child(
-                    self.render_plan_usage_header("Shared Notebooks".into(), appearance),
-                );
-                let num_shared_notebooks = cloud_model
-                    .active_notebooks_in_space(Space::Team { team_uid: team.uid }, app)
-                    .count();
-                shared_notebooks_column.add_child(
-                    Container::new(self.render_plan_usage_text(
-                        format!("{}/{}", num_shared_notebooks, policy.limit),
-                        appearance,
-                    ))
-                    .with_margin_top(4.)
+            && !policy.is_unlimited
+        {
+            let mut shared_notebooks_column = Flex::column();
+            shared_notebooks_column
+                .add_child(self.render_plan_usage_header("Shared Notebooks".into(), appearance));
+            let num_shared_notebooks = cloud_model
+                .active_notebooks_in_space(Space::Team { team_uid: team.uid }, app)
+                .count();
+            shared_notebooks_column.add_child(
+                Container::new(self.render_plan_usage_text(
+                    format!("{}/{}", num_shared_notebooks, policy.limit),
+                    appearance,
+                ))
+                .with_margin_top(4.)
+                .finish(),
+            );
+            shared_objects_usage_row.add_child(
+                Container::new(shared_notebooks_column.finish())
+                    .with_margin_right(64.)
                     .finish(),
-                );
-                shared_objects_usage_row.add_child(
-                    Container::new(shared_notebooks_column.finish())
-                        .with_margin_right(64.)
-                        .finish(),
-                );
-            }
+            );
+        }
 
         if let Some(policy) = team.billing_metadata.tier.shared_workflows_policy
-            && !policy.is_unlimited {
-                let mut shared_workflows_column = Flex::column();
-                shared_workflows_column.add_child(
-                    self.render_plan_usage_header("Shared Workflows".into(), appearance),
-                );
-                let num_shared_workflows = cloud_model
-                    .active_workflows_in_space(Space::Team { team_uid: team.uid }, app)
-                    .count();
-                shared_workflows_column.add_child(
-                    Container::new(self.render_plan_usage_text(
-                        format!("{}/{}", num_shared_workflows, policy.limit),
-                        appearance,
-                    ))
-                    .with_margin_top(4.)
-                    .finish(),
-                );
-                shared_objects_usage_row.add_child(shared_workflows_column.finish());
-            }
+            && !policy.is_unlimited
+        {
+            let mut shared_workflows_column = Flex::column();
+            shared_workflows_column
+                .add_child(self.render_plan_usage_header("Shared Workflows".into(), appearance));
+            let num_shared_workflows = cloud_model
+                .active_workflows_in_space(Space::Team { team_uid: team.uid }, app)
+                .count();
+            shared_workflows_column.add_child(
+                Container::new(self.render_plan_usage_text(
+                    format!("{}/{}", num_shared_workflows, policy.limit),
+                    appearance,
+                ))
+                .with_margin_top(4.)
+                .finish(),
+            );
+            shared_objects_usage_row.add_child(shared_workflows_column.finish());
+        }
 
         section.add_child(
             Container::new(shared_objects_usage_row.finish())
@@ -3646,8 +3646,6 @@ impl TeamsWidget {
 
                 let list_element =
                     Container::new(row.finish()).with_uniform_padding(SCROLLABLE_LIST_ITEM_PADDING);
-
-                
 
                 if idx % 2 == 0 {
                     list_element

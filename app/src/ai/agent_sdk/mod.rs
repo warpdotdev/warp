@@ -807,9 +807,10 @@ impl AgentDriverRunner {
         .await;
 
         if let Err(ref err) = result
-            && let Some(task_id) = task_id {
-                driver::report_driver_error(task_id, err, &server_api).await;
-            }
+            && let Some(task_id) = task_id
+        {
+            driver::report_driver_error(task_id, err, &server_api).await;
+        }
         result
     }
 

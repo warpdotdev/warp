@@ -58,15 +58,16 @@ where
     T: DeserializeOwned,
 {
     if let Some(file_name) = get_file_name(item)
-        && is_config_file(&file_name) {
-            let parsed = from_yaml::<T>(item.path().into());
-            match parsed {
-                Ok(parsed) => return Some(post_deserialize_fn(file_name, parsed)),
-                Err(e) => {
-                    log::warn!("Failed to parse config file at {file_name:?} with error: {e:?}")
-                }
+        && is_config_file(&file_name)
+    {
+        let parsed = from_yaml::<T>(item.path().into());
+        match parsed {
+            Ok(parsed) => return Some(post_deserialize_fn(file_name, parsed)),
+            Err(e) => {
+                log::warn!("Failed to parse config file at {file_name:?} with error: {e:?}")
             }
         }
+    }
     None
 }
 
@@ -90,22 +91,23 @@ where
     T: DeserializeOwned,
 {
     if let Some(file_name) = get_file_name(item)
-        && is_config_file(&file_name) {
-            let parsed = from_multi_doc_yaml::<T>(item.path().into());
-            match parsed {
-                Ok(parsed) => {
-                    return Some(
-                        parsed
-                            .into_iter()
-                            .map(|val| post_deserialize_fn(file_name.clone(), val))
-                            .collect_vec(),
-                    );
-                }
-                Err(e) => {
-                    log::warn!("Failed to parse config file at {file_name:?} with error: {e:?}")
-                }
+        && is_config_file(&file_name)
+    {
+        let parsed = from_multi_doc_yaml::<T>(item.path().into());
+        match parsed {
+            Ok(parsed) => {
+                return Some(
+                    parsed
+                        .into_iter()
+                        .map(|val| post_deserialize_fn(file_name.clone(), val))
+                        .collect_vec(),
+                );
+            }
+            Err(e) => {
+                log::warn!("Failed to parse config file at {file_name:?} with error: {e:?}")
             }
         }
+    }
     None
 }
 

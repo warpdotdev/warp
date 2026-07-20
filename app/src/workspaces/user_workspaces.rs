@@ -906,9 +906,10 @@ impl UserWorkspaces {
                         .workspaces
                         .iter()
                         .any(|w| w.uid == current_workspace.uid)
-                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
-                            self.set_current_workspace_uid(workspace_uid, ctx);
-                        }
+                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid)
+                    {
+                        self.set_current_workspace_uid(workspace_uid, ctx);
+                    }
                 } else if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
                     self.set_current_workspace_uid(workspace_uid, ctx);
                 }

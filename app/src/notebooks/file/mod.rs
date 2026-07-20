@@ -824,10 +824,11 @@ impl FileNotebookView {
                 return;
             };
             if let Some(active_session) = handle.as_ref(ctx).session(ctx.window_id())
-                && active_session.is_local() {
-                    self.set_context(&path, active_session, ctx);
-                    ctx.unsubscribe_to_model(&handle);
-                }
+                && active_session.is_local()
+            {
+                self.set_context(&path, active_session, ctx);
+                ctx.unsubscribe_to_model(&handle);
+            }
         }
     }
 

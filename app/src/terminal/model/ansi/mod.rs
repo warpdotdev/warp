@@ -585,9 +585,10 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
     /// assumes that the hook was encoded originally.
     fn handle_decoded_hook(&mut self, hook: Result<DProtoHook, serde_json::Error>) {
         if let Ok(ref hook) = hook
-            && !self.validate_hook_session_id(hook) {
-                return;
-            }
+            && !self.validate_hook_session_id(hook)
+        {
+            return;
+        }
         match hook {
             Ok(DProtoHook::CommandFinished { value }) => self.handler.command_finished(value),
             Ok(DProtoHook::Precmd { value }) => match value {
@@ -632,9 +633,10 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
         // that might otherwise corrupt parsing of the PTY output (the same can't be said for the
         // payloads of other DCS hooks).
         if let Ok(ref hook) = hook
-            && !self.validate_hook_session_id(hook) {
-                return;
-            }
+            && !self.validate_hook_session_id(hook)
+        {
+            return;
+        }
         match hook {
             Ok(DProtoHook::InitShell { value }) => self.handler.init_shell(value),
             Ok(DProtoHook::InitSubshell { value }) => {
@@ -909,11 +911,12 @@ where
                         .collect::<Result<Vec<_>, _>>()
                         .map(|parts| parts.join(";").trim().to_owned());
                     if let Ok(body) = body
-                        && !body.is_empty() {
-                            log::info!("Received OSC 9 notification: {}", body);
-                            self.handler.pluggable_notification(None, body);
-                            return;
-                        }
+                        && !body.is_empty()
+                    {
+                        log::info!("Received OSC 9 notification: {}", body);
+                        self.handler.pluggable_notification(None, body);
+                        return;
+                    }
                 }
                 unhandled(params);
             }
@@ -921,34 +924,35 @@ where
             // Get/set Foreground, Background, Cursor colors.
             b"10" | b"11" | b"12" => {
                 if params.len() >= 2
-                    && let Some(mut dynamic_code) = parse_number(params[0]) {
-                        for param in &params[1..] {
-                            // 10 is the first dynamic color, also the foreground.
-                            let offset = dynamic_code as usize - 10;
-                            let index = color_index::FOREGROUND + offset;
+                    && let Some(mut dynamic_code) = parse_number(params[0])
+                {
+                    for param in &params[1..] {
+                        // 10 is the first dynamic color, also the foreground.
+                        let offset = dynamic_code as usize - 10;
+                        let index = color_index::FOREGROUND + offset;
 
-                            // End of setting dynamic colors.
-                            if index > color_index::CURSOR {
-                                unhandled(params);
-                                break;
-                            }
-
-                            if let Some(color) = xparse_color(param) {
-                                self.handler.set_color(index, color);
-                            } else if param == b"?" {
-                                self.handler.dynamic_color_sequence(
-                                    writer,
-                                    dynamic_code,
-                                    index,
-                                    terminator,
-                                );
-                            } else {
-                                unhandled(params);
-                            }
-                            dynamic_code += 1;
+                        // End of setting dynamic colors.
+                        if index > color_index::CURSOR {
+                            unhandled(params);
+                            break;
                         }
-                        return;
+
+                        if let Some(color) = xparse_color(param) {
+                            self.handler.set_color(index, color);
+                        } else if param == b"?" {
+                            self.handler.dynamic_color_sequence(
+                                writer,
+                                dynamic_code,
+                                index,
+                                terminator,
+                            );
+                        } else {
+                            unhandled(params);
+                        }
+                        dynamic_code += 1;
                     }
+                    return;
+                }
                 unhandled(params);
             }
 

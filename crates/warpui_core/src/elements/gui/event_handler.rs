@@ -203,12 +203,13 @@ impl EventHandler {
     ) -> bool {
         if let Some(callback) = callback.as_ref()
             && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
-                && rect.contains_point(position) {
-                    return match callback.borrow_mut()(ctx, app, position) {
-                        DispatchEventResult::PropagateToParent => false,
-                        DispatchEventResult::StopPropagation => true,
-                    };
-                }
+            && rect.contains_point(position)
+        {
+            return match callback.borrow_mut()(ctx, app, position) {
+                DispatchEventResult::PropagateToParent => false,
+                DispatchEventResult::StopPropagation => true,
+            };
+        }
         false
     }
 }
@@ -345,12 +346,13 @@ impl Element for EventHandler {
             }) => {
                 if let Some(callback) = self.scroll_wheel.as_ref()
                     && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
-                        && rect.contains_point(*position) {
-                            return match callback.borrow_mut()(ctx, app, delta, modifiers) {
-                                DispatchEventResult::PropagateToParent => false,
-                                DispatchEventResult::StopPropagation => true,
-                            };
-                        }
+                    && rect.contains_point(*position)
+                {
+                    return match callback.borrow_mut()(ctx, app, delta, modifiers) {
+                        DispatchEventResult::PropagateToParent => false,
+                        DispatchEventResult::StopPropagation => true,
+                    };
+                }
             }
             _ => {}
         }

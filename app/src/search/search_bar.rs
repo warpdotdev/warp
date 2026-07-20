@@ -186,9 +186,10 @@ impl<T: Action + Clone> SearchBarState<T> {
         // Keep searching until we find an interactable item or we've checked all items
         while attempts < len {
             if let Some(renderer) = query_result_renderers.get(current_index)
-                && !renderer.search_result.is_static_separator() {
-                    return Some(current_index);
-                }
+                && !renderer.search_result.is_static_separator()
+            {
+                return Some(current_index);
+            }
 
             current_index = direction.move_in_direction(current_index, len);
             attempts += 1;

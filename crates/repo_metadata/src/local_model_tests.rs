@@ -893,12 +893,13 @@ fn test_lazy_loaded_path_discovers_force_included_skills_and_emits_watcher_delta
                     if let RepositoryMetadataEvent::StandingQueryResultsUpdated { path, delta } =
                         event
                         && path == &workspace_path_for_event
-                            && delta.upserted_project_skills.iter().any(|content| {
-                                content.path == skill_path_for_event && !content.is_directory
-                            })
-                            && let Some(tx) = received_delta_for_event.borrow_mut().take() {
-                                let _ = tx.send(());
-                            }
+                        && delta.upserted_project_skills.iter().any(|content| {
+                            content.path == skill_path_for_event && !content.is_directory
+                        })
+                        && let Some(tx) = received_delta_for_event.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
+                    }
                 });
             });
 
@@ -976,10 +977,10 @@ fn test_index_directory_path_upgrades_lazy_loaded_non_git_path() {
                         event,
                         RepositoryMetadataEvent::RepositoryUpdated { path }
                             if path == &repo_root_for_event
-                    )
-                        && let Some(tx) = upgrade_completed_for_event.borrow_mut().take() {
-                            let _ = tx.send(());
-                        }
+                    ) && let Some(tx) = upgrade_completed_for_event.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
+                    }
                 });
             });
 
@@ -2102,9 +2103,10 @@ fn modified_external_symlink_target_upserts_lexical_project_skill() {
                                             logical_skill_path_for_event.clone(),
                                         )
                                 })
-                                && let Some(tx) = received_delta_for_event.borrow_mut().take() {
-                                    let _ = tx.send(());
-                                }
+                            && let Some(tx) = received_delta_for_event.borrow_mut().take()
+                        {
+                            let _ = tx.send(());
+                        }
                     });
                 });
 
@@ -2185,9 +2187,10 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                                         logical_skill_path_for_event.clone(),
                                     )
                             })
-                                && let Some(tx) = received_delta_for_event.borrow_mut().take() {
-                                    let _ = tx.send(());
-                                }
+                            && let Some(tx) = received_delta_for_event.borrow_mut().take()
+                        {
+                            let _ = tx.send(());
+                        }
                     });
                 });
 
@@ -2232,9 +2235,10 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                                         logical_skill_path_for_event.clone(),
                                     )
                             })
-                                && let Some(tx) = received_delta_for_event.borrow_mut().take() {
-                                    let _ = tx.send(());
-                                }
+                            && let Some(tx) = received_delta_for_event.borrow_mut().take()
+                        {
+                            let _ = tx.send(());
+                        }
                     });
                 });
                 std::fs::write(&target_skill_path, "linked skill").unwrap();
@@ -3565,9 +3569,10 @@ fn deleted_subdir_drops_its_tracked_watch() {
                 ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
                     if let RepositoryMetadataEvent::FileTreeEntryUpdated { path, .. } = event
                         && path == &root_for_event
-                            && let Some(tx) = sender.borrow_mut().take() {
-                                let _ = tx.send(());
-                            }
+                        && let Some(tx) = sender.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
+                    }
                 });
             });
 

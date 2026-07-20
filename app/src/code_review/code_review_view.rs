@@ -1013,10 +1013,11 @@ impl CodeReviewView {
         if let ReviewCommentBatchEvent::Changed {
             should_reposition_comments: true,
         } = event
-            && self.all_editors_loaded() {
-                let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
-                self.reposition_comments_in_file(&diff_mode, ctx);
-            }
+            && self.all_editors_loaded()
+        {
+            let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
+            self.reposition_comments_in_file(&diff_mode, ctx);
+        }
     }
 
     fn clear_comment_locations(
@@ -1441,9 +1442,10 @@ impl CodeReviewView {
             && let Some(pane_width) = ctx
                 .element_position_by_id(containing_pane_id.position_id())
                 .map(|rect| rect.width())
-                && let Ok(mut state) = self.ui_state_handles.sidebar_resizable_state.lock() {
-                    state.set_size(pane_width * FILE_SIDEBAR_PANE_WIDTH_PERCENTAGE);
-                }
+            && let Ok(mut state) = self.ui_state_handles.sidebar_resizable_state.lock()
+        {
+            state.set_size(pane_width * FILE_SIDEBAR_PANE_WIDTH_PERCENTAGE);
+        }
     }
 
     /// Handles file sidebar state transitions when the maximize state changes.
@@ -1459,14 +1461,15 @@ impl CodeReviewView {
                 ctx.notify();
             }
         } else if !is_maximized
-            && let Some(was_expanded) = self.file_sidebar_expanded_before_maximize.take() {
-                // Transitioning to minimized: restore saved sidebar state
-                if self.file_sidebar_expanded != was_expanded {
-                    self.file_sidebar_expanded = was_expanded;
-                    self.update_file_nav_button_tooltip(ctx);
-                    ctx.notify();
-                }
+            && let Some(was_expanded) = self.file_sidebar_expanded_before_maximize.take()
+        {
+            // Transitioning to minimized: restore saved sidebar state
+            if self.file_sidebar_expanded != was_expanded {
+                self.file_sidebar_expanded = was_expanded;
+                self.update_file_nav_button_tooltip(ctx);
+                ctx.notify();
             }
+        }
     }
 
     fn fetch_branches_and_setup_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1527,9 +1530,10 @@ impl CodeReviewView {
                 continue;
             }
             if let Some(current_name) = &current_branch_name
-                && entry.name == *current_name {
-                    continue;
-                }
+                && entry.name == *current_name
+            {
+                continue;
+            }
             let is_selected = match &current_mode {
                 DiffMode::OtherBranch(name) => name == &entry.name,
                 DiffMode::Head | DiffMode::MainBranch => false,
@@ -3012,8 +3016,6 @@ impl CodeReviewView {
             let full_file_location = repo_path.join(&file.file_diff.file_path);
 
             let local_code_view = ctx.add_typed_action_view(|ctx| {
-                
-
                 LocalCodeEditorView::new_with_global_buffer(
                     full_file_location.clone(),
                     |buffer_state, ctx| {
@@ -3379,9 +3381,10 @@ impl CodeReviewView {
         };
 
         if let Some((_, file_state)) = loaded_state.file_states.get_index_mut(file_index)
-            && let Some(editor_state) = &mut file_state.editor_state {
-                editor_state.set_loaded();
-            }
+            && let Some(editor_state) = &mut file_state.editor_state
+        {
+            editor_state.set_loaded();
+        }
 
         if self.all_editors_loaded() {
             let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
@@ -4130,21 +4133,22 @@ impl CodeReviewView {
             if let Some(rules) =
                 ProjectContextModel::as_ref(app).find_applicable_project_rules(repo_path)
                 && let Some(first_rule) = rules.active_rules.first()
-                    && let Some(file_name) = first_rule.path.file_name() {
-                        zero_state_column.add_child(
-                            Container::new(
-                                Text::new(
-                                    format!("Repo is initialized with a {file_name} file."),
-                                    appearance.ui_font_family(),
-                                    12.,
-                                )
-                                .with_color(theme.sub_text_color(theme.surface_2()).into())
-                                .finish(),
-                            )
-                            .with_margin_top(8.)
-                            .finish(),
-                        );
-                    }
+                && let Some(file_name) = first_rule.path.file_name()
+            {
+                zero_state_column.add_child(
+                    Container::new(
+                        Text::new(
+                            format!("Repo is initialized with a {file_name} file."),
+                            appearance.ui_font_family(),
+                            12.,
+                        )
+                        .with_color(theme.sub_text_color(theme.surface_2()).into())
+                        .finish(),
+                    )
+                    .with_margin_top(8.)
+                    .finish(),
+                );
+            }
         }
 
         let zero_state_content = Container::new(zero_state_column.finish()).finish();
@@ -5671,11 +5675,12 @@ impl CodeReviewView {
             }
             CodeEditorEvent::HiddenSectionExpanded => {
                 if let CodeReviewViewState::Loaded(LoadedState { file_states, .. }) = self.state()
-                    && let Some(index) = file_states.get_index_of(&file_path) {
-                        self.viewported_list_state
-                            .invalidate_height_for_index(index);
-                        ctx.notify();
-                    }
+                    && let Some(index) = file_states.get_index_of(&file_path)
+                {
+                    self.viewported_list_state
+                        .invalidate_height_for_index(index);
+                    ctx.notify();
+                }
             }
             CodeEditorEvent::Focused => {
                 ctx.emit(CodeReviewViewEvent::Pane(PaneEvent::FocusSelf));
@@ -6305,15 +6310,14 @@ impl CodeReviewView {
     fn save_file(&mut self, repo_relative_path: &str, ctx: &mut ViewContext<CodeReviewView>) {
         if let CodeReviewViewState::Loaded(state) = self.state()
             && let Some(file_state) = state.file_states.get(repo_relative_path)
-                && let Some(editor) = file_state.editor_state.as_ref().map(|state| state.editor())
-                    && let Err(err) =
-                        editor.update(ctx, |local_editor, ctx| local_editor.save_local(ctx))
-                    {
-                        safe_error!(
-                            safe: ("Failed to save file: {err}"),
-                            full: ("Failed to save file {}: {err:?}", repo_relative_path)
-                        );
-                    }
+            && let Some(editor) = file_state.editor_state.as_ref().map(|state| state.editor())
+            && let Err(err) = editor.update(ctx, |local_editor, ctx| local_editor.save_local(ctx))
+        {
+            safe_error!(
+                safe: ("Failed to save file: {err}"),
+                full: ("Failed to save file {}: {err:?}", repo_relative_path)
+            );
+        }
     }
 
     /// Captures the current cursor position and selections from the editor
@@ -6877,9 +6881,10 @@ impl CodeReviewView {
         if let CodeReviewViewState::Loaded(state) = self.state() {
             for file_state in state.file_states.values() {
                 if let Some(model) = &file_state.editor_state
-                    && model.has_unsaved_changes(app) {
-                        unsaved_paths.push(file_state.file_diff.file_path.clone());
-                    }
+                    && model.has_unsaved_changes(app)
+                {
+                    unsaved_paths.push(file_state.file_diff.file_path.clone());
+                }
             }
         }
         unsaved_paths

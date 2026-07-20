@@ -230,10 +230,11 @@ impl TaskStore {
 
             // Check if we should append to the last group or start a new one
             if let Some((last_task_id, exchanges)) = result.last_mut()
-                && last_task_id == &exchange_ref.task_id {
-                    exchanges.push(exchange);
-                    continue;
-                }
+                && last_task_id == &exchange_ref.task_id
+            {
+                exchanges.push(exchange);
+                continue;
+            }
 
             // Start a new group
             result.push((exchange_ref.task_id.clone(), vec![exchange]));
@@ -288,9 +289,10 @@ impl TaskStore {
                 if let Some(subagent_call) = message
                     .tool_call()
                     .and_then(|tc: &api::message::ToolCall| tc.subagent())
-                    && let Some(subtask) = me.get(&TaskId::new(subagent_call.task_id.clone())) {
-                        collect_messages_dfs(me, messages, subtask);
-                    }
+                    && let Some(subtask) = me.get(&TaskId::new(subagent_call.task_id.clone()))
+                {
+                    collect_messages_dfs(me, messages, subtask);
+                }
             }
         }
 
@@ -373,9 +375,10 @@ impl TaskStore {
             };
             for message in task.messages() {
                 if let Some(subagent) = message.tool_call().and_then(|tc| tc.subagent())
-                    && !subagent.task_id.is_empty() {
-                        queue.push(TaskId::new(subagent.task_id.clone()));
-                    }
+                    && !subagent.task_id.is_empty()
+                {
+                    queue.push(TaskId::new(subagent.task_id.clone()));
+                }
             }
         }
         reachable
@@ -424,9 +427,9 @@ impl TaskStore {
                             &output_message.message
                             && let Some(subtask) =
                                 tasks.get(&TaskId::new(subagent_call.task_id.clone()))
-                            {
-                                append_refs_for_task(tasks, refs, subtask);
-                            }
+                        {
+                            append_refs_for_task(tasks, refs, subtask);
+                        }
                     }
                 }
             }

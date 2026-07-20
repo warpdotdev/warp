@@ -139,11 +139,10 @@ impl ShellCommandExecutor {
                         ctx
                     );
                 } else if let CommandExecutionPermission::Denied(reason) = autoexecution_permission
-                    && AppExecutionMode::as_ref(ctx).is_autonomous() {
-                        log::warn!(
-                            "Command denied during autonomous execution, reason: {reason:?}"
-                        );
-                    }
+                    && AppExecutionMode::as_ref(ctx).is_autonomous()
+                {
+                    log::warn!("Command denied during autonomous execution, reason: {reason:?}");
+                }
                 autoexecution_permission.is_allowed()
             }
             AIAgentActionType::WriteToLongRunningShellCommand { block_id, .. } => {
@@ -589,7 +588,6 @@ impl ShellCommandExecutor {
             // At this point, we've either received block metadata or we've timed out.
             // Check the current state of the block and produce a result accordingly.
             let model = terminal_model.lock();
-            
 
             match block_selector.get_block(&model) {
                 Some(block) => {
@@ -672,9 +670,10 @@ impl ShellCommandExecutor {
         drop(terminal_model);
 
         if let Some(selector) = matching_selector
-            && let Some(sender) = self.force_refresh_senders.remove(&selector) {
-                let _ = sender.send(());
-            }
+            && let Some(sender) = self.force_refresh_senders.remove(&selector)
+        {
+            let _ = sender.send(());
+        }
     }
 
     pub(super) fn preprocess_action(

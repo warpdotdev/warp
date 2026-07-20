@@ -172,21 +172,22 @@ impl SyncDataSource for DataSource {
             // and add each separator item after all of the items in the section.
             for section in ConversationSection::reverse_order() {
                 if let Some(conversations) = grouped.get(&section)
-                    && !conversations.is_empty() {
-                        for conversation in conversations {
-                            let matched_conversation = MatchedConversation {
-                                conversation: conversation.clone(),
-                                match_result: ConversationMatchResult::no_match(),
-                            };
-                            results.push(
-                                ConversationSearchItem::new(ConversationAction::Resume(Box::new(
-                                    matched_conversation,
-                                )))
-                                .into(),
-                            );
-                        }
-                        results.push(SeparatorSearchItem::new(section.title().to_string()).into());
+                    && !conversations.is_empty()
+                {
+                    for conversation in conversations {
+                        let matched_conversation = MatchedConversation {
+                            conversation: conversation.clone(),
+                            match_result: ConversationMatchResult::no_match(),
+                        };
+                        results.push(
+                            ConversationSearchItem::new(ConversationAction::Resume(Box::new(
+                                matched_conversation,
+                            )))
+                            .into(),
+                        );
                     }
+                    results.push(SeparatorSearchItem::new(section.title().to_string()).into());
+                }
             }
 
             Ok(results)
@@ -203,18 +204,19 @@ impl SyncDataSource for DataSource {
         if self.add_conversation_actions && query.text.trim().is_empty() {
             result.map(|mut results| {
                 if !cfg!(target_family = "wasm")
-                    && let Some(conversation) = selected_conversation_in_focused_pane(app) {
-                        // Only surface the fork option if the selected conversation is done.
-                        if conversation.status().is_done() {
-                            results.push(
-                                ConversationSearchItem::new(ConversationAction::Fork {
-                                    conversation_id: conversation.id(),
-                                    title: conversation.title().unwrap_or_default().to_string(),
-                                })
-                                .into(),
-                            );
-                        }
+                    && let Some(conversation) = selected_conversation_in_focused_pane(app)
+                {
+                    // Only surface the fork option if the selected conversation is done.
+                    if conversation.status().is_done() {
+                        results.push(
+                            ConversationSearchItem::new(ConversationAction::Fork {
+                                conversation_id: conversation.id(),
+                                title: conversation.title().unwrap_or_default().to_string(),
+                            })
+                            .into(),
+                        );
                     }
+                }
                 results.push(ConversationSearchItem::new(ConversationAction::New).into());
                 results
             })

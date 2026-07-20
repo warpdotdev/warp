@@ -557,9 +557,10 @@ impl CommentListView {
                     .update(ctx, |view, ctx| view.clear_text_selection(ctx));
             }
             if let Some(diff_editor) = card.static_diff_editor()
-                && source_view_id.is_none_or(|id| diff_editor.id() != id) {
-                    diff_editor.update(ctx, |view, ctx| view.clear_selection(ctx));
-                }
+                && source_view_id.is_none_or(|id| diff_editor.id() != id)
+            {
+                diff_editor.update(ctx, |view, ctx| view.clear_selection(ctx));
+            }
         }
     }
 
@@ -1237,12 +1238,13 @@ impl TypedActionView for CommentListView {
             CommentListAction::DismissOverflowMenu => self.close_overflow_menu(ctx),
             CommentListAction::CopyCommentText => {
                 if let Some(id) = self.active_overflow_comment_id.take()
-                    && let Some(state) = self.comments_by_id.get(&id) {
-                        let content = state.card.source().content.clone();
-                        let mut clipboard = ClipboardContent::plain_text(content.clone());
-                        clipboard.html = markdown_to_html(state.card.comment_editor(), ctx);
-                        ctx.clipboard().write(clipboard);
-                    }
+                    && let Some(state) = self.comments_by_id.get(&id)
+                {
+                    let content = state.card.source().content.clone();
+                    let mut clipboard = ClipboardContent::plain_text(content.clone());
+                    clipboard.html = markdown_to_html(state.card.comment_editor(), ctx);
+                    ctx.clipboard().write(clipboard);
+                }
                 ctx.notify();
             }
             CommentListAction::EditComment => {

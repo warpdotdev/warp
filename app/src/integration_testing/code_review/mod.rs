@@ -141,12 +141,13 @@ fn assert_anchor(
         ));
     }
     if let Some(expected_line_number) = expected_line_number
-        && anchor.line_number != expected_line_number {
-            return AssertionOutcome::failure(format!(
-                "expected anchor line number to be {expected_line_number}, got {}",
-                anchor.line_number
-            ));
-        }
+        && anchor.line_number != expected_line_number
+    {
+        return AssertionOutcome::failure(format!(
+            "expected anchor line number to be {expected_line_number}, got {}",
+            anchor.line_number
+        ));
+    }
 
     AssertionOutcome::Success
 }

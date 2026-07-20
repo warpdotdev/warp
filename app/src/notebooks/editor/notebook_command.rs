@@ -749,17 +749,18 @@ impl RunnableCommandModel for NotebookCommand {
                         .on_click(move |ctx, app, _| {
                             if let Some(command_model) = fullscreen_model.upgrade(app)
                                 && let Some(source) = command_model.as_ref(app).command(app)
-                                    && !source.trim().is_empty() {
-                                        ctx.dispatch_typed_action(WorkspaceAction::OpenLightbox {
-                                            images: vec![LightboxImage {
-                                                source: LightboxImageSource::Resolved {
-                                                    asset_source: mermaid_asset_source(&source),
-                                                },
-                                                description: None,
-                                            }],
-                                            initial_index: 0,
-                                        });
-                                    }
+                                && !source.trim().is_empty()
+                            {
+                                ctx.dispatch_typed_action(WorkspaceAction::OpenLightbox {
+                                    images: vec![LightboxImage {
+                                        source: LightboxImageSource::Resolved {
+                                            asset_source: mermaid_asset_source(&source),
+                                        },
+                                        description: None,
+                                    }],
+                                    initial_index: 0,
+                                });
+                            }
                         })
                         .finish(),
                     )
@@ -780,13 +781,14 @@ impl RunnableCommandModel for NotebookCommand {
                 )
                 .on_click(move |ctx, app, _| {
                     if let Some(command_model) = model.upgrade(app)
-                        && let Some(block_content) = command_model.as_ref(app).command(app) {
-                            ctx.dispatch_typed_action(EditorViewAction::CopyTextToClipboard {
-                                text: UserInput::new(block_content.trim()),
-                                block: BlockInfo::CodeBlock,
-                                entrypoint: ActionEntrypoint::Button,
-                            });
-                        }
+                        && let Some(block_content) = command_model.as_ref(app).command(app)
+                    {
+                        ctx.dispatch_typed_action(EditorViewAction::CopyTextToClipboard {
+                            text: UserInput::new(block_content.trim()),
+                            block: BlockInfo::CodeBlock,
+                            entrypoint: ActionEntrypoint::Button,
+                        });
+                    }
                 })
                 .finish(),
             )
@@ -806,9 +808,10 @@ impl RunnableCommandModel for NotebookCommand {
                     )
                     .on_click(move |ctx, app, _| {
                         if let Some(command_model) = model.upgrade(app)
-                            && let Some(workflow) = command_model.as_ref(app).to_workflow(app) {
-                                ctx.dispatch_typed_action(EditorViewAction::RunWorkflow(workflow));
-                            }
+                            && let Some(workflow) = command_model.as_ref(app).to_workflow(app)
+                        {
+                            ctx.dispatch_typed_action(EditorViewAction::RunWorkflow(workflow));
+                        }
                     })
                     .finish(),
                 )

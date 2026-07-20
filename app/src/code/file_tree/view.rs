@@ -481,9 +481,10 @@ impl FileTreeView {
 
             // Auto-expand the root, respecting explicit user collapses.
             if !self.is_explicitly_collapsed(&repo_path, &repo_path)
-                && let Some(root_dir) = self.root_directories.get_mut(&repo_path) {
-                    root_dir.expanded_folders.insert(repo_path);
-                }
+                && let Some(root_dir) = self.root_directories.get_mut(&repo_path)
+            {
+                root_dir.expanded_folders.insert(repo_path);
+            }
 
             changed = true;
         }
@@ -700,8 +701,6 @@ impl FileTreeView {
         #[cfg(feature = "local_fs")]
         let repository_metadata_model = RepoMetadataModel::handle(ctx);
 
-        
-
         Self {
             root_directories: HashMap::new(),
             displayed_directories: Vec::new(),
@@ -815,13 +814,13 @@ impl FileTreeView {
                 .iter()
                 .enumerate()
                 .find(|(_, item)| *item.path() == *file_path)
-            {
-                let id = FileTreeIdentifier {
-                    root: repository_root.clone(),
-                    index,
-                };
-                self.select_id(&id, ctx);
-            }
+        {
+            let id = FileTreeIdentifier {
+                root: repository_root.clone(),
+                index,
+            };
+            self.select_id(&id, ctx);
+        }
     }
 
     /// Expands all ancestor directories between root and target_path.
@@ -1134,13 +1133,13 @@ impl FileTreeView {
                             .iter()
                             .enumerate()
                             .find(|(_, item)| item.path() == &selected_path)
-                        {
-                            self.selected_item = Some(FileTreeIdentifier {
-                                root: new_root.clone(),
-                                index,
-                            });
-                            break;
-                        }
+                    {
+                        self.selected_item = Some(FileTreeIdentifier {
+                            root: new_root.clone(),
+                            index,
+                        });
+                        break;
+                    }
                 }
             }
         }
@@ -1160,18 +1159,19 @@ impl FileTreeView {
         self.pending_focus_target = None;
         if let Some(first_local) = grouping.roots.first()
             && let Some(absorbed) = grouping.absorbed_by_root.get(first_local)
-                && let Some(most_recent) = absorbed.first() {
-                    let selection_is_under_target = self
-                        .selected_item_std_path()
-                        .is_some_and(|p| p.starts_with(most_recent));
-                    if !selection_is_under_target {
-                        self.pending_focus_target = Some(PendingFocusTarget {
-                            root: first_local.clone(),
-                            path: most_recent.clone(),
-                            scrolled: false,
-                        });
-                    }
-                }
+            && let Some(most_recent) = absorbed.first()
+        {
+            let selection_is_under_target = self
+                .selected_item_std_path()
+                .is_some_and(|p| p.starts_with(most_recent));
+            if !selection_is_under_target {
+                self.pending_focus_target = Some(PendingFocusTarget {
+                    root: first_local.clone(),
+                    path: most_recent.clone(),
+                    scrolled: false,
+                });
+            }
+        }
         self.apply_pending_focus_target();
     }
 
@@ -1347,12 +1347,13 @@ impl FileTreeView {
         // Respect explicit user collapse of the root header.
         if should_expand_last_directory
             && let Some(displayed_root) = self.displayed_directories.last().cloned()
-                && !self.is_explicitly_collapsed(&displayed_root, &displayed_root) {
-                    self.ensure_loaded_path(&displayed_root, &displayed_root, ctx);
-                    if let Some(root_dir) = self.root_directories.get_mut(&displayed_root) {
-                        root_dir.expanded_folders.insert(displayed_root.clone());
-                    }
-                }
+            && !self.is_explicitly_collapsed(&displayed_root, &displayed_root)
+        {
+            self.ensure_loaded_path(&displayed_root, &displayed_root, ctx);
+            if let Some(root_dir) = self.root_directories.get_mut(&displayed_root) {
+                root_dir.expanded_folders.insert(displayed_root.clone());
+            }
+        }
 
         // Ensure all expanded folders have their children loaded
         for root_path in self.displayed_directories.clone() {
@@ -1435,9 +1436,10 @@ impl FileTreeView {
         }
 
         if let Some(state) = RepoMetadataModel::as_ref(ctx).get_repository(&backing_id, ctx)
-            && let Some(root_dir) = self.root_directories.get_mut(root_path) {
-                root_dir.entry = state.entry.clone();
-            }
+            && let Some(root_dir) = self.root_directories.get_mut(root_path)
+        {
+            root_dir.entry = state.entry.clone();
+        }
     }
 
     /// Sends a `LoadRepoMetadataDirectory` request to the remote server for
@@ -1635,9 +1637,10 @@ impl FileTreeView {
         // Process displayed directories, optionally filtering to a single root.
         for root_path in self.displayed_directories.clone() {
             if let Some(target) = target_root
-                && root_path != *target {
-                    continue;
-                }
+                && root_path != *target
+            {
+                continue;
+            }
 
             let Some(root_dir) = self.root_directories.get(&root_path) else {
                 continue;
@@ -1670,16 +1673,17 @@ impl FileTreeView {
             // If the selection was expected but not found (e.g. filtered out as hidden),
             // clear selected_item to avoid stale references.
             if let Some(id) = id_to_preserve.as_ref()
-                && id.root == root_path {
-                    if let Some(index) = new_index {
-                        self.selected_item = Some(FileTreeIdentifier {
-                            root: root_path,
-                            index,
-                        });
-                    } else if selected_item_path.is_some() {
-                        self.selected_item = None;
-                    }
+                && id.root == root_path
+            {
+                if let Some(index) = new_index {
+                    self.selected_item = Some(FileTreeIdentifier {
+                        root: root_path,
+                        index,
+                    });
+                } else if selected_item_path.is_some() {
+                    self.selected_item = None;
                 }
+            }
 
             any_item_removed = any_item_removed || removed_item;
         }
@@ -1709,11 +1713,13 @@ impl FileTreeView {
         // Filter hidden files/directories when show_hidden_files is disabled.
         // Only filter descendants (depth > 0), not the root entry itself,
         // so that hidden workspace directories (e.g. ~/.config) are still shown.
-        if !self.show_hidden_files && depth > 0
+        if !self.show_hidden_files
+            && depth > 0
             && let Some(name) = current_path.file_name()
-                && name.starts_with('.') {
-                    return (selected_item_index, removed_item);
-                }
+            && name.starts_with('.')
+        {
+            return (selected_item_index, removed_item);
+        }
 
         if path_of_selected_item == Some(current_path) {
             selected_item_index = Some(items.len());
@@ -2103,13 +2109,14 @@ impl FileTreeView {
     /// Selects the first item if no item is selected.
     pub fn select_first_item_if_no_selection(&mut self, ctx: &mut ViewContext<Self>) {
         if self.selected_item.is_none()
-            && let Some(active_dir) = self.displayed_directories.first() {
-                let id = FileTreeIdentifier {
-                    root: active_dir.clone(),
-                    index: 0,
-                };
-                self.select_id(&id, ctx);
-            }
+            && let Some(active_dir) = self.displayed_directories.first()
+        {
+            let id = FileTreeIdentifier {
+                root: active_dir.clone(),
+                index: 0,
+            };
+            self.select_id(&id, ctx);
+        }
     }
 
     /// Selects and expands the most recent directory (the current terminal session's working
@@ -2150,9 +2157,10 @@ impl FileTreeView {
         }
 
         if let Some(root_dir) = self.root_directories.get(&most_recent_dir)
-            && root_dir.items.is_empty() {
-                return;
-            }
+            && root_dir.items.is_empty()
+        {
+            return;
+        }
 
         // Override selection only when there is none, or when the current
         // selection lives under a different root than the most-recent one
@@ -3039,18 +3047,20 @@ impl TypedActionView for FileTreeView {
             FileTreeAction::Expand => {
                 if let Some(selected_item) = self.selected_item.clone()
                     && let Some(sp) = self.selected_item_std_path()
-                        && !self.is_folder_expanded(&selected_item.root, &sp) {
-                            self.toggle_folder_expansion(&selected_item.root, &sp, ctx);
-                            ctx.notify();
-                        }
+                    && !self.is_folder_expanded(&selected_item.root, &sp)
+                {
+                    self.toggle_folder_expansion(&selected_item.root, &sp, ctx);
+                    ctx.notify();
+                }
             }
             FileTreeAction::Collapse => {
                 if let Some(selected_item) = self.selected_item.clone()
                     && let Some(sp) = self.selected_item_std_path()
-                        && self.is_folder_expanded(&selected_item.root, &sp) {
-                            self.toggle_folder_expansion(&selected_item.root, &sp, ctx);
-                            ctx.notify();
-                        }
+                    && self.is_folder_expanded(&selected_item.root, &sp)
+                {
+                    self.toggle_folder_expansion(&selected_item.root, &sp, ctx);
+                    ctx.notify();
+                }
             }
             FileTreeAction::ExecuteSelectedItem => {
                 if let Some(id) = self.selected_item.clone() {
@@ -3111,10 +3121,11 @@ impl TypedActionView for FileTreeView {
             FileTreeAction::OpenInFinder { id } => {
                 if !self.is_remote_item(id)
                     && let Some(root_dir) = self.root_directories.get(&id.root)
-                        && let Some(item) = root_dir.items.get(id.index) {
-                            let path = item.path().to_local_path_lossy();
-                            ctx.open_file_path_in_explorer(&path);
-                        }
+                    && let Some(item) = root_dir.items.get(id.index)
+                {
+                    let path = item.path().to_local_path_lossy();
+                    ctx.open_file_path_in_explorer(&path);
+                }
                 self.context_menu_state.take();
             }
             FileTreeAction::Rename { id } => {

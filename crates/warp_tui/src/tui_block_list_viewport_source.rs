@@ -131,22 +131,23 @@ impl TuiBlockListViewportSource {
             let item_bottom = item_top.saturating_add(item.height().as_f64().ceil() as usize);
             if item_bottom > band_top
                 && let BlockHeightItem::RichContent(rich_content) = item
-                    && !rich_content.should_hide {
-                        if let Some(view) = agent_blocks.get(&rich_content.view_id) {
-                            if view
-                                .as_ref(app)
-                                .needs_height_measurement(available_width, app)
-                            {
-                                view_ids.insert(rich_content.view_id);
-                            }
-                        } else if let Some(view) = cli_subagent_blocks.get(&rich_content.view_id)
-                            && view
-                                .as_ref(app)
-                                .needs_height_measurement(available_width, app)
-                            {
-                                view_ids.insert(rich_content.view_id);
-                            }
+                && !rich_content.should_hide
+            {
+                if let Some(view) = agent_blocks.get(&rich_content.view_id) {
+                    if view
+                        .as_ref(app)
+                        .needs_height_measurement(available_width, app)
+                    {
+                        view_ids.insert(rich_content.view_id);
                     }
+                } else if let Some(view) = cli_subagent_blocks.get(&rich_content.view_id)
+                    && view
+                        .as_ref(app)
+                        .needs_height_measurement(available_width, app)
+                {
+                    view_ids.insert(rich_content.view_id);
+                }
+            }
             cursor.next();
         }
         view_ids

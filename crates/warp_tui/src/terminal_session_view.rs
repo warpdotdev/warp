@@ -2033,28 +2033,29 @@ impl TuiTerminalSessionView {
                 );
         }
         if let Some(stats) = git_stats
-            && (stats.total_additions > 0 || stats.total_deletions > 0) {
-                footer = footer.child(TuiText::new(" • ").with_style(muted).truncate().finish());
-                if stats.total_additions > 0 {
-                    footer = footer.child(
-                        TuiText::new(format!("+{}", stats.total_additions))
-                            .with_style(builder.diff_added_style())
-                            .truncate()
-                            .finish(),
-                    );
-                }
-                if stats.total_deletions > 0 {
-                    if stats.total_additions > 0 {
-                        footer = footer.child(TuiText::new(" ").truncate().finish());
-                    }
-                    footer = footer.child(
-                        TuiText::new(format!("-{}", stats.total_deletions))
-                            .with_style(builder.diff_removed_style())
-                            .truncate()
-                            .finish(),
-                    );
-                }
+            && (stats.total_additions > 0 || stats.total_deletions > 0)
+        {
+            footer = footer.child(TuiText::new(" • ").with_style(muted).truncate().finish());
+            if stats.total_additions > 0 {
+                footer = footer.child(
+                    TuiText::new(format!("+{}", stats.total_additions))
+                        .with_style(builder.diff_added_style())
+                        .truncate()
+                        .finish(),
+                );
             }
+            if stats.total_deletions > 0 {
+                if stats.total_additions > 0 {
+                    footer = footer.child(TuiText::new(" ").truncate().finish());
+                }
+                footer = footer.child(
+                    TuiText::new(format!("-{}", stats.total_deletions))
+                        .with_style(builder.diff_removed_style())
+                        .truncate()
+                        .finish(),
+                );
+            }
+        }
         footer
     }
 
@@ -2255,12 +2256,11 @@ impl TuiTerminalSessionView {
         let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
             controller.send_user_query_in_conversation(prompt.clone(), conversation_id, None, ctx)
         });
-        if dispatched
-            && let Some(block_id) = active_long_running_block_id {
-                self.cli_subagent_controller.update(ctx, |controller, ctx| {
-                    controller.set_latest_instruction(block_id, prompt, ctx);
-                });
-            }
+        if dispatched && let Some(block_id) = active_long_running_block_id {
+            self.cli_subagent_controller.update(ctx, |controller, ctx| {
+                controller.set_latest_instruction(block_id, prompt, ctx);
+            });
+        }
     }
 
     fn handle_submitted_input(&mut self, input: &str, ctx: &mut ViewContext<Self>) {

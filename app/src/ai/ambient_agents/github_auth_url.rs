@@ -151,8 +151,9 @@ fn build_next_url(
 
 fn oauth_next_scheme() -> String {
     if let Ok(override_value) = std::env::var("WARP_OAUTH_NEXT_SCHEME")
-        && !override_value.is_empty() {
-            return override_value;
-        }
+        && !override_value.is_empty()
+    {
+        return override_value;
+    }
     ChannelState::url_scheme().to_string()
 }

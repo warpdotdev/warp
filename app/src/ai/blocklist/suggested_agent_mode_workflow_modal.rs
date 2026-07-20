@@ -181,15 +181,16 @@ impl SuggestedAgentModeWorkflowModal {
             WorkflowViewEvent::CreatedWorkflow(created_workflow_id) => {
                 if let Some(SuggestedAgentModeWorkflowAndId { sync_id, workflow }) =
                     &self.workflow_and_id
-                    && sync_id == created_workflow_id {
-                        ctx.emit(SuggestedAgentModeWorkflowModalEvent::WorkflowCreated);
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::AISuggestedAgentModeWorkflowAdded {
-                                logging_id: workflow.logging_id.clone(),
-                            },
-                            ctx
-                        );
-                    }
+                    && sync_id == created_workflow_id
+                {
+                    ctx.emit(SuggestedAgentModeWorkflowModalEvent::WorkflowCreated);
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::AISuggestedAgentModeWorkflowAdded {
+                            logging_id: workflow.logging_id.clone(),
+                        },
+                        ctx
+                    );
+                }
                 self.close(ctx);
             }
             WorkflowViewEvent::RunWorkflow {

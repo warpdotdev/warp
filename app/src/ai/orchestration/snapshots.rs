@@ -238,9 +238,10 @@ fn build_harness_snapshot(
             if harness_str.eq_ignore_ascii_case(initial_harness) {
                 selected_id = Some(harness_str.clone());
             } else if let Some(target_display) = &target_display
-                && &entry.display_name == target_display {
-                    selected_id = Some(harness_str.clone());
-                }
+                && &entry.display_name == target_display
+            {
+                selected_id = Some(harness_str.clone());
+            }
         }
         rows.push(OptionRow {
             id: harness_str,
@@ -522,12 +523,12 @@ fn build_host_snapshot(
         && !added_slugs
             .iter()
             .any(|known| known.eq_ignore_ascii_case(&slug))
-        {
-            rows.push(OptionRow {
-                badge: Some(OptionBadge::Recent),
-                ..OptionRow::new(slug.clone(), slug)
-            });
-        }
+    {
+        rows.push(OptionRow {
+            badge: Some(OptionBadge::Recent),
+            ..OptionRow::new(slug.clone(), slug)
+        });
+    }
     OptionSnapshot {
         rows,
         selected_id: Some(current.to_string()),

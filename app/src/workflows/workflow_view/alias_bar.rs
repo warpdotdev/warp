@@ -201,25 +201,26 @@ impl AliasBar {
         if let Some(alias) = self
             .selected_alias
             .and_then(|index| self.aliases.get_mut(index))
-            && alias.env_vars != sync_id {
-                alias.env_vars = sync_id;
-                self.mark_dirty(true, ctx);
+            && alias.env_vars != sync_id
+        {
+            alias.env_vars = sync_id;
+            self.mark_dirty(true, ctx);
 
-                let env_vars_space = sync_id
-                    .and_then(|id| CloudModel::as_ref(ctx).get_env_var_collection(&id))
-                    .map(|env_vars| env_vars.space(ctx))
-                    .map(Into::into);
+            let env_vars_space = sync_id
+                .and_then(|id| CloudModel::as_ref(ctx).get_env_var_collection(&id))
+                .map(|env_vars| env_vars.space(ctx))
+                .map(Into::into);
 
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::WorkflowAliasEnvVarsAttached {
-                        workflow_id: self.workflow_id.into_server().map(Into::into),
-                        workflow_space: self.workflow_space(ctx),
-                        env_vars_id: sync_id.and_then(|id| id.into_server()).map(Into::into),
-                        env_vars_space,
-                    },
-                    ctx
-                );
-            }
+            send_telemetry_from_ctx!(
+                TelemetryEvent::WorkflowAliasEnvVarsAttached {
+                    workflow_id: self.workflow_id.into_server().map(Into::into),
+                    workflow_space: self.workflow_space(ctx),
+                    env_vars_id: sync_id.and_then(|id| id.into_server()).map(Into::into),
+                    env_vars_space,
+                },
+                ctx
+            );
+        }
     }
 
     /// Environment variables associated with the current alias.

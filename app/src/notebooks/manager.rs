@@ -149,9 +149,10 @@ impl NotebookManager {
         ctx: &mut ModelContext<Self>,
     ) {
         if let CloudModelEvent::ObjectUpdated { type_and_id, .. } = event
-            && let Some(notebook_id) = type_and_id.as_notebook_id() {
-                self.update_raw_text_for_notebook(notebook_id, ctx);
-            }
+            && let Some(notebook_id) = type_and_id.as_notebook_id()
+        {
+            self.update_raw_text_for_notebook(notebook_id, ctx);
+        }
     }
 
     /// Returns the raw text of a given notebook id - if it exists in the cache.

@@ -601,17 +601,18 @@ pub fn render_viewer_role_button(
     stack.add_child(button);
 
     if let Some(menu) = menu_handle
-        && is_menu_open {
-            stack.add_positioned_overlay_child(
-                ChildView::new(&menu).finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::BottomRight,
-                    ChildAnchor::TopRight,
-                ),
-            );
-        }
+        && is_menu_open
+    {
+        stack.add_positioned_overlay_child(
+            ChildView::new(&menu).finish(),
+            OffsetPositioning::offset_from_parent(
+                vec2f(0., 0.),
+                ParentOffsetBounds::WindowByPosition,
+                ParentAnchor::BottomRight,
+                ChildAnchor::TopRight,
+            ),
+        );
+    }
 
     Container::new(stack.finish()).with_margin_left(8.).finish()
 }

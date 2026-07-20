@@ -728,33 +728,32 @@ impl Task {
         // so we need to convert any tool call results and update the exchange accordingly
         // (this is necessary for session sharing, where the tool call input has not already been
         // optimistically inserted into the exchange)
-        if should_convert_input_messages
-            && let Some(tool_call_result) = message.tool_call_result() {
-                let mut document_versions: HashMap<AIDocumentId, AIDocumentVersion> =
-                    HashMap::new();
-                if let Some(input) = convert_tool_call_result_to_input(
-                    &id,
-                    tool_call_result,
-                    &HashMap::new(),
-                    &mut document_versions,
-                ) {
-                    if let Some(action_result) = input.action_result() {
-                        if let Some(existing_result) =
-                            exchange_to_update.input.iter_mut().find(|existing_input| {
-                                existing_input
-                                    .action_result()
-                                    .is_some_and(|existing_result| {
-                                        existing_result.id == action_result.id
-                                    })
-                            })
-                        {
-                            *existing_result = input;
-                        }
-                    } else {
-                        exchange_to_update.input.push(input)
+        if should_convert_input_messages && let Some(tool_call_result) = message.tool_call_result()
+        {
+            let mut document_versions: HashMap<AIDocumentId, AIDocumentVersion> = HashMap::new();
+            if let Some(input) = convert_tool_call_result_to_input(
+                &id,
+                tool_call_result,
+                &HashMap::new(),
+                &mut document_versions,
+            ) {
+                if let Some(action_result) = input.action_result() {
+                    if let Some(existing_result) =
+                        exchange_to_update.input.iter_mut().find(|existing_input| {
+                            existing_input
+                                .action_result()
+                                .is_some_and(|existing_result| {
+                                    existing_result.id == action_result.id
+                                })
+                        })
+                    {
+                        *existing_result = input;
                     }
+                } else {
+                    exchange_to_update.input.push(input)
                 }
             }
+        }
 
         let source = self.try_get_source_mut()?;
         source.messages[idx] = updated_message;
@@ -944,10 +943,10 @@ impl Task {
                                     existing_result.id == action_result.id
                                 })
                         })
-                    {
-                        *existing_result = input;
-                        continue;
-                    }
+                {
+                    *existing_result = input;
+                    continue;
+                }
 
                 exchange.input.push(input);
             }
@@ -983,9 +982,10 @@ pub fn derive_todo_lists_from_root_task(root_task: &Task) -> Vec<AIAgentTodoList
     // For simplicity, we'll iterate through messages and apply UpdateTodos operations
     for message in root_task.messages() {
         if let Some(api::message::Message::UpdateTodos(update)) = &message.message
-            && let Some(operation) = &update.operation {
-                update_todo_list_from_todo_op(&mut todo_lists, operation.clone());
-            }
+            && let Some(operation) = &update.operation
+        {
+            update_todo_list_from_todo_op(&mut todo_lists, operation.clone());
+        }
     }
 
     todo_lists

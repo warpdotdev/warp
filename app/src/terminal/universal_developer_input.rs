@@ -216,7 +216,6 @@ fn calculate_profile_model_selector_threshold(
     let model_name_char_count = active_llm.menu_display_name().chars().count() as f32;
     let model_text_width = model_name_char_count * em_width;
 
-    
     if has_multiple_profiles {
         let profile_name_char_count = AIExecutionProfilesModel::as_ref(ctx)
             .active_profile(Some(terminal_view_id), ctx)

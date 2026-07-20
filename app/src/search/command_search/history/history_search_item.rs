@@ -173,23 +173,24 @@ impl HistorySearchItem {
         let mut metadata_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
         if let Some(exit_code) = self.entry.exit_code
-            && !exit_code.was_successful() {
-                metadata_row.add_child(
-                    Container::new(
-                        ConstrainedBox::new(
-                            Icon::new(
-                                UiIcon::AlertTriangle.into(),
-                                item_highlight_state.main_text_fill(appearance).into_solid(),
-                            )
-                            .finish(),
+            && !exit_code.was_successful()
+        {
+            metadata_row.add_child(
+                Container::new(
+                    ConstrainedBox::new(
+                        Icon::new(
+                            UiIcon::AlertTriangle.into(),
+                            item_highlight_state.main_text_fill(appearance).into_solid(),
                         )
-                        .with_max_height(appearance.ui_font_size())
-                        .with_max_width(appearance.ui_font_size())
                         .finish(),
                     )
+                    .with_max_height(appearance.ui_font_size())
+                    .with_max_width(appearance.ui_font_size())
                     .finish(),
-                );
-            }
+                )
+                .finish(),
+            );
+        }
 
         if let Some(start) = self.entry.start_ts {
             metadata_row.add_child(

@@ -436,9 +436,10 @@ impl GlobFileMatcher {
     fn matches(&self, path_relative: &str, change_type: FileChangeType) -> bool {
         if let Some(kind) = self.kind
             && let Some(required) = watch_kind_for_change_type(change_type)
-                && !kind.contains(required) {
-                    return false;
-                }
+            && !kind.contains(required)
+        {
+            return false;
+        }
 
         self.matcher.is_match(path_relative)
     }

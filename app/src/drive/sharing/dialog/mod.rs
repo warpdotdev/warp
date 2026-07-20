@@ -376,9 +376,10 @@ impl SharingDialog {
         {
             // Check if this event is for the conversation we're currently showing
             if let Some(ShareableObject::AIConversation(target_id)) = &self.target
-                && target_id == conversation_id {
-                    self.refresh_object_permission_states(ctx);
-                }
+                && target_id == conversation_id
+            {
+                self.refresh_object_permission_states(ctx);
+            }
         }
     }
 
@@ -502,24 +503,26 @@ impl SharingDialog {
                                 if let Owner::User {
                                     user_uid: owner_uid,
                                 } = permissions.space
-                                    && owner_uid == user_uid {
-                                        return Some(SharingAccessLevel::Full);
-                                    }
+                                    && owner_uid == user_uid
+                                {
+                                    return Some(SharingAccessLevel::Full);
+                                }
                                 // Check if user is on the owning team (for team-owned conversations)
                                 if let Owner::Team { team_uid } = permissions.space
                                     && UserWorkspaces::as_ref(app).current_team_uid()
                                         == Some(team_uid)
-                                    {
-                                        return Some(SharingAccessLevel::Full);
-                                    }
+                                {
+                                    return Some(SharingAccessLevel::Full);
+                                }
                                 // Check if user is in guests
                                 let user_firebase_uid = user_uid.to_string();
                                 permissions.guests.iter().find_map(|guest| {
                                     if let ServerGuestSubject::User { firebase_uid } =
                                         &guest.subject
-                                        && firebase_uid == &user_firebase_uid {
-                                            return Some(guest.access_level.into());
-                                        }
+                                        && firebase_uid == &user_firebase_uid
+                                    {
+                                        return Some(guest.access_level.into());
+                                    }
                                     None
                                 })
                             })
@@ -546,17 +549,18 @@ impl SharingDialog {
                 if let Some(owner) = self.owner(app) {
                     // If we are the user owner, we have Full access.
                     if let Some(user_uid) = AuthStateProvider::as_ref(app).get().user_id()
-                        && owner.is_user(user_uid) {
-                            return SharingAccessLevel::Full;
-                        }
+                        && owner.is_user(user_uid)
+                    {
+                        return SharingAccessLevel::Full;
+                    }
                     // Team members of owning team have Full access.
                     if let Subject::Team(team_kind) = owner
                         && UserWorkspaces::as_ref(app)
                             .current_team_uid()
                             .is_some_and(|current| current == team_kind.team_uid())
-                        {
-                            return SharingAccessLevel::Full;
-                        }
+                    {
+                        return SharingAccessLevel::Full;
+                    }
                 }
 
                 // For viewers, compute effective access as the max across all channels.
@@ -569,12 +573,12 @@ impl SharingDialog {
                 if let Some(team_level) = self.team_sharing_state.access_level
                     && let Some(TeamKind::SharedSessionTeam { ref team_uid, .. }) =
                         self.team_sharing_state.team
-                        && UserWorkspaces::as_ref(app)
-                            .current_team_uid()
-                            .is_some_and(|current| current == *team_uid)
-                        {
-                            level = level.max(team_level);
-                        }
+                    && UserWorkspaces::as_ref(app)
+                        .current_team_uid()
+                        .is_some_and(|current| current == *team_uid)
+                {
+                    level = level.max(team_level);
+                }
 
                 if let Some(user_uid) = AuthStateProvider::as_ref(app).get().user_id()
                     && let Some(guest_level) = self
@@ -582,9 +586,9 @@ impl SharingDialog {
                         .iter()
                         .find(|guest| guest.subject.is_user(user_uid))
                         .map(|guest| guest.current_access_level)
-                    {
-                        level = level.max(guest_level);
-                    }
+                {
+                    level = level.max(guest_level);
+                }
 
                 level
             }
@@ -650,12 +654,13 @@ impl SharingDialog {
                 // Check if team has Full access - if so, team is the owner.
                 if let Some(TeamKind::SharedSessionTeam { team_uid, name }) =
                     self.team_sharing_state.team.as_ref()
-                    && self.team_sharing_state.access_level == Some(SharingAccessLevel::Full) {
-                        return Some(Subject::Team(TeamKind::SharedSessionTeam {
-                            team_uid: *team_uid,
-                            name: name.clone(),
-                        }));
-                    }
+                    && self.team_sharing_state.access_level == Some(SharingAccessLevel::Full)
+                {
+                    return Some(Subject::Team(TeamKind::SharedSessionTeam {
+                        team_uid: *team_uid,
+                        name: name.clone(),
+                    }));
+                }
 
                 // Otherwise, the sharer is the owner.
                 // The sharer doesn't store their own participant info, so if it's unset, we assume
@@ -2122,9 +2127,10 @@ impl SharingDialog {
         // If this team is the owner of the object, don't render this team sharing ACL since
         // we already rendered the team as the owner (and you can't change ACLs on it).
         if let Some(Subject::Team(team_owner)) = self.owner(app)
-            && team_owner.team_uid() == team_kind.team_uid() {
-                return None;
-            }
+            && team_owner.team_uid() == team_kind.team_uid()
+        {
+            return None;
+        }
 
         let mut subject_row = Flex::row();
         subject_row.add_child(

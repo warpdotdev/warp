@@ -1357,35 +1357,36 @@ impl BlockListElement {
             let viewport = self.viewport_state_after_layout(model.block_list());
 
             if let Some(blocklist_point) = blocklist_point
-                && let Some(block_index) = viewport.block_index_from_point(blocklist_point) {
-                    let on_long_running_block = model
-                        .block_list()
-                        .block_at(block_index)
-                        .is_some_and(|block| block.is_active_and_long_running());
+                && let Some(block_index) = viewport.block_index_from_point(blocklist_point)
+            {
+                let on_long_running_block = model
+                    .block_list()
+                    .block_at(block_index)
+                    .is_some_and(|block| block.is_active_and_long_running());
 
-                    if on_long_running_block && !should_intercept_scroll(&model, app) {
-                        // Send scroll event to PTY as mouse wheel action.
-                        // Convert Lines to i32 by rounding to nearest non-zero integer.
-                        let delta = round_nonzero(delta_lines.as_f64());
-                        if delta != 0 {
-                            let mouse_state = MouseState::new(
-                                MouseButton::Wheel,
-                                MouseAction::Scrolled { delta },
-                                Default::default(),
-                            );
-                            let grid_point = IndexPoint::new(
-                                blocklist_point.row.as_f64().round() as usize,
-                                blocklist_point.column,
-                            );
+                if on_long_running_block && !should_intercept_scroll(&model, app) {
+                    // Send scroll event to PTY as mouse wheel action.
+                    // Convert Lines to i32 by rounding to nearest non-zero integer.
+                    let delta = round_nonzero(delta_lines.as_f64());
+                    if delta != 0 {
+                        let mouse_state = MouseState::new(
+                            MouseButton::Wheel,
+                            MouseAction::Scrolled { delta },
+                            Default::default(),
+                        );
+                        let grid_point = IndexPoint::new(
+                            blocklist_point.row.as_f64().round() as usize,
+                            blocklist_point.column,
+                        );
 
-                            drop(model);
-                            ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
-                                mouse_state.set_point(grid_point),
-                            ));
-                            return true;
-                        }
+                        drop(model);
+                        ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
+                            mouse_state.set_point(grid_point),
+                        ));
+                        return true;
                     }
                 }
+            }
             ctx.dispatch_typed_action(TerminalAction::Scroll { delta: delta_lines });
             true
         } else {
@@ -1710,8 +1711,6 @@ impl BlockListElement {
             ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(BlockTextSelectAction::End));
         }
 
-        
-
         if self.is_mouse_position_within_bounds(position) {
             if let Some(point) = self.coord_to_point(
                 SnackbarPoint::within_snackbar(position),
@@ -1974,16 +1973,17 @@ impl BlockListElement {
                 && let Some(point) = self.coord_to_point(
                     SnackbarPoint::underneath_snackbar(position),
                     ClampingMode::ClampToGrid,
-                ) {
-                    ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
-                        BlockTextSelectAction::Update {
-                            point,
-                            delta: delta_y.into_lines(),
-                            side,
-                            position,
-                        },
-                    ));
-                }
+                )
+            {
+                ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
+                    BlockTextSelectAction::Update {
+                        point,
+                        delta: delta_y.into_lines(),
+                        side,
+                        position,
+                    },
+                ));
+            }
 
             if let Some(point) = self.coord_to_point(
                 SnackbarPoint::within_snackbar(position),
@@ -2381,10 +2381,10 @@ impl BlockListElement {
         if !FeatureFlag::AgentView.is_enabled()
             && let Some(ai_context_stripe_color) =
                 ai_render_context.context_color_for_block(block, warp_theme)
-            {
-                draw_flag_pole(grid_origin, block_height, ai_context_stripe_color, ctx);
-                did_render_ai_stripe = true;
-            }
+        {
+            draw_flag_pole(grid_origin, block_height, ai_context_stripe_color, ctx);
+            did_render_ai_stripe = true;
+        }
 
         if block.has_failed() {
             ctx.scene
@@ -3745,16 +3745,16 @@ impl Element for BlockListElement {
         let mut start_of_continuous_selected_blocks = HashSet::new();
         let mut end_of_continuous_selected_blocks = HashSet::new();
         if let Some(visible_blocks) = &self.visible_blocks
-            && !visible_blocks.is_empty() {
-                let visible_blocks_inclusive_range =
-                    visible_blocks.start..=(visible_blocks.end - 1.into());
-                for range in self.selected_blocks.ranges() {
-                    visible_selected_blocks
-                        .extend(range.intersection(&visible_blocks_inclusive_range));
-                    start_of_continuous_selected_blocks.insert(range.start());
-                    end_of_continuous_selected_blocks.insert(range.end());
-                }
+            && !visible_blocks.is_empty()
+        {
+            let visible_blocks_inclusive_range =
+                visible_blocks.start..=(visible_blocks.end - 1.into());
+            for range in self.selected_blocks.ranges() {
+                visible_selected_blocks.extend(range.intersection(&visible_blocks_inclusive_range));
+                start_of_continuous_selected_blocks.insert(range.start());
+                end_of_continuous_selected_blocks.insert(range.end());
             }
+        }
 
         // Used to determine border styling of selected blocks.
         let is_singleton = self.selected_blocks.is_singleton();
@@ -4082,9 +4082,10 @@ impl Element for BlockListElement {
 
                     if let Some(snackbar_toggle_button_origin) =
                         self.compute_snackbar_toggle_button_draw_location(&block_grid_params)
-                        && let Some(snackbar_toggle_button) = self.snackbar_toggle_button.as_mut() {
-                            snackbar_toggle_button.paint(snackbar_toggle_button_origin, ctx, app);
-                        }
+                        && let Some(snackbar_toggle_button) = self.snackbar_toggle_button.as_mut()
+                    {
+                        snackbar_toggle_button.paint(snackbar_toggle_button_origin, ctx, app);
+                    }
 
                     // The block buttons might overlap with the prompt. If that's the case,
                     // we want to detect that it will overlap and draw a background behind
@@ -4814,32 +4815,33 @@ where
         let mut stack = Stack::new().with_child(container.finish());
 
         if let Some(tooltip_info) = tooltip_info
-            && state.is_hovered() {
-                let tool_tip = ui_builder.tool_tip(tooltip_info.label).build().finish();
-                // Adjust the position of the tooltip depending on whether it is showing on the snackbar header
-                let (parent_anchor, child_anchor, offset) = if tooltip_info.tool_tip_below_button {
-                    (
-                        ParentAnchor::BottomRight,
-                        ChildAnchor::TopRight,
-                        vec2f(0., 5.),
-                    )
-                } else {
-                    (
-                        ParentAnchor::TopRight,
-                        ChildAnchor::BottomRight,
-                        vec2f(0., -5.),
-                    )
-                };
-                stack.add_positioned_overlay_child(
-                    tool_tip,
-                    OffsetPositioning::offset_from_parent(
-                        offset,
-                        ParentOffsetBounds::Unbounded,
-                        parent_anchor,
-                        child_anchor,
-                    ),
-                );
-            }
+            && state.is_hovered()
+        {
+            let tool_tip = ui_builder.tool_tip(tooltip_info.label).build().finish();
+            // Adjust the position of the tooltip depending on whether it is showing on the snackbar header
+            let (parent_anchor, child_anchor, offset) = if tooltip_info.tool_tip_below_button {
+                (
+                    ParentAnchor::BottomRight,
+                    ChildAnchor::TopRight,
+                    vec2f(0., 5.),
+                )
+            } else {
+                (
+                    ParentAnchor::TopRight,
+                    ChildAnchor::BottomRight,
+                    vec2f(0., -5.),
+                )
+            };
+            stack.add_positioned_overlay_child(
+                tool_tip,
+                OffsetPositioning::offset_from_parent(
+                    offset,
+                    ParentOffsetBounds::Unbounded,
+                    parent_anchor,
+                    child_anchor,
+                ),
+            );
+        }
 
         stack.finish()
     });

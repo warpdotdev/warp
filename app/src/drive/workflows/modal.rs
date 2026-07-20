@@ -815,13 +815,15 @@ impl WorkflowModal {
             if let Some(enum_data) = type_selector
                 .get_selected_enum()
                 .and_then(|id| self.all_workflow_enums.get(&id))
-                && enum_data.new_data.is_some() && !sent_requests.contains(&enum_data.id) {
-                    workflow_arg_type_helpers::save_enum(enum_data, owner, ctx);
+                && enum_data.new_data.is_some()
+                && !sent_requests.contains(&enum_data.id)
+            {
+                workflow_arg_type_helpers::save_enum(enum_data, owner, ctx);
 
-                    // Make sure we aren't sending duplicate requests
-                    // We choose to do it this way so we don't end up creating/updating enums that aren't used
-                    sent_requests.insert(enum_data.id);
-                }
+                // Make sure we aren't sending duplicate requests
+                // We choose to do it this way so we don't end up creating/updating enums that aren't used
+                sent_requests.insert(enum_data.id);
+            }
         });
     }
 

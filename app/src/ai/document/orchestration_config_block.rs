@@ -203,9 +203,10 @@ impl OrchestrationConfigBlockView {
                     conversation_id: cid,
                     ..
                 } = event
-                    && *cid == me.conversation_id {
-                        me.refresh_from_model(ctx);
-                    }
+                    && *cid == me.conversation_id
+                {
+                    me.refresh_from_model(ctx);
+                }
             },
         );
 
@@ -214,24 +215,25 @@ impl OrchestrationConfigBlockView {
         // HarnessAvailabilityModel, not LLMPreferences).
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
             if let LLMPreferencesEvent::UpdatedAvailableLLMs = event
-                && let Some(handle) = &me.pickers.model_picker {
-                    let is_local = !me
-                        .orchestration_edit_state
+                && let Some(handle) = &me.pickers.model_picker
+            {
+                let is_local = !me
+                    .orchestration_edit_state
+                    .orchestration_config_state
+                    .execution_mode
+                    .is_remote();
+                oc::populate_model_picker_for_harness(
+                    handle,
+                    &me.orchestration_edit_state
                         .orchestration_config_state
-                        .execution_mode
-                        .is_remote();
-                    oc::populate_model_picker_for_harness(
-                        handle,
-                        &me.orchestration_edit_state
-                            .orchestration_config_state
-                            .model_id,
-                        &me.orchestration_edit_state
-                            .orchestration_config_state
-                            .harness_type,
-                        is_local,
-                        ctx,
-                    );
-                }
+                        .model_id,
+                    &me.orchestration_edit_state
+                        .orchestration_config_state
+                        .harness_type,
+                    is_local,
+                    ctx,
+                );
+            }
         });
 
         // Repopulate pickers when the server-provided harness list,
@@ -406,23 +408,24 @@ impl OrchestrationConfigBlockView {
         }
         let history = BlocklistAIHistoryModel::as_ref(ctx);
         if let Some(conv) = history.conversation(&self.conversation_id)
-            && let Some((config, status)) = conv.orchestration_config_for_plan(&self.plan_id) {
-                self.orchestration_edit_state.orchestration_config_state =
-                    OrchestrationConfigState::from_orchestration_config(config);
-                self.is_approved = status.is_approved();
-                if self.pickers_initialized {
-                    oc::repopulate_all_pickers(
-                        &mut self.orchestration_edit_state.orchestration_config_state,
-                        &self.pickers,
-                        ctx,
-                    );
-                    // Runner picker is excluded from the shared sync (its
-                    // options are fetched async and cached on the view), so
-                    // re-apply its selection from the refreshed config.
-                    self.resync_runner_selection(ctx);
-                }
-                ctx.notify();
+            && let Some((config, status)) = conv.orchestration_config_for_plan(&self.plan_id)
+        {
+            self.orchestration_edit_state.orchestration_config_state =
+                OrchestrationConfigState::from_orchestration_config(config);
+            self.is_approved = status.is_approved();
+            if self.pickers_initialized {
+                oc::repopulate_all_pickers(
+                    &mut self.orchestration_edit_state.orchestration_config_state,
+                    &self.pickers,
+                    ctx,
+                );
+                // Runner picker is excluded from the shared sync (its
+                // options are fetched async and cached on the view), so
+                // re-apply its selection from the refreshed config.
+                self.resync_runner_selection(ctx);
             }
+            ctx.notify();
+        }
     }
 
     fn ensure_pickers(&mut self, ctx: &mut ViewContext<Self>) {
@@ -514,13 +517,12 @@ impl OrchestrationConfigBlockView {
                 .set_worker_host(default_host);
             filled_defaults = true;
         }
-        if needs_env
-            && let Some(default_env) = oc::resolve_default_environment_id(ctx) {
-                self.orchestration_edit_state
-                    .orchestration_config_state
-                    .set_environment_id(default_env);
-                filled_defaults = true;
-            }
+        if needs_env && let Some(default_env) = oc::resolve_default_environment_id(ctx) {
+            self.orchestration_edit_state
+                .orchestration_config_state
+                .set_environment_id(default_env);
+            filled_defaults = true;
+        }
         if filled_defaults && self.is_approved {
             self.apply_field_change(ctx);
         }

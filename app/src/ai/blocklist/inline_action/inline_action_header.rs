@@ -229,21 +229,22 @@ impl HeaderConfig {
         .finish();
 
         if self.use_markdown
-            && let Ok(formatted_text) = markdown_parser::parse_markdown(&self.title) {
-                let mut element = FormattedTextElement::new(
-                    formatted_text,
-                    appearance.monospace_font_size(),
-                    self.font_family,
-                    appearance.monospace_font_family(),
-                    text_color,
-                    Default::default(),
-                )
-                .set_selectable(self.is_text_selectable);
-                if !self.soft_wrap_title {
-                    element = element.with_no_text_wrapping();
-                }
-                title_element = element.finish();
+            && let Ok(formatted_text) = markdown_parser::parse_markdown(&self.title)
+        {
+            let mut element = FormattedTextElement::new(
+                formatted_text,
+                appearance.monospace_font_size(),
+                self.font_family,
+                appearance.monospace_font_family(),
+                text_color,
+                Default::default(),
+            )
+            .set_selectable(self.is_text_selectable);
+            if !self.soft_wrap_title {
+                element = element.with_no_text_wrapping();
             }
+            title_element = element.finish();
+        }
 
         left_content_container.add_child(
             Expanded::new(

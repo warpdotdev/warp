@@ -780,18 +780,18 @@ fn render_grid_without_ligatures<'a>(
             if obfuscate_secrets.should_redact_secret()
                 && let Some((handle, secret)) =
                     grid.secret_at_displayed_point(Point::new(offset_row, col))
-                {
-                    let range = secret.range();
-                    if row_idx == range.start().row && col == range.start().col {
-                        first_cell_in_secret = FirstCellInSecret::Yes { handle };
-                    }
-                    cell_type.secret = Some(Secret {
-                        hovered: hovered_secret_range
-                            .as_ref()
-                            .is_some_and(|r| r.contains(&Point::new(row_idx, col))),
-                        is_obfuscated: secret.is_obfuscated(),
-                    });
+            {
+                let range = secret.range();
+                if row_idx == range.start().row && col == range.start().col {
+                    first_cell_in_secret = FirstCellInSecret::Yes { handle };
                 }
+                cell_type.secret = Some(Secret {
+                    hovered: hovered_secret_range
+                        .as_ref()
+                        .is_some_and(|r| r.contains(&Point::new(row_idx, col))),
+                    is_obfuscated: secret.is_obfuscated(),
+                });
+            }
 
             // Don't apply cursor contrast colouring when hide_cursor_cell
             // is active — the cursor itself won't be drawn, so the cell
@@ -1316,18 +1316,18 @@ fn render_grid_with_ligatures<'a>(
             if obfuscate_secrets.should_redact_secret()
                 && let Some((handle, secret)) =
                     grid.secret_at_displayed_point(Point::new(offset_row, col))
-                {
-                    let range = secret.range();
-                    if row_idx == range.start().row && col == range.start().col {
-                        first_cell_in_secret = FirstCellInSecret::Yes { handle };
-                    }
-                    cell_type.secret = Some(Secret {
-                        hovered: hovered_secret_range
-                            .as_ref()
-                            .is_some_and(|r| r.contains(&Point::new(row_idx, col))),
-                        is_obfuscated: secret.is_obfuscated(),
-                    });
+            {
+                let range = secret.range();
+                if row_idx == range.start().row && col == range.start().col {
+                    first_cell_in_secret = FirstCellInSecret::Yes { handle };
                 }
+                cell_type.secret = Some(Secret {
+                    hovered: hovered_secret_range
+                        .as_ref()
+                        .is_some_and(|r| r.contains(&Point::new(row_idx, col))),
+                    is_obfuscated: secret.is_obfuscated(),
+                });
+            }
 
             // Don't apply cursor contrast colouring when hide_cursor_cell
             // is active — the cursor itself won't be drawn, so the cell

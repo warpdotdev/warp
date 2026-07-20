@@ -320,11 +320,10 @@ impl<T: EventLoopSender> PtyController<T> {
                 if !outcome.is_accepted()
                     && let Err(err) = block_on(cancel_tx.send(InBandCommandCancelledEvent {
                         command_id: callback_command_id.clone(),
-                    })) {
-                        log::warn!(
-                            "Pty Controller failed to cancel rejected in band command: {err:?}"
-                        );
-                    }
+                    }))
+                {
+                    log::warn!("Pty Controller failed to cancel rejected in band command: {err:?}");
+                }
                 outcome
             })),
         });
@@ -691,9 +690,10 @@ impl<T: EventLoopSender> PtyController<T> {
         }
 
         if let Some(on_write_fn) = on_write_fn
-            && !on_write_fn().is_accepted() {
-                return false;
-            }
+            && !on_write_fn().is_accepted()
+        {
+            return false;
+        }
 
         if is_for_command {
             self.line_editor_status

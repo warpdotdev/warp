@@ -134,11 +134,12 @@ impl StandingQueryResults {
         definitions: &StandingQueryDefinitions,
     ) {
         if definitions.is_direct_project_skill_provider_child(path)
-            && let Some(provider_root) = definitions.project_skill_provider_ancestor(path) {
-                self.project_skills.insert(StandingQueryContent::directory(
-                    StandardizedPath::from_local_absolute_unchecked(provider_root),
-                ));
-            }
+            && let Some(provider_root) = definitions.project_skill_provider_ancestor(path)
+        {
+            self.project_skills.insert(StandingQueryContent::directory(
+                StandardizedPath::from_local_absolute_unchecked(provider_root),
+            ));
+        }
     }
 
     /// Records an eligible project skill reached through a directory symlink during standing

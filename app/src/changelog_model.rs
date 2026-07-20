@@ -186,10 +186,10 @@ impl ChangelogModel {
             for markdown_section in &changelog.markdown_sections {
                 if !markdown_section.markdown.is_empty()
                     && let Ok(parsed_markdown) = parse_markdown(markdown_section.markdown.as_str())
-                    {
-                        self.parsed_changelog
-                            .insert(markdown_section.title.clone(), parsed_markdown);
-                    }
+                {
+                    self.parsed_changelog
+                        .insert(markdown_section.title.clone(), parsed_markdown);
+                }
             }
         }
     }

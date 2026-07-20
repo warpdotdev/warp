@@ -113,15 +113,19 @@ fn extract_filename_from_html_tags(html: &str) -> Option<String> {
 
     // 2. Check title attribute
     if let Some(title_content) = extract_quoted_value(html, "title=\"")
-        && title_content.contains('.') && has_image_extension(&title_content) {
-            return Some(title_content);
-        }
+        && title_content.contains('.')
+        && has_image_extension(&title_content)
+    {
+        return Some(title_content);
+    }
 
     // 3. Check alt attribute
     if let Some(alt_content) = extract_quoted_value(html, "alt=\"")
-        && alt_content.contains('.') && has_image_extension(&alt_content) {
-            return Some(alt_content);
-        }
+        && alt_content.contains('.')
+        && has_image_extension(&alt_content)
+    {
+        return Some(alt_content);
+    }
 
     // 4. Look for any filename-like strings with image extensions in the entire HTML
     const TRIM_CHARS: &[char] = &['"', '\'', '<', '>', '(', ')', ',', ';'];

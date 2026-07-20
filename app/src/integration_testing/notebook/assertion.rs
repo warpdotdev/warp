@@ -120,9 +120,10 @@ fn is_notebook_in_hidden_pane(app: &App, notebook_view: &ViewHandle<NotebookView
                 let is_hidden = pane_group.read(app, |pg, ctx| {
                     for pane_id in pg.pane_ids() {
                         if let Some(notebook_pane) = pg.notebook_pane_by_pane_id(Some(pane_id))
-                            && notebook_pane.notebook_view(ctx).id() == notebook_view.id() {
-                                return pg.is_pane_hidden_for_close(pane_id);
-                            }
+                            && notebook_pane.notebook_view(ctx).id() == notebook_view.id()
+                        {
+                            return pg.is_pane_hidden_for_close(pane_id);
+                        }
                     }
                     false
                 });

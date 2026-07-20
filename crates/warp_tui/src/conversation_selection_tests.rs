@@ -252,9 +252,10 @@ fn tui_selection_reconciles_split_and_removed_selection() {
         app.update(|ctx| {
             ctx.subscribe_to_model(&selection, move |_, event, _| {
                 if matches!(event, ConversationSelectionEvent::Activated { .. })
-                    && let Some(tx) = replacement_tx.borrow_mut().take() {
-                        let _ = tx.send(());
-                    }
+                    && let Some(tx) = replacement_tx.borrow_mut().take()
+                {
+                    let _ = tx.send(());
+                }
             });
         });
 

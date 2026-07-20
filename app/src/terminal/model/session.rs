@@ -410,9 +410,9 @@ impl Sessions {
                 BootstrapSessionType::WarpifiedRemote
             )
             && let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
-            {
-                session.set_remote_host_id(Some(host_id.clone()));
-            }
+        {
+            session.set_remote_host_id(Some(host_id.clone()));
+        }
 
         let bootstrap_duration_seconds =
             pending_session_start_time.map(|start| start.elapsed().as_secs_f64());
@@ -524,11 +524,12 @@ impl Sessions {
         event: ExecutedExecutorCommandEvent,
     ) {
         if let Some(in_band_command_output_tx) = self.in_band_command_output_tx_map.get(&session_id)
-            && let Err(e) = in_band_command_output_tx.try_send(event) {
-                log::warn!(
-                    "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor: {e:#}"
-                );
-            }
+            && let Err(e) = in_band_command_output_tx.try_send(event)
+        {
+            log::warn!(
+                "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor: {e:#}"
+            );
+        }
     }
 
     /// Registers a session in the map for the purpose of testing.
@@ -1644,7 +1645,7 @@ impl Session {
                     );
                     return vec![];
                 };
-                
+
                 output_string
                     .lines()
                     .map(|s| s.trim().to_string())

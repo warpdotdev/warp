@@ -608,9 +608,10 @@ fn evaluate_entry(
             IgnoredPathStrategy::Exclude => return Err(BuildTreeError::Ignored),
             IgnoredPathStrategy::IncludeOnly(patterns) => {
                 if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str())
-                    && !patterns.iter().any(|pattern| file_name == pattern) {
-                        return Err(BuildTreeError::Ignored);
-                    }
+                    && !patterns.iter().any(|pattern| file_name == pattern)
+                {
+                    return Err(BuildTreeError::Ignored);
+                }
             }
             IgnoredPathStrategy::IncludeLazy => {
                 lazy = !force_included;

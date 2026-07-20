@@ -47,27 +47,28 @@ impl UsageHistoryEntry {
             .with_child(self.render_header(appearance));
 
         if let Some(entry) = &self.entry
-            && self.is_expanded {
-                res = res
-                    .with_child(
-                        // Separator between header and usage component
-                        Container::new(Empty::new().finish())
-                            .with_border(
-                                Border::top(2.0).with_border_fill(appearance.theme().outline()),
-                            )
-                            .with_overdraw_bottom(0.)
-                            .finish(),
-                    )
-                    .with_child(
-                        ConversationUsageView::new(
-                            ConversationUsageInfo::from(entry),
-                            DisplayMode::Settings,
-                            None,
-                            self.tooltip_mouse_state.clone(),
+            && self.is_expanded
+        {
+            res = res
+                .with_child(
+                    // Separator between header and usage component
+                    Container::new(Empty::new().finish())
+                        .with_border(
+                            Border::top(2.0).with_border_fill(appearance.theme().outline()),
                         )
-                        .render(app),
-                    );
-            }
+                        .with_overdraw_bottom(0.)
+                        .finish(),
+                )
+                .with_child(
+                    ConversationUsageView::new(
+                        ConversationUsageInfo::from(entry),
+                        DisplayMode::Settings,
+                        None,
+                        self.tooltip_mouse_state.clone(),
+                    )
+                    .render(app),
+                );
+        }
 
         Container::new(res.finish())
             .with_border(Border::all(2.).with_border_fill(appearance.theme().surface_3()))

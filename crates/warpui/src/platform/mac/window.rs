@@ -1706,15 +1706,16 @@ fn schedule_synthetic_drag(
         .spawn(async move {
             Timer::at(instant).await;
             if let Some(window_state) = weak_window_state.upgrade()
-                && window_state.synthetic_drag_counter.get() == drag_id {
-                    schedule_synthetic_drag(&window_state, position, modifiers);
-                    app::callback_dispatcher()
-                        .for_window(&Window(window_state))
-                        .dispatch_event(Event::LeftMouseDragged {
-                            position,
-                            modifiers,
-                        });
-                }
+                && window_state.synthetic_drag_counter.get() == drag_id
+            {
+                schedule_synthetic_drag(&window_state, position, modifiers);
+                app::callback_dispatcher()
+                    .for_window(&Window(window_state))
+                    .dispatch_event(Event::LeftMouseDragged {
+                        position,
+                        modifiers,
+                    });
+            }
         })
         .detach();
 }

@@ -760,13 +760,13 @@ impl EnvironmentCommandRunner {
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
             if let UpdateManagerEvent::ObjectOperationComplete { result } = event
                 && matches!(result.operation, ObjectOperation::Create { .. })
-                    && matches!(result.success_type, OperationSuccessType::Success)
-                    && result.client_id == Some(client_id)
-                {
-                    let server_id = result.server_id.unwrap();
-                    println!("Environment created successfully with ID: {server_id}");
-                    ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
-                }
+                && matches!(result.success_type, OperationSuccessType::Success)
+                && result.client_id == Some(client_id)
+            {
+                let server_id = result.server_id.unwrap();
+                println!("Environment created successfully with ID: {server_id}");
+                ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
+            }
         });
     }
 
@@ -1004,25 +1004,22 @@ impl EnvironmentCommandRunner {
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
             if let UpdateManagerEvent::ObjectOperationComplete { result } = event
                 && matches!(result.operation, ObjectOperation::Update)
-                    && result.server_id == Some(server_id)
-                {
-                    match result.success_type {
-                        OperationSuccessType::Success => {
-                            println!("Environment updated successfully!\n");
-                            Self::print_environment_details(&updated_env);
-                            ctx.terminate_app(
-                                warpui::platform::TerminationMode::ForceTerminate,
-                                None,
-                            );
-                        }
-                        _ => {
-                            super::report_fatal_error(
-                                anyhow::anyhow!("Failed to update environment"),
-                                ctx,
-                            );
-                        }
+                && result.server_id == Some(server_id)
+            {
+                match result.success_type {
+                    OperationSuccessType::Success => {
+                        println!("Environment updated successfully!\n");
+                        Self::print_environment_details(&updated_env);
+                        ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
+                    }
+                    _ => {
+                        super::report_fatal_error(
+                            anyhow::anyhow!("Failed to update environment"),
+                            ctx,
+                        );
                     }
                 }
+            }
         });
     }
 
@@ -1088,23 +1085,21 @@ impl EnvironmentCommandRunner {
         // Listen to the UpdateManager for a completed object deletion
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
             if let UpdateManagerEvent::ObjectOperationComplete { result } = event
-                && matches!(result.operation, ObjectOperation::Delete { .. }) {
-                    match result.success_type {
-                        OperationSuccessType::Success => {
-                            println!("Environment deleted successfully");
-                            ctx.terminate_app(
-                                warpui::platform::TerminationMode::ForceTerminate,
-                                None,
-                            );
-                        }
-                        _ => {
-                            super::report_fatal_error(
-                                anyhow::anyhow!("Failed to delete environment"),
-                                ctx,
-                            );
-                        }
+                && matches!(result.operation, ObjectOperation::Delete { .. })
+            {
+                match result.success_type {
+                    OperationSuccessType::Success => {
+                        println!("Environment deleted successfully");
+                        ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
+                    }
+                    _ => {
+                        super::report_fatal_error(
+                            anyhow::anyhow!("Failed to delete environment"),
+                            ctx,
+                        );
                     }
                 }
+            }
         });
     }
 }

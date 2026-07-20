@@ -593,9 +593,10 @@ fn find_terminal_view_by_id(
             let pane_group = pane_group.as_ref(app);
             for pane_id in pane_group.terminal_pane_ids() {
                 if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app)
-                    && terminal_view.id() == terminal_view_id {
-                        return Some(terminal_view);
-                    }
+                    && terminal_view.id() == terminal_view_id
+                {
+                    return Some(terminal_view);
+                }
             }
         }
     }

@@ -1099,9 +1099,9 @@ impl CodebaseIndex {
                                     repo_metadata.clone(),
                                 )
                                 .await
-                            {
-                                cache_population_error = Some(e);
-                            }
+                        {
+                            cache_population_error = Some(e);
+                        }
                         SyncOperationResult::Success {
                             flushed_node_count: total_nodes_to_sync,
                             flushed_fragment_result: flush_result,

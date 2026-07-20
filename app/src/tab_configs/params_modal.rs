@@ -591,21 +591,22 @@ impl View for TabConfigParamsModal {
 
             // Default value hint (text params only — pickers show the value in their top bar).
             if matches!(param.param_type, TabConfigParamType::Text)
-                && let Some(default_value) = &param.default {
-                    form.add_child(
-                        Container::new(
-                            Text::new_inline(
-                                format!("Default: {default_value}"),
-                                appearance.ui_font_family(),
-                                appearance.ui_font_size() - 1.,
-                            )
-                            .with_color(sub_text.into())
-                            .finish(),
+                && let Some(default_value) = &param.default
+            {
+                form.add_child(
+                    Container::new(
+                        Text::new_inline(
+                            format!("Default: {default_value}"),
+                            appearance.ui_font_family(),
+                            appearance.ui_font_size() - 1.,
                         )
-                        .with_margin_bottom(4.)
+                        .with_color(sub_text.into())
                         .finish(),
-                    );
-                }
+                    )
+                    .with_margin_bottom(4.)
+                    .finish(),
+                );
+            }
 
             // The input field itself.
             // Text editors get the standard text_input border treatment;

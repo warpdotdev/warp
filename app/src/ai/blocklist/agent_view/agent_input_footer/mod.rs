@@ -600,27 +600,29 @@ impl AgentInputFooter {
                 // start a debounce timer for non-auto-install agents.
                 #[cfg(not(target_family = "wasm"))]
                 if let CLIAgentSessionsModelEvent::Started { .. } = event
-                    && let Some(agent) = me.cli_agent(ctx) {
-                        let label = format!("Enable {} notifications", agent.display_name());
-                        me.install_plugin_button.update(ctx, |button, ctx| {
-                            button.set_label(label, ctx);
-                        });
-                        if let Some(manager) = plugin_manager_for(agent)
-                            && !manager.can_auto_install() {
-                                ctx.spawn(
-                                    Timer::after(PLUGIN_CHIP_DEBOUNCE),
-                                    |me, _, ctx: &mut ViewContext<Self>| {
-                                        let suppress = CLIAgentSessionsModel::as_ref(ctx)
-                                            .session(me.terminal_view_id)
-                                            .is_some_and(|s| s.supports_rich_status());
-                                        if !suppress {
-                                            me.plugin_chip_ready = true;
-                                            ctx.notify();
-                                        }
-                                    },
-                                );
-                            }
+                    && let Some(agent) = me.cli_agent(ctx)
+                {
+                    let label = format!("Enable {} notifications", agent.display_name());
+                    me.install_plugin_button.update(ctx, |button, ctx| {
+                        button.set_label(label, ctx);
+                    });
+                    if let Some(manager) = plugin_manager_for(agent)
+                        && !manager.can_auto_install()
+                    {
+                        ctx.spawn(
+                            Timer::after(PLUGIN_CHIP_DEBOUNCE),
+                            |me, _, ctx: &mut ViewContext<Self>| {
+                                let suppress = CLIAgentSessionsModel::as_ref(ctx)
+                                    .session(me.terminal_view_id)
+                                    .is_some_and(|s| s.supports_rich_status());
+                                if !suppress {
+                                    me.plugin_chip_ready = true;
+                                    ctx.notify();
+                                }
+                            },
+                        );
                     }
+                }
 
                 let CLIAgentSessionsModelEvent::InputSessionChanged {
                     new_input_state, ..
@@ -1221,9 +1223,10 @@ impl AgentInputFooter {
 
         #[cfg(not(target_family = "wasm"))]
         if let Some(manager) = plugin_manager_for(session.agent)
-            && !manager.can_auto_install() {
-                return true;
-            }
+            && !manager.can_auto_install()
+        {
+            return true;
+        }
         if session.is_remote() {
             return true;
         }
@@ -1598,22 +1601,23 @@ impl AgentInputFooter {
 
         // CLI agent brand icon is always rendered (not configurable).
         if let Some(agent) = self.cli_agent(app)
-            && let Some(icon) = agent.icon() {
-                let icon_color = agent
-                    .brand_color()
-                    .map(|c| c.on_background(background_color, MinimumAllowedContrast::NonText))
-                    .unwrap_or_else(|| appearance.theme().foreground().into_solid());
-                left_buttons.add_child(
-                    Container::new(
-                        ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(icon_color)).finish())
-                            .with_width(cli_icon_size)
-                            .with_height(cli_icon_size)
-                            .finish(),
-                    )
-                    .with_padding_right(8.)
-                    .finish(),
-                );
-            }
+            && let Some(icon) = agent.icon()
+        {
+            let icon_color = agent
+                .brand_color()
+                .map(|c| c.on_background(background_color, MinimumAllowedContrast::NonText))
+                .unwrap_or_else(|| appearance.theme().foreground().into_solid());
+            left_buttons.add_child(
+                Container::new(
+                    ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(icon_color)).finish())
+                        .with_width(cli_icon_size)
+                        .with_height(cli_icon_size)
+                        .finish(),
+                )
+                .with_padding_right(8.)
+                .finish(),
+            );
+        }
 
         if let Some(chip_kind) = self.plugin_chip_kind(app) {
             let manual = self.should_use_manual_mode(app);
@@ -2578,15 +2582,16 @@ impl TypedActionView for AgentInputFooter {
                 let chip_kind = self.plugin_chip_kind(ctx);
                 let is_update = matches!(chip_kind, Some(PluginChipKind::Update));
                 if let Some(agent) = self.cli_agent(ctx)
-                    && let Some(kind) = chip_kind {
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::CLIAgentPluginChipDismissed {
-                                cli_agent: agent.into(),
-                                chip_kind: kind.into(),
-                            },
-                            ctx
-                        );
-                    }
+                    && let Some(kind) = chip_kind
+                {
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::CLIAgentPluginChipDismissed {
+                            cli_agent: agent.into(),
+                            chip_kind: kind.into(),
+                        },
+                        ctx
+                    );
+                }
                 let session = CLIAgentSessionsModel::as_ref(ctx)
                     .session(self.terminal_view_id)
                     .cloned();

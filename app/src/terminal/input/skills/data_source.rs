@@ -261,12 +261,13 @@ impl SearchItem for SkillSearchItem {
         .with_clip(ClipConfig::ellipsis());
 
         if let Some(name_match) = &self.name_match_result
-            && !name_match.matched_indices.is_empty() {
-                name_text = name_text.with_single_highlight(
-                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
-                    name_match.matched_indices.clone(),
-                );
-            }
+            && !name_match.matched_indices.is_empty()
+        {
+            name_text = name_text.with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                name_match.matched_indices.clone(),
+            );
+        }
 
         row.add_child(
             ConstrainedBox::new(name_text.finish())

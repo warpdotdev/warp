@@ -60,9 +60,9 @@ where
             .ok()?
             .take_while(|c| c.is_whitespace())
             .find_position(|c| *c == '\n')
-        {
-            block_start += i + 1;
-        }
+    {
+        block_start += i + 1;
+    }
 
     Some(block_start..block_end)
 }

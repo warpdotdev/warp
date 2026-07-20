@@ -142,9 +142,10 @@ impl Listener {
         ctx: &mut ModelContext<Self>,
     ) {
         if let UserWorkspacesEvent::TeamsChanged = event
-            && self.is_part_of_some_team(ctx) {
-                self.start_listener(ctx);
-            }
+            && self.is_part_of_some_team(ctx)
+        {
+            self.start_listener(ctx);
+        }
     }
 
     /// Returns true if the user has any object that is not a welcome object. If the user only has objects

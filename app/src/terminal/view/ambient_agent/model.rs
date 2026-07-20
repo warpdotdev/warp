@@ -841,10 +841,11 @@ impl AmbientAgentViewModel {
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(id) = &environment_id
-            && CloudAmbientAgentEnvironment::get_by_id(id, ctx).is_none() {
-                log::warn!("Tried to select unknown environment {id:?}");
-                return;
-            }
+            && CloudAmbientAgentEnvironment::get_by_id(id, ctx).is_none()
+        {
+            log::warn!("Tried to select unknown environment {id:?}");
+            return;
+        }
         self.environment_id = environment_id;
         self.environment_id_from_viewed_task = false;
         ctx.emit(AmbientAgentViewModelEvent::EnvironmentSelected);
@@ -854,9 +855,10 @@ impl AmbientAgentViewModel {
     fn validate_selected_harness(&mut self, ctx: &mut ModelContext<Self>) {
         let model = HarnessAvailabilityModel::as_ref(ctx);
         if !model.is_harness_enabled(self.harness)
-            && let Some(first_enabled) = model.available_harnesses().iter().find(|h| h.enabled) {
-                self.set_harness(first_enabled.harness, ctx);
-            }
+            && let Some(first_enabled) = model.available_harnesses().iter().find(|h| h.enabled)
+        {
+            self.set_harness(first_enabled.harness, ctx);
+        }
     }
 
     /// Whether or not this terminal session is for an ambient agent.
@@ -1517,10 +1519,11 @@ impl AmbientAgentViewModel {
         );
 
         if let Some(client_error) = err.downcast_ref::<ClientError>()
-            && let Some(auth_url) = &client_error.auth_url {
-                self.handle_needs_github_auth(auth_url.clone(), client_error.error.clone(), ctx);
-                return;
-            }
+            && let Some(auth_url) = &client_error.auth_url
+        {
+            self.handle_needs_github_auth(auth_url.clone(), client_error.error.clone(), ctx);
+            return;
+        }
         if let Some(capacity_error) = err.downcast_ref::<CloudAgentCapacityError>() {
             self.handle_spawn_error(capacity_error.error.clone(), ctx);
             ctx.emit(AmbientAgentViewModelEvent::ShowCloudAgentCapacityModal);

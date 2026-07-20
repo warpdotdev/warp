@@ -277,9 +277,10 @@ impl CodeReviewState {
 
         // Auto-select first repo if we have one and no selection yet
         if self.selected_repo_path.is_none()
-            && let Some(first_repo) = self.available_repos.first() {
-                self.set_selected_repo(first_repo.clone(), ctx);
-            }
+            && let Some(first_repo) = self.available_repos.first()
+        {
+            self.set_selected_repo(first_repo.clone(), ctx);
+        }
     }
 
     #[cfg(not(feature = "local_fs"))]
@@ -611,9 +612,10 @@ impl RightPanelView {
 
                 // Only close the old view if the selection actually changed.
                 if old_selected != new_selected
-                    && let Some(old_path) = &old_selected {
-                        self.close_code_review_view(*pane_group_id, old_path, ctx);
-                    }
+                    && let Some(old_path) = &old_selected
+                {
+                    self.close_code_review_view(*pane_group_id, old_path, ctx);
+                }
 
                 if let Some(path) = &new_selected {
                     self.ensure_code_review_view_exists(path, ctx);
@@ -734,12 +736,9 @@ impl RightPanelView {
                 view.on_open(ctx);
             });
             self.recompute_terminal_availability(ctx);
-        } else if let Some(view) = self.create_code_review_view(
-            repo_path,
-            diff_state_model.clone(),
-            pane_group_id,
-            ctx,
-        ) {
+        } else if let Some(view) =
+            self.create_code_review_view(repo_path, diff_state_model.clone(), pane_group_id, ctx)
+        {
             view.update(ctx, |view, ctx| {
                 view.on_open(ctx);
             });
@@ -1617,16 +1616,18 @@ impl RightPanelView {
 
         // Try the focused terminal first.
         if let Some(tv) = focused_terminal
-            && is_available(tv) {
-                return Some(tv.clone());
-            }
+            && is_available(tv)
+        {
+            return Some(tv.clone());
+        }
 
         // Try the preferred (repo-mapped) terminal next.
         if let Some(preferred_id) = preferred_terminal_id
             && let Some(tv) = terminal_views.iter().find(|tv| tv.id() == preferred_id)
-                && is_available(tv) {
-                    return Some(tv.clone());
-                }
+            && is_available(tv)
+        {
+            return Some(tv.clone());
+        }
 
         // Fallback: any terminal in the repo that is available.
         terminal_views.iter().find(|tv| is_available(tv)).cloned()
@@ -1773,11 +1774,12 @@ impl RightPanelView {
             if has_review_terminal
                 && let Some(view) =
                     self.create_code_review_view(repo_path, diff_state_model, pane_group_id, ctx)
-                    && is_panel_open {
-                        view.update(ctx, |view, ctx| {
-                            view.on_open(ctx);
-                        });
-                    }
+                && is_panel_open
+            {
+                view.update(ctx, |view, ctx| {
+                    view.on_open(ctx);
+                });
+            }
         }
     }
 }
@@ -1795,18 +1797,19 @@ impl TypedActionView for RightPanelView {
             RightPanelAction::ToggleFileSidebar => {
                 if let Some(state) = &self.code_review_state
                     && let Some(repo_path) = &state.selected_repo_path
-                        && let Some(pane_group) = &self.active_pane_group {
-                            let pane_group_id = pane_group.id();
-                            let working_directories_model = self.working_directories_model.clone();
-                            if let Some(code_review_view) = working_directories_model
-                                .as_ref(ctx)
-                                .get_code_review_view(pane_group_id, repo_path)
-                            {
-                                code_review_view.update(ctx, |view, ctx| {
-                                    view.handle_action(&CodeReviewAction::ToggleFileSidebar, ctx);
-                                });
-                            }
-                        }
+                    && let Some(pane_group) = &self.active_pane_group
+                {
+                    let pane_group_id = pane_group.id();
+                    let working_directories_model = self.working_directories_model.clone();
+                    if let Some(code_review_view) = working_directories_model
+                        .as_ref(ctx)
+                        .get_code_review_view(pane_group_id, repo_path)
+                    {
+                        code_review_view.update(ctx, |view, ctx| {
+                            view.handle_action(&CodeReviewAction::ToggleFileSidebar, ctx);
+                        });
+                    }
+                }
             }
             RightPanelAction::SelectRepo {
                 repo_path,

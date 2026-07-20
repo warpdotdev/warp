@@ -262,9 +262,10 @@ impl TuiTranscriptView {
             } => {
                 let mut conversation_ids = cleared_conversation_ids.clone();
                 if let Some(active_conversation_id) = active_conversation_id
-                    && !conversation_ids.contains(active_conversation_id) {
-                        conversation_ids.push(*active_conversation_id);
-                    }
+                    && !conversation_ids.contains(active_conversation_id)
+                {
+                    conversation_ids.push(*active_conversation_id);
+                }
                 for conversation_id in conversation_ids {
                     self.remove_conversation(conversation_id, ctx);
                 }

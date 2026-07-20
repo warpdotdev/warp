@@ -63,9 +63,10 @@ fn is_command_copied_from_notebook(command: &str, notebook: &CloudNotebookModel)
 
     for line in md.lines {
         if let FormattedTextLine::CodeBlock(code) = line
-            && command == code.code.trim() {
-                return true;
-            }
+            && command == code.code.trim()
+        {
+            return true;
+        }
     }
 
     false
@@ -89,9 +90,10 @@ fn is_command_copied_from_env_var_collection(
     for var in &collection.vars {
         // Check if the env-var is defined as a command and matches the given command exactly.
         if let EnvVarValue::Command(secret_command) = &var.value
-            && secret_command.command == command {
-                return true;
-            }
+            && secret_command.command == command
+        {
+            return true;
+        }
 
         // Check if the command is an initialization of the specific env-var.
         let init_string = var.get_initialization_string(shell_type);

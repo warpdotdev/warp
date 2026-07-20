@@ -52,14 +52,15 @@ impl PromptSuggestionExecutor {
         };
 
         if FeatureFlag::PromptSuggestionsViaMAA.is_enabled()
-            && let SuggestPromptRequest::PromptSuggestion { prompt, label } = request {
-                ctx.emit(PromptSuggestionExecutorEvent::NewPromptSuggestion {
-                    prompt: prompt.clone(),
-                    label: label.clone(),
-                    conversation_id: input.conversation_id,
-                    action_id: input.action.id.clone(),
-                });
-            }
+            && let SuggestPromptRequest::PromptSuggestion { prompt, label } = request
+        {
+            ctx.emit(PromptSuggestionExecutorEvent::NewPromptSuggestion {
+                prompt: prompt.clone(),
+                label: label.clone(),
+                conversation_id: input.conversation_id,
+                action_id: input.action.id.clone(),
+            });
+        }
 
         let (result_tx, result_rx) = oneshot::channel();
         self.suggest_prompt_result_tx = Some(result_tx);

@@ -1672,9 +1672,10 @@ impl AppearanceSettingsPageView {
         // actual font.  We currently don't do this on Linux because
         // pre-loading all of the fonts is too expensive.
         if cfg!(not(any(target_os = "linux", target_os = "freebsd")))
-            && let Some(family_id) = ctx.font_cache().family_id_for_name(&font_name) {
-                initial_dropdown_item = initial_dropdown_item.with_font_override(family_id);
-            }
+            && let Some(family_id) = ctx.font_cache().family_id_for_name(&font_name)
+        {
+            initial_dropdown_item = initial_dropdown_item.with_font_override(family_id);
+        }
 
         initial_dropdown_item
     }
@@ -1755,22 +1756,23 @@ impl AppearanceSettingsPageView {
                 let buffer_text = self.alt_screen_padding_editor.as_ref(ctx).buffer_text(ctx);
 
                 if let Ok(padding) = buffer_text.parse::<f32>()
-                    && padding >= 0. {
-                        TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
-                            let new_mode = AltScreenPaddingMode::Custom {
-                                uniform_padding: padding.into_pixels(),
-                            };
-                            report_if_error!(
-                                terminal_settings
-                                    .alt_screen_padding
-                                    .set_value(new_mode, ctx)
-                            );
-                            send_telemetry_from_ctx!(
-                                TelemetryEvent::UpdateAltScreenPaddingMode { new_mode },
-                                ctx
-                            );
-                        });
-                    }
+                    && padding >= 0.
+                {
+                    TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
+                        let new_mode = AltScreenPaddingMode::Custom {
+                            uniform_padding: padding.into_pixels(),
+                        };
+                        report_if_error!(
+                            terminal_settings
+                                .alt_screen_padding
+                                .set_value(new_mode, ctx)
+                        );
+                        send_telemetry_from_ctx!(
+                            TelemetryEvent::UpdateAltScreenPaddingMode { new_mode },
+                            ctx
+                        );
+                    });
+                }
 
                 ctx.notify();
             }
@@ -1885,15 +1887,16 @@ impl AppearanceSettingsPageView {
     fn set_font_size(&mut self, ctx: &mut ViewContext<Self>) {
         let user_input = self.font_size_editor.as_ref(ctx).buffer_text(ctx);
         if let Ok(num) = user_input.parse::<usize>()
-            && (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&num) {
-                FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-                    report_if_error!(
-                        font_settings
-                            .monospace_font_size
-                            .set_value(num as f32, ctx,)
-                    );
-                });
-            }
+            && (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&num)
+        {
+            FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
+                report_if_error!(
+                    font_settings
+                        .monospace_font_size
+                        .set_value(num as f32, ctx,)
+                );
+            });
+        }
     }
 
     pub fn set_font_weight(&mut self, value: Weight, ctx: &mut ViewContext<Self>) {
@@ -1905,11 +1908,12 @@ impl AppearanceSettingsPageView {
     fn set_notebook_font_size(&mut self, ctx: &mut ViewContext<Self>) {
         let user_input = self.notebook_font_size_editor.as_ref(ctx).buffer_text(ctx);
         if let Ok(num) = user_input.parse::<usize>()
-            && (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&num) {
-                FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-                    report_if_error!(font_settings.notebook_font_size.set_value(num as f32, ctx,));
-                });
-            }
+            && (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&num)
+        {
+            FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
+                report_if_error!(font_settings.notebook_font_size.set_value(num as f32, ctx,));
+            });
+        }
     }
 
     fn set_opacity(
@@ -2093,9 +2097,10 @@ impl AppearanceSettingsPageView {
                         // actual font.  We currently don't do this on Linux because
                         // pre-loading all of the fonts is too expensive.
                         if cfg!(not(any(target_os = "linux", target_os = "freebsd")))
-                            && let Some(family_id) = family {
-                                dropdown = dropdown.with_font_override(*family_id)
-                            }
+                            && let Some(family_id) = family
+                        {
+                            dropdown = dropdown.with_font_override(*family_id)
+                        }
 
                         Some(dropdown)
                     } else {
@@ -2153,9 +2158,10 @@ impl AppearanceSettingsPageView {
                     // actual font.  We currently don't do this on Linux because
                     // pre-loading all of the fonts is too expensive.
                     if cfg!(not(any(target_os = "linux", target_os = "freebsd")))
-                        && let Some(family_id) = family {
-                            dropdown = dropdown.with_font_override(*family_id)
-                        }
+                        && let Some(family_id) = family
+                    {
+                        dropdown = dropdown.with_font_override(*family_id)
+                    }
 
                     Some(dropdown)
                 })
@@ -3503,21 +3509,23 @@ impl SettingsWidget for WindowBlurTextureWidget {
             None,
         ));
         if let Some(window) = app.windows().platform_window(view.window_id)
-            && !window.supports_transparency() && window.graphics_backend() != GraphicsBackend::Gl {
-                col.add_child(
-                    Container::new(
-                        FormattedTextElement::from_str(
-                            "The selected hardware may not support rendering transparent windows.",
-                            appearance.ui_font_family(),
-                            appearance.ui_font_size(),
-                        )
-                        .with_color(appearance.theme().disabled_ui_text_color().into_solid())
-                        .finish(),
+            && !window.supports_transparency()
+            && window.graphics_backend() != GraphicsBackend::Gl
+        {
+            col.add_child(
+                Container::new(
+                    FormattedTextElement::from_str(
+                        "The selected hardware may not support rendering transparent windows.",
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
                     )
-                    .with_margin_bottom(8.0)
+                    .with_color(appearance.theme().disabled_ui_text_color().into_solid())
                     .finish(),
-                );
-            }
+                )
+                .with_margin_bottom(8.0)
+                .finish(),
+            );
+        }
         col.finish()
     }
 }
@@ -5254,9 +5262,10 @@ fn open_directory_tab_color_folder_picker(ctx: &mut ViewContext<AppearanceSettin
     ctx.open_file_picker(
         move |result, ctx| {
             if let Ok(paths) = result
-                && let Some(directory_path) = paths.first() {
-                    add_directory_tab_color_path(PathBuf::from(directory_path), ctx);
-                }
+                && let Some(directory_path) = paths.first()
+            {
+                add_directory_tab_color_path(PathBuf::from(directory_path), ctx);
+            }
         },
         file_picker_config,
     );

@@ -310,16 +310,17 @@ impl Repository {
             paths.push(external_git_dir.clone());
         }
         if let Some(common_git_dir) = &self.common_git_directory
-            && let Some(common_local) = common_git_dir.to_local_path() {
-                let refs_dir = common_local.join("refs");
-                if let Ok(refs_std) = StandardizedPath::from_local_canonicalized(&refs_dir) {
-                    paths.push(refs_std);
-                }
-                let config_file = common_local.join("config");
-                if let Ok(config_std) = StandardizedPath::from_local_canonicalized(&config_file) {
-                    paths.push(config_std);
-                }
+            && let Some(common_local) = common_git_dir.to_local_path()
+        {
+            let refs_dir = common_local.join("refs");
+            if let Ok(refs_std) = StandardizedPath::from_local_canonicalized(&refs_dir) {
+                paths.push(refs_std);
             }
+            let config_file = common_local.join("config");
+            if let Ok(config_std) = StandardizedPath::from_local_canonicalized(&config_file) {
+                paths.push(config_std);
+            }
+        }
         paths
     }
 

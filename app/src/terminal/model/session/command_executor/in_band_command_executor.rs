@@ -177,17 +177,18 @@ impl InBandCommandExecutor {
                 return;
             }
             if let Some(output_tx) = cmd.output_tx.clone()
-                && !output_tx.is_closed() {
-                    // TODO: we should consider turning this into a Result::Err
-                    if let Err(error) = output_tx.try_send(CommandOutput {
-                        stdout: vec![],
-                        stderr: vec![],
-                        status: CommandExitStatus::Failure,
-                        exit_code: None,
-                    }) {
-                        log::warn!("Error occurred when sending generator command output: {error}");
-                    }
+                && !output_tx.is_closed()
+            {
+                // TODO: we should consider turning this into a Result::Err
+                if let Err(error) = output_tx.try_send(CommandOutput {
+                    stdout: vec![],
+                    stderr: vec![],
+                    status: CommandExitStatus::Failure,
+                    exit_code: None,
+                }) {
+                    log::warn!("Error occurred when sending generator command output: {error}");
                 }
+            }
             *lock = None;
         }
         self.execute_command_internal();
@@ -207,28 +208,29 @@ impl InBandCommandExecutor {
             if let Some(cmd) = current_command.take() {
                 if cmd.id == event.command_id {
                     if let Some(output_tx) = cmd.output_tx
-                        && !output_tx.is_closed() {
-                            let command_output = if event.exit_code == 0 {
-                                CommandOutput {
-                                    stdout: event.output,
-                                    stderr: vec![],
-                                    status: CommandExitStatus::Success,
-                                    exit_code: Some(ExitCode::from(event.exit_code as i32)),
-                                }
-                            } else {
-                                CommandOutput {
-                                    stdout: vec![],
-                                    stderr: event.output,
-                                    status: CommandExitStatus::Failure,
-                                    exit_code: Some(ExitCode::from(event.exit_code as i32)),
-                                }
-                            };
-                            if let Err(error) = output_tx.try_send(command_output) {
-                                log::warn!(
-                                    "Error occurred when sending generator command output: {error}"
-                                );
+                        && !output_tx.is_closed()
+                    {
+                        let command_output = if event.exit_code == 0 {
+                            CommandOutput {
+                                stdout: event.output,
+                                stderr: vec![],
+                                status: CommandExitStatus::Success,
+                                exit_code: Some(ExitCode::from(event.exit_code as i32)),
                             }
+                        } else {
+                            CommandOutput {
+                                stdout: vec![],
+                                stderr: event.output,
+                                status: CommandExitStatus::Failure,
+                                exit_code: Some(ExitCode::from(event.exit_code as i32)),
+                            }
+                        };
+                        if let Err(error) = output_tx.try_send(command_output) {
+                            log::warn!(
+                                "Error occurred when sending generator command output: {error}"
+                            );
                         }
+                    }
                 } else {
                     log::warn!(
                         "Cached in-band command ID {} does not match ID of executed in-band command output {}",

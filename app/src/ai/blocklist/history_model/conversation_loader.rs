@@ -364,9 +364,9 @@ impl BlocklistAIHistoryModel {
             if let Some(persisted_conversation) = persisted_ai_conversation
                 && let Some(conversation) =
                     convert_persisted_conversation_to_ai_conversation(persisted_conversation)
-                {
-                    return Some(conversation);
-                }
+            {
+                return Some(conversation);
+            }
         }
 
         None
@@ -388,9 +388,10 @@ impl BlocklistAIHistoryModel {
         let mut child_conversation_tokens: HashSet<String> = HashSet::new();
         for conv in self.conversations_by_id.values() {
             if let Some(token) = conv.server_conversation_token()
-                && conv.is_child_agent_conversation() {
-                    child_conversation_tokens.insert(token.as_str().to_string());
-                }
+                && conv.is_child_agent_conversation()
+            {
+                child_conversation_tokens.insert(token.as_str().to_string());
+            }
         }
 
         for server_meta in cloud_metadata_list {

@@ -91,9 +91,10 @@ async fn touch(path: impl AsRef<Path>) {
     let path = path.as_ref();
     if let Some(parent) = path.parent()
         && let Err(err) = async_fs::create_dir_all(parent).await
-            && err.kind() != ErrorKind::AlreadyExists {
-                panic!("Creating parent {} failed: {}", parent.display(), err);
-            }
+        && err.kind() != ErrorKind::AlreadyExists
+    {
+        panic!("Creating parent {} failed: {}", parent.display(), err);
+    }
 
     async_fs::File::create(path)
         .await

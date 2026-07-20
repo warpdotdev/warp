@@ -871,9 +871,10 @@ async fn compute_diff_and_expand(app: &mut App, editor: &ModelHandle<CodeEditorM
         let mut diff_tx = Some(diff_tx);
         ctx.subscribe_to_model(editor, move |_, event, _| {
             if let CodeEditorModelEvent::DiffUpdated = event
-                && let Some(tx) = diff_tx.take() {
-                    let _ = tx.send(());
-                }
+                && let Some(tx) = diff_tx.take()
+            {
+                let _ = tx.send(());
+            }
         });
 
         editor.update(ctx, |editor, ctx| {

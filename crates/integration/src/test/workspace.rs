@@ -386,7 +386,7 @@ fn dispatch_mouse_event(app: &mut warpui_core::App, window_id: WindowId, event: 
 
 fn tab_bounds(app: &mut warpui_core::App, window_id: WindowId, tab_index: usize) -> RectF {
     let presenter = app.presenter(window_id).expect("presenter should exist");
-    
+
     presenter
         .borrow()
         .position_cache()

@@ -572,22 +572,24 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             let is_preprocessing = action_status
                                 .clone()
                                 .is_some_and(|status| status.is_preprocessing());
-                            if !is_preprocessing && !status.is_streaming()
-                                && let Some(requested_edit) = props.requested_edits.get(id) {
-                                    // Don't render the requested edit if the diffs are empty for passive code diffs.
-                                    if request_type.is_passive_code_diff()
-                                        && requested_edit.view.as_ref(app).is_pending_diffs_empty()
-                                    {
-                                        continue;
-                                    }
-
-                                    output_items.add_child(render_requested_edits_output_message(
-                                        requested_edit,
-                                        action_status,
-                                        request_type.is_passive_code_diff(),
-                                        app,
-                                    ));
+                            if !is_preprocessing
+                                && !status.is_streaming()
+                                && let Some(requested_edit) = props.requested_edits.get(id)
+                            {
+                                // Don't render the requested edit if the diffs are empty for passive code diffs.
+                                if request_type.is_passive_code_diff()
+                                    && requested_edit.view.as_ref(app).is_pending_diffs_empty()
+                                {
+                                    continue;
                                 }
+
+                                output_items.add_child(render_requested_edits_output_message(
+                                    requested_edit,
+                                    action_status,
+                                    request_type.is_passive_code_diff(),
+                                    app,
+                                ));
+                            }
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
                             action: AIAgentActionType::Grep { queries, path },
@@ -713,15 +715,15 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 if let Some(conversation) = props.model.conversation(app)
                                     && let Some(state) =
                                         props.todo_list_states.get(&output_message.id)
-                                    {
-                                        output_items.add_child(render_todos(
-                                            &output_message.id,
-                                            todos,
-                                            conversation,
-                                            state,
-                                            app,
-                                        ));
-                                    }
+                                {
+                                    output_items.add_child(render_todos(
+                                        &output_message.id,
+                                        todos,
+                                        conversation,
+                                        state,
+                                        app,
+                                    ));
+                                }
                             }
                             TodoOperation::MarkAsCompleted { completed_todos } => {
                                 if let Some(completed_text) = render_completed_todo_items(
@@ -744,12 +746,13 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                         }) => {
                             if let Some(unit_test_suggestion_view) =
                                 props.unit_test_suggestions.get(id)
-                                && !unit_test_suggestion_view.as_ref(app).is_hidden() {
-                                    output_items.add_child(render_unit_test_suggestion(
-                                        unit_test_suggestion_view,
-                                        app,
-                                    ));
-                                }
+                                && !unit_test_suggestion_view.as_ref(app).is_hidden()
+                            {
+                                output_items.add_child(render_unit_test_suggestion(
+                                    unit_test_suggestion_view,
+                                    app,
+                                ));
+                            }
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
                             action:
@@ -978,9 +981,10 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                     text,
                                     props,
                                     app,
-                                ) {
-                                    output_items.add_child(element);
-                                }
+                                )
+                            {
+                                output_items.add_child(element);
+                            }
                         }
                         AIAgentOutputMessageType::Subagent(SubagentCall {
                             subagent_type:
@@ -1146,11 +1150,12 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 }
 
                 // Only render suggested rules and prompts if the response is complete.
-                if should_render_suggestions && FeatureFlag::SuggestedRules.is_enabled()
+                if should_render_suggestions
+                    && FeatureFlag::SuggestedRules.is_enabled()
                     && let Some(suggestions) = render_suggested_rules_and_prompts_footer(props, app)
-                    {
-                        output_items.add_child(suggestions);
-                    }
+                {
+                    output_items.add_child(suggestions);
+                }
 
                 if should_render_references_section {
                     let exchange_id = props.model.exchange_id(app);
@@ -1220,73 +1225,74 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
     }
 
     if request_type.is_active()
-        && let AIBlockOutputStatus::Failed { error, .. } = &status {
-            // While an automatic resume is still in flight, keep the failed exchange
-            // quiet: skip the error banner, the "won't count towards usage" notice, and
-            // the debug footer. The full failure UI is surfaced only once recovery has
-            // actually failed. Dogfood builds (Local/Dev) opt out so developers still see
-            // every transport failure aggressively.
-            if !error.should_suppress_during_recovery() {
+        && let AIBlockOutputStatus::Failed { error, .. } = &status
+    {
+        // While an automatic resume is still in flight, keep the failed exchange
+        // quiet: skip the error banner, the "won't count towards usage" notice, and
+        // the debug footer. The full failure UI is surfaced only once recovery has
+        // actually failed. Dogfood builds (Local/Dev) opt out so developers still see
+        // every transport failure aggressively.
+        if !error.should_suppress_during_recovery() {
+            output_items.add_child(
+                render_failed_output(
+                    FailedOutputProps {
+                        error,
+                        is_ai_input_enabled: props.is_ai_input_enabled,
+                        invalid_api_key_button_handle: &props
+                            .state_handles
+                            .invalid_api_key_button_handle,
+                        subscribe_button_handle: &props.state_handles.subscribe_button_handle,
+                        aws_bedrock_credentials_error_view: props
+                            .aws_bedrock_credentials_error_view,
+                        icon_right_margin: 16.,
+                    },
+                    app,
+                )
+                .with_content_item_spacing()
+                .finish(),
+            );
+
+            if props.model.is_latest_visible_exchange_in_root_task(app)
+                && !has_expanded_last_requested_command
+                && !props.model.is_restored()
+                && !error.is_invalid_api_key()
+            {
                 output_items.add_child(
-                    render_failed_output(
-                        FailedOutputProps {
-                            error,
-                            is_ai_input_enabled: props.is_ai_input_enabled,
-                            invalid_api_key_button_handle: &props
-                                .state_handles
-                                .invalid_api_key_button_handle,
-                            subscribe_button_handle: &props.state_handles.subscribe_button_handle,
-                            aws_bedrock_credentials_error_view: props
-                                .aws_bedrock_credentials_error_view,
-                            icon_right_margin: 16.,
-                        },
+                    render_informational_footer(
                         app,
+                        "This response won't count towards your usage.".to_string(),
                     )
-                    .with_content_item_spacing()
+                    .with_agent_output_item_spacing(app)
                     .finish(),
                 );
 
-                if props.model.is_latest_visible_exchange_in_root_task(app)
-                    && !has_expanded_last_requested_command
-                    && !props.model.is_restored()
-                    && !error.is_invalid_api_key()
-                {
-                    output_items.add_child(
-                        render_informational_footer(
-                            app,
-                            "This response won't count towards your usage.".to_string(),
-                        )
-                        .with_agent_output_item_spacing(app)
-                        .finish(),
-                    );
-
-                    output_items.add_child(
-                        render_debug_footer(
-                            DebugFooterProps {
-                                conversation: props.model.conversation(app),
-                                model: props.model,
-                                debug_copy_button_handle: props
-                                    .state_handles
-                                    .debug_copy_button_handle
-                                    .clone(),
-                                submit_issue_button_handle: props
-                                    .state_handles
-                                    .submit_issue_button_handle
-                                    .clone(),
-                                should_render_feedback_below: false,
-                            },
-                            |debug_id, ctx| {
-                                ctx.dispatch_typed_action(AIBlockAction::CopyDebugId(debug_id))
-                            },
-                            |ctx| ctx.dispatch_typed_action(AIBlockAction::OpenFeedbackDocs),
-                            app,
-                        )
-                        .with_agent_output_item_spacing(app)
-                        .finish(),
-                    );
-                }
+                output_items.add_child(
+                    render_debug_footer(
+                        DebugFooterProps {
+                            conversation: props.model.conversation(app),
+                            model: props.model,
+                            debug_copy_button_handle: props
+                                .state_handles
+                                .debug_copy_button_handle
+                                .clone(),
+                            submit_issue_button_handle: props
+                                .state_handles
+                                .submit_issue_button_handle
+                                .clone(),
+                            should_render_feedback_below: false,
+                        },
+                        |debug_id, ctx| {
+                            ctx.dispatch_typed_action(AIBlockAction::CopyDebugId(debug_id))
+                        },
+                        |ctx| ctx.dispatch_typed_action(AIBlockAction::OpenFeedbackDocs),
+                        app,
+                    )
+                    .with_agent_output_item_spacing(app)
+                    .finish(),
+                );
             }
         }
+    }
 
     if should_render_stopped_output(props, app) {
         output_items.add_child(render_stopped_output(props, app))
@@ -1856,29 +1862,30 @@ fn render_read_skill(
     // Renders the 'open skill' button for known, non-bundled skills.
     if let Some(skill) = skill
         && !skill.is_bundled()
-            && let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned() {
-                let source = CodeSource::Skill {
-                    reference: skill_reference.clone(),
-                    location: skill.path.clone(),
-                    origin: SkillOpenOrigin::ReadSkill,
-                };
+        && let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned()
+    {
+        let source = CodeSource::Skill {
+            reference: skill_reference.clone(),
+            location: skill.path.clone(),
+            origin: SkillOpenOrigin::ReadSkill,
+        };
 
-                let skill_icon_override = icon_override_for_skill_name(&skill.name);
-                let open_button = render_skill_button(
-                    "Open skill",
-                    button_handle,
-                    appearance,
-                    skill.provider,
-                    skill_icon_override,
-                    move |ctx| {
-                        ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
-                            source: source.clone(),
-                        });
-                    },
-                );
+        let skill_icon_override = icon_override_for_skill_name(&skill.name);
+        let open_button = render_skill_button(
+            "Open skill",
+            button_handle,
+            appearance,
+            skill.provider,
+            skill_icon_override,
+            move |ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
+                    source: source.clone(),
+                });
+            },
+        );
 
-                renderable_action = renderable_action.with_action_button(open_button);
-            }
+        renderable_action = renderable_action.with_action_button(open_button);
+    }
 
     renderable_action.render(app).finish()
 }
@@ -2084,30 +2091,31 @@ fn render_read_files(
 
     // Renders the 'open skill' button if all files belong to the same skill directory.
     if let Some(skill) = parsed_skill
-        && let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned() {
-            let reference = SkillManager::handle(app)
-                .as_ref(app)
-                .reference_for_skill_path(&skill.path);
-            let source = CodeSource::Skill {
-                reference,
-                location: skill.path.clone(),
-                origin: SkillOpenOrigin::ReadFiles,
-            };
-            let skill_icon_override = icon_override_for_skill_name(&skill.name);
-            let open_button = render_skill_button(
-                &format!("/{}", skill.name),
-                button_handle,
-                appearance,
-                skill.provider,
-                skill_icon_override,
-                move |ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
-                        source: source.clone(),
-                    });
-                },
-            );
-            renderable_action = renderable_action.with_action_button(open_button);
-        }
+        && let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned()
+    {
+        let reference = SkillManager::handle(app)
+            .as_ref(app)
+            .reference_for_skill_path(&skill.path);
+        let source = CodeSource::Skill {
+            reference,
+            location: skill.path.clone(),
+            origin: SkillOpenOrigin::ReadFiles,
+        };
+        let skill_icon_override = icon_override_for_skill_name(&skill.name);
+        let open_button = render_skill_button(
+            &format!("/{}", skill.name),
+            button_handle,
+            appearance,
+            skill.provider,
+            skill_icon_override,
+            move |ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
+                    source: source.clone(),
+                });
+            },
+        );
+        renderable_action = renderable_action.with_action_button(open_button);
+    }
 
     renderable_action.render(app).finish()
 }
@@ -2175,14 +2183,15 @@ fn render_stopped_output(props: Props, app: &AppContext) -> Box<dyn Element> {
                     todo_list
                         .get_item_index(&item.id)
                         .map(|index| (item, index))
-                }) {
-                    return Some(format!(
-                        "Stopped task {}/{}: \"{}\"",
-                        item_index + 1,
-                        todo_list.len(),
-                        item.title
-                    ));
-                }
+                })
+            {
+                return Some(format!(
+                    "Stopped task {}/{}: \"{}\"",
+                    item_index + 1,
+                    todo_list.len(),
+                    item.title
+                ));
+            }
 
             conversation
                 .initial_query()
@@ -3170,21 +3179,22 @@ fn render_stop_recording(
         });
     let mut action_button = None;
     if let Some(StopRecordingResult::Success(stopped)) = result
-        && !stopped.artifact_uid.trim().is_empty() {
-            let artifact_uid = stopped.artifact_uid.clone();
-            action_button = props.open_recording_buttons.get(action_id).map(|btn| {
-                render_inline_action_secondary_button(
-                    appearance,
-                    btn,
-                    "Open recording",
-                    Box::new(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(AIBlockAction::OpenRecordingArtifact {
-                            artifact_uid: artifact_uid.clone(),
-                        });
-                    }),
-                )
-            });
-        }
+        && !stopped.artifact_uid.trim().is_empty()
+    {
+        let artifact_uid = stopped.artifact_uid.clone();
+        action_button = props.open_recording_buttons.get(action_id).map(|btn| {
+            render_inline_action_secondary_button(
+                appearance,
+                btn,
+                "Open recording",
+                Box::new(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AIBlockAction::OpenRecordingArtifact {
+                        artifact_uid: artifact_uid.clone(),
+                    });
+                }),
+            )
+        });
+    }
 
     recording_card(stop_recording_card_text(result), action_button, app)
 }
@@ -3202,10 +3212,11 @@ fn render_use_computer(
         .with_icon(action_icon(action_id, props.action_model, props.model, app).finish());
 
     if should_decorate_recorded_use_computer(request)
-        && let Some(recording_span) = recording_span {
-            renderable_action =
-                renderable_action.with_footer(render_recording_footer(recording_span.status, app));
-        }
+        && let Some(recording_span) = recording_span
+    {
+        renderable_action =
+            renderable_action.with_footer(render_recording_footer(recording_span.status, app));
+    }
 
     // Add a "View screenshot" button if the action result contains a screenshot.
     let has_screenshot = props

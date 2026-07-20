@@ -292,9 +292,10 @@ fn inline_visible_width(inline: &FormattedTextInline) -> usize {
         };
         if active_url.as_ref().map(|(url, _)| url.as_str()) != fragment_url {
             if let Some((url, display)) = active_url.take()
-                && url != display {
-                    width += UnicodeWidthStr::width(format!(" ({url})").as_str());
-                }
+                && url != display
+            {
+                width += UnicodeWidthStr::width(format!(" ({url})").as_str());
+            }
             if let Some(url) = fragment_url {
                 active_url = Some((url.to_owned(), String::new()));
             }
@@ -304,8 +305,9 @@ fn inline_visible_width(inline: &FormattedTextInline) -> usize {
         }
     }
     if let Some((url, display)) = active_url
-        && url != display {
-            width += UnicodeWidthStr::width(format!(" ({url})").as_str());
-        }
+        && url != display
+    {
+        width += UnicodeWidthStr::width(format!(" ({url})").as_str());
+    }
     width
 }

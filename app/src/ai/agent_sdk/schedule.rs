@@ -64,13 +64,14 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
             };
 
             let mut environment_args = args.environment;
-            if environment_args.environment.is_none() && !environment_args.no_environment
+            if environment_args.environment.is_none()
+                && !environment_args.no_environment
                 && let Some(environment_id) = loaded_file
                     .as_ref()
                     .and_then(|f| f.file.environment_id.clone())
-                {
-                    environment_args.environment = Some(environment_id);
-                }
+            {
+                environment_args.environment = Some(environment_id);
+            }
 
             let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
             {
@@ -436,10 +437,12 @@ fn update(ctx: &mut AppContext, args: UpdateScheduleArgs) -> anyhow::Result<()> 
             };
 
             let mut environment_args = args.environment;
-            if environment_args.environment.is_none() && !environment_args.remove_environment
-                && let Some(environment_id) = file_config.and_then(|f| f.environment_id.clone()) {
-                    environment_args.environment = Some(environment_id);
-                }
+            if environment_args.environment.is_none()
+                && !environment_args.remove_environment
+                && let Some(environment_id) = file_config.and_then(|f| f.environment_id.clone())
+            {
+                environment_args.environment = Some(environment_id);
+            }
 
             let environment_id = match EnvironmentChoice::resolve_for_update(environment_args, ctx)
             {

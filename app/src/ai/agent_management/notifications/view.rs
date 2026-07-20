@@ -215,9 +215,10 @@ impl NotificationMailboxView {
         if self.filtered_ids.is_empty() {
             self.selected_index = None;
         } else if let Some(idx) = self.selected_index
-            && idx >= self.filtered_ids.len() {
-                self.selected_index = Some(self.filtered_ids.len() - 1);
-            }
+            && idx >= self.filtered_ids.len()
+        {
+            self.selected_index = Some(self.filtered_ids.len() - 1);
+        }
     }
 
     fn render_item_at_index(&self, index: usize, app: &AppContext) -> Box<dyn Element> {
@@ -321,9 +322,10 @@ impl TypedActionView for NotificationMailboxView {
             }
             NotificationMailboxViewAction::ActivateSelected => {
                 if let Some(idx) = self.selected_index
-                    && let Some(id) = self.filtered_ids.get(idx).copied() {
-                        self.activate_notification(id, ctx);
-                    }
+                    && let Some(id) = self.filtered_ids.get(idx).copied()
+                {
+                    self.activate_notification(id, ctx);
+                }
             }
         }
     }

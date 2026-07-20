@@ -153,13 +153,15 @@ impl ThirdPartyHarness for CodexHarness {
         // Order: resumption_prompt → context → prompt
         let mut parts: Vec<&str> = Vec::new();
         if let Some(preamble) = resumption_prompt
-            && !preamble.is_empty() {
-                parts.push(preamble);
-            }
+            && !preamble.is_empty()
+        {
+            parts.push(preamble);
+        }
         if let Some(ctx) = context
-            && !ctx.is_empty() {
-                parts.push(ctx);
-            }
+            && !ctx.is_empty()
+        {
+            parts.push(ctx);
+        }
         parts.push(prompt);
         let owned_prompt = parts.join("\n\n");
         let client: Arc<dyn HarnessSupportClient> = server_api;
@@ -550,9 +552,10 @@ fn prepare_codex_environment_config(
 
 fn codex_config_dir() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var(CODEX_HOME_ENV)
-        && !dir.is_empty() {
-            return Ok(PathBuf::from(dir));
-        }
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
+    }
     dirs::home_dir()
         .map(|home| home.join(CODEX_CONFIG_DIR))
         .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))

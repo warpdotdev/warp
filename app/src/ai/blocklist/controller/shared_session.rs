@@ -389,23 +389,24 @@ impl BlocklistAIController {
                         };
 
                         if let Some(input_ctx) = ctx_opt
-                            && let Some(dir) = &input_ctx.directory {
-                                self.context_model.update(ctx, |context_model, ctx| {
-                                    context_model.update_directory_context(
-                                        if dir.pwd.is_empty() {
-                                            None
-                                        } else {
-                                            Some(dir.pwd.clone())
-                                        },
-                                        if dir.home.is_empty() {
-                                            None
-                                        } else {
-                                            Some(dir.home.clone())
-                                        },
-                                        ctx,
-                                    );
-                                });
-                            }
+                            && let Some(dir) = &input_ctx.directory
+                        {
+                            self.context_model.update(ctx, |context_model, ctx| {
+                                context_model.update_directory_context(
+                                    if dir.pwd.is_empty() {
+                                        None
+                                    } else {
+                                        Some(dir.pwd.clone())
+                                    },
+                                    if dir.home.is_empty() {
+                                        None
+                                    } else {
+                                        Some(dir.home.clone())
+                                    },
+                                    ctx,
+                                );
+                            });
+                        }
                     }
                 }
             }

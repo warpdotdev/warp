@@ -88,14 +88,15 @@ impl ImportedConfigModel {
     ) {
         if let TerminalType::ITerm = terminal_type
             && let Ok(configs) = configs
-                && configs.iter().any(|config| {
-                    matches!(
-                        config.hotkey_mode.setting,
-                        Err(HotkeyError::MultipleHotkeys)
-                    )
-                }) {
-                    send_telemetry_from_ctx!(TelemetryEvent::ITermMultipleHotkeys, ctx);
-                }
+            && configs.iter().any(|config| {
+                matches!(
+                    config.hotkey_mode.setting,
+                    Err(HotkeyError::MultipleHotkeys)
+                )
+            })
+        {
+            send_telemetry_from_ctx!(TelemetryEvent::ITermMultipleHotkeys, ctx);
+        }
     }
 
     pub fn write_parse_results(

@@ -80,11 +80,11 @@ impl ActiveNotebookData {
                     if let Some(new_editor) =
                         CloudViewModel::as_ref(ctx).object_current_editor(&notebook_id.uid(), ctx)
                         && self.mode == Mode::Editing
-                            && matches!(new_editor.state, EditorState::OtherUserActive)
-                        {
-                            self.mode = Mode::View;
-                            ctx.emit(ActiveNotebookDataEvent::ModeChangedFromServer);
-                        }
+                        && matches!(new_editor.state, EditorState::OtherUserActive)
+                    {
+                        self.mode = Mode::View;
+                        ctx.emit(ActiveNotebookDataEvent::ModeChangedFromServer);
+                    }
                     ctx.notify();
                 }
             }
@@ -113,17 +113,18 @@ impl ActiveNotebookData {
         match (&result.operation, &result.success_type) {
             (ObjectOperation::Create { .. }, OperationSuccessType::Success) => {
                 if let Some(current_id) = self.id()
-                    && current_id.into_client() == result.client_id {
-                        let server_id = result.server_id.expect("Expect server id on success");
-                        let notebook_id: NotebookId = server_id.into();
-                        self.feature_not_available = false;
-                        self.saving_status = SavingStatus::Saved;
-                        self.active_notebook =
-                            ActiveNotebook::CommittedNotebook(SyncId::ServerId(notebook_id.into()));
-                        ctx.emit(ActiveNotebookDataEvent::BreadcrumbsChanged);
-                        ctx.emit(ActiveNotebookDataEvent::CreatedOnServer);
-                        ctx.notify();
-                    }
+                    && current_id.into_client() == result.client_id
+                {
+                    let server_id = result.server_id.expect("Expect server id on success");
+                    let notebook_id: NotebookId = server_id.into();
+                    self.feature_not_available = false;
+                    self.saving_status = SavingStatus::Saved;
+                    self.active_notebook =
+                        ActiveNotebook::CommittedNotebook(SyncId::ServerId(notebook_id.into()));
+                    ctx.emit(ActiveNotebookDataEvent::BreadcrumbsChanged);
+                    ctx.emit(ActiveNotebookDataEvent::CreatedOnServer);
+                    ctx.notify();
+                }
             }
             (ObjectOperation::Update, OperationSuccessType::Success) => {
                 if let Some(current_id) = self.id() {
@@ -165,28 +166,31 @@ impl ActiveNotebookData {
                 let current_id = self.id();
                 let server_id = result.server_id.expect("Expect server id on success");
                 if let Some(id) = current_id
-                    && id.into_server() == Some(server_id) {
-                        self.feature_not_available = false;
-                        self.mode = Mode::Editing;
-                        ctx.emit(ActiveNotebookDataEvent::SwitchedToEditMode);
-                    }
+                    && id.into_server() == Some(server_id)
+                {
+                    self.feature_not_available = false;
+                    self.mode = Mode::Editing;
+                    ctx.emit(ActiveNotebookDataEvent::SwitchedToEditMode);
+                }
             }
             (ObjectOperation::Trash, OperationSuccessType::Success)
             | (ObjectOperation::Untrash, OperationSuccessType::Success) => {
                 let current_id = self.id();
                 let server_id = result.server_id.expect("Expect server id on success");
                 if let Some(id) = current_id
-                    && id.into_server() == Some(server_id) {
-                        ctx.emit(ActiveNotebookDataEvent::TrashStatusChanged);
-                    }
+                    && id.into_server() == Some(server_id)
+                {
+                    ctx.emit(ActiveNotebookDataEvent::TrashStatusChanged);
+                }
             }
             (ObjectOperation::MoveToDrive, OperationSuccessType::Success) => {
                 let current_id = self.id();
                 let server_id = result.server_id.expect("Expect server id on success");
                 if let Some(id) = current_id
-                    && id.into_server() == Some(server_id) {
-                        ctx.emit(ActiveNotebookDataEvent::MovedToSpace);
-                    }
+                    && id.into_server() == Some(server_id)
+                {
+                    ctx.emit(ActiveNotebookDataEvent::MovedToSpace);
+                }
             }
             _ => {}
         }

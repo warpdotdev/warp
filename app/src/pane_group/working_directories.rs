@@ -794,10 +794,10 @@ impl WorkingDirectoriesModel {
                 if *terminal_id == focused_id
                     && let Some(repo_root) =
                         DetectedRepositories::as_ref(ctx).get_root_for_path(dir)
-                    {
-                        repos_to_insert.push((repo_root.clone(), focused_id));
-                        focused_repo = Some(repo_root);
-                    }
+                {
+                    repos_to_insert.push((repo_root.clone(), focused_id));
+                    focused_repo = Some(repo_root);
+                }
             }
             for (repo_key, focused_id) in repos_to_insert {
                 new_root_to_terminal.insert(repo_key, focused_id);

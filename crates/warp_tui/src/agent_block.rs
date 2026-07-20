@@ -302,9 +302,9 @@ impl TuiAIBlock {
                 if should_schedule_auto_expand
                     && let Some(TuiToolCallView::ShellCommand(view)) =
                         me.action_views.get(&action_id)
-                    {
-                        view.update(ctx, |view, ctx| view.schedule_auto_expand(ctx));
-                    }
+                {
+                    view.update(ctx, |view, ctx| view.schedule_auto_expand(ctx));
+                }
                 me.invalidate_action(&action_id, ctx);
             }
         });
@@ -715,7 +715,7 @@ impl TuiAIBlock {
     fn latest_exposed_plan(&self, ctx: &AppContext) -> Option<ViewHandle<TuiPlanView>> {
         let status = self.block_model.status(ctx);
         let output = status.output_to_render()?;
-        
+
         output.get().messages.iter().rev().find_map(|message| {
             let AIAgentOutputMessageType::Action(action) = &message.message else {
                 return None;

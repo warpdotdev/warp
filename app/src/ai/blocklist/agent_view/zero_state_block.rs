@@ -107,17 +107,17 @@ impl AgentViewZeroStateBlock {
                 if let BlocklistAIHistoryEvent::AppendedExchange {
                     conversation_id, ..
                 } = event
-                    && *conversation_id == me.conversation_id {
-                        me.should_hide = true;
-                        ctx.unsubscribe_to_model(&model_events_clone);
-                        ctx.unsubscribe_to_model(&history_model);
-                        if let Some(cloud_agent_view_model) = cloud_agent_view_model_clone.as_ref()
-                        {
-                            ctx.unsubscribe_to_model(cloud_agent_view_model);
-                        }
-                        ctx.notify();
-                        return;
+                    && *conversation_id == me.conversation_id
+                {
+                    me.should_hide = true;
+                    ctx.unsubscribe_to_model(&model_events_clone);
+                    ctx.unsubscribe_to_model(&history_model);
+                    if let Some(cloud_agent_view_model) = cloud_agent_view_model_clone.as_ref() {
+                        ctx.unsubscribe_to_model(cloud_agent_view_model);
                     }
+                    ctx.notify();
+                    return;
+                }
 
                 match event {
                     BlocklistAIHistoryEvent::StartedNewConversation { .. }
@@ -434,12 +434,13 @@ impl View for AgentViewZeroStateBlock {
                     state_handles: &self.state_handles,
                 },
                 app,
-            ) {
-                content.add_children([Container::new(oz_updates_section)
-                    .with_margin_top(8.)
-                    .with_margin_bottom(16.)
-                    .finish()]);
-            }
+            )
+        {
+            content.add_children([Container::new(oz_updates_section)
+                .with_margin_top(8.)
+                .with_margin_bottom(16.)
+                .finish()]);
+        }
 
         let active_session = self.active_session(app);
         let body = render_body(

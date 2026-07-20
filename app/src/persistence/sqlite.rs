@@ -1098,9 +1098,10 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                     // restore, causing the entire surrounding tab to be
                     // dropped. See `LeafContents::is_persisted`.
                     if let PaneNodeSnapshot::Leaf(leaf) = pane_node
-                        && !leaf.contents.is_persisted() {
-                            continue;
-                        }
+                        && !leaf.contents.is_persisted()
+                    {
+                        continue;
+                    }
 
                     let is_leaf = matches!(pane_node, PaneNodeSnapshot::Leaf(_));
                     let new_pane_node = model::NewPaneNode {
@@ -2106,17 +2107,17 @@ fn save_workspaces(
         && !workspaces_to_insert
             .iter()
             .any(|workspace| workspace.uid == current_workspace_uid)
-        {
-            // If the currently selected workspace is not in the list of workspaces, set
-            // the first workspace as the current workspace.
-            if let Some(first_workspace) = workspaces_to_insert.first() {
-                diesel::update(workspaces.filter(
-                    schema::workspaces::dsl::server_uid.eq::<String>(first_workspace.uid.into()),
-                ))
-                .set(is_selected.eq(true))
-                .execute(conn)?;
-            }
+    {
+        // If the currently selected workspace is not in the list of workspaces, set
+        // the first workspace as the current workspace.
+        if let Some(first_workspace) = workspaces_to_insert.first() {
+            diesel::update(workspaces.filter(
+                schema::workspaces::dsl::server_uid.eq::<String>(first_workspace.uid.into()),
+            ))
+            .set(is_selected.eq(true))
+            .execute(conn)?;
         }
+    }
 
     Ok(())
 }

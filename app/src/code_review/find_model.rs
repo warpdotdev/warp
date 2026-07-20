@@ -284,21 +284,22 @@ impl CodeReviewFindModel {
     ) {
         // Try to restore the previous selection if there was one
         if let Some(selected) = self.selected_match.take()
-            && let Some(searcher) = self.get_editor_searcher(selected.editor_id, ctx) {
-                let candidates = MultiEditorSearchMatches {
-                    editor_id: selected.editor_id,
-                    matches: all_matches.clone(),
-                };
+            && let Some(searcher) = self.get_editor_searcher(selected.editor_id, ctx)
+        {
+            let candidates = MultiEditorSearchMatches {
+                editor_id: selected.editor_id,
+                matches: all_matches.clone(),
+            };
 
-                if let Some(restored_result) = searcher.update(ctx, |searcher, ctx| {
-                    searcher.restore_selected_result(selected.selected_result, candidates, ctx)
-                }) {
-                    self.selected_match = Some(MultiEditorSelectedResult {
-                        editor_id: selected.editor_id,
-                        selected_result: restored_result,
-                    });
-                }
+            if let Some(restored_result) = searcher.update(ctx, |searcher, ctx| {
+                searcher.restore_selected_result(selected.selected_result, candidates, ctx)
+            }) {
+                self.selected_match = Some(MultiEditorSelectedResult {
+                    editor_id: selected.editor_id,
+                    selected_result: restored_result,
+                });
             }
+        }
 
         // If we still don't have a selection and we have matches, select the first one
         if self.selected_match.is_none() && !all_matches.is_empty() {

@@ -212,9 +212,10 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
     /// End the run by sending `value` immediately.
     fn end_run_now(&self, value: T) {
         if let Ok(mut guard) = self.tx_cell.lock()
-            && let Some(sender) = guard.take() {
-                let _ = sender.send(value);
-            }
+            && let Some(sender) = guard.take()
+        {
+            let _ = sender.send(value);
+        }
     }
 
     /// End the run after `timeout` by sending `value`, unless cancelled before then.
@@ -236,10 +237,11 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
                 return;
             }
             if let Ok(mut guard) = tx_cell.lock()
-                && let Some(sender) = guard.take() {
-                    // Send the value after the idle timeout expires.
-                    let _ = sender.send(value);
-                }
+                && let Some(sender) = guard.take()
+            {
+                // Send the value after the idle timeout expires.
+                let _ = sender.send(value);
+            }
         });
     }
 
@@ -2656,9 +2658,9 @@ impl AgentDriver {
                     manager.install(),
                 )
                 .await
-            {
-                log::warn!("Plugin installation failed (continuing): {e}");
-            }
+        {
+            log::warn!("Plugin installation failed (continuing): {e}");
+        }
     }
 
     async fn setup_platform_plugin(
@@ -2690,15 +2692,15 @@ impl AgentDriver {
                     manager.install_platform_plugin(),
                 )
                 .await
-            {
-                if required {
-                    return Err(Self::required_platform_plugin_error(
-                        harness_name,
-                        format!("Required platform plugin installation failed: {e}"),
-                    ));
-                }
-                log::warn!("Platform plugin installation failed (continuing): {e}");
+        {
+            if required {
+                return Err(Self::required_platform_plugin_error(
+                    harness_name,
+                    format!("Required platform plugin installation failed: {e}"),
+                ));
             }
+            log::warn!("Platform plugin installation failed (continuing): {e}");
+        }
 
         if required {
             Self::verify_required_platform_plugin(harness_name, manager)?;

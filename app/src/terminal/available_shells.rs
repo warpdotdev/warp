@@ -849,9 +849,10 @@ impl AvailableShells {
                     continue;
                 };
                 if let Some(file_name) = path.file_name().and_then(|name| name.to_str())
-                    && let Some(set) = shells.get_mut(file_name) {
-                        set.insert(path);
-                    }
+                    && let Some(set) = shells.get_mut(file_name)
+                {
+                    set.insert(path);
+                }
             }
         }
         Ok(shells)
@@ -892,11 +893,12 @@ impl AvailableShells {
                             executable_path,
                             ..
                         }) = shell.state.as_ref()
-                            && shell_command == command {
-                                return Some(NewSessionShell::Executable(
-                                    executable_path.display().to_string(),
-                                ));
-                            }
+                            && shell_command == command
+                        {
+                            return Some(NewSessionShell::Executable(
+                                executable_path.display().to_string(),
+                            ));
+                        }
                     }
                     None
                 })

@@ -48,31 +48,32 @@ impl<'g> GraphemeCursor<'g> {
     /// adheres to the provided wrapping behavior.
     pub fn new(point: Point, grid: &'g GridHandler, wrap: Wrap) -> Self {
         if let Some(row) = grid.row(point.row)
-            && let Some(cell) = row.get(point.col) {
-                let flags = cell.flags;
+            && let Some(cell) = row.get(point.col)
+        {
+            let flags = cell.flags;
 
-                let mut cursor = Self {
-                    grid,
-                    cur: point,
-                    cursor_state: CursorState::Valid,
-                    wrap,
+            let mut cursor = Self {
+                grid,
+                cur: point,
+                cursor_state: CursorState::Valid,
+                wrap,
 
-                    cached_row_idx: point.row,
-                    cached_row: Some(row),
-                };
+                cached_row_idx: point.row,
+                cached_row: Some(row),
+            };
 
-                // The cursor should never start on a spacer cell.  If we're on
-                // the second cell in a wide char, move to the first cell.  If
-                // we're on the cell where a wide char _should_ have started,
-                // move to its actual start cell.
-                if flags.intersects(cell::Flags::WIDE_CHAR_SPACER) {
-                    cursor.move_backward();
-                } else if flags.intersects(cell::Flags::LEADING_WIDE_CHAR_SPACER) {
-                    cursor.move_forward();
-                }
-
-                return cursor;
+            // The cursor should never start on a spacer cell.  If we're on
+            // the second cell in a wide char, move to the first cell.  If
+            // we're on the cell where a wide char _should_ have started,
+            // move to its actual start cell.
+            if flags.intersects(cell::Flags::WIDE_CHAR_SPACER) {
+                cursor.move_backward();
+            } else if flags.intersects(cell::Flags::LEADING_WIDE_CHAR_SPACER) {
+                cursor.move_forward();
             }
+
+            return cursor;
+        }
 
         Self {
             grid,

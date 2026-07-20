@@ -353,9 +353,10 @@ fn is_local_marketplace_path(source: &str) -> bool {
 /// `claude plugin install` writes, else install/verify checks read the wrong dir.
 fn claude_home_dir() -> io::Result<PathBuf> {
     if let Ok(dir) = env::var("CLAUDE_CONFIG_DIR")
-        && !dir.is_empty() {
-            return Ok(PathBuf::from(dir));
-        }
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
+    }
     dirs::home_dir()
         .map(|home| home.join(".claude"))
         .ok_or_else(|| {

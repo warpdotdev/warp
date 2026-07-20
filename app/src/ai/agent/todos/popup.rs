@@ -86,9 +86,10 @@ impl AgentTodosPopupView {
         if let BlocklistAIHistoryEvent::UpdatedTodoList {
             terminal_surface_id,
         } = event
-            && *terminal_surface_id == self.terminal_view_id {
-                ctx.notify();
-            }
+            && *terminal_surface_id == self.terminal_view_id
+        {
+            ctx.notify();
+        }
     }
 
     /// Scroll to the in-progress item, if not currently visible.

@@ -100,9 +100,10 @@ pub(crate) fn claude_config_dir() -> Result<PathBuf> {
 pub(super) fn home_dir_for_claude_config() -> Option<PathBuf> {
     #[cfg(test)]
     if let Some(home) = std::env::var_os("HOME")
-        && !home.is_empty() {
-            return Some(PathBuf::from(home));
-        }
+        && !home.is_empty()
+    {
+        return Some(PathBuf::from(home));
+    }
     dirs::home_dir()
 }
 

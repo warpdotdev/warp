@@ -319,11 +319,12 @@ where
         View::on_focus(self, focus_ctx, &mut ctx);
         // Send notification to a11y tools that the view gained focus
         if focus_ctx.is_self_focused()
-            && let Some(accessibility_contents) = View::accessibility_contents(self, app) {
-                app.platform_delegate.set_accessibility_contents(
-                    accessibility_contents.with_verbosity(app.a11y_verbosity),
-                );
-            }
+            && let Some(accessibility_contents) = View::accessibility_contents(self, app)
+        {
+            app.platform_delegate.set_accessibility_contents(
+                accessibility_contents.with_verbosity(app.a11y_verbosity),
+            );
+        }
     }
 
     fn on_blur(

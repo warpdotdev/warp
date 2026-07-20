@@ -61,14 +61,14 @@ impl RewindDataSource {
                             ..
                         },
                     ) = &action_result.result
-                    {
-                        total_lines_added += lines_added;
-                        total_lines_removed += lines_removed;
+                {
+                    total_lines_added += lines_added;
+                    total_lines_removed += lines_removed;
 
-                        for updated_file in updated_files {
-                            file_paths.insert(updated_file.file_context.file_name.clone());
-                        }
+                    for updated_file in updated_files {
+                        file_paths.insert(updated_file.file_context.file_name.clone());
                     }
+                }
             }
         }
 

@@ -185,11 +185,12 @@ impl LocalShellState {
                             && let InteractiveEnvState::Pending { waiters } = std::mem::replace(
                                 &mut local_shell.interactive_env_state,
                                 InteractiveEnvState::Ready(path.clone()),
-                            ) {
-                                for waiter in waiters {
-                                    let _ = waiter.try_send(path.clone());
-                                }
+                            )
+                        {
+                            for waiter in waiters {
+                                let _ = waiter.try_send(path.clone());
                             }
+                        }
                     },
                 );
 
