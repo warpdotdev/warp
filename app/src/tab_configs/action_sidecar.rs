@@ -70,23 +70,22 @@ pub(crate) fn render_action_sidecar(
     );
 
     // Subtitle (file path for user configs)
-    if let SidecarItemKind::UserTabConfig { config } = item {
-        if let Some(path) = &config.source_path {
-            let raw_path = path.to_string_lossy().into_owned();
-            let home_dir = dirs::home_dir();
-            let path_str =
-                user_friendly_path(&raw_path, home_dir.as_ref().and_then(|h| h.to_str()))
-                    .into_owned();
-            column.add_child(
-                Container::new(
-                    Text::new_inline(path_str, font_family, font_size - 1.)
-                        .with_color(theme.sub_text_color(theme.surface_2()).into())
-                        .finish(),
-                )
-                .with_margin_bottom(8.)
-                .finish(),
-            );
-        }
+    if let SidecarItemKind::UserTabConfig { config } = item
+        && let Some(path) = &config.source_path
+    {
+        let raw_path = path.to_string_lossy().into_owned();
+        let home_dir = dirs::home_dir();
+        let path_str =
+            user_friendly_path(&raw_path, home_dir.as_ref().and_then(|h| h.to_str())).into_owned();
+        column.add_child(
+            Container::new(
+                Text::new_inline(path_str, font_family, font_size - 1.)
+                    .with_color(theme.sub_text_color(theme.surface_2()).into())
+                    .finish(),
+            )
+            .with_margin_bottom(8.)
+            .finish(),
+        );
     }
 
     let primary_text_color = theme.main_text_color(theme.surface_2());
@@ -165,68 +164,68 @@ pub(crate) fn render_action_sidecar(
     );
 
     // "Edit config" and "Remove" buttons (only for user tab configs)
-    if let SidecarItemKind::UserTabConfig { config } = item {
-        if let Some(config_path) = &config.source_path {
-            let edit_path = config_path.clone();
-            let edit_button = appearance
-                .ui_builder()
-                .button(ButtonVariant::Outlined, mouse_states.edit_config.clone())
-                .with_centered_text_label("Edit config".into())
-                .with_style(button_style)
-                .build()
-                .with_cursor(Cursor::PointingHand)
-                .on_click(move |ctx: &mut warpui::elements::EventContext, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::TabConfigSidecarEditConfig {
-                        path: edit_path.clone(),
-                    })
+    if let SidecarItemKind::UserTabConfig { config } = item
+        && let Some(config_path) = &config.source_path
+    {
+        let edit_path = config_path.clone();
+        let edit_button = appearance
+            .ui_builder()
+            .button(ButtonVariant::Outlined, mouse_states.edit_config.clone())
+            .with_centered_text_label("Edit config".into())
+            .with_style(button_style)
+            .build()
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx: &mut warpui::elements::EventContext, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::TabConfigSidecarEditConfig {
+                    path: edit_path.clone(),
                 })
-                .finish();
-            column.add_child(
-                Container::new(
-                    ConstrainedBox::new(edit_button)
-                        .with_max_width(SIDECAR_WIDTH - SIDECAR_PADDING * 2.)
-                        .finish(),
-                )
-                .with_margin_top(4.)
-                .finish(),
-            );
+            })
+            .finish();
+        column.add_child(
+            Container::new(
+                ConstrainedBox::new(edit_button)
+                    .with_max_width(SIDECAR_WIDTH - SIDECAR_PADDING * 2.)
+                    .finish(),
+            )
+            .with_margin_top(4.)
+            .finish(),
+        );
 
-            let remove_name = config.name.clone();
-            let remove_path = config_path.clone();
-            let red_color = theme.ansi_fg_red();
-            let remove_style = UiComponentStyles {
-                font_color: Some(red_color),
-                border_color: Some(red_color.into()),
-                ..button_style
-            };
-            let remove_button = appearance
-                .ui_builder()
-                .button(ButtonVariant::Outlined, mouse_states.remove_config.clone())
-                .with_centered_text_label("Remove".into())
-                .with_style(remove_style)
-                .with_hovered_styles(UiComponentStyles {
-                    border_color: Some(theme.accent().into()),
-                    ..Default::default()
+        let remove_name = config.name.clone();
+        let remove_path = config_path.clone();
+        let red_color = theme.ansi_fg_red();
+        let remove_style = UiComponentStyles {
+            font_color: Some(red_color),
+            border_color: Some(red_color.into()),
+            ..button_style
+        };
+        let remove_button = appearance
+            .ui_builder()
+            .button(ButtonVariant::Outlined, mouse_states.remove_config.clone())
+            .with_centered_text_label("Remove".into())
+            .with_style(remove_style)
+            .with_hovered_styles(UiComponentStyles {
+                border_color: Some(theme.accent().into()),
+                ..Default::default()
+            })
+            .build()
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx: &mut warpui::elements::EventContext, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::TabConfigSidecarRemoveConfig {
+                    name: remove_name.clone(),
+                    path: remove_path.clone(),
                 })
-                .build()
-                .with_cursor(Cursor::PointingHand)
-                .on_click(move |ctx: &mut warpui::elements::EventContext, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::TabConfigSidecarRemoveConfig {
-                        name: remove_name.clone(),
-                        path: remove_path.clone(),
-                    })
-                })
-                .finish();
-            column.add_child(
-                Container::new(
-                    ConstrainedBox::new(remove_button)
-                        .with_max_width(SIDECAR_WIDTH - SIDECAR_PADDING * 2.)
-                        .finish(),
-                )
-                .with_margin_top(4.)
-                .finish(),
-            );
-        }
+            })
+            .finish();
+        column.add_child(
+            Container::new(
+                ConstrainedBox::new(remove_button)
+                    .with_max_width(SIDECAR_WIDTH - SIDECAR_PADDING * 2.)
+                    .finish(),
+            )
+            .with_margin_top(4.)
+            .finish(),
+        );
     }
 
     ConstrainedBox::new(

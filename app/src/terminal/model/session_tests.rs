@@ -129,6 +129,29 @@ fn test_malicious_histfile_path_does_not_execute_injected_commands() {
     });
 }
 
+#[cfg(not(windows))]
+#[test]
+fn can_resolve_cwd_to_native_path_accepts_posix_path() {
+    let session = Session::test();
+    assert!(session.can_resolve_cwd_to_native_path("/Users/foo/bar"));
+}
+
+#[cfg(windows)]
+#[test]
+fn can_resolve_cwd_to_native_path_accepts_windows_drive_path() {
+    let session = Session::test();
+    assert!(session.can_resolve_cwd_to_native_path(r"E:\CLAUDE-BASE"));
+}
+
+#[cfg(windows)]
+#[test]
+fn can_resolve_cwd_to_native_path_rejects_unix_encoded_path_on_windows() {
+    let session_info =
+        SessionInfo::new_for_test().with_shell_type(crate::terminal::shell::ShellType::Bash);
+    let session = Session::new(session_info, Arc::new(TestCommandExecutor::default()));
+    assert!(!session.can_resolve_cwd_to_native_path("/E:/CLAUDE-BASE"));
+}
+
 #[cfg(windows)]
 #[test]
 fn powershell_read_command_embeds_escaped_path_without_args() {

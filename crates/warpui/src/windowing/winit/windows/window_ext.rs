@@ -1,7 +1,7 @@
 use windows::Win32::Foundation::{COLORREF, FALSE, HWND, TRUE};
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA,
+    GWL_EXSTYLE, GetWindowLongPtrW, LWA_ALPHA, SetLayeredWindowAttributes, SetWindowLongPtrW,
     WS_EX_LAYERED,
 };
 use windows_core::BOOL;

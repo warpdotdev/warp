@@ -1,4 +1,4 @@
-use async_channel::{unbounded, Receiver};
+use async_channel::{Receiver, unbounded};
 use warpui_core::r#async::block_on;
 use warpui_core::{App, ModelHandle};
 

@@ -4,9 +4,9 @@ use lazy_static::lazy_static;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::OperatingSystem;
 
+use super::TermMode;
 use super::indexing::Point;
 use super::mouse::{MouseAction, MouseButton, MouseState};
-use super::TermMode;
 
 mod kitty_keyboard_protocol;
 
@@ -148,7 +148,7 @@ pub const BRACKETED_PASTE_END: &[u8] = &[C0::ESC, b'[', b'2', b'0', b'1', b'~'];
 
 #[allow(non_snake_case)]
 pub mod EscCodes {
-    use super::{ModeProvider, TermMode, C0, C1};
+    use super::{C0, C1, ModeProvider, TermMode};
 
     // Arrows-related escape codes
     pub const ARROW_UP: u8 = b'A';
@@ -302,12 +302,12 @@ fn ctrl_letter_to_c0(keystroke: &Keystroke) -> Option<Vec<u8>> {
 
 /// C0 bytes for named control keys that carry no `chars` and that the
 /// escape-sequence encoder leaves unmapped without the kitty protocol. The key
-/// strings match the crossterm→key-event conversion (tab is `"\t"`).
+/// strings match the crossterm→key-event conversion.
 fn named_control_key_to_c0(key: &str) -> Option<Vec<u8>> {
     match key {
         "enter" => Some(vec![C0::CR]),
         "escape" => Some(vec![C0::ESC]),
-        "\t" => Some(vec![C0::HT]),
+        "tab" => Some(vec![C0::HT]),
         "backspace" => Some(vec![C0::DEL]),
         _ => None,
     }

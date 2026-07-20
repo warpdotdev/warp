@@ -33,6 +33,60 @@ pub(super) enum TerminalUseInterruptAction {
     InterruptCommand,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TuiInputTarget {
+    /// No editable destination is ready, such as while Warp injects its
+    /// bootstrap script or waits for the first post-bootstrap prompt. The
+    /// session view keeps focus for reserved bindings, but hides the agent
+    /// editor and does not forward ordinary input to the PTY.
+    Disabled,
+    /// The foreground terminal process owns input during shell startup
+    /// scripts, alt-screen applications, or user-controlled long-running
+    /// commands. The agent editor is hidden, the session view is focused, and
+    /// terminal content forwards key, paste, and supported pointer events to
+    /// the PTY.
+    Pty,
+    /// The shell is at an ordinary prompt and no foreground process owns
+    /// input. The agent editor, menus, and footer are rendered, and focus moves
+    /// to the editor unless a blocking interaction takes precedence.
+    AgentEditor,
+}
+
+impl TuiInputTarget {
+    pub(super) fn agent_editor_owns_input(self) -> bool {
+        matches!(self, Self::AgentEditor)
+    }
+
+    pub(super) fn pty_owns_input(self) -> bool {
+        matches!(self, Self::Pty)
+    }
+}
+
+fn tui_input_target_for_state(
+    alt_screen_active: bool,
+    script_execution: bool,
+    bootstrap_precmd_done: bool,
+    inline_process_owns_input: bool,
+) -> TuiInputTarget {
+    if alt_screen_active || script_execution || inline_process_owns_input {
+        TuiInputTarget::Pty
+    } else if !bootstrap_precmd_done {
+        TuiInputTarget::Disabled
+    } else {
+        TuiInputTarget::AgentEditor
+    }
+}
+
+pub(super) fn tui_input_target(terminal_model: &TerminalModel) -> TuiInputTarget {
+    let block_list = terminal_model.block_list();
+    tui_input_target_for_state(
+        terminal_model.is_alt_screen_active(),
+        block_list.is_script_execution(),
+        block_list.is_bootstrapping_precmd_done(),
+        inline_process_owns_input(terminal_model),
+    )
+}
+
 pub(super) fn terminal_use_interrupt_action(
     control_state: Option<&LongRunningCommandControlState>,
     process_owns_input: bool,

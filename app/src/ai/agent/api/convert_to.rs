@@ -804,12 +804,13 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 api_git_context.head = head;
                 api_git_context.branch = branch.unwrap_or_default();
             }
-            AIAgentContext::Repository { name, owner } => {
+            AIAgentContext::Repository { name, owner, host } => {
                 let api_git_context =
                     git_context.get_or_insert_with(api::input_context::Git::default);
                 api_git_context.repository = Some(api::input_context::git::Repository {
                     name,
                     owner: owner.unwrap_or_default(),
+                    host: host.unwrap_or_default(),
                 });
             }
             AIAgentContext::PullRequest {
@@ -817,6 +818,7 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 state,
                 draft,
                 base_branch,
+                url,
             } => {
                 if number <= 0 {
                     continue;
@@ -828,6 +830,7 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                     number,
                     state: state as i32,
                     base_branch,
+                    url,
                 };
                 let api_git_context =
                     git_context.get_or_insert_with(api::input_context::Git::default);

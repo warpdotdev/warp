@@ -17,9 +17,11 @@ fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
 
     let hosts_path = gh_config_dir.join(GH_HOSTS_FILENAME);
     assert!(hosts_path.exists());
-    assert!(!gh_config_dir
-        .join(format!("{GH_HOSTS_FILENAME}.tmp"))
-        .exists());
+    assert!(
+        !gh_config_dir
+            .join(format!("{GH_HOSTS_FILENAME}.tmp"))
+            .exists()
+    );
 
     let hosts = std::fs::read_to_string(hosts_path)?;
     assert!(hosts.contains("github.com:"));
@@ -139,9 +141,11 @@ fn write_glab_config_uses_glab_cli_filename() -> Result<()> {
 
     let config_path = glab_config_dir.join(GLAB_CONFIG_FILENAME);
     assert!(config_path.exists());
-    assert!(!glab_config_dir
-        .join(format!("{GLAB_CONFIG_FILENAME}.tmp"))
-        .exists());
+    assert!(
+        !glab_config_dir
+            .join(format!("{GLAB_CONFIG_FILENAME}.tmp"))
+            .exists()
+    );
 
     let config = std::fs::read_to_string(config_path)?;
     assert!(config.contains("hosts:"));

@@ -22,12 +22,12 @@ use simple_logger::SimpleLogger;
 use warp_errors::report_error;
 use warp_util::on_cancel::OnCancelFutureExt;
 
-use crate::config::{lsp_uri_to_path, path_to_lsp_uri, LanguageId};
+use crate::LspServerLogLevel;
+use crate::config::{LanguageId, lsp_uri_to_path, path_to_lsp_uri};
 use crate::types::{
     HoverResult, LspDefinitionLocation, ReferenceLocation, TextDocumentContentChangeEvent,
     TextEdit, WatchedFileChangeEvent,
 };
-use crate::LspServerLogLevel;
 
 /// Tracks the sync state for an open document.
 #[derive(Debug, Clone)]
@@ -434,12 +434,11 @@ struct GlobFileMatcher {
 
 impl GlobFileMatcher {
     fn matches(&self, path_relative: &str, change_type: FileChangeType) -> bool {
-        if let Some(kind) = self.kind {
-            if let Some(required) = watch_kind_for_change_type(change_type) {
-                if !kind.contains(required) {
-                    return false;
-                }
-            }
+        if let Some(kind) = self.kind
+            && let Some(required) = watch_kind_for_change_type(change_type)
+            && !kind.contains(required)
+        {
+            return false;
         }
 
         self.matcher.is_match(path_relative)

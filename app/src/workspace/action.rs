@@ -17,17 +17,17 @@ use super::tab_settings::{
     VerticalTabsTabItemMode, VerticalTabsViewMode,
 };
 use super::view::{OnboardingTutorial, WorkspaceBanner};
+use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::api::ServerConversationToken;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::conversation::AIAgentHarness;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::PendingAttachment;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::auth::auth_manager::LoginGatedFeature;
-use crate::drive::items::WarpDriveItemId;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::items::WarpDriveItemId;
 use crate::palette::PaletteMode;
 use crate::pane_group::PaneGroup;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
@@ -44,8 +44,8 @@ use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
-use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::PaneViewLocator;
+use crate::workspace::tab_group::TabGroupId;
 
 /// This enum determines how the search query is initialized when opening command search.
 #[derive(Clone, Default, Debug)]

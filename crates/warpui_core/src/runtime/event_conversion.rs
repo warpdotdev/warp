@@ -140,7 +140,7 @@ fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
         KeyCode::End => Some("end".to_owned()),
         KeyCode::PageUp => Some("pageup".to_owned()),
         KeyCode::PageDown => Some("pagedown".to_owned()),
-        KeyCode::Tab | KeyCode::BackTab => Some("\t".to_owned()),
+        KeyCode::Tab | KeyCode::BackTab => Some("tab".to_owned()),
         KeyCode::Delete => Some("delete".to_owned()),
         KeyCode::Insert => Some("insert".to_owned()),
         KeyCode::Esc => Some("escape".to_owned()),

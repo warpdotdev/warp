@@ -54,7 +54,7 @@ mod platform;
 pub use client::{Client, ClientError};
 pub use protocol::ConnectionAddress;
 pub use server::{Server, ServerBuilder};
-pub use service::{service_caller, Service, ServiceCaller, ServiceImpl};
+pub use service::{Service, ServiceCaller, ServiceImpl, service_caller};
 
 #[cfg(test)]
 pub mod testing;

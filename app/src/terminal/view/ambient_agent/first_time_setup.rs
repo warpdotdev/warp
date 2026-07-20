@@ -17,7 +17,7 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 
 use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectTarget};
 use crate::ai::request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD;
-use crate::ai::{cloud_environments, AIRequestUsageModel};
+use crate::ai::{AIRequestUsageModel, cloud_environments};
 use crate::appearance::Appearance;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ClientId;

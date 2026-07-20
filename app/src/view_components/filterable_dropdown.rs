@@ -17,7 +17,7 @@ use warpui::{
 };
 
 use super::dropdown::{
-    DropdownAction, DropdownItem, DropdownItemAction, MenuHeaderTextFormatter, DROPDOWN_PADDING,
+    DROPDOWN_PADDING, DropdownAction, DropdownItem, DropdownItemAction, MenuHeaderTextFormatter,
     TOP_MENU_BAR_HEIGHT, TOP_MENU_BAR_MAX_WIDTH,
 };
 use crate::appearance::Appearance;
@@ -435,10 +435,10 @@ where
     pub(crate) fn toggle_expanded(&mut self, ctx: &mut ViewContext<Self>) {
         self.is_expanded = !self.is_expanded;
         if self.is_expanded {
-            if self.match_menu_width_to_top_bar {
-                if let Some(bounds) = ctx.element_position_by_id(self.top_bar_label()) {
-                    self.set_menu_width(bounds.width(), ctx);
-                }
+            if self.match_menu_width_to_top_bar
+                && let Some(bounds) = ctx.element_position_by_id(self.top_bar_label())
+            {
+                self.set_menu_width(bounds.width(), ctx);
             }
             ctx.focus(&self.filter_editor);
             ctx.emit(FilterableDropdownEvent::ToggleExpanded);

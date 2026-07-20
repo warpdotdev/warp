@@ -9,6 +9,7 @@ use warpui::{
 
 use super::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use super::suggested_rule_modal::SuggestedRuleAndId;
+use crate::TelemetryEvent;
 use crate::ai::agent::{SuggestedAgentModeWorkflow, SuggestedLoggingId, SuggestedRule};
 use crate::ai::facts::{AIFact, AIMemory, CloudAIFactModel};
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -21,7 +22,6 @@ use crate::server::ids::{ClientId, SyncId};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, SecondaryTheme};
-use crate::TelemetryEvent;
 
 const MAX_CHIP_WIDTH: f32 = 316.;
 
@@ -275,23 +275,21 @@ impl SuggestionChipView {
 
         if let (ObjectOperation::Create { .. }, OperationSuccessType::Success) =
             (&result.operation, &result.success_type)
+            && self.sync_id.into_client() == result.client_id
+            && let Some(server_id) = result.server_id
         {
-            if self.sync_id.into_client() == result.client_id {
-                if let Some(server_id) = result.server_id {
-                    self.sync_id = SyncId::ServerId(server_id);
-                    // Reload the rule from the cloud model.
-                    match &mut self.suggestion {
-                        Suggestion::Rule { .. } => {
-                            self.load_suggestion(ctx);
-                        }
-                        Suggestion::AgentModeWorkflow { .. } => {
-                            // Loading agent mode workflows is not supported
-                            // as there is no editing flow for them.
-                        }
-                    }
-                    self.on_add_suggestion(ctx);
+            self.sync_id = SyncId::ServerId(server_id);
+            // Reload the rule from the cloud model.
+            match &mut self.suggestion {
+                Suggestion::Rule { .. } => {
+                    self.load_suggestion(ctx);
+                }
+                Suggestion::AgentModeWorkflow { .. } => {
+                    // Loading agent mode workflows is not supported
+                    // as there is no editing flow for them.
                 }
             }
+            self.on_add_suggestion(ctx);
         }
     }
 

@@ -3,8 +3,8 @@
 //! testing.
 
 use super::{
-    build_menu_items, menu_label_for, normalize_slug, DropdownAction, InternalAction, MenuItem,
-    ORCHESTRATION_WARP_WORKER_HOST,
+    DropdownAction, InternalAction, MenuItem, ORCHESTRATION_WARP_WORKER_HOST, build_menu_items,
+    menu_label_for, normalize_slug,
 };
 
 /// Extracts the visible label text out of a `MenuItem::Item`, panicking

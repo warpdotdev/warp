@@ -5,8 +5,8 @@ use markdown_parser::{
 };
 use pathfinder_color::ColorU;
 use settings::Setting;
-use warp_core::ui::theme::phenomenon::PhenomenonStyle;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::phenomenon::PhenomenonStyle;
 use warpui::elements::{
     Align, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
     FormattedTextElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
@@ -15,8 +15,8 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::Vector2F;
 use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::platform::file_picker::{FilePickerConfiguration, FilePickerError};
 use warpui::platform::Cursor;
+use warpui::platform::file_picker::{FilePickerConfiguration, FilePickerError};
 use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, Element, Entity, EventContext, SingletonEntity, TypedActionView, View, ViewContext,
@@ -26,15 +26,15 @@ use warpui::{
 use super::{tab_config_step, welcome_banner};
 use crate::appearance::Appearance;
 use crate::settings::AISettings;
-use crate::tab_configs::session_config::{is_git_repo, SessionConfigSelection, SessionType};
+use crate::tab_configs::session_config::{SessionConfigSelection, SessionType, is_git_repo};
 use crate::tab_configs::session_config_rendering;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource,
 };
 use crate::view_components::callout_bubble::{
-    callout_body_color, callout_checkbox, callout_label_color, callout_title_color,
-    render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
+    CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig, callout_body_color,
+    callout_checkbox, callout_label_color, callout_title_color, render_callout_bubble,
 };
 use crate::workspace::tab_settings::TabSettings;
 

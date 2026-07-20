@@ -11,7 +11,7 @@ use std::io::Write;
 use schemars::SchemaGenerator;
 use serde_json::{Map, Value};
 use settings::schema::SettingSchemaEntry;
-use warp_core::features::{FeatureFlag, DEBUG_FLAGS, DOGFOOD_FLAGS, PREVIEW_FLAGS, RELEASE_FLAGS};
+use warp_core::features::{DEBUG_FLAGS, DOGFOOD_FLAGS, FeatureFlag, PREVIEW_FLAGS, RELEASE_FLAGS};
 
 /// Ensures all `inventory::submit!` registrations from the app crate's
 /// dependency tree are linked into the binary.
@@ -178,10 +178,10 @@ fn main() {
         }
 
         // Skip settings whose feature flag is not active
-        if let Some(flag) = entry.feature_flag {
-            if !active_flags.contains(&flag) {
-                continue;
-            }
+        if let Some(flag) = entry.feature_flag
+            && !active_flags.contains(&flag)
+        {
+            continue;
         }
 
         let type_schema = (entry.schema_fn)(&mut generator);
@@ -191,20 +191,20 @@ fn main() {
         // Compute default value — prefer file default over serde default
         let default_json = (entry.file_default_value_fn)();
 
-        if let Ok(default_value) = serde_json::from_str::<Value>(&default_json) {
-            if let Some(obj) = schema_value.as_object_mut() {
-                obj.insert("default".to_string(), default_value);
-            }
+        if let Ok(default_value) = serde_json::from_str::<Value>(&default_json)
+            && let Some(obj) = schema_value.as_object_mut()
+        {
+            obj.insert("default".to_string(), default_value);
         }
 
         // Always overwrite description with the macro-provided one
-        if !entry.description.is_empty() {
-            if let Some(obj) = schema_value.as_object_mut() {
-                obj.insert(
-                    "description".to_string(),
-                    Value::String(entry.description.to_string()),
-                );
-            }
+        if !entry.description.is_empty()
+            && let Some(obj) = schema_value.as_object_mut()
+        {
+            obj.insert(
+                "description".to_string(),
+                Value::String(entry.description.to_string()),
+            );
         }
 
         // Place the setting in the hierarchy

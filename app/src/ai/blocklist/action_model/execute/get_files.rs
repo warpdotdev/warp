@@ -313,12 +313,17 @@ impl GetFilesExecutor {
                 let result =
                     read_local_file_context(&files, current_working_directory, shell, None, None)
                         .await?;
-                if result.missing_files.is_empty() {
+                if result.failed_files.is_empty() {
                     Ok(GetFilesResult::Success {
                         files: result.file_contexts,
                     })
                 } else {
-                    let missing_files = result.missing_files.join(", ");
+                    let missing_files = result
+                        .failed_files
+                        .into_iter()
+                        .map(|f| f.path)
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     Ok(GetFilesResult::Error(format!(
                         "These files do not exist: {}",
                         missing_files

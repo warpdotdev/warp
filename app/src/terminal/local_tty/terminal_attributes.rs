@@ -1,8 +1,8 @@
 use std::os::fd::RawFd;
 use std::time::Duration;
 
-use nix::sys::termios::{self, Termios};
 use nix::Result;
+use nix::sys::termios::{self, Termios};
 use warpui::{Entity, ModelContext};
 
 /// The default amount of time we wait before polling the terminal attributes again.

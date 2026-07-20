@@ -48,7 +48,7 @@ use std::time::Duration;
 pub use agent_mode::*;
 pub use ai_assistant::*;
 pub use ai_document::*;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 pub use block_filtering::*;
 pub use bootstrapping::*;
 pub use code_review::*;
@@ -95,12 +95,12 @@ use warp::integration_testing::assertions::{
     assert_binding_display_string, go_offline, go_online, join_a_workspace,
 };
 use warp::integration_testing::block::{
-    assert_block_visible, assert_bottom_of_block_approx_at, assert_num_blocks_in_model,
-    BlockPosition, LinePosition,
+    BlockPosition, LinePosition, assert_block_visible, assert_bottom_of_block_approx_at,
+    assert_num_blocks_in_model,
 };
 use warp::integration_testing::clipboard::assert_clipboard_contains_string;
 use warp::integration_testing::command_palette::{
-    close_command_palette, open_command_palette, open_command_palette_and_run_action, TestStepsExt,
+    TestStepsExt, close_command_palette, open_command_palette, open_command_palette_and_run_action,
 };
 use warp::integration_testing::context_chips::assert_working_dir_is_present;
 use warp::integration_testing::find::{Find, FindWithinBlockState};
@@ -108,7 +108,7 @@ use warp::integration_testing::input::{
     input_contains_string, input_is_empty, open_input_context_menu,
 };
 use warp::integration_testing::navigation_palette::{
-    check_recency, navigate_to_other_session_step, open_navigation_palette_step, RecentSession,
+    RecentSession, check_recency, navigate_to_other_session_step, open_navigation_palette_step,
 };
 use warp::integration_testing::pane_group::assert_focused_pane_index;
 use warp::integration_testing::settings::{
@@ -120,7 +120,7 @@ use warp::integration_testing::step::{
 };
 use warp::integration_testing::tab::{assert_pane_title, assert_tab_title, tab_title_step};
 use warp::integration_testing::terminal::util::{
-    current_shell_starter_and_version, ExactLine, ExpectedExitStatus,
+    ExactLine, ExpectedExitStatus, current_shell_starter_and_version,
 };
 use warp::integration_testing::terminal::{
     assert_active_block_output, assert_active_block_output_for_single_terminal_in_tab,
@@ -157,7 +157,7 @@ use warp::integration_testing::workspace::assert_tab_count;
 use warp::integration_testing::{self, view_of_type};
 use warp::pane_group::AGENT_MODE_PANE_DEFAULT_MINIMUM_WIDTH;
 use warp::settings::{
-    CompletionsOpenWhileTyping, CtrlTabBehavior, MonospaceFontSize, TabBehavior, INPUT_MODE,
+    CompletionsOpenWhileTyping, CtrlTabBehavior, INPUT_MODE, MonospaceFontSize, TabBehavior,
 };
 use warp::settings_view::keybindings::KeybindingsView;
 use warp::settings_view::{FeaturesPageAction, SettingsAction, SettingsSection, SettingsView};
@@ -170,20 +170,20 @@ use warp::terminal::keys_settings::KeysSettings;
 use warp::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
 use warp::terminal::model::ansi::{Handler, InitShellValue};
 use warp::terminal::model::blocks::{BlockHeightItem, BlockHeightSummary, TotalIndex};
-use warp::terminal::model::grid::grid_handler::TermMode;
 use warp::terminal::model::grid::Dimensions;
+use warp::terminal::model::grid::grid_handler::TermMode;
 use warp::terminal::model::terminal_model::BlockIndex;
 use warp::terminal::session_settings::{HonorPS1, SessionSettings, StartupShellOverride};
 use warp::terminal::view::{
-    BlockVisibilityMode, TerminalAction, TerminalViewState, ALIAS_EXPANSION_BANNER_SEEN_KEY,
+    ALIAS_EXPANSION_BANNER_SEEN_KEY, BlockVisibilityMode, TerminalAction, TerminalViewState,
 };
-use warp::terminal::{shell, TerminalView};
+use warp::terminal::{TerminalView, shell};
 use warp::util::bindings::CustomAction;
 use warp::workflows::categories::CategoriesView;
 use warp::workspace::{
-    Workspace, WorkspaceAction, NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID,
+    NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID, Workspace, WorkspaceAction,
 };
-use warp::{cmd_or_ctrl_shift, AgentModeEntrypoint};
+use warp::{AgentModeEntrypoint, cmd_or_ctrl_shift};
 use warpui_core::event::KeyState;
 use warpui_core::integration::{AssertionOutcome, StepData, TestStep};
 use warpui_core::keymap::{Keystroke, PerPlatformKeystroke, Trigger};
@@ -192,15 +192,15 @@ use warpui_core::platform::{OperatingSystem, TerminationMode};
 use warpui_core::units::Lines;
 use warpui_core::windowing::WindowManager;
 use warpui_core::{
-    async_assert, async_assert_eq, AssetProvider, Event, SingletonEntity, UpdateView, ViewHandle,
+    AssetProvider, Event, SingletonEntity, UpdateView, ViewHandle, async_assert, async_assert_eq,
 };
 pub use websockets::*;
 pub use workflows::*;
 pub use workspace::*;
 
 use crate::builder::cargo_target_tmpdir;
-use crate::util::{skip_if_powershell_core_2303, ShellRcType};
-use crate::{user_defaults, Builder};
+use crate::util::{ShellRcType, skip_if_powershell_core_2303};
+use crate::{Builder, user_defaults};
 
 const ADD_NEXT_OCCURRENCE_KEYBINDING: &str = "ctrl-g";
 
@@ -837,8 +837,10 @@ pub fn test_waterfall_input_alt_grid() -> Builder {
         TestStep::new("Close vim")
             .with_typed_characters(&[":q"])
             .with_keystrokes(&["enter"]),
-        vec![TestStep::new("waterfall background should not be rendered")
-            .add_assertion(assert_waterfall_gap_empty_background_rendered(false))],
+        vec![
+            TestStep::new("waterfall background should not be rendered")
+                .add_assertion(assert_waterfall_gap_empty_background_rendered(false)),
+        ],
     );
     builder = builder.with_steps(steps);
 

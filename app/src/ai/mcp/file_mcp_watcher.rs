@@ -5,8 +5,8 @@ use std::pin::Pin;
 use std::sync::LazyLock;
 
 use async_channel::Sender;
-use futures::stream::AbortHandle;
 use futures::Future;
+use futures::stream::AbortHandle;
 use regex::Regex;
 use repo_metadata::repositories::{
     DetectedRepositories, DetectedRepositoriesEvent, RepoDetectionSource,
@@ -18,12 +18,12 @@ use warp_core::safe_warn;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::HomeDirectoryWatcherEvent;
 
-use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
-use crate::ai::mcp::{home_config_file_path, MCPProvider, ParsedTemplatableMCPServerResult};
-use crate::warp_managed_paths_watcher::{
-    warp_managed_mcp_config_path, WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent,
-};
 use crate::HomeDirectoryWatcher;
+use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
+use crate::ai::mcp::{MCPProvider, ParsedTemplatableMCPServerResult, home_config_file_path};
+use crate::warp_managed_paths_watcher::{
+    WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent, warp_managed_mcp_config_path,
+};
 
 static ENV_VAR_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("Regex is valid"));
@@ -192,35 +192,33 @@ impl FileMCPWatcher {
             ));
         }
 
-        if !is_tui {
-            if let Some(home_dir) = dirs::home_dir() {
-                for provider in MCPProvider::iter() {
-                    if provider == MCPProvider::Warp {
-                        continue;
+        if !is_tui && let Some(home_dir) = dirs::home_dir() {
+            for provider in MCPProvider::iter() {
+                if provider == MCPProvider::Warp {
+                    continue;
+                }
+                match home_subdir_to_watch(provider) {
+                    None => {
+                        // Initial scan of config files for providers whose config lives directly in
+                        // home (i.e. ~/.claude.json). HomeDirectoryWatcher handles incremental updates.
+                        let Some(config_path) = home_config_file_path(provider) else {
+                            continue;
+                        };
+                        initial_config_parses.push((config_path, home_dir.clone(), provider));
                     }
-                    match home_subdir_to_watch(provider) {
-                        None => {
-                            // Initial scan of config files for providers whose config lives directly in
-                            // home (i.e. ~/.claude.json). HomeDirectoryWatcher handles incremental updates.
-                            let Some(config_path) = home_config_file_path(provider) else {
-                                continue;
-                            };
-                            initial_config_parses.push((config_path, home_dir.clone(), provider));
-                        }
-                        Some(subdir) => {
-                            // For providers whose home config lives in a subdir (e.g. ~/.codex for Codex)
-                            // start watching the subdir for file-based MCP servers, if it exists.
-                            let subdir_path = home_dir.join(&subdir);
-                            // Note: this will fail if the subdir doesn't exist yet.
-                            // We register upon creation of the subdir via HomeDirectoryWatcher.
-                            Self::watch_home_provider_dir(
-                                &subdir_path,
-                                home_dir.clone(),
-                                file_mcp_tx.clone(),
-                                &mut home_provider_watchers,
-                                ctx,
-                            );
-                        }
+                    Some(subdir) => {
+                        // For providers whose home config lives in a subdir (e.g. ~/.codex for Codex)
+                        // start watching the subdir for file-based MCP servers, if it exists.
+                        let subdir_path = home_dir.join(&subdir);
+                        // Note: this will fail if the subdir doesn't exist yet.
+                        // We register upon creation of the subdir via HomeDirectoryWatcher.
+                        Self::watch_home_provider_dir(
+                            &subdir_path,
+                            home_dir.clone(),
+                            file_mcp_tx.clone(),
+                            &mut home_provider_watchers,
+                            ctx,
+                        );
                     }
                 }
             }

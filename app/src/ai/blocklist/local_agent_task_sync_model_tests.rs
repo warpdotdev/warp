@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use session_sharing_protocol::common::SessionId;
@@ -8,8 +8,8 @@ use warpui::App;
 
 use super::super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use super::{
-    classify_renderable_error, map_cli_session_status, map_conversation_status,
-    LocalAgentTaskSyncModel,
+    LocalAgentTaskSyncModel, classify_renderable_error, map_cli_session_status,
+    map_conversation_status,
 };
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{
@@ -19,10 +19,10 @@ use crate::ai::agent::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::llms::LLMId;
 use crate::server::server_api::ai::{AIClient, MockAIClient, TaskStatusUpdate};
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
-use crate::terminal::CLIAgent;
 
 /// Helper to assert a (state, Option<TaskStatusUpdate>) tuple.
 fn assert_update(

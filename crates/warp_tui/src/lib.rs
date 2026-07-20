@@ -9,6 +9,7 @@
 
 mod agent_block;
 mod agent_block_sections;
+mod agent_message;
 mod alt_screen_view;
 mod autoupdate;
 mod clipboard;
@@ -16,6 +17,7 @@ pub mod input;
 pub mod root_view;
 pub mod session;
 mod telemetry;
+mod tui_ask_question_view;
 mod tui_builder;
 mod ui;
 
@@ -23,8 +25,6 @@ mod conversation_menu;
 mod conversation_selection;
 mod editor_element;
 mod editor_interaction;
-// The option-selector slice consumes this reusable editor and removes the allow.
-#[allow(dead_code)]
 mod editor_view;
 mod exit_confirmation;
 mod inline_menu;
@@ -33,9 +33,16 @@ mod input_suggestions_mode;
 mod keybindings;
 mod mcp_menu;
 mod model_menu;
+mod option_selector;
+mod orchestrated_agent_identity_styling;
+mod orchestration_block;
+mod orchestration_model;
+mod platform;
 mod resume;
+mod session_registry;
 mod skills_menu;
 mod slash_commands;
+pub mod tab_bar;
 mod terminal_background;
 mod terminal_block;
 mod terminal_content_element;

@@ -7,17 +7,16 @@
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    agent_conversations_cloud_metadata_load_failed, query_conversation_entries,
     AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
     AgentConversationsModelEvent, AgentManagementFilters, ConversationSelectionHandle, Harness,
-    HarnessFilter,
+    HarnessFilter, agent_conversations_cloud_metadata_load_failed, query_conversation_entries,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
 use crate::inline_menu::{
-    result_row_capacity, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
-    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
+    MAX_INLINE_MENU_ROWS, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
+    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
@@ -158,11 +157,11 @@ impl TuiConversationMenuModel {
         if !self.is_open(ctx) {
             return None;
         }
-        let selected_id = match &self.state {
+
+        match &self.state {
             TuiConversationMenuState::Open { list } => list.selected_row().map(|row| row.id),
             TuiConversationMenuState::Closed => None,
-        };
-        selected_id
+        }
     }
 
     /// Returns the render snapshot for the open menu.

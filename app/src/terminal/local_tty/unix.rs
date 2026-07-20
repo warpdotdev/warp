@@ -14,9 +14,9 @@ use std::{io, ptr};
 use anyhow::{Context as _, Error, Result};
 use command::blocking::Command;
 use itertools::Itertools;
-use libc::{self, c_int, winsize, TIOCSCTTY};
-use mio::unix::SourceFd;
+use libc::{self, TIOCSCTTY, c_int, winsize};
 use mio::Interest;
+use mio::unix::SourceFd;
 use nix::pty::openpty;
 use nix::sys::termios::{self, InputFlags, SetArg};
 use serde::{Deserialize, Serialize};
@@ -24,23 +24,23 @@ use signal_hook_mio::v1_0::Signals;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
-use warp_errors::{report_error, report_if_error};
+use warp_errors::report_if_error;
 use warpui::{AppContext, SingletonEntity};
 
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
 use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
 use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
+use crate::ASSETS;
 use crate::terminal::bootstrap::raw_init_shell_script_for_shell;
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
 use crate::terminal::local_tty::docker_sandbox::{
-    DockerSandboxShellStarter, DOCKER_SANDBOX_HOME_DIR,
+    DOCKER_SANDBOX_HOME_DIR, DockerSandboxShellStarter,
 };
 use crate::terminal::local_tty::shell::{
-    extra_path_entries, ssh_socket_dir, DirectShellStarter, ShellStarter,
+    DirectShellStarter, ShellStarter, extra_path_entries, ssh_socket_dir,
 };
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
-use crate::ASSETS;
 
 const BASH_HISTORY_SIZE_SENTINEL: &str = "57265949261";
 
@@ -703,7 +703,7 @@ impl EventedPty for Pty {
                 Ok(true) => Some(ChildEvent::Exited),
                 Ok(false) => None,
                 Err(e) => {
-                    report_error!(e.context("Error checking child process termination"));
+                    log::warn!("Error checking child process termination: {e:#}");
                     None
                 }
             }
@@ -755,10 +755,12 @@ impl ToWinsize for &SizeInfo {
 }
 
 unsafe fn set_nonblocking(fd: c_int) {
-    use libc::{fcntl, F_GETFL, F_SETFL, O_NONBLOCK};
+    unsafe {
+        use libc::{F_GETFL, F_SETFL, O_NONBLOCK, fcntl};
 
-    let res = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-    assert_eq!(res, 0);
+        let res = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        assert_eq!(res, 0);
+    }
 }
 
 /// Spawn the PTY for a Docker sandbox session.
@@ -776,7 +778,7 @@ fn spawn_docker_sandbox(
     // itself is created + attached in a single step via `sbx run` when
     // the PTY process spawns below.
     if let Err(e) = prepare_docker_sandbox(&docker_starter) {
-        report_error!(&e);
+        log::error!("Docker sandbox setup failed: {e:#}");
         return Err(Error::msg(format!("Docker sandbox setup failed: {e}")));
     }
 

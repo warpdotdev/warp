@@ -2,14 +2,14 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-use ai::skills::{parse_skill, ParsedSkill, SkillProvider, SkillReference, SkillScope};
+use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope, parse_skill};
 use async_channel::unbounded;
+use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
-use repo_metadata::RepoMetadataModel;
 use tempfile::TempDir;
-use warp_core::features::FeatureFlag;
 use warp_core::HostId;
+use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;

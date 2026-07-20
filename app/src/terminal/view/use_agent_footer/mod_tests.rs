@@ -17,13 +17,13 @@ use crate::ai::blocklist::{AIBlock, ClientIdentifiers};
 use crate::ai::llms::LLMId;
 use crate::features::FeatureFlag;
 use crate::settings::AISettings;
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
     CLIAgentSessionsModel,
 };
 use crate::terminal::model::ansi::{BootstrappedValue, Handler as _, InitShellValue};
 use crate::terminal::shared_session::SharedSessionSource;
-use crate::terminal::CLIAgent;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
@@ -209,10 +209,12 @@ fn use_agent_footer_renders_for_manual_handoff_even_when_user_command_footer_set
                 let model = view.model.lock();
                 assert!(!view.should_render_use_agent_footer(&model, ctx));
                 let active_block_index = model.block_list().active_block_index();
-                assert!(model
-                    .block_list()
-                    .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
-                    .is_none());
+                assert!(
+                    model
+                        .block_list()
+                        .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
+                        .is_none()
+                );
             }
 
             transition_to_user_handoff_state(view, UserTakeOverReason::Manual, ctx);

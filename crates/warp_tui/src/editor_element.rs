@@ -788,11 +788,13 @@ impl TuiElement for TuiEditorElement {
                     // (consumer keybindings) before the element pass ever sees the
                     // key. Only printable-character insertion stays element-level —
                     // text insertion is not a keybinding, matching the GUI.
-                    if !keystroke.ctrl && !keystroke.alt && !chars.is_empty() {
-                        if let Some(char) = chars.chars().next() {
-                            handler(TuiEditorAction::InsertChar(char), event_ctx);
-                            return true;
-                        }
+                    if !keystroke.ctrl
+                        && !keystroke.alt
+                        && !chars.is_empty()
+                        && let Some(char) = chars.chars().next()
+                    {
+                        handler(TuiEditorAction::InsertChar(char), event_ctx);
+                        return true;
                     }
                 }
                 TuiEvent::Paste { text } => {

@@ -1,4 +1,4 @@
-use remote_server::proto::{remote_skill_proto, BundledSkillMetadata, RemoteSkillProto};
+use remote_server::proto::{BundledSkillMetadata, RemoteSkillProto, remote_skill_proto};
 
 use super::bundled::{BundledSkill, BundledSkillActivation};
 use crate::ai::mcp::McpIntegration;

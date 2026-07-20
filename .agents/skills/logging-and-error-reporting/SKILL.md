@@ -21,17 +21,23 @@ Consequences:
 - **`log::error!` does NOT create a Sentry issue** — it's only a breadcrumb. If a failure should be tracked in Sentry, use `report_error!`. Only `report_error!` and panics create Sentry events.
 - Breadcrumbs (Info and above) are uploaded, so they must never contain secrets or PII — see "Sensitive data: safe_* macros" below.
 
-## Choosing: log vs. `report_error!`
+## Choosing: `report_error!` vs. `log::error!` vs. `log::warn!`
 
-- Use **`report_error!`** when a failure should become a Sentry issue an engineer may act on.
-- Use **`log::*`** for everything else: lifecycle/state info, expected or handled conditions, and diagnostic dumps or informational "loud logs" (e.g. listing valid options after a lookup miss). If a function's name/doc says it *logs* (or it emits a header line plus one entry per item), it should use `log::*`, not `report_error!`.
-- Don't signal the same failure twice. Report it once, at the sink where it stops propagating; `log::*` breadcrumbs on the way there are useful context (see "Report once, at the sink").
+Pick based on **whose fault the failure is** and **what it means for the user**, not on how bad it feels. Remember only `report_error!` reaches Sentry (see above) — the two `log` levels are local/breadcrumb-only, so choosing between them is about log severity, not about paging anyone.
+
+- **`report_error!` — actionable; an engineer should fix something.** Use it when the failure means our code is wrong: an invariant was violated, an assumption that should always hold didn't, or execution reached a state that shouldn't be possible. Also use it when the cause isn't our bug but the user-facing impact is severe enough that we need to build a workaround — this covers failures in a **critical subsystem** (a core startup/lifecycle path, or a fallback that itself guards a critical path), where even an externally-caused failure is worth an engineer's eyes. **One further exception:** when we're programming against an **external system whose behavior is uncertain** — its quirks aren't fully understood, or a failure might actually mean *we're* using it wrong — prefer `report_error!` over a plain `log`, since the "external" failure may be our bug in disguise. This is the only form that becomes a Sentry issue, so reserve it for failures worth an engineer's attention.
+- **`log::error!` — a genuine failure that is not our code's fault.** The operation we intended couldn't be completed, but the cause is external (the environment or an external system), not a bug we can fix. It's a real failure, so it's error severity — but there's nothing to act on, so it does not page us. (Exception: if it's a critical subsystem, or the external system's behavior is uncertain enough that the failure might be our fault, escalate to `report_error!` per the bullet above.)
+- **`log::warn!` — non-ideal but largely expected.** The app can still proceed with the functionality generally intact, perhaps with a degraded experience. Recoverable/handled conditions, fallbacks, retries, and skipped work belong here.
+
+For everything else — lifecycle/state info, expected or handled conditions, and diagnostic "loud logs" (e.g. listing valid options after a lookup miss) — use plain `log::*` at the level that fits (see "Log levels"). If a function's name/doc says it *logs* (or it emits a header line plus one entry per item), it should use `log::*`, not `report_error!`.
+
+Don't signal the same failure twice. Report it once, at the sink where it stops propagating; `log::*` breadcrumbs on the way there are useful context (see "Report once, at the sink").
 
 ## Log levels
 
 The default filter is `Info`, so `debug!`/`trace!` are off unless `RUST_LOG` enables them.
-- **`error!`** — a real failure the code handled locally. Remember this is only a breadcrumb; if it warrants a Sentry issue, use `report_error!` instead (or as well, at the sink).
-- **`warn!`** — unexpected but recoverable/handled: degraded paths, retries, fallbacks, skipped work.
+- **`error!`** — a genuine failure whose cause is **external, not a bug in our code**: the environment or an external system prevented the operation we intended. Nothing for us to fix, so it's not `report_error!`; still a real failure, so it's error severity. Only a breadcrumb — if it turns out to be actionable, use `report_error!` instead.
+- **`warn!`** — non-ideal but largely expected: the app proceeds with the functionality generally intact (possibly degraded). Recoverable/handled paths, retries, fallbacks, skipped work.
 - **`info!`** — coarse lifecycle/state milestones (startup, connection up/down, feature enabled). On by default and uploaded as breadcrumbs, so keep it low-volume and free of per-item spam.
 - **`debug!`** — verbose diagnostics for local development; off by default; never sent to Sentry.
 - **`trace!`** — very fine-grained / hot-path detail; off by default; never sent to Sentry.
@@ -60,7 +66,9 @@ safe_error!(
 
 # Reporting errors with `report_error!`
 
-`report_error!` is the explicit way to send an error to Sentry as a structured event. At runtime it checks `err.is_actionable()`:
+`report_error!` is the explicit way to send an error to Sentry as a structured event. Reserve it for **actionable** failures — an invariant or always-true assumption was violated, or the code reached a state it shouldn't, i.e. a bug we should FIX — or for cases where the cause isn't our bug but the user-facing impact is severe enough to warrant a workaround. A failure that's merely an external error (nothing to fix) or an expected/degraded condition belongs at `log::error!` / `log::warn!` instead (see "Choosing" above).
+
+At runtime it checks `err.is_actionable()`:
 - **actionable** → captured to Sentry AND logged at `Error` level.
 - **not actionable** (e.g. registered network errors: reqwest connect/5xx/429, tokio `JoinError` cancelled) → logged at `Warn` level only, never sent to Sentry.
 
@@ -123,7 +131,7 @@ register_error!(UserAuthenticationError);
 Rules, in priority order:
 
 1. **The error IS the payload — report it as an error, never demote it into `extra:`.** `extra:` is only for genuinely incidental data (ids, paths, counts, durations).
-2. **Prefer Result-level `.context()` whenever a `Result` is in hand.** Works for any `Result<_, E: std::error::Error>` and for `anyhow::Result`; add `use anyhow::Context` for the trait method. Don't add an `anyhow::Error::new(..)` / `anyhow!(..)` wrapper when `.context()` on the `Result` will do. Avoid the UFCS form `anyhow::Context::context(result, "msg")` — it reads poorly; import the trait, or if you'd rather not import it, restructure to own the error and use the inherent method: `if let Err(e) = some_call() { report_error!(e.context("msg")); }`.
+2. **Prefer Result-level `.context()` whenever a `Result` is in hand.** This is the **preferred, most succinct style** — reach for it before an `anyhow::Error::new(..)` / `anyhow!(..)` wrapper whenever practical. Works for any `Result<_, E: std::error::Error>` and for `anyhow::Result`; add `use anyhow::Context` for the trait method. Don't add an `anyhow::Error::new(..)` / `anyhow!(..)` wrapper when `.context()` on the `Result` will do. Avoid the UFCS form `anyhow::Context::context(result, "msg")` — it reads poorly; import the trait, or if you'd rather not import it, restructure to own the error and use the inherent method: `if let Err(e) = some_call() { report_error!(e.context("msg")); }`.
    ```rust
    let data = some_call().context("Failed to load data")?;
    ```
@@ -147,6 +155,14 @@ Report a failure where it stops propagating, not at every layer it flows through
 - A callee that wants a local breadcrumb while still returning the error should use `log::warn!`/`log::error!`, and leave the `report_error!` to the sink.
 - `inspect_err(|e| report_error!(..)).ok()` (report-and-swallow) is a legitimate terminal decision — the error is consumed there, not returned.
 - For a registered error surfaced through many internal failure points, implement `is_actionable` on the type and `report_error!` it once at the top-level sink (e.g. a driver's `run`), instead of reporting at each internal `Err`.
+
+## `report_if_error!` for report-and-continue
+
+When you have a `Result` and simply want to **`report_error!` it if it's `Err` and otherwise carry on** — without binding the error yourself — reach for `report_if_error!(<expr returning a Result>)`. It's the succinct form of `if let Err(e) = expr { report_error!(e); }`, so prefer it whenever you'd otherwise hand-write that pattern at a sink. It's underused; keep it in mind to make error handling more concise. Pair it with a Result-level `.context("…")` to attach a static grouping message:
+```rust
+report_if_error!(some_fallible_call().context("Failed to do the thing"));
+```
+It reports (and logs) an actionable error and is a no-op on `Ok`, so it fits "report once, at the sink" for a call whose error you don't otherwise need to bind.
 
 ## `extra:` syntax
 
@@ -189,6 +205,7 @@ This applies to `report_error!` messages/`extra:` AND to `log::*` at Info and ab
 - Static, descriptive grouping message; variable data via `.context()` or `extra:`.
 - When the grouping message is static, put the inputs that explain *why this instance fired* in `extra:` — the offending values, not just identifiers (e.g. an invalid-geometry report carries the sizes/offsets that produced it; a bounds violation carries the actual `min`/`max`). A static message with no diagnostic `extra:` is hard to act on.
 - Preserve the typed error chain (`.context()` / `anyhow::Error::new`) so `is_actionable()` can suppress registered non-actionable (network) errors — stringifying with `anyhow!("{e}")` defeats this.
+- Prefer Result-level `.context()` at the sink over an `anyhow::Error::new(e).context(..)` wrapper whenever a `Result` is in hand — it's the most succinct, idiomatic form (see "Choosing the form" rule 2). Reach for `report_if_error!` when you'd otherwise write `if let Err(e) = expr { report_error!(e); }`.
 - Prefer a typed, registered error enum (`thiserror` + `ErrorExt` + `register_error!`) over `anyhow` when a caller or the Sentry layer needs to tell failures apart (branching, or mixed actionability); reserve `anyhow` for errors that are only propagated and reported (see "Prefer typed error enums over `anyhow` when it makes sense").
 - Match log level to volume and audience: hot paths at `debug!`/`trace!`, milestones at `info!`, and reserve `report_error!` for Sentry-worthy failures.
 

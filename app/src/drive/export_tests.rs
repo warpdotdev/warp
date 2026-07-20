@@ -9,7 +9,7 @@ use tempfile::TempDir;
 use warp_util::path::ShellFamily;
 use warpui::{AddSingletonModel, App, SingletonEntity, WindowId};
 
-use super::{safe_filename, ExportEvent, ExportId, ExportManager};
+use super::{ExportEvent, ExportId, ExportManager, safe_filename};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{
     CloudObjectMetadata, CloudObjectPermissions, ObjectIdType, ObjectType, Space,
@@ -71,12 +71,13 @@ impl ExportTest {
             export_manager.export(window_id, &[export_ids], ctx);
             export_manager.handle_files_picked(
                 vec![id],
-                Ok(vec![self
-                    .target_dir
-                    .path()
-                    .to_str()
-                    .expect("Path must be UTF-8")
-                    .to_owned()]),
+                Ok(vec![
+                    self.target_dir
+                        .path()
+                        .to_str()
+                        .expect("Path must be UTF-8")
+                        .to_owned(),
+                ]),
                 ShellFamily::Posix,
                 ctx,
             );
@@ -467,12 +468,14 @@ fn test_export_multiple_objects() {
                 .collect::<Vec<_>>();
             export_manager.handle_files_picked(
                 all_export_ids,
-                Ok(vec![exporter
-                    .target_dir
-                    .path()
-                    .to_str()
-                    .expect("Path must be UTF-8")
-                    .to_owned()]),
+                Ok(vec![
+                    exporter
+                        .target_dir
+                        .path()
+                        .to_str()
+                        .expect("Path must be UTF-8")
+                        .to_owned(),
+                ]),
                 ShellFamily::Posix,
                 ctx,
             );

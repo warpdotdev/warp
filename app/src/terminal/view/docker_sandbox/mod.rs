@@ -10,19 +10,19 @@ use warp_cli::agent::Harness;
 #[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
 use warp_errors::report_error;
 #[cfg(feature = "local_tty")]
-use warpui::geometry::vector::Vector2F;
+use warpui::ModelHandle;
+use warpui::ViewContext;
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::FutureExt;
 #[cfg(feature = "local_tty")]
-use warpui::ModelHandle;
-use warpui::ViewContext;
+use warpui::geometry::vector::Vector2F;
 #[cfg(not(target_family = "wasm"))]
 use warpui::{SingletonEntity, View, ViewHandle};
 
 use super::TerminalView;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{
-    environment::prepare_environment, terminal::TerminalDriver, WARP_DRIVE_SYNC_TIMEOUT,
+    WARP_DRIVE_SYNC_TIMEOUT, environment::prepare_environment, terminal::TerminalDriver,
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
@@ -40,23 +40,23 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 #[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
 use crate::server::server_api::ServerApiProvider;
+#[cfg(feature = "local_tty")]
+use crate::terminal::TerminalManager;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
 use crate::terminal::available_shells::AvailableShell;
-#[cfg(feature = "local_tty")]
-use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_tty::docker_sandbox::DOCKER_SANDBOX_HOME_DIR;
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
 use crate::terminal::local_tty::{
-    create_terminal_view_surface, TerminalManager as LocalTtyTerminalManager,
-    TerminalViewSurfaceConfig,
+    TerminalManager as LocalTtyTerminalManager, TerminalViewSurfaceConfig,
+    create_terminal_view_surface,
 };
 #[cfg(feature = "remote_tty")]
 use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
 use crate::terminal::shared_session::IsSharedSessionCreator;
-#[cfg(feature = "local_tty")]
-use crate::terminal::TerminalManager;
 
 /// Default base Docker image used for newly created sandbox shells.
 ///
@@ -304,8 +304,10 @@ impl TerminalView {
                     .map_err(|_| "view dropped")?;
 
                 prepare_future.await.map_err(|e| {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Docker sandbox environment preparation failed"));
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Docker sandbox environment preparation failed")
+                    );
                     "environment preparation failed"
                 })?;
 

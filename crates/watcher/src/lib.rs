@@ -14,8 +14,8 @@ use notify_debouncer_full::notify::{
     self, EventKind, RecommendedWatcher, RecursiveMode, WatchFilter,
 };
 use notify_debouncer_full::{
-    new_debouncer_opt, DebounceEventHandler, DebounceEventResult, DebouncedEvent, Debouncer,
-    NoCache,
+    DebounceEventHandler, DebounceEventResult, DebouncedEvent, Debouncer, NoCache,
+    new_debouncer_opt,
 };
 use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext};
@@ -180,7 +180,7 @@ impl BulkFilesystemWatcher {
 
     /// Stop watching a path. The returned future resolves once the path is fully unregistered.
     /// Awaiting the future is *not* required for the path to be unregistered.
-    pub fn unregister_path(&mut self, path: &Path) -> impl Future<Output = Result<()>> {
+    pub fn unregister_path(&mut self, path: &Path) -> impl Future<Output = Result<()>> + use<> {
         let (tx, rx) = oneshot::channel();
         let send_result = self.tx.send(BackgroundFileWatcherCommand::RemovePath {
             path: path.to_path_buf(),
@@ -205,7 +205,7 @@ impl BulkFilesystemWatcher {
         path: &Path,
         watch_filter: WatchFilter,
         recursive_mode: RecursiveMode,
-    ) -> impl Future<Output = Result<()>> {
+    ) -> impl Future<Output = Result<()>> + use<> {
         let (tx, rx) = oneshot::channel();
         let send_result = self.tx.send(BackgroundFileWatcherCommand::AddPath {
             path: path.to_path_buf(),
@@ -248,10 +248,9 @@ impl DebounceEventHandler for WatcherEventHandler {
             Ok(debounce_events) => {
                 if let Ok(config_event) =
                     deduplicate_and_merge_raw_notifier_events(&debounce_events)
+                    && let Err(e) = self.tx.try_send(config_event)
                 {
-                    if let Err(e) = self.tx.try_send(config_event) {
-                        log::warn!("Failed to send WatcherEvent: {e:?}");
-                    }
+                    log::warn!("Failed to send WatcherEvent: {e:?}");
                 }
             }
             Err(e) => {

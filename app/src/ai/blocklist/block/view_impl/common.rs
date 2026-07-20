@@ -48,13 +48,14 @@ use warpui::{Action, AppContext, Element, EventContext, SingletonEntity, View, V
 
 use super::output::LinkActionConstructors;
 use super::{add_highlights_to_rich_text, add_highlights_to_text};
+use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::icons::red_stop_icon;
 use crate::ai::agent::{
-    icons, AIAgentAction, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
-    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
-    AgentOutputTable, AgentOutputTableRendering, MessageId, ProgrammingLanguage, RenderableAIError,
-    ShellCommandDelay, SummarizationType, UserQueryMode, WebSearchStatus,
+    AIAgentAction, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType, AIAgentTextSection,
+    AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable,
+    AgentOutputTableRendering, MessageId, ProgrammingLanguage, RenderableAIError,
+    ShellCommandDelay, SummarizationType, UserQueryMode, WebSearchStatus, icons,
 };
 use crate::ai::blocklist::block::find::FindState;
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBarAction;
@@ -64,8 +65,8 @@ use crate::ai::blocklist::block::{
     TableSectionHandles,
 };
 use crate::ai::blocklist::code_block::{
-    render_code_block_plain, render_code_block_with_warp_text, CodeBlockOptions,
-    CodeSnippetButtonHandles,
+    CodeBlockOptions, CodeSnippetButtonHandles, render_code_block_plain,
+    render_code_block_with_warp_text,
 };
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
@@ -75,11 +76,10 @@ use crate::ai::blocklist::inline_action::inline_action_header::{
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
-use crate::ai::blocklist::secret_redaction::{redact_secrets_in_element, SecretRedactionState};
+use crate::ai::blocklist::secret_redaction::{SecretRedactionState, redact_secrets_in_element};
 use crate::ai::blocklist::view_util::error_color;
 use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
 use crate::ai::loading::shimmering_warp_loading_text;
-use crate::ai::AIRequestUsageModel;
 use crate::code::editor::view::CodeEditorView;
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::editor::{markdown_table_appearance, rich_text_styles};
@@ -95,7 +95,7 @@ use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
-use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::link_detection::{DetectedLinksState, add_link_detection_mouse_interactions};
 use crate::util::time_format::format_elapsed_seconds;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -1387,11 +1387,12 @@ fn collect_renderable_image_group<'a>(
         let (section_index, section) = indexed_sections[section_offset];
         // Skip whitespace-only plain text sections (e.g. blank lines between images)
         // so that adjacent images separated only by blank lines are grouped together.
-        if let AIAgentTextSection::PlainText { text } = section {
-            if !images.is_empty() && text.text().trim().is_empty() {
-                section_offset += 1;
-                continue;
-            }
+        if let AIAgentTextSection::PlainText { text } = section
+            && !images.is_empty()
+            && text.text().trim().is_empty()
+        {
+            section_offset += 1;
+            continue;
         }
         let AIAgentTextSection::Image { image } = section else {
             break;
@@ -1602,15 +1603,15 @@ pub(super) fn render_rich_text_output_text_section(
         }
 
         let secret_redaction = get_secret_obfuscation_mode(app);
-        if secret_redaction.should_redact_secret() {
-            if let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location) {
-                frame = redact_secrets_in_element(
-                    frame,
-                    secrets,
-                    location,
-                    secret_redaction.is_visually_obfuscated(),
-                );
-            }
+        if secret_redaction.should_redact_secret()
+            && let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location)
+        {
+            frame = redact_secrets_in_element(
+                frame,
+                secrets,
+                location,
+                secret_redaction.is_visually_obfuscated(),
+            );
         }
         frame
     });
@@ -2963,7 +2964,7 @@ pub fn get_highlight_ranges_for_find_matches(
     location: TextLocation,
     find_state: &FindState,
     find_model: &TerminalFindModel,
-) -> impl Iterator<Item = HighlightedRange> {
+) -> impl Iterator<Item = HighlightedRange> + use<> {
     let find_match_locations = find_state.matches_for_location(location);
     let focused_match_location = find_model
         .focused_rich_content_match_id()
@@ -3006,7 +3007,7 @@ pub(crate) fn resolve_absolute_file_path(
 ) -> Option<PathBuf> {
     use warp_util::path::CleanPathResult;
 
-    use crate::util::file::{absolute_path_if_valid, ShellPathType};
+    use crate::util::file::{ShellPathType, absolute_path_if_valid};
 
     let clean_path = CleanPathResult::with_line_and_column_number(&path.to_string_lossy());
 
@@ -3647,10 +3648,9 @@ pub(super) fn query_prefix_highlight_len(
     if let AIAgentInput::UserQuery {
         user_query_mode, ..
     } = input
+        && let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode)
     {
-        if let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode) {
-            return Some(prefix_len);
-        }
+        return Some(prefix_len);
     }
 
     if displayed_query.starts_with(commands::CREATE_ENVIRONMENT.name) {

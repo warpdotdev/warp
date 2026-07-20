@@ -7,22 +7,22 @@ use std::time::Duration;
 use command::blocking::Command;
 use prost::Message;
 use warpui::integration::{AssertionOutcome, TestStep};
-use warpui::{async_assert, SingletonEntity};
+use warpui::{SingletonEntity, async_assert};
 
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::{AIAgentActionType, AIAgentOutputStatus, FinishedAIAgentOutput};
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::ActionPermission;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::integration_testing::agent_mode::{
-    assert_latest_task_succeeds_or_blocked, assert_task_is_blocked, ConversationTarget,
+    ConversationTarget, assert_latest_task_succeeds_or_blocked, assert_task_is_blocked,
 };
 use crate::integration_testing::step::{
     new_step_with_default_assertions, new_step_with_default_assertions_for_pane,
 };
 use crate::integration_testing::terminal::assert_input_is_focused;
 use crate::integration_testing::view_getters::terminal_view;
-use crate::BlocklistAIHistoryModel;
 
 pub const AGENT_MODE_RUNNING_STEP_GROUP_NAME: &str = "Agent mode running";
 
@@ -299,21 +299,21 @@ fn collect_edited_files(conversation: &AIConversation) -> HashSet<String> {
 
 /// Returns an assertion that prints the conversation ID to stdout once available.
 /// This assertion will poll until the conversation token is received from the server.
-fn print_conversation_id_assertion(
-) -> impl FnMut(&mut warpui::App, warpui::WindowId) -> warpui::integration::AssertionOutcome {
+fn print_conversation_id_assertion()
+-> impl FnMut(&mut warpui::App, warpui::WindowId) -> warpui::integration::AssertionOutcome {
     |app, window_id| {
         let terminal_view = terminal_view(app, window_id, 0, 0);
         BlocklistAIHistoryModel::handle(app).read(app, |history_model, _| {
-            if let Some(conversation) = history_model.active_conversation(terminal_view.id()) {
-                if let Some(token) = conversation.server_conversation_token() {
-                    // The debug link within the container will be using host.docker.internal, but we're opening
-                    // from outside the container.
-                    let debug_link = token
-                        .debug_link()
-                        .replace("host.docker.internal", "localhost");
-                    println!("Conversation ID (debug link): {debug_link}");
-                    return AssertionOutcome::Success;
-                }
+            if let Some(conversation) = history_model.active_conversation(terminal_view.id())
+                && let Some(token) = conversation.server_conversation_token()
+            {
+                // The debug link within the container will be using host.docker.internal, but we're opening
+                // from outside the container.
+                let debug_link = token
+                    .debug_link()
+                    .replace("host.docker.internal", "localhost");
+                println!("Conversation ID (debug link): {debug_link}");
+                return AssertionOutcome::Success;
             }
             // If we don't have a conversation token yet, keep polling
             AssertionOutcome::failure("Waiting for conversation token to be available".to_string())

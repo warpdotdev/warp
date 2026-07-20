@@ -15,7 +15,7 @@ use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentSessi
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
 };
-use crate::util::image::{infer_mime_type, MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT, MIME_SNIFF_BYTES};
+use crate::util::image::{MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT, MIME_SNIFF_BYTES, infer_mime_type};
 mod warpify_footer;
 
 use std::path::Path;
@@ -29,18 +29,18 @@ use warp_core::send_telemetry_from_ctx;
 use warp_core::settings::Setting;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::contrast::{
-    high_enough_contrast, pick_best_foreground_color, MinimumAllowedContrast,
+    MinimumAllowedContrast, high_enough_contrast, pick_best_foreground_color,
 };
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
 use warpify_footer::{WarpifyFooterView, WarpifyFooterViewEvent};
+use warpui::r#async::Timer;
 use warpui::elements::{
     ChildView, Container, CrossAxisAlignment, Empty, Expanded, Flex, MainAxisSize, ParentElement,
 };
 use warpui::keymap::Keystroke;
-use warpui::r#async::Timer;
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
@@ -55,10 +55,10 @@ use crate::server::telemetry::{CLIAgentType, CLISubagentControlState, TelemetryE
 use crate::settings::{
     AISettings, AISettingsChangedEvent, CompiledCommandsForCodingAgentToolbar, InputModeSettings,
 };
-use crate::terminal::cli_agent_sessions::CLIAgentRichInputCloseReason;
-use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 pub use crate::terminal::CLIAgent;
 use crate::terminal::TerminalModel;
+use crate::terminal::cli_agent_sessions::CLIAgentRichInputCloseReason;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
@@ -1356,10 +1356,10 @@ impl View for UseAgentToolbar {
             // the horizontal padding area as well, preventing a visible color mismatch
             // between the padding and the footer content.
             let terminal_model = self.terminal_model.lock();
-            if terminal_model.is_alt_screen_active() {
-                if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
-                    container = container.with_background(bg_color);
-                }
+            if terminal_model.is_alt_screen_active()
+                && let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color()
+            {
+                container = container.with_background(bg_color);
             }
 
             return container.finish();
@@ -1399,10 +1399,10 @@ impl View for UseAgentToolbar {
             .with_horizontal_padding(*super::PADDING_LEFT)
             .with_vertical_padding(4.);
 
-        if terminal_model.is_alt_screen_active() {
-            if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
-                container = container.with_background(bg_color);
-            }
+        if terminal_model.is_alt_screen_active()
+            && let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color()
+        {
+            container = container.with_background(bg_color);
         }
 
         container.finish()

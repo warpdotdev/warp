@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use rand::prelude::StdRng;
 use rand::SeedableRng;
+use rand::prelude::StdRng;
 
-use super::{generate_unique_name, WORDS};
+use super::{WORDS, generate_unique_name};
 
 fn seeded_rng(seed: u64) -> StdRng {
     StdRng::seed_from_u64(seed)

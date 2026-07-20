@@ -1,10 +1,10 @@
 use warp_core::context_flag::ContextFlag;
+use warpui::AppContext;
 use warpui::keymap::{
     BindingDescription, ContextPredicate, EditableBinding, FixedBinding, PerPlatformKeystroke,
 };
 use warpui::platform::OperatingSystem;
 use warpui::units::IntoLines;
-use warpui::AppContext;
 
 use super::{
     AgentOnboardingVersion, AskAISource, ContextMenuAction, OnboardingIntention, OnboardingVersion,
@@ -18,6 +18,7 @@ use crate::channel::{Channel, ChannelState};
 use crate::features::FeatureFlag;
 use crate::server::telemetry::{InteractionSource, ToggleBlockFilterSource};
 use crate::settings_view::flags;
+use crate::terminal::TerminalView;
 use crate::terminal::input::{
     SET_INPUT_MODE_AGENT_ACTION_NAME, SET_INPUT_MODE_TERMINAL_ACTION_NAME,
 };
@@ -29,9 +30,8 @@ use crate::terminal::view::{
     LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY,
     LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY,
 };
-use crate::terminal::TerminalView;
 use crate::util::bindings;
-use crate::util::bindings::{cmd_or_ctrl_shift, is_binding_pty_compliant, CustomAction};
+use crate::util::bindings::{CustomAction, cmd_or_ctrl_shift, is_binding_pty_compliant};
 
 pub const TOGGLE_BLOCK_FILTER_KEYBINDING: &str =
     "terminal:toggle_block_filter_on_selected_or_last_block";
