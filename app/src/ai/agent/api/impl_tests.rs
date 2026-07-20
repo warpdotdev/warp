@@ -4,7 +4,7 @@ use warp_multi_agent_api as api;
 
 use super::{
     api_keys_with_warp_credit_fallback_setting, get_supported_cli_agent_tools, get_supported_tools,
-    supports_orchestration_v2,
+    supports_orchestration_runners, supports_orchestration_v2,
 };
 use crate::ai::agent::api::RequestParams;
 use crate::ai::blocklist::SessionContext;
@@ -104,6 +104,24 @@ fn api_keys_with_warp_credit_fallback_setting_preserves_existing_keys() {
 fn supports_orchestration_v2_matches_request_orchestration_setting() {
     assert!(supports_orchestration_v2(true));
     assert!(!supports_orchestration_v2(false));
+}
+
+#[test]
+fn supports_orchestration_runners_matches_flags() {
+    // The capability is reported only when orchestration is enabled AND the
+    // CloudAgentRunners flag is on. The override guard must drop before a
+    // second override is set for the same flag, so each case is in its own block.
+    {
+        let _flag = FeatureFlag::CloudAgentRunners.override_enabled(true);
+        assert!(supports_orchestration_runners(true));
+        assert!(!supports_orchestration_runners(false));
+    }
+
+    {
+        let _flag = FeatureFlag::CloudAgentRunners.override_enabled(false);
+        assert!(!supports_orchestration_runners(true));
+        assert!(!supports_orchestration_runners(false));
+    }
 }
 
 #[test]
