@@ -490,28 +490,27 @@ impl ConversationEndedTombstoneView {
         let mut has_button = false;
 
         let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-        if is_any_ai_enabled {
-            if let Some(continue_in_cloud_button) = &self.continue_in_cloud_button {
-                row.add_child(ChildView::new(continue_in_cloud_button).finish());
+        if is_any_ai_enabled && let Some(continue_in_cloud_button) = &self.continue_in_cloud_button
+        {
+            row.add_child(ChildView::new(continue_in_cloud_button).finish());
+            has_button = true;
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if let Some(continue_locally_button) = &self.continue_locally_button {
+                row.add_child(ChildView::new(continue_locally_button).finish());
                 has_button = true;
-            }
-            #[cfg(not(target_family = "wasm"))]
-            {
-                if let Some(continue_locally_button) = &self.continue_locally_button {
-                    row.add_child(ChildView::new(continue_locally_button).finish());
-                    has_button = true;
-                }
             }
         }
 
         #[cfg(target_family = "wasm")]
         {
             // Don't show on mobile devices - they can't use the desktop app
-            if !warpui::platform::wasm::is_mobile_device() {
-                if let Some(ref open_in_warp_button) = self.open_in_warp_button {
-                    row.add_child(ChildView::new(open_in_warp_button).finish());
-                    has_button = true;
-                }
+            if !warpui::platform::wasm::is_mobile_device()
+                && let Some(ref open_in_warp_button) = self.open_in_warp_button
+            {
+                row.add_child(ChildView::new(open_in_warp_button).finish());
+                has_button = true;
             }
         }
 

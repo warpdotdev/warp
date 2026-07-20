@@ -1927,10 +1927,9 @@ impl EventLoop {
                 .query_selector("canvas")
                 .ok()
                 .flatten()
+                && let Ok(html_element) = canvas.dyn_into::<web_sys::HtmlElement>()
             {
-                if let Ok(html_element) = canvas.dyn_into::<web_sys::HtmlElement>() {
-                    let _ = html_element.focus();
-                }
+                let _ = html_element.focus();
             }
         }) as Box<dyn FnOnce()>);
 
@@ -2022,12 +2021,12 @@ impl EventLoop {
     fn handle_visual_viewport_resize(&mut self, _width: f32, height: f32) {
         log::debug!("Visual viewport resized, height = {}px", height);
 
-        if let Some(container) = gloo::utils::document().get_element_by_id("wasm-container") {
-            if let Some(html_element) = container.dyn_ref::<web_sys::HtmlElement>() {
-                let _ = html_element
-                    .style()
-                    .set_property("height", &format!("{}px", height));
-            }
+        if let Some(container) = gloo::utils::document().get_element_by_id("wasm-container")
+            && let Some(html_element) = container.dyn_ref::<web_sys::HtmlElement>()
+        {
+            let _ = html_element
+                .style()
+                .set_property("height", &format!("{}px", height));
         }
     }
 }

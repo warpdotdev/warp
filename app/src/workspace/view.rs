@@ -22693,10 +22693,9 @@ impl Workspace {
             && self
                 .current_workspace_state
                 .is_transcript_details_panel_open
+            && let Some(panel_content) = self.render_transcript_details_panel(app)
         {
-            if let Some(panel_content) = self.render_transcript_details_panel(app) {
-                panels_view = panels_view.with_child(panel_content);
-            }
+            panels_view = panels_view.with_child(panel_content);
         }
 
         // Resource center and AI assistant are workspace-level panels, not configurable.

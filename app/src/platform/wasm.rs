@@ -7,7 +7,7 @@ use wasm_bindgen::{JsCast, JsValue};
 /// static variables are initialized.
 pub(super) fn init() {
     unsafe {
-        extern "C" {
+        unsafe extern "C" {
             /// __wasm_call_ctors is a function defined by the `wasm-ld` linker, and is used to
             /// initialize static variables.
             ///

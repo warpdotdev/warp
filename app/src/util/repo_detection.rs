@@ -84,6 +84,6 @@ pub fn detect_possible_git_repo(
     _active_directory: &str,
     _source: RepoDetectionSource,
     _ctx: &mut AppContext,
-) -> impl Future<Output = Option<LocalOrRemotePath>> {
+) -> impl Future<Output = Option<LocalOrRemotePath>> + use<> {
     ready(None)
 }
