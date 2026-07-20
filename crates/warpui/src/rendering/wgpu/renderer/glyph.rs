@@ -98,8 +98,8 @@ impl Pipeline {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[
-                    shader_types::Vertex::desc(),
-                    shaders::GlyphInstanceData::desc(),
+                    Some(shader_types::Vertex::desc()),
+                    Some(shaders::GlyphInstanceData::desc()),
                 ],
                 compilation_options: Default::default(),
             },

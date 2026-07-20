@@ -367,7 +367,7 @@ web-sys = { version = "0.3.69", features = [
 # Disable default features to disable support for WebGPU, which does not yet
 # have wide browser support.  We enable all other default feature of wgpu,
 # though.
-wgpu = { version = "29.0.1", default-features = false, features = [
+wgpu = { version = "30.0.0", default-features = false, features = [
   "dx12",
   "gles",
   "metal",
