@@ -1200,6 +1200,16 @@ impl Block {
             self.start_ts = Some(Local::now());
         }
 
+        // Defensively end prompt-capture mode if it is still active.
+        if let Some(kind) = self.header_grid.receiving_chars_for_prompt.take() {
+            log::warn!(
+                "Prompt capture was still active when command execution began; force-ending it \
+                 so command echo/output are not routed into the prompt grid. An OSC 133;A \
+                 start-prompt marker was likely never followed by a matching OSC 133;B end \
+                 marker. kind={kind:?}"
+            );
+        }
+
         self.header_grid.start_command_grid();
         self.wakeup_after_delay();
     }
