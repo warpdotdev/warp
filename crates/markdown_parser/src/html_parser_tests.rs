@@ -187,6 +187,67 @@ fn test_parse_sub_sup() {
 }
 
 #[test]
+fn test_parse_nested_sub_sup_bails_whole_span_to_literal() {
+    // Issue #13948: the paste-path HTML parser must apply the same whole-formula literal bail as
+    // the Markdown tokenizer. ANY nesting of `<sub>`/`<sup>` — opposite-direction, same-direction,
+    // or depth ≥ 2 — degrades the ENTIRE outermost span to literal source text rather than
+    // rendering a plausible-but-wrong formula (recursive parsing would otherwise just overwrite
+    // `vertical_align`, showing a misleading partially-styled construct).
+
+    // Opposite-direction nesting — the motivating case from the finding.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub>a<sup>b</sup>c</sub>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<sub>a<sup>b</sup>c</sub>")
+        ])]
+    );
+
+    // Same-direction nesting.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sup>2<sup>3</sup></sup>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<sup>2<sup>3</sup></sup>")
+        ])]
+    );
+
+    // Depth ≥ 2 (a vertical-align tag separated from its nested descendant by a non-vertical-align
+    // tag) still bails the whole outermost span.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub>x<b>y<sup>z</sup></b></sub>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<sub>x<b>y<sup>z</sup></b></sub>")
+        ])]
+    );
+
+    // Attributes on a bailed span survive in the literal (invariant 9 ignores them only when the
+    // tag renders styled; the literal must still be faithful to the source).
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub class=\"foo\">a<sup>b</sup></sub>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<sub class=\"foo\">a<sup>b</sup></sub>")
+        ])]
+    );
+
+    // Control: a single, non-nested vertical-align tag still renders styled.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'>x<sup>2</sup>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("x"),
+            FormattedTextFragment::superscript("2"),
+        ])]
+    );
+
+    // Control: sibling (non-nested) vertical-align tags each render styled independently.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub>a</sub><sup>b</sup>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::subscript("a"),
+            FormattedTextFragment::superscript("b"),
+        ])]
+    );
+}
+
+#[test]
 fn test_block() {
     assert_eq!(
         test_parse_html(

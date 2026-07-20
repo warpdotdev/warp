@@ -437,6 +437,25 @@ fn parse_phrasing_content(nodes: &[Rc<Node>], text_styling: Styling) -> Formatte
             }
             NodeData::Element { name, attrs, .. } => {
                 let node_name = name.local.to_string();
+
+                // Whole-formula literal bail (issue #13948, mirroring the Markdown tokenizer): a
+                // `<sub>`/`<sup>` whose subtree contains another `<sub>`/`<sup>` — at any depth,
+                // same- or opposite-direction — degrades the ENTIRE outermost span to literal
+                // source text. `vertical_align` has no compounding, so recursively styling nested
+                // tags would render a plausible-but-wrong formula (e.g. `<sub>a<sup>b</sup>c</sub>`
+                // showing a real-looking but incorrect construct). Only a single, non-nested
+                // vertical-align tag renders styled. Serializing the whole span back to source is
+                // the only rendering that can't be misread as a real formula.
+                if matches!(node_name.as_ref(), "sub" | "sup")
+                    && node_has_nested_vertical_align(node)
+                {
+                    result.push(phrasing_to_formatted_text(
+                        serialize_node_to_literal(node),
+                        &text_styling,
+                    ));
+                    continue;
+                }
+
                 let mut decorated_styling = text_styling.clone();
                 decorated_styling.update_with_attributes(&attrs.borrow());
                 match node_name.as_ref() {
@@ -460,6 +479,67 @@ fn parse_phrasing_content(nodes: &[Rc<Node>], text_styling: Styling) -> Formatte
         }
     }
     result
+}
+
+/// Whether any descendant element of `node` is a `<sub>`/`<sup>` vertical-align tag.
+///
+/// Used to detect nesting for the whole-formula literal bail: called on a vertical-align element,
+/// a `true` result means a second vertical-align tag lives somewhere in its subtree (at any depth),
+/// so the outermost span must render as literal source rather than styled.
+fn node_has_nested_vertical_align(node: &Rc<Node>) -> bool {
+    node.children.borrow().iter().any(|child| {
+        if let NodeData::Element { name, .. } = &child.data
+            && matches!(name.local.as_ref(), "sub" | "sup")
+        {
+            return true;
+        }
+        node_has_nested_vertical_align(child)
+    })
+}
+
+/// Re-serialize a parsed phrasing node back to HTML-like source text, for the literal-bail path.
+///
+/// This is a faithful-enough reconstruction for a literal fallback, not a byte-exact round trip:
+/// element tags are emitted as `<name attr="value" …>children</name>` with their parsed attributes
+/// (attribute order/quoting is normalized to double quotes), and text nodes are emitted verbatim.
+/// It exists so a bailed nested `<sub>`/`<sup>` construct shows readable source text rather than a
+/// misleading formula.
+fn serialize_node_to_literal(node: &Rc<Node>) -> String {
+    let mut out = String::new();
+    serialize_node_into(node, &mut out);
+    out
+}
+
+fn serialize_node_into(node: &Rc<Node>, out: &mut String) {
+    match &node.data {
+        NodeData::Text { contents } => out.push_str(&contents.borrow()),
+        NodeData::Element { name, attrs, .. } => {
+            let tag = name.local.as_ref();
+            out.push('<');
+            out.push_str(tag);
+            for attr in attrs.borrow().iter() {
+                out.push(' ');
+                out.push_str(&attr.name.local);
+                out.push_str("=\"");
+                out.push_str(&attr.value);
+                out.push('"');
+            }
+            out.push('>');
+            for child in node.children.borrow().iter() {
+                serialize_node_into(child, out);
+            }
+            out.push_str("</");
+            out.push_str(tag);
+            out.push('>');
+        }
+        // Comments, doctypes, and processing instructions don't appear in phrasing content we
+        // bail; ignore them defensively rather than inventing a serialization.
+        _ => {
+            for child in node.children.borrow().iter() {
+                serialize_node_into(child, out);
+            }
+        }
+    }
 }
 
 /// Converts styled phrasing text to a fragment of formatted text.
