@@ -1859,11 +1859,16 @@ impl EventLoop {
             self.last_ime_cursor_area = Some(next_area);
 
             log::debug!(
-                "Updating IME cursor area for window={active_window_id:?} position=({:.1}, {:.1}) size=({:.1}, {:.1}) is_wayland={is_wayland}",
+                concat!(
+                    "Updating IME cursor area for window={:?} ",
+                    "position=({:.1}, {:.1}) size=({:.1}, {:.1}) is_wayland={}"
+                ),
+                active_window_id,
                 position.x,
                 position.y,
                 size.width,
-                size.height
+                size.height,
+                is_wayland
             );
 
             // On X11, winit can cache the previous cursor area and ignore a

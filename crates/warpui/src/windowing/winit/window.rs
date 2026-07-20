@@ -1457,12 +1457,6 @@ fn create_window(
         // On Linux, winit only sends `zwp_text_input_v3.enable()` (Wayland) /
         // activates the XIM/IBUS client (X11) after `set_ime_allowed(true)`.
         // Without this, CJK and other IME input methods appear to do nothing.
-        //
-        // Previously this was X11-only because enabling IME on Wayland could
-        // interact with aggressive `set_ime_cursor_area` updates and produce an
-        // event loop on KDE Plasma. Cursor-area updates are now deduped and the
-        // X11-only position nudge is gated off on Wayland (see
-        // `update_ime_position` / `handle_ime_event`).
         window.set_ime_allowed(true);
         log::debug!("IME allowed on newly created Linux window");
     }
