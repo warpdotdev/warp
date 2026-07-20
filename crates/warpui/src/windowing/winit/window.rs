@@ -1454,9 +1454,6 @@ fn create_window(
 
     #[cfg(target_os = "linux")]
     if let Ok(window) = created_window.as_ref() {
-        // On Linux, winit only sends `zwp_text_input_v3.enable()` (Wayland) /
-        // activates the XIM/IBUS client (X11) after `set_ime_allowed(true)`.
-        // Without this, CJK and other IME input methods appear to do nothing.
         window.set_ime_allowed(true);
         log::debug!("IME allowed on newly created Linux window");
     }
