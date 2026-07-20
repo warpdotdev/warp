@@ -945,6 +945,7 @@ impl TuiTerminalSessionView {
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
         let transcript_for_input = transcript.clone();
+        let terminal_model_for_input = model.clone();
         let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
         let orchestration_tab_bar_for_input = orchestration_tab_bar.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
@@ -957,6 +958,10 @@ impl TuiTerminalSessionView {
                 move |ctx| orchestration_tab_bar_for_input.as_ref(ctx).has_tabs(),
                 ctx,
             )
+            .with_inline_menu_actions_allowed(move |_| {
+                let terminal_model = terminal_model_for_input.lock();
+                tui_input_target(&terminal_model).agent_editor_owns_input()
+            })
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
         });
 

@@ -175,6 +175,8 @@ pub struct TuiInputView {
     keyboard_enhancement_supported: bool,
     /// Consults the owner live before Shift+Up leaves the first visual row.
     can_move_focus_up: Rc<dyn Fn(&AppContext) -> bool>,
+    /// Consults the owner live before an inline-menu Enter can accept an item.
+    can_accept_inline_menu: Rc<dyn Fn(&AppContext) -> bool>,
 }
 
 impl Entity for TuiInputView {
@@ -265,7 +267,16 @@ impl TuiInputView {
             transcript,
             keyboard_enhancement_supported: false,
             can_move_focus_up: Rc::new(can_move_focus_up),
+            can_accept_inline_menu: Rc::new(|_| true),
         }
+    }
+
+    pub(crate) fn with_inline_menu_actions_allowed(
+        mut self,
+        can_accept_inline_menu: impl Fn(&AppContext) -> bool + 'static,
+    ) -> Self {
+        self.can_accept_inline_menu = Rc::new(can_accept_inline_menu);
+        self
     }
 
     pub(crate) fn with_keyboard_enhancement_supported(
@@ -681,6 +692,13 @@ impl TuiInputView {
         let Some(inline_menu) = self.active_inline_menu(ctx) else {
             return false;
         };
+        if matches!(action, TuiInputAction::Submit) && !(self.can_accept_inline_menu)(ctx) {
+            // The session can render a disabled editor while the shell is still
+            // bootstrapping. Consume Enter without accepting a hidden menu item;
+            // otherwise the accepted-menu event bypasses the session's normal
+            // submission guard and can execute or clear the draft.
+            return true;
+        }
 
         match action {
             TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp) => {

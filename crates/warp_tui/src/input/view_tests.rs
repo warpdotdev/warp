@@ -371,6 +371,17 @@ fn build_view_with_inline_menu(
     ModelHandle<TuiSlashCommandModel>,
     [SlashCommandId; 2],
 ) {
+    build_view_with_inline_menu_gate(ctx, Rc::new(Cell::new(true)))
+}
+
+fn build_view_with_inline_menu_gate(
+    ctx: &mut AppContext,
+    allowed_at_prompt: Rc<Cell<bool>>,
+) -> (
+    ViewHandle<TuiInputView>,
+    ModelHandle<TuiSlashCommandModel>,
+    [SlashCommandId; 2],
+) {
     ctx.add_singleton_model(|_| Appearance::mock());
     add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
@@ -411,6 +422,7 @@ fn build_view_with_inline_menu(
                 |_| false,
                 ctx,
             )
+            .with_inline_menu_actions_allowed(move |_| allowed_at_prompt.get())
         },
     );
     (view, menu_model, ids)
@@ -518,6 +530,51 @@ fn inline_menu_accept_dismisses_before_emitting_unchanged_payload() {
         });
         app.read(|ctx| {
             assert_eq!(accepted.borrow().as_slice(), &[(ids[0], true)]);
+            assert!(!menu_model.as_ref(ctx).is_open(ctx));
+        });
+    });
+}
+
+#[test]
+fn inline_menu_submit_is_blocked_until_prompt_is_ready() {
+    App::test((), |mut app| async move {
+        let (view, menu_model, ids, allowed_at_prompt, accepted) = app.update(|ctx| {
+            let allowed_at_prompt = Rc::new(Cell::new(false));
+            let (view, menu_model, ids) =
+                build_view_with_inline_menu_gate(ctx, allowed_at_prompt.clone());
+            let accepted = Rc::new(RefCell::new(Vec::new()));
+            let accepted_for_subscription = accepted.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiInputViewEvent::AcceptedSlashCommand(
+                    AcceptSlashCommandOrSavedPrompt::SlashCommand { id },
+                ) = event
+                {
+                    accepted_for_subscription.borrow_mut().push(*id);
+                }
+            });
+            (view, menu_model, ids, allowed_at_prompt, accepted)
+        });
+
+        app.update(|ctx| {
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+        });
+        app.read(|ctx| {
+            assert!(
+                accepted.borrow().is_empty(),
+                "bootstrap must not emit an accepted menu event"
+            );
+            assert!(
+                menu_model.as_ref(ctx).is_open(ctx),
+                "bootstrap must leave the menu untouched"
+            );
+        });
+
+        allowed_at_prompt.set(true);
+        app.update(|ctx| {
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+        });
+        app.read(|ctx| {
+            assert_eq!(accepted.borrow().as_slice(), &[ids[0]]);
             assert!(!menu_model.as_ref(ctx).is_open(ctx));
         });
     });
