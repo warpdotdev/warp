@@ -105,8 +105,8 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         let target_entity = handle.id();
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
-        if let Some(ref mut pending) = self.app.pending_unsubscribes {
-            if pending.entity_id == target_entity {
+        if let Some(ref mut pending) = self.app.pending_unsubscribes
+            && pending.entity_id == target_entity {
                 pending.keys.insert(SubscriptionKey::Model(self.model_id));
 
                 // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
@@ -125,7 +125,6 @@ impl<'a, T: Entity> ModelContext<'a, T> {
 
                 return;
             }
-        }
 
         // Otherwise process immediately.
         self.app
@@ -170,8 +169,8 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         let target_entity = handle.id();
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
-        if let Some(ref mut pending) = self.app.pending_unsubscribes {
-            if pending.entity_id == target_entity {
+        if let Some(ref mut pending) = self.app.pending_unsubscribes
+            && pending.entity_id == target_entity {
                 pending.keys.insert(SubscriptionKey::Model(self.model_id));
 
                 // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
@@ -190,7 +189,6 @@ impl<'a, T: Entity> ModelContext<'a, T> {
 
                 return;
             }
-        }
 
         // Otherwise process immediately.
         self.app
@@ -249,11 +247,10 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     pub fn notify(&mut self) {
         // If the last effect is a model notification for this model,
         // don't add another one.
-        if let Some(Effect::ModelNotification { model_id }) = self.app.pending_effects.back() {
-            if *model_id == self.model_id {
+        if let Some(Effect::ModelNotification { model_id }) = self.app.pending_effects.back()
+            && *model_id == self.model_id {
                 return;
             }
-        }
 
         self.app
             .pending_effects

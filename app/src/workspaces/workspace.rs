@@ -135,8 +135,8 @@ impl Workspace {
     }
 
     pub fn are_overages_remaining(&self) -> bool {
-        if self.settings.usage_based_pricing_settings.enabled {
-            if let Some(max_spend_cents) = self
+        if self.settings.usage_based_pricing_settings.enabled
+            && let Some(max_spend_cents) = self
                 .settings
                 .usage_based_pricing_settings
                 .max_monthly_spend_cents
@@ -149,7 +149,6 @@ impl Workspace {
                     return true;
                 }
             }
-        }
 
         false
     }

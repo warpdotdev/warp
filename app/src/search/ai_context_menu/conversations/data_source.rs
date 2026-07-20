@@ -28,8 +28,8 @@ impl ConversationDataSource {
 
         // Source 1: local + historical conversations (excludes ambient agent conversations).
         for nav in ConversationNavigationData::all_conversations(app) {
-            if let Some(token) = &nav.server_conversation_token {
-                if !seen_tokens.contains(token.as_str()) {
+            if let Some(token) = &nav.server_conversation_token
+                && !seen_tokens.contains(token.as_str()) {
                     let token_str = token.as_str().to_string();
                     seen_tokens.insert(token_str.clone());
                     items.push(ConversationContextItem {
@@ -38,22 +38,20 @@ impl ConversationDataSource {
                         last_updated: nav.last_updated.to_utc(),
                     });
                 }
-            }
         }
 
         // Source 2: cloud agent tasks. Every ambient agent conversation has a
         // corresponding task, so this covers all cloud conversations.
         let agent_model = AgentConversationsModel::as_ref(app);
         for task in agent_model.tasks_iter() {
-            if let Some(conv_id) = &task.conversation_id {
-                if seen_tokens.insert(conv_id.clone()) {
+            if let Some(conv_id) = &task.conversation_id
+                && seen_tokens.insert(conv_id.clone()) {
                     items.push(ConversationContextItem {
                         title: task.title.clone(),
                         server_conversation_token: conv_id.clone(),
                         last_updated: task.updated_at,
                     });
                 }
-            }
         }
 
         items

@@ -114,11 +114,9 @@ pub(super) fn subscribe_to_shared_dependencies<T>(
                 terminal_view_id: event_terminal_view_id,
                 ..
             } = event
-            {
-                if *event_terminal_view_id == terminal_view_id {
+                && *event_terminal_view_id == terminal_view_id {
                     recompute_active_commands(me, ctx);
                 }
-            }
         },
     );
     // Recompute when the active conversation switches so commands gated on the active

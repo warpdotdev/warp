@@ -113,8 +113,8 @@ pub(in crate::terminal::view) fn resolve_cloud_conversation_continuation_ui_stat
         .map(|token| ServerConversationToken::new(token.to_string()));
     let history_model = BlocklistAIHistoryModel::as_ref(app);
 
-    if let Some(conversation_token) = conversation_token.as_ref() {
-        if let Some(metadata) =
+    if let Some(conversation_token) = conversation_token.as_ref()
+        && let Some(metadata) =
             history_model.get_server_conversation_metadata_by_server_token(conversation_token)
         {
             return continuation_ui_state_for_harness_and_access(
@@ -126,7 +126,6 @@ pub(in crate::terminal::view) fn resolve_cloud_conversation_continuation_ui_stat
                 history_model,
             );
         }
-    }
 
     let access = task_creator_access(&task, app);
     if access == ConversationAccess::Edit {

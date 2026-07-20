@@ -771,8 +771,7 @@ impl AsyncFindController {
         // Check for query refinement optimization.
         if let (Some(current_config), Some(new_query)) =
             (&self.current_config, options.query.as_ref())
-        {
-            if !options.is_regex_enabled
+            && !options.is_regex_enabled
                 && !current_config.is_regex_enabled
                 && options.is_case_sensitive == current_config.is_case_sensitive
                 && is_query_refinement(&current_config.query, new_query)
@@ -781,7 +780,6 @@ impl AsyncFindController {
                 self.filter_results_for_refinement(options, block_sort_direction, ctx);
                 return;
             }
-        }
 
         // Create new config.
         let Some(config) = AsyncFindConfig::from_options(options, block_sort_direction) else {
@@ -930,8 +928,8 @@ impl AsyncFindController {
                 total_index,
             } => {
                 // Scan AI block on main thread.
-                if let Some(view) = self.rich_content_views.get(&view_id) {
-                    if let Some(config) = &self.current_config {
+                if let Some(view) = self.rich_content_views.get(&view_id)
+                    && let Some(config) = &self.current_config {
                         let options = FindOptions {
                             query: Some(config.query.clone()),
                             is_case_sensitive: config.is_case_sensitive,
@@ -954,7 +952,6 @@ impl AsyncFindController {
                             self.clamp_focused_match_index();
                         }
                     }
-                }
             }
             FindTaskMessage::Done => {
                 self.status = AsyncFindStatus::Complete;
@@ -1264,11 +1261,10 @@ impl AsyncFindController {
         ctx.spawn_stream_local(
             result_rx,
             move |me, msg, ctx| {
-                if let Some(controller) = &mut me.async_find_controller {
-                    if controller.generation == generation {
+                if let Some(controller) = &mut me.async_find_controller
+                    && controller.generation == generation {
                         controller.process_message(msg, ctx);
                     }
-                }
             },
             |_me, _ctx| {},
         );

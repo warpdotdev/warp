@@ -461,8 +461,8 @@ pub(crate) fn build_menu_items(
         ));
         known_slugs.push(slug.to_string());
     }
-    if let Some(slug) = recent_host {
-        if !known_slugs
+    if let Some(slug) = recent_host
+        && !known_slugs
             .iter()
             .any(|known| known.eq_ignore_ascii_case(slug))
         {
@@ -476,7 +476,6 @@ pub(crate) fn build_menu_items(
                 InternalAction::SelectKnown(slug.to_string()),
             ));
         }
-    }
     items.push(MenuItem::Item(
         MenuItemFields::new(CUSTOM_HOST_LABEL).with_on_select_action(
             DropdownAction::select_action_and_close(InternalAction::EnterCustomMode),

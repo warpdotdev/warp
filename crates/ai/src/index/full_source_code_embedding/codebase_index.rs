@@ -1091,8 +1091,8 @@ impl CodebaseIndex {
                     Ok(flush_result) => {
                         let mut cache_population_error = None;
                         // Populate cache if needed.
-                        if should_populate_cache {
-                            if let Err(e) = store_client
+                        if should_populate_cache
+                            && let Err(e) = store_client
                                 .populate_merkle_tree_cache(
                                     updated_config.embedding_config,
                                     tree.root_node().hash(),
@@ -1102,7 +1102,6 @@ impl CodebaseIndex {
                             {
                                 cache_population_error = Some(e);
                             }
-                        }
                         SyncOperationResult::Success {
                             flushed_node_count: total_nodes_to_sync,
                             flushed_fragment_result: flush_result,

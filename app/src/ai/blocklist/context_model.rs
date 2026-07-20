@@ -405,12 +405,11 @@ impl BlocklistAIContextModel {
             if FeatureFlag::AgentViewBlockContext.is_enabled() {
                 for block_id in &self.auto_attached_agent_view_user_block_ids {
                     // Skip if already in pending_context_block_ids to avoid duplicates
-                    if !self.pending_context_block_ids.contains(block_id) {
-                        if let Some(block_context) = self.transform_block_to_context(block_id, true)
+                    if !self.pending_context_block_ids.contains(block_id)
+                        && let Some(block_context) = self.transform_block_to_context(block_id, true)
                         {
                             context.push(block_context);
                         }
-                    }
                 }
             }
 
@@ -455,15 +454,14 @@ impl BlocklistAIContextModel {
         let pwd = block_metadata
             .current_working_directory()
             .map(|s| PathBuf::from(s.to_owned()));
-        if let Some(session_id) = block_metadata.session_id() {
-            if let Some(active_session) = sessions.as_ref(ctx).get(session_id) {
+        if let Some(session_id) = block_metadata.session_id()
+            && let Some(active_session) = sessions.as_ref(ctx).get(session_id) {
                 self.update_directory_context(
                     pwd.map(|p| p.to_string_lossy().to_string()),
                     active_session.home_dir().map(|sq| sq.to_owned()),
                     ctx,
                 );
             }
-        }
     }
 
     /// Set `requires_visual_resync` to `false` only if the pending context was modified as a result

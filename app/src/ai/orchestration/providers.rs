@@ -152,11 +152,9 @@ pub fn resolve_default_environment_id(ctx: &AppContext) -> Option<String> {
     if let Some(env_id) = *CloudAgentSettings::as_ref(ctx)
         .last_selected_environment_id
         .value()
-    {
-        if CloudAmbientAgentEnvironment::get_by_id(&env_id, ctx).is_some() {
+        && CloudAmbientAgentEnvironment::get_by_id(&env_id, ctx).is_some() {
             return Some(env_id.uid());
         }
-    }
     let mut envs = CloudAmbientAgentEnvironment::get_all(ctx);
     envs.sort_by(|a, b| {
         b.metadata

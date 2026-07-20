@@ -262,8 +262,8 @@ impl CurrentPrompt {
             };
 
             let latest_context = me.latest_context.clone();
-            if let Some(context) = latest_context {
-                if let Some(session_id) = context.active_block_metadata.session_id() {
+            if let Some(context) = latest_context
+                && let Some(session_id) = context.active_block_metadata.session_id() {
                     let session = me
                         .sessions
                         .update(ctx, |sessions, _| sessions.get(session_id));
@@ -277,12 +277,12 @@ impl CurrentPrompt {
                         ctx.notify();
                     }
                 }
-            }
         });
     }
 
     pub fn snapshot(&self) -> HashMap<ContextChipKind, Option<ChipValue>> {
-        let cur = self
+        
+        self
             .states
             .iter()
             .filter_map(|(kind, state)| {
@@ -292,8 +292,7 @@ impl CurrentPrompt {
                     None
                 }
             })
-            .collect();
-        cur
+            .collect()
     }
 
     pub fn on_click_snapshot(&self) -> HashMap<ContextChipKind, Vec<String>> {
@@ -323,13 +322,12 @@ impl CurrentPrompt {
 
     fn update_chip_value(&mut self, chip_kind: &ContextChipKind, value: Option<ChipValue>) {
         log::debug!("Updating prompt value of {chip_kind:?} to {value:?}");
-        if let Some(state) = self.states.get_mut(chip_kind) {
-            if state.last_computed_value != value {
+        if let Some(state) = self.states.get_mut(chip_kind)
+            && state.last_computed_value != value {
                 state.last_computed_value = value;
                 state.update_status = ChipUpdateStatus::Ready;
                 let _ = self.update_tx.try_send(());
             }
-        }
     }
 
     fn update_on_click_value(&mut self, chip_kind: &ContextChipKind, value: Option<Vec<String>>) {
@@ -349,12 +347,11 @@ impl CurrentPrompt {
         chip_kind: &ContextChipKind,
         availability: ChipAvailability,
     ) {
-        if let Some(state) = self.states.get_mut(chip_kind) {
-            if state.availability != availability {
+        if let Some(state) = self.states.get_mut(chip_kind)
+            && state.availability != availability {
                 state.availability = availability;
                 let _ = self.update_tx.try_send(());
             }
-        }
     }
 
     fn set_chip_update_status(&mut self, chip_kind: &ContextChipKind, status: ChipUpdateStatus) {
@@ -678,18 +675,15 @@ impl CurrentPrompt {
             return;
         }
 
-        if chip.runtime_policy().suppress_on_failure() {
-            if let Some(state) = self.states.get(chip_kind) {
-                if let Some(current_fp) = &fingerprint {
-                    if state.last_failure_fingerprint.as_ref() == Some(current_fp) {
+        if chip.runtime_policy().suppress_on_failure()
+            && let Some(state) = self.states.get(chip_kind)
+                && let Some(current_fp) = &fingerprint
+                    && state.last_failure_fingerprint.as_ref() == Some(current_fp) {
                         self.update_chip_value(chip_kind, None);
                         self.update_on_click_value(chip_kind, None);
                         self.set_chip_update_status(chip_kind, ChipUpdateStatus::Cached);
                         return;
                     }
-                }
-            }
-        }
         match generator {
             PromptGenerator::ShellCommand(cmd) => {
                 let Some(exec_ctx) = self.prepare_shell_command_context(cmd, ctx) else {
@@ -752,11 +746,10 @@ impl CurrentPrompt {
                         }
 
                         if timed_out {
-                            if suppress_on_failure {
-                                if let Some(state) = me.states.get_mut(&chip_kind) {
+                            if suppress_on_failure
+                                && let Some(state) = me.states.get_mut(&chip_kind) {
                                     state.last_failure_fingerprint = current_fingerprint;
                                 }
-                            }
                             me.update_chip_value(&chip_kind, None);
                             me.set_chip_update_status(&chip_kind, ChipUpdateStatus::TimedOut);
                             return;
@@ -783,13 +776,11 @@ impl CurrentPrompt {
                             if let Some(state) = me.states.get_mut(&chip_kind) {
                                 state.last_failure_fingerprint = current_fingerprint;
                             }
-                        } else if suppress_on_failure {
-                            if let Some(state) = me.states.get_mut(&chip_kind) {
-                                if state.last_failure_fingerprint == current_fingerprint {
+                        } else if suppress_on_failure
+                            && let Some(state) = me.states.get_mut(&chip_kind)
+                                && state.last_failure_fingerprint == current_fingerprint {
                                     state.last_failure_fingerprint = None;
                                 }
-                            }
-                        }
                         let chip_value = output.map(ChipValue::Text);
                         me.update_chip_value(&chip_kind, chip_value);
                         me.set_chip_update_status(&chip_kind, status);
@@ -1232,11 +1223,10 @@ impl CurrentPrompt {
         event: &ModelEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let ModelEvent::AfterBlockCompleted(after_block_completed) = event {
-            if let BlockType::User(UserBlockCompleted { command, .. }) =
+        if let ModelEvent::AfterBlockCompleted(after_block_completed) = event
+            && let BlockType::User(UserBlockCompleted { command, .. }) =
                 &after_block_completed.block_type
-            {
-                if let Some(cmd) = command.split_whitespace().next() {
+                && let Some(cmd) = command.split_whitespace().next() {
                     // Resolve aliases so that e.g. `alias g=git` followed by `g push`
                     // still triggers invalidation for chips watching "git".
                     let resolved = self
@@ -1248,8 +1238,8 @@ impl CurrentPrompt {
                     let effective_cmd = resolved.as_deref().unwrap_or(cmd);
 
                     for (chip_kind, state) in &mut self.states {
-                        if let Some(chip) = chip_kind.to_chip() {
-                            if chip
+                        if let Some(chip) = chip_kind.to_chip()
+                            && chip
                                 .runtime_policy()
                                 .invalidate_on_commands()
                                 .iter()
@@ -1257,11 +1247,8 @@ impl CurrentPrompt {
                             {
                                 state.invalidating_command_count += 1;
                             }
-                        }
                     }
                 }
-            }
-        }
     }
 
     /// Update the prompt context to reflect a new active block. This should be called from the
@@ -1389,11 +1376,10 @@ impl CurrentPrompt {
         ctx: &mut ModelContext<Self>,
     ) {
         // Unsubscribe from the previous model, if any.
-        if let Some(old_weak) = self.git_repo_status.take() {
-            if let Some(old_strong) = old_weak.upgrade(ctx) {
+        if let Some(old_weak) = self.git_repo_status.take()
+            && let Some(old_strong) = old_weak.upgrade(ctx) {
                 ctx.unsubscribe_from_model(&old_strong);
             }
-        }
 
         // Repo detached, clear git chips that require repository metadata.
         if handle.is_none() {
@@ -1410,8 +1396,8 @@ impl CurrentPrompt {
             return;
         }
 
-        if let Some(weak) = handle {
-            if let Some(strong) = weak.upgrade(ctx) {
+        if let Some(weak) = handle
+            && let Some(strong) = weak.upgrade(ctx) {
                 self.git_repo_status = Some(weak);
                 ctx.subscribe_to_model(&strong, |me, _, event, ctx| match event {
                     GitRepoStatusEvent::MetadataChanged => {
@@ -1428,7 +1414,6 @@ impl CurrentPrompt {
                     self.apply_git_repo_metadata(ctx);
                 }
             }
-        }
     }
 
     /// Set the per-repo GitHub-info model handle. When `Some`, subscribes to
@@ -1439,11 +1424,10 @@ impl CurrentPrompt {
         ctx: &mut ModelContext<Self>,
     ) {
         // Unsubscribe from the previous model, if any.
-        if let Some(old_weak) = self.github_repo_model.take() {
-            if let Some(old_strong) = old_weak.upgrade(ctx) {
+        if let Some(old_weak) = self.github_repo_model.take()
+            && let Some(old_strong) = old_weak.upgrade(ctx) {
                 ctx.unsubscribe_from_model(&old_strong);
             }
-        }
 
         if handle.is_none() {
             // GitHub-info handle detached: clear any stale PR chip state.
@@ -1455,8 +1439,8 @@ impl CurrentPrompt {
             return;
         }
 
-        if let Some(weak) = handle {
-            if let Some(strong) = weak.upgrade(ctx) {
+        if let Some(weak) = handle
+            && let Some(strong) = weak.upgrade(ctx) {
                 self.github_repo_model = Some(weak);
                 // Only PR info drives the chip value; repository name/owner
                 // changes don't affect it.
@@ -1470,7 +1454,6 @@ impl CurrentPrompt {
                 // Eagerly populate the PR chip if PR info has already landed.
                 self.sync_pr_chip_from_model(ctx);
             }
-        }
     }
 
     /// Read the current `GitRepoStatusModel` metadata and push it into the
@@ -1495,11 +1478,10 @@ impl CurrentPrompt {
             self.update_chip_value(&ContextChipKind::ShellGitBranch, Some(new_branch));
             // Refresh the branch dropdown so it stays in sync.
             let chip_kind = ContextChipKind::ShellGitBranch;
-            if let Some(chip) = chip_kind.to_chip() {
-                if let Some(on_click_gen) = chip.on_click_generator().cloned() {
+            if let Some(chip) = chip_kind.to_chip()
+                && let Some(on_click_gen) = chip.on_click_generator().cloned() {
                     self.refresh_on_click_values(&chip_kind, on_click_gen, ctx);
                 }
-            }
         }
 
         let new_branch_status = ChipValue::GitBranchStatus(metadata.branch_tracking_status.clone());

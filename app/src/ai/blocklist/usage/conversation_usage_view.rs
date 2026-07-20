@@ -583,11 +583,11 @@ impl ConversationUsageView {
         ));
 
         // Last response time
-        if self.display_mode == DisplayMode::Footer {
-            if let Some(timing) = &self.timing_info {
-                if timing.time_to_first_token_ms != 0
+        if self.display_mode == DisplayMode::Footer
+            && let Some(timing) = &self.timing_info
+                && (timing.time_to_first_token_ms != 0
                     || timing.total_agent_response_time_ms != 0
-                    || timing.wall_to_wall_response_time_ms.is_some()
+                    || timing.wall_to_wall_response_time_ms.is_some())
                 {
                     // Space between sections
                     labels.push(
@@ -626,8 +626,8 @@ impl ConversationUsageView {
                         appearance,
                     ));
 
-                    if let Some(wall_ms) = timing.wall_to_wall_response_time_ms {
-                        if wall_ms != 0 {
+                    if let Some(wall_ms) = timing.wall_to_wall_response_time_ms
+                        && wall_ms != 0 {
                             labels.push(render_label_text(
                                 "Total time (including tool calls)",
                                 appearance,
@@ -637,10 +637,7 @@ impl ConversationUsageView {
                                 appearance,
                             ));
                         }
-                    }
                 }
-            }
-        }
 
         Container::new(
             Flex::row()

@@ -1264,8 +1264,8 @@ impl BlocklistAIController {
         };
 
         // Persist the updated visibility for each promoted block
-        if !promoted_blocks.is_empty() {
-            if let Some(sender) = GlobalResourceHandlesProvider::as_ref(ctx)
+        if !promoted_blocks.is_empty()
+            && let Some(sender) = GlobalResourceHandlesProvider::as_ref(ctx)
                 .get()
                 .model_event_sender
                 .as_ref()
@@ -1282,7 +1282,6 @@ impl BlocklistAIController {
                     }
                 }
             }
-        }
 
         let participant_id = participant_id.or_else(|| self.get_sharer_participant_id());
         self.send_query(
@@ -1636,20 +1635,15 @@ impl BlocklistAIController {
                     "a subagent is currently active"
                 }
             );
-        } else {
-            match OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
-                svc.drain_events_for_request(conversation_id, ctx)
-            }) {
-                Some((event_inputs, task_id)) => {
-                    has_piggybacked_events = true;
-                    request_input
-                        .input_messages
-                        .entry(task_id)
-                        .or_default()
-                        .extend(event_inputs);
-                }
-                _ => {}
-            }
+        } else if let Some((event_inputs, task_id)) = OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
+            svc.drain_events_for_request(conversation_id, ctx)
+        }) {
+            has_piggybacked_events = true;
+            request_input
+                .input_messages
+                .entry(task_id)
+                .or_default()
+                .extend(event_inputs);
         }
 
         let result = self.send_request_input(

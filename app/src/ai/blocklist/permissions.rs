@@ -695,8 +695,7 @@ impl BlocklistAIPermissions {
         // Check if we've already been given permission to read these files in this conversation.
         if let Some(temp_permissions) =
             conversation_id.and_then(|id| self.temporary_file_permissions.get(id))
-        {
-            if paths.iter().all(|path| {
+            && paths.iter().all(|path| {
                 temp_permissions
                     .iter()
                     .any(|allowed| path.starts_with(allowed))
@@ -705,7 +704,6 @@ impl BlocklistAIPermissions {
                     FileReadPermissionAllowedReason::AlreadyReadInConvo,
                 );
             }
-        }
 
         match self.get_read_files_setting(ctx, terminal_view_id) {
             ActionPermission::AgentDecides | ActionPermission::Unknown => {

@@ -747,9 +747,9 @@ impl RunnableCommandModel for NotebookCommand {
                             None,
                         )
                         .on_click(move |ctx, app, _| {
-                            if let Some(command_model) = fullscreen_model.upgrade(app) {
-                                if let Some(source) = command_model.as_ref(app).command(app) {
-                                    if !source.trim().is_empty() {
+                            if let Some(command_model) = fullscreen_model.upgrade(app)
+                                && let Some(source) = command_model.as_ref(app).command(app)
+                                    && !source.trim().is_empty() {
                                         ctx.dispatch_typed_action(WorkspaceAction::OpenLightbox {
                                             images: vec![LightboxImage {
                                                 source: LightboxImageSource::Resolved {
@@ -760,8 +760,6 @@ impl RunnableCommandModel for NotebookCommand {
                                             initial_index: 0,
                                         });
                                     }
-                                }
-                            }
                         })
                         .finish(),
                     )
@@ -781,15 +779,14 @@ impl RunnableCommandModel for NotebookCommand {
                     custom_action_to_display(CustomAction::Copy),
                 )
                 .on_click(move |ctx, app, _| {
-                    if let Some(command_model) = model.upgrade(app) {
-                        if let Some(block_content) = command_model.as_ref(app).command(app) {
+                    if let Some(command_model) = model.upgrade(app)
+                        && let Some(block_content) = command_model.as_ref(app).command(app) {
                             ctx.dispatch_typed_action(EditorViewAction::CopyTextToClipboard {
                                 text: UserInput::new(block_content.trim()),
                                 block: BlockInfo::CodeBlock,
                                 entrypoint: ActionEntrypoint::Button,
                             });
                         }
-                    }
                 })
                 .finish(),
             )
@@ -808,11 +805,10 @@ impl RunnableCommandModel for NotebookCommand {
                         NotebookKeybindings::as_ref(ctx).run_commands_keybinding(),
                     )
                     .on_click(move |ctx, app, _| {
-                        if let Some(command_model) = model.upgrade(app) {
-                            if let Some(workflow) = command_model.as_ref(app).to_workflow(app) {
+                        if let Some(command_model) = model.upgrade(app)
+                            && let Some(workflow) = command_model.as_ref(app).to_workflow(app) {
                                 ctx.dispatch_typed_action(EditorViewAction::RunWorkflow(workflow));
                             }
-                        }
                     })
                     .finish(),
                 )

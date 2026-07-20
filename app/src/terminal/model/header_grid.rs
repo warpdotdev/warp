@@ -1248,8 +1248,8 @@ impl ansi::Handler for HeaderGrid {
     }
 
     fn prompt_only_precmd(&mut self, data: PromptMetadata) {
-        if let Some(honor_ps1) = data.honor_ps1 {
-            if honor_ps1 != self.honor_ps1 {
+        if let Some(honor_ps1) = data.honor_ps1
+            && honor_ps1 != self.honor_ps1 {
                 log::debug!(
                     "Honor PS1 value changed from {} to {}",
                     self.honor_ps1,
@@ -1267,7 +1267,6 @@ impl ansi::Handler for HeaderGrid {
                 // avoid double prompt or empty prompt issues).
                 self.honor_ps1 = honor_ps1;
             }
-        }
 
         if let Some(ps1) = data.ps1 {
             if ps1.is_empty() {

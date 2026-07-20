@@ -706,8 +706,8 @@ impl MCPServersEditPageView {
             };
             let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
 
-            if let Some(model_event_sender) = &global_resource_handles.model_event_sender {
-                if let Err(e) =
+            if let Some(model_event_sender) = &global_resource_handles.model_event_sender
+                && let Err(e) =
                     model_event_sender.send(ModelEvent::UpsertMCPServerEnvironmentVariables {
                         mcp_server_uuid: mcp_server.uuid.as_bytes().to_vec(),
                         environment_variables: env_vars_string,
@@ -718,7 +718,6 @@ impl MCPServersEditPageView {
                             .context("Error persisting MCP server env vars to database")
                     );
                 };
-            }
         }
     }
 

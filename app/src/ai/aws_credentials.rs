@@ -102,11 +102,10 @@ static STS_CLIENT_CACHE: Mutex<Option<(String, aws_sdk_sts::Client)>> = Mutex::c
 
 pub(crate) async fn sts_client(region: &str) -> aws_sdk_sts::Client {
     let mut cache = STS_CLIENT_CACHE.lock().await;
-    if let Some((cached_region, client)) = cache.as_ref() {
-        if cached_region == region {
+    if let Some((cached_region, client)) = cache.as_ref()
+        && cached_region == region {
             return client.clone();
         }
-    }
 
     let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .no_credentials()

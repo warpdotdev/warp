@@ -551,14 +551,13 @@ fn get_git_remote_org(repo_path: &Path) -> Option<String> {
 
 fn parse_org_from_git_url(url: &str) -> Option<String> {
     // SSH format: git@github.com:org/repo.git
-    if let Some(rest) = url.strip_prefix("git@") {
-        if let Some(path_start) = rest.find(':') {
+    if let Some(rest) = url.strip_prefix("git@")
+        && let Some(path_start) = rest.find(':') {
             let path = &rest[path_start + 1..];
             if let Some(slash_pos) = path.find('/') {
                 return Some(path[..slash_pos].to_string());
             }
         }
-    }
 
     // HTTPS format: https://github.com/org/repo.git
     if url.starts_with("https://") || url.starts_with("http://") {

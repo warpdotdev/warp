@@ -1732,8 +1732,8 @@ impl BlockList {
             if let RemovableBlocklistItem::RichContent(view_id) = item {
                 let mut cursor = self.block_heights.cursor::<TotalIndex, ()>();
                 cursor.seek(index, SeekBias::Right);
-                if let Some(BlockHeightItem::RichContent(rich_content)) = cursor.item() {
-                    if rich_content.content_type.is_some_and(|content_type| {
+                if let Some(BlockHeightItem::RichContent(rich_content)) = cursor.item()
+                    && rich_content.content_type.is_some_and(|content_type| {
                         matches!(
                             content_type,
                             RichContentType::AIBlock
@@ -1743,7 +1743,6 @@ impl BlockList {
                     }) {
                         self.dirty_rich_content_items.insert(*view_id);
                     }
-                }
             }
         }
     }
@@ -1772,11 +1771,9 @@ impl BlockList {
                     origin_conversation_id,
                     ..
                 } = block.agent_view_visibility()
-                {
-                    if *origin_conversation_id == conversation_id {
+                    && *origin_conversation_id == conversation_id {
                         continue;
                     }
-                }
                 block.add_pending_conversation_id(conversation_id);
                 modified_blocks.push((block_id.clone(), block.agent_view_visibility().clone()));
             }
@@ -1796,11 +1793,9 @@ impl BlockList {
                 origin_conversation_id,
                 ..
             } = block.agent_view_visibility()
-            {
-                if *origin_conversation_id == conversation_id {
+                && *origin_conversation_id == conversation_id {
                     continue;
                 }
-            }
             block.add_attached_conversation_id(conversation_id);
         }
 
@@ -1817,11 +1812,10 @@ impl BlockList {
     ) -> Vec<(BlockId, AgentViewVisibility)> {
         let mut modified_blocks = Vec::new();
         for block_id in block_ids {
-            if let Some(block) = self.mut_block_from_id(block_id) {
-                if block.remove_pending_conversation_id(conversation_id) {
+            if let Some(block) = self.mut_block_from_id(block_id)
+                && block.remove_pending_conversation_id(conversation_id) {
                     modified_blocks.push((block_id.clone(), block.agent_view_visibility().clone()));
                 }
-            }
         }
         modified_blocks
     }
@@ -2760,8 +2754,8 @@ impl BlockList {
         if let Some(is_local) = restored_block_was_local {
             block.set_restored_block_was_local(is_local);
         }
-        if !self.blocks.is_empty() && self.active_block().is_for_in_band_command {
-            if let Some(CachedPromptData {
+        if !self.blocks.is_empty() && self.active_block().is_for_in_band_command
+            && let Some(CachedPromptData {
                 prompt_grid,
                 rprompt_grid,
                 ..
@@ -2772,7 +2766,6 @@ impl BlockList {
                 log::debug!("Initializing new block using cached prompt grids");
                 block.set_prompt_grids_from_cached_data(prompt_grid, rprompt_grid);
             }
-        }
 
         if self.is_executing_oz_environment_startup_commands {
             block.set_is_oz_environment_startup_command(true);
@@ -3146,12 +3139,11 @@ impl BlockList {
         // Set the completed_ts to the saved completed_ts _after_ `finish`ing the block (which would have set its own completed_ts).
         self.active_block_mut().override_completed_ts(completed_ts);
 
-        if let Some(prompt_snapshot) = &block.prompt_snapshot {
-            if let Ok(prompt_snapshot) = serde_json::from_str(prompt_snapshot) {
+        if let Some(prompt_snapshot) = &block.prompt_snapshot
+            && let Ok(prompt_snapshot) = serde_json::from_str(prompt_snapshot) {
                 log::debug!("Restored prompt: {prompt_snapshot:?}");
                 self.active_block_mut().set_prompt_snapshot(prompt_snapshot);
             }
-        }
     }
 
     /// Marks the end of the active block and creates the next block.

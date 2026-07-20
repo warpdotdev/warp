@@ -74,9 +74,9 @@ impl ThemeDeletionBody {
         let mut errored = true;
         let dir = user_config::themes_dir();
         // Check if the theme directory exists
-        if fs::metadata(&dir).is_ok() {
-            if let Some(ThemeKind::Custom(custom_theme)) = &self.theme_kind {
-                if let Ok(theme_from_yaml) = from_yaml::<WarpTheme>(custom_theme.path()) {
+        if fs::metadata(&dir).is_ok()
+            && let Some(ThemeKind::Custom(custom_theme)) = &self.theme_kind
+                && let Ok(theme_from_yaml) = from_yaml::<WarpTheme>(custom_theme.path()) {
                     // If theme has an image
                     if let Some(image) = theme_from_yaml.background_image() {
                         // Only delete the image if it is in the ./warp/themes directory.
@@ -108,8 +108,6 @@ impl ThemeDeletionBody {
                         ctx.notify();
                     }
                 }
-            }
-        }
         if errored {
             self.send_error_toast("Something went wrong", ctx);
         }

@@ -38,8 +38,8 @@ impl WorkflowsDataSource {
         workflows_by_source.insert(WorkflowSource::Local, user_workflows);
 
         #[cfg(feature = "local_fs")]
-        if let Some(session_context) = session_context {
-            if session_context.session.is_local() {
+        if let Some(session_context) = session_context
+            && session_context.session.is_local() {
                 let project_workflows =
                     LocalWorkflows::handle(app).update(app, move |local_workflows, _| {
                         if let Ok(working_directory) = std::path::PathBuf::try_from(
@@ -58,7 +58,6 @@ impl WorkflowsDataSource {
                     });
                 workflows_by_source.insert(WorkflowSource::Project, project_workflows);
             }
-        }
 
         workflows_by_source.insert(
             WorkflowSource::App,

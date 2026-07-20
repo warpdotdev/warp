@@ -521,15 +521,14 @@ impl View for InstallationModalBody {
                 self.close_button_mouse_state.clone(),
             ));
 
-            if let Some(instructions) = &self.instructions_in_markdown {
-                if !instructions.is_empty() {
+            if let Some(instructions) = &self.instructions_in_markdown
+                && !instructions.is_empty() {
                     let instructions_result =
                         Self::render_markdown_instructions(instructions, appearance);
                     if let Ok(rendered_instructions) = instructions_result {
                         form_column.add_child(rendered_instructions);
                     }
                 }
-            }
 
             form_column = self.render_input_fields(
                 form_column,

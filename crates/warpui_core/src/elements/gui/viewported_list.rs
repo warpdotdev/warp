@@ -367,19 +367,16 @@ impl<T: 'static> Element for List<T> {
 
         // If the current scroll item was invalidated (height was None at layout start),
         // apply scroll preservation to maintain visual position.
-        if scroll_item_was_invalidated {
-            if let Some(scroll_ctx) = &list_state.current_scroll_context {
-                if let Some(scroll_preservation) = &list_state.scroll_preservation {
-                    if let Some(new_scroll_offset) =
+        if scroll_item_was_invalidated
+            && let Some(scroll_ctx) = &list_state.current_scroll_context
+                && let Some(scroll_preservation) = &list_state.scroll_preservation
+                    && let Some(new_scroll_offset) =
                         (scroll_preservation.adjustment_fn)(scroll_item_index, scroll_ctx, app)
                     {
                         list_state.scroll_top.offset_from_start = new_scroll_offset;
                         (_, self.children) =
                             self.render_visible_items(child_constraint, &mut list_state, ctx, app);
                     }
-                }
-            }
-        }
 
         self.size = size;
         size

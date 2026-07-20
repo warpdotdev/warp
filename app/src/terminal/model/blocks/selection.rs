@@ -997,8 +997,8 @@ impl BlockList {
                                 selected_texts.push(selected_text);
                             }
 
-                            if let Some(active_window_id) = app.windows().active_window() {
-                                if let Some(ssh_block) = app
+                            if let Some(active_window_id) = app.windows().active_window()
+                                && let Some(ssh_block) = app
                                     .view_with_id::<WarpifySuccessBlock>(active_window_id, *view_id)
                                 {
                                     let warpify_success_block = app.view(&ssh_block);
@@ -1008,7 +1008,6 @@ impl BlockList {
                                         selected_texts.push(selected_text);
                                     }
                                 }
-                            }
                         }
                         BlockHeightItem::Gap(_)
                         | BlockHeightItem::RestoredBlockSeparator { .. }
@@ -1205,8 +1204,8 @@ impl BlockList {
             if start > end {
                 mem::swap(&mut start, &mut end);
             }
-            if start.in_same_block_and_grid(&active_block_location) {
-                if let Some(selection) = self.selection.as_mut() {
+            if start.in_same_block_and_grid(&active_block_location)
+                && let Some(selection) = self.selection.as_mut() {
                     // If the start of the selection is at the first row of the grid, clamp the
                     // selection to the first point in the grid so that that a previous grid
                     // (which wasn't previously selected) is not selected.
@@ -1219,10 +1218,9 @@ impl BlockList {
                         );
                     }
                 }
-            }
 
-            if end.in_same_block_and_grid(&active_block_location) {
-                if let Some(mut selection) = self.selection.take() {
+            if end.in_same_block_and_grid(&active_block_location)
+                && let Some(mut selection) = self.selection.take() {
                     selection.end_anchor().point.row = max(
                         selection.end_anchor().point.row - 1.into_lines(),
                         Lines::zero(),
@@ -1243,7 +1241,6 @@ impl BlockList {
                         self.set_selection(selection);
                     }
                 }
-            }
         }
     }
 
@@ -1338,8 +1335,7 @@ impl BlockList {
                         selection.set_smart_select_side(Direction::Left);
                     }
                     if let Some(smart_select_override) = &block_list_selection.smart_select_override
-                    {
-                        if start_grid_point.in_same_block_and_grid(smart_select_override.start())
+                        && start_grid_point.in_same_block_and_grid(smart_select_override.start())
                             && start_grid_point.in_same_block_and_grid(smart_select_override.end())
                         {
                             selection.set_smart_select_override(
@@ -1347,7 +1343,6 @@ impl BlockList {
                                     ..=*smart_select_override.end().get(),
                             );
                         }
-                    }
                     selection.update(*end_grid_point.get(), end.side);
 
                     let grid = self.grid_at_location(&start_grid_point);
@@ -1375,8 +1370,7 @@ impl BlockList {
 
                         if let Some(smart_select_override) =
                             &block_list_selection.smart_select_override
-                        {
-                            if start_grid_point
+                            && start_grid_point
                                 .in_same_block_and_grid(smart_select_override.start())
                             {
                                 selection.set_smart_select_override(
@@ -1384,7 +1378,6 @@ impl BlockList {
                                         ..=*smart_select_override.end().get(),
                                 );
                             }
-                        }
 
                         let grid = self.grid_at_location(&start_grid_point);
 
@@ -1417,14 +1410,12 @@ impl BlockList {
 
                         if let Some(smart_select_override) =
                             &block_list_selection.smart_select_override
-                        {
-                            if end_grid_point.in_same_block_and_grid(smart_select_override.end()) {
+                            && end_grid_point.in_same_block_and_grid(smart_select_override.end()) {
                                 selection.set_smart_select_override(
                                     *smart_select_override.start().get()
                                         ..=*smart_select_override.end().get(),
                                 );
                             }
-                        }
 
                         let grid = self.grid_at_location(&end_grid_point);
                         let selection_range =

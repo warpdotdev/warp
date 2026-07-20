@@ -374,11 +374,10 @@ impl PassiveSuggestionsModel {
                     self.abort_pending_requests(ctx);
                     return;
                 }
-                if let BlockType::User(block_completed) = &after_block_completed_event.block_type {
-                    if !block_completed.was_part_of_agent_interaction {
+                if let BlockType::User(block_completed) = &after_block_completed_event.block_type
+                    && !block_completed.was_part_of_agent_interaction {
                         self.handle_user_block_completed(block_completed, ctx);
                     }
-                }
             }
             _ => {}
         }
@@ -508,8 +507,8 @@ impl PassiveSuggestionsModel {
 
         // If passive code diffs are enabled, check for any files that were read.
         #[cfg(feature = "local_fs")]
-        if is_passive_code_diffs_enabled {
-            if let Some(current_working_directory) = block_completed.serialized_block.pwd.clone() {
+        if is_passive_code_diffs_enabled
+            && let Some(current_working_directory) = block_completed.serialized_block.pwd.clone() {
                 let block_contents =
                     format!("{}\n{}", &block_context.command, &block_context.output);
                 let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
@@ -571,7 +570,6 @@ impl PassiveSuggestionsModel {
                 ));
                 return;
             }
-        }
 
         if !supported_tools.is_empty() {
             self.send_shell_command_completed_request(

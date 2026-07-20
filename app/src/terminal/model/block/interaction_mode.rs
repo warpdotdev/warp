@@ -58,8 +58,7 @@ impl Block {
         if let InteractionMode::User(UserMode {
             did_user_tag_in_agent,
         }) = &mut self.interaction_mode
-        {
-            if *did_user_tag_in_agent != value {
+            && *did_user_tag_in_agent != value {
                 *did_user_tag_in_agent = value;
                 self.event_proxy
                     .send_terminal_event(Event::AgentTaggedInChanged {
@@ -67,7 +66,6 @@ impl Block {
                         is_tagged_in: value,
                     });
             }
-        }
     }
 
     /// Returns `true` if an agent is monitoring/interacting with this command.
@@ -162,15 +160,14 @@ impl Block {
     /// stop) where the conversation has been cancelled and must not resume when the command
     /// completes.
     pub fn set_user_control_for_teardown(&mut self) {
-        if let InteractionMode::Agent(metadata) = &mut self.interaction_mode {
-            if let Some(state) = &mut metadata.long_running_control_state {
+        if let InteractionMode::Agent(metadata) = &mut self.interaction_mode
+            && let Some(state) = &mut metadata.long_running_control_state {
                 *state = LongRunningCommandControlState::User {
                     reason: UserTakeOverReason::Stop {
                         should_auto_resume: false,
                     },
                 };
             }
-        }
     }
 
     /// Returns `true` if agent responses should be hidden in the UI.

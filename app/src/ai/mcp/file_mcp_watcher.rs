@@ -192,8 +192,8 @@ impl FileMCPWatcher {
             ));
         }
 
-        if !is_tui {
-            if let Some(home_dir) = dirs::home_dir() {
+        if !is_tui
+            && let Some(home_dir) = dirs::home_dir() {
                 for provider in MCPProvider::iter() {
                     if provider == MCPProvider::Warp {
                         continue;
@@ -224,7 +224,6 @@ impl FileMCPWatcher {
                     }
                 }
             }
-        }
 
         let mut watcher = Self {
             file_mcp_tx,

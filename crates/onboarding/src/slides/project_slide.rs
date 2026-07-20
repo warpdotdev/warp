@@ -97,8 +97,8 @@ impl ProjectSlide {
 
         // Only show the "Initialize project automatically" checkbox when AgentView is NOT enabled.
         // When AgentView is enabled, initialization is handled differently through the callout flow.
-        if !agent_modality_enabled {
-            if let ProjectOnboardingSettings::Project {
+        if !agent_modality_enabled
+            && let ProjectOnboardingSettings::Project {
                 initialize_projects_automatically,
                 ..
             } = settings
@@ -110,7 +110,6 @@ impl ProjectSlide {
                     .finish(),
                 );
             }
-        }
 
         let bottom_nav = Align::new(self.render_bottom_nav(appearance, settings)).finish();
         slide_content::onboarding_slide_content(

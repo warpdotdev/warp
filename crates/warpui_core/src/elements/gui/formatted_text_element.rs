@@ -1291,12 +1291,11 @@ impl FormattedTextElement {
             let end_glyph_index = end_bound.glyph_index.min(end_text.chars().count());
 
             // This is to prevent slicing an empty string (i.e. a newline frame) and returning a None.
-            if let Some(text) = char_slice(end_text, 0, end_glyph_index) {
-                if !text.is_empty() {
+            if let Some(text) = char_slice(end_text, 0, end_glyph_index)
+                && !text.is_empty() {
                     result.push('\n');
                     result.push_str(text);
                 }
-            }
 
             Some(result)
         }
@@ -1797,14 +1796,13 @@ impl Element for FormattedTextElement {
                         let mut style = Properties::default();
                         let mut text_style = TextStyle::default();
 
-                        if let Some(style) = link_styles_iter.peek() {
-                            if style.highlight_indices[0] + glyph_offset
+                        if let Some(style) = link_styles_iter.peek()
+                            && style.highlight_indices[0] + glyph_offset
                                 == prev_index + character_count
                             {
                                 current_link_style = Some((*style).clone());
                                 link_styles_iter.next();
                             }
-                        }
 
                         let start_char_index = prev_index + character_count;
                         let style_char_len;
@@ -1856,16 +1854,14 @@ impl Element for FormattedTextElement {
                         if inline.styles.inline_code {
                             // If we have existing background and foreground highlighting from, for example,
                             // a link or a search, we don't want to override it.
-                            if let Some(font_color) = self.inline_code_font_color {
-                                if text_style.foreground_color.is_none() {
+                            if let Some(font_color) = self.inline_code_font_color
+                                && text_style.foreground_color.is_none() {
                                     text_style.foreground_color = Some(font_color);
                                 }
-                            }
-                            if let Some(bg_color) = self.inline_code_bg_color {
-                                if text_style.background_color.is_none() {
+                            if let Some(bg_color) = self.inline_code_bg_color
+                                && text_style.background_color.is_none() {
                                     text_style.background_color = Some(bg_color);
                                 }
-                            }
                         }
 
                         let font_family_id = if matches!(line, FormattedTextLine::CodeBlock(_))

@@ -380,14 +380,13 @@ impl AmbientAgentRunner {
             };
 
             let mut environment_args = args.environment;
-            if environment_args.environment.is_none() && !environment_args.no_environment {
-                if let Some(environment_id) = loaded_file
+            if environment_args.environment.is_none() && !environment_args.no_environment
+                && let Some(environment_id) = loaded_file
                     .as_ref()
                     .and_then(|f| f.file.environment_id.clone())
                 {
                     environment_args.environment = Some(environment_id);
                 }
-            }
 
             let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
             {
@@ -578,8 +577,8 @@ impl AmbientAgentRunner {
 
             ctx.spawn(spawn_future, move |_, result, ctx| match result {
                 Ok(session_join_info) => {
-                    if should_open {
-                        if let Some(session_join_info) = session_join_info {
+                    if should_open
+                        && let Some(session_join_info) = session_join_info {
                             let url =
                                 match (super::is_running_in_warp(), session_join_info.session_id) {
                                     (true, Some(session_id)) => {
@@ -590,7 +589,6 @@ impl AmbientAgentRunner {
 
                             ctx.open_url(&url);
                         }
-                    }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                 }
                 Err(err) => {

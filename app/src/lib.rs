@@ -684,12 +684,11 @@ fn apply_extra_meta_keys(event: &mut Event, extra_metas: ExtraMetaKeys) {
 }
 
 fn apply_scroll_multiplier(event: &mut Event, app: &AppContext) {
-    if let Event::ScrollWheel { delta, precise, .. } = event {
-        if !*precise {
+    if let Event::ScrollWheel { delta, precise, .. } = event
+        && !*precise {
             let scroll_multiplier = *ScrollSettings::as_ref(app).mouse_scroll_multiplier.value();
             *delta *= scroll_multiplier;
         }
-    }
 }
 
 /// Runs the shared Warp executable as the app or as one of its command-line modes.
@@ -718,23 +717,20 @@ pub fn run() -> Result<()> {
     // `WARP_*` env-var equivalents) so shipped builds can't be redirected away from their
     // baked-in server URLs. See `Channel::allows_server_url_overrides`.
     if ChannelState::channel().allows_server_url_overrides() {
-        if let Some(url) = args.server_root_url() {
-            if let Err(e) = ChannelState::override_server_root_url(url.to_owned()) {
+        if let Some(url) = args.server_root_url()
+            && let Err(e) = ChannelState::override_server_root_url(url.to_owned()) {
                 eprintln!("Error: Invalid server root URL: {e:#}");
             }
-        }
 
-        if let Some(url) = args.ws_server_url() {
-            if let Err(e) = ChannelState::override_ws_server_url(url.to_owned()) {
+        if let Some(url) = args.ws_server_url()
+            && let Err(e) = ChannelState::override_ws_server_url(url.to_owned()) {
                 eprintln!("Error: Invalid websocket server URL: {e:#}");
             }
-        }
 
-        if let Some(url) = args.session_sharing_server_url() {
-            if let Err(e) = ChannelState::override_session_sharing_server_url(url.to_owned()) {
+        if let Some(url) = args.session_sharing_server_url()
+            && let Err(e) = ChannelState::override_session_sharing_server_url(url.to_owned()) {
                 eprintln!("Error: Invalid session sharing server URL: {e:#}");
             }
-        }
     }
 
     if let Some(command) = args.command() {
@@ -1731,11 +1727,10 @@ pub(crate) fn initialize_app(
     // Rewrite recognized Warp web URLs (sessions, Drive, settings, home) into local
     // intent URLs when possible so they open directly in the desktop app.
     ctx.set_before_open_url(|url_str, _ctx| {
-        if let Ok(url) = Url::parse(url_str) {
-            if let Some(intent) = maybe_rewrite_web_url_to_intent(&url) {
+        if let Ok(url) = Url::parse(url_str)
+            && let Some(intent) = maybe_rewrite_web_url_to_intent(&url) {
                 return intent.to_string();
             }
-        }
         url_str.to_owned()
     });
 
@@ -2673,8 +2668,8 @@ pub(crate) fn app_callbacks(
                 {
                     // Ensure the window ID exists, if so dispatch an action to focus
                     // the correct pane.
-                    if ctx.window_ids().contains(&window_id) {
-                        if let Some(root_view_id) = ctx.root_view_id(window_id) {
+                    if ctx.window_ids().contains(&window_id)
+                        && let Some(root_view_id) = ctx.root_view_id(window_id) {
                             ctx.dispatch_action(
                                 window_id,
                                 &[root_view_id],
@@ -2686,7 +2681,6 @@ pub(crate) fn app_callbacks(
                                 log::Level::Info,
                             );
                         }
-                    }
                 }
             }
         })),
@@ -2774,13 +2768,12 @@ fn focus_running_window_and_show_native_modal(
             .expect("already checked len > 0")
     });
     ctx.windows().show_window_and_focus_app(window_id_to_focus);
-    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id_to_focus) {
-        if let Some(handle) = workspaces.first() {
+    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id_to_focus)
+        && let Some(handle) = workspaces.first() {
             handle.update(ctx, |view, ctx| {
                 view.show_native_modal(dialog_with_callbacks, ctx);
             });
         }
-    }
 }
 
 fn on_close_app_cancelled(open_navigation_palette: bool, ctx: &mut AppContext) {
@@ -2820,8 +2813,8 @@ fn on_close_app_cancelled(open_navigation_palette: bool, ctx: &mut AppContext) {
     windowing_model.show_window_and_focus_app(window_id_to_focus);
 
     // open the nav palette in the selected window
-    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id_to_focus) {
-        if let Some(handle) = workspaces.first() {
+    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id_to_focus)
+        && let Some(handle) = workspaces.first() {
             ctx.dispatch_typed_action_for_view(
                 window_id_to_focus,
                 handle.id(),
@@ -2832,7 +2825,6 @@ fn on_close_app_cancelled(open_navigation_palette: bool, ctx: &mut AppContext) {
                 },
             );
         }
-    }
 }
 
 fn on_close_window_cancelled(
@@ -2865,8 +2857,8 @@ fn on_close_window_cancelled(
     // if we haven't returned early, it means open_navigation_palette is true as the
     // user pressed the modal button for opening the navigation palette to show their
     // running processes
-    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-        if let Some(handle) = workspaces.first() {
+    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+        && let Some(handle) = workspaces.first() {
             ctx.dispatch_typed_action_for_view(
                 window_id,
                 handle.id(),
@@ -2877,7 +2869,6 @@ fn on_close_window_cancelled(
                 },
             );
         }
-    }
 }
 
 fn is_cloud_agent_web_home_launch_url(url: &Url) -> bool {

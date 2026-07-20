@@ -70,8 +70,8 @@ pub(crate) fn render_action_sidecar(
     );
 
     // Subtitle (file path for user configs)
-    if let SidecarItemKind::UserTabConfig { config } = item {
-        if let Some(path) = &config.source_path {
+    if let SidecarItemKind::UserTabConfig { config } = item
+        && let Some(path) = &config.source_path {
             let raw_path = path.to_string_lossy().into_owned();
             let home_dir = dirs::home_dir();
             let path_str =
@@ -87,7 +87,6 @@ pub(crate) fn render_action_sidecar(
                 .finish(),
             );
         }
-    }
 
     let primary_text_color = theme.main_text_color(theme.surface_2());
     let button_style = UiComponentStyles {
@@ -165,8 +164,8 @@ pub(crate) fn render_action_sidecar(
     );
 
     // "Edit config" and "Remove" buttons (only for user tab configs)
-    if let SidecarItemKind::UserTabConfig { config } = item {
-        if let Some(config_path) = &config.source_path {
+    if let SidecarItemKind::UserTabConfig { config } = item
+        && let Some(config_path) = &config.source_path {
             let edit_path = config_path.clone();
             let edit_button = appearance
                 .ui_builder()
@@ -227,7 +226,6 @@ pub(crate) fn render_action_sidecar(
                 .finish(),
             );
         }
-    }
 
     ConstrainedBox::new(
         Container::new(column.finish())

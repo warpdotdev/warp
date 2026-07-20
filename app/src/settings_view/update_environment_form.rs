@@ -1068,11 +1068,10 @@ impl UpdateEnvironmentForm {
             }
         });
 
-        if let Ok(url) = parsed_url {
-            if matches!(url.host_str(), Some("github.com" | "www.github.com")) {
+        if let Ok(url) = parsed_url
+            && matches!(url.host_str(), Some("github.com" | "www.github.com")) {
                 return parse_owner_repo(url.path_segments()?.filter(|p| !p.is_empty()));
             }
-        }
 
         parse_owner_repo(trimmed.split('/').filter(|p| !p.is_empty()))
     }
@@ -1349,15 +1348,14 @@ impl UpdateEnvironmentForm {
                         me.github_dropdown_state.auth_fetched_at = Some(Instant::now());
                         me.github_dropdown_state.app_install_link =
                             Some(auth_info.app_install_link);
-                        if open_auth_after_fetch {
-                            if let Some(auth_url) = me.github_dropdown_state.auth_url.as_deref() {
+                        if open_auth_after_fetch
+                            && let Some(auth_url) = me.github_dropdown_state.auth_url.as_deref() {
                                 if let Some(tx_id) = Self::extract_tx_id(auth_url) {
                                     debug!("Refetched GitHub auth URL with tx_id={tx_id}");
                                 } else {
                                     debug!("Refetched GitHub auth URL (tx_id missing)");
                                 }
                             }
-                        }
                         me.update_repos_input_placeholder(ctx);
                     }
                     Ok(UserGithubInfoResult::Unknown) => {
@@ -2929,11 +2927,10 @@ impl UpdateEnvironmentForm {
         };
 
         // Handle explicit "library/" prefix for official images (e.g. docker.io/library/python)
-        if let Some(official_name) = path.strip_prefix("library/") {
-            if !official_name.is_empty() && !official_name.contains('/') {
+        if let Some(official_name) = path.strip_prefix("library/")
+            && !official_name.is_empty() && !official_name.contains('/') {
                 return Some(format!("https://hub.docker.com/_/{official_name}"));
             }
-        }
 
         // Validate the path has owner/repo format
         let path_parts: Vec<&str> = path.split('/').collect();
@@ -3360,14 +3357,12 @@ impl TypedActionView for UpdateEnvironmentForm {
                         .any(|available| available.owner == *owner && available.repo == *repo)
                 });
 
-                if self.github_dropdown_state.is_expanded {
-                    if let Some(selected_index) = self.github_dropdown_state.selected_index {
-                        if parsed_repos.is_empty() || !has_custom_repo {
+                if self.github_dropdown_state.is_expanded
+                    && let Some(selected_index) = self.github_dropdown_state.selected_index
+                        && (parsed_repos.is_empty() || !has_custom_repo) {
                             self.toggle_repo_selection_at_index(selected_index, ctx);
                             return;
                         }
-                    }
-                }
 
                 if parsed_repos.is_empty() {
                     return;

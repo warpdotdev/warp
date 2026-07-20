@@ -368,14 +368,13 @@ impl HarnessAvailabilityModel {
     }
 
     fn cache(&self, ctx: &ModelContext<Self>) {
-        if let Ok(serialized) = serde_json::to_string(&self.harnesses) {
-            if let Err(e) = ctx
+        if let Ok(serialized) = serde_json::to_string(&self.harnesses)
+            && let Err(e) = ctx
                 .private_user_preferences()
                 .write_value(CACHE_KEY, serialized)
             {
                 report_error!(anyhow::anyhow!(e).context("Failed to cache available harnesses"));
             }
-        }
     }
 }
 

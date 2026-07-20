@@ -478,8 +478,8 @@ impl BlocklistAIActionModel {
                 return;
             };
 
-            if let Some(current_phase) = self.action_execution_phase(conversation_id) {
-                if !self.can_start_action_in_current_phase(
+            if let Some(current_phase) = self.action_execution_phase(conversation_id)
+                && !self.can_start_action_in_current_phase(
                     &front_action,
                     conversation_id,
                     current_phase,
@@ -487,7 +487,6 @@ impl BlocklistAIActionModel {
                 ) {
                     return;
                 }
-            }
 
             let Some(result) =
                 self.start_pending_action_by_id(&front_action.id, conversation_id, false, ctx)
@@ -507,13 +506,12 @@ impl BlocklistAIActionModel {
     }
 
     fn sort_finished_results(&mut self, conversation_id: AIConversationId) {
-        if let Some(action_order) = self.action_order.get(&conversation_id) {
-            if let Some(finished_results) = self.finished_action_results.get_mut(&conversation_id) {
+        if let Some(action_order) = self.action_order.get(&conversation_id)
+            && let Some(finished_results) = self.finished_action_results.get_mut(&conversation_id) {
                 finished_results.sort_by_key(|result| {
                     action_order.get(&result.id).copied().unwrap_or(usize::MAX)
                 });
             }
-        }
     }
 
     /// Returns all pending actions for all conversations.
@@ -1015,11 +1013,10 @@ impl BlocklistAIActionModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let action_id = action_result.id.clone();
-        if let Some(queue) = self.pending_actions.get_mut(&conversation_id) {
-            if let Some(idx) = queue.iter().position(|a| a.id == action_id) {
+        if let Some(queue) = self.pending_actions.get_mut(&conversation_id)
+            && let Some(idx) = queue.iter().position(|a| a.id == action_id) {
                 queue.remove(idx);
             }
-        }
 
         // For shared session viewers, take in any document action results
         // and apply the associated actions to the local document version
@@ -1059,11 +1056,9 @@ impl BlocklistAIActionModel {
             if let Some((idx, _)) = pending_actions_for_conversation
                 .iter()
                 .find_position(|action| action.id == *action_id)
-            {
-                if let Some(action) = pending_actions_for_conversation.remove(idx) {
+                && let Some(action) = pending_actions_for_conversation.remove(idx) {
                     self.cancel_pending_action(conversation_id, action, Some(reason), ctx);
                 }
-            }
         }
     }
 
@@ -1249,8 +1244,7 @@ impl BlocklistAIActionModel {
             if let Some(action) = pending_actions_for_conversation
                 .iter_mut()
                 .find(|action| action.id == *action_id)
-            {
-                if let AIAgentActionType::RequestCommandOutput {
+                && let AIAgentActionType::RequestCommandOutput {
                     command: original_command,
                     ..
                 } = &mut action.action
@@ -1259,7 +1253,6 @@ impl BlocklistAIActionModel {
                     found_conversation_id = Some(*conversation_id);
                     break;
                 }
-            }
         }
 
         let Some(conversation_id) = found_conversation_id else {

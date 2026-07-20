@@ -275,8 +275,8 @@ fn poll_run_until_joinable_session(
                                 return;
                             }
 
-                            if task.state == AmbientAgentTaskState::InProgress {
-                                if let Some(session_join_info) = SessionJoinInfo::from_task(&task) {
+                            if task.state == AmbientAgentTaskState::InProgress
+                                && let Some(session_join_info) = SessionJoinInfo::from_task(&task) {
                                     let has_new_session = match &mode {
                                         RunPollMode::InitialRun
                                         | RunPollMode::Followup {
@@ -296,7 +296,6 @@ fn poll_run_until_joinable_session(
                                         return;
                                     }
                                 }
-                            }
                         }
                         Err(err) => {
                             yield Err(err);

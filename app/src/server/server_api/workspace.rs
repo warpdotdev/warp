@@ -86,14 +86,13 @@ impl WorkspaceClient for ServerApi {
         usage_based_pricing_enabled: bool,
         max_monthly_spend_cents: Option<u32>,
     ) -> Result<WorkspacesMetadataResponse> {
-        if let Some(cents) = max_monthly_spend_cents {
-            if cents > i32::MAX as u32 {
+        if let Some(cents) = max_monthly_spend_cents
+            && cents > i32::MAX as u32 {
                 return Err(anyhow!(
                     "Maximum monthly spend cannot exceed {} cents",
                     i32::MAX
                 ));
             }
-        }
 
         let variables = UpdateWorkspaceSettingsVariables {
             input: UpdateWorkspaceSettingsInput {

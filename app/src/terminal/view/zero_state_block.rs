@@ -66,14 +66,13 @@ impl TerminalViewZeroStateBlock {
         ctx.subscribe_to_model(
             model_events_dispatcher,
             move |me, model_events_dispatcher, event, ctx| {
-                if let ModelEvent::BlockCompleted(block_completed) = event {
-                    if matches!(block_completed.block_type, BlockType::User(..)) {
+                if let ModelEvent::BlockCompleted(block_completed) = event
+                    && matches!(block_completed.block_type, BlockType::User(..)) {
                         me.should_hide = true;
                         ctx.unsubscribe_to_model(&model_events_dispatcher);
                         ctx.unsubscribe_to_model(&controller_clone);
                         ctx.notify();
                     }
-                }
             },
         );
 
@@ -84,14 +83,12 @@ impl TerminalViewZeroStateBlock {
                 final_exchange_count,
                 ..
             } = event
-            {
-                if original_exchange_count != final_exchange_count {
+                && original_exchange_count != final_exchange_count {
                     me.should_hide = true;
                     ctx.unsubscribe_to_model(&model_events_clone);
                     ctx.unsubscribe_to_model(&controller);
                     ctx.notify()
                 }
-            }
         });
 
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
@@ -231,8 +228,8 @@ impl View for TerminalViewZeroStateBlock {
             ),
         ];
 
-        if *TabSettings::as_ref(app).show_code_review_button {
-            if let Some(keystroke) =
+        if *TabSettings::as_ref(app).show_code_review_button
+            && let Some(keystroke) =
                 keybinding_name_to_keystroke(TOGGLE_RIGHT_PANEL_BINDING_NAME, app)
             {
                 items.push(render_standard_message(
@@ -249,7 +246,6 @@ impl View for TerminalViewZeroStateBlock {
                     app,
                 ));
             }
-        }
 
         if InputModeSettings::handle(app)
             .as_ref(app)

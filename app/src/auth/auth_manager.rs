@@ -415,8 +415,8 @@ impl AuthManager {
                 // Reconstruct the database if it was removed.
                 // Do nothing if the database was not removed.
                 persistence::reconstruct(&global_resource_handles.model_event_sender);
-                if let Some(model_event_sender) = &global_resource_handles.model_event_sender {
-                    if let Err(e) =
+                if let Some(model_event_sender) = &global_resource_handles.model_event_sender
+                    && let Err(e) =
                         model_event_sender.send(ModelEvent::UpsertCurrentUserInformation {
                             user_information: PersistedCurrentUserInformation {
                                 email: self.auth_state.user_email().unwrap_or_default(),
@@ -428,7 +428,6 @@ impl AuthManager {
                                 .context("Error persisting user information to database")
                         );
                     };
-                }
 
                 // Fetch the user's privacy settings from the server if any or update the server settings.
                 let privacy_settings_handle = PrivacySettings::handle(ctx);

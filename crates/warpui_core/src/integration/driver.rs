@@ -376,11 +376,10 @@ impl TestDriver {
                     .active_window()
                     .and_then(|id| windows.platform_window(id))
                     .map(|window| window.as_ctx().backing_scale_factor())
-            }) {
-                if let Some(overlay_log) = super::overlay::get_overlay_log_mut(step_data_map) {
+            })
+                && let Some(overlay_log) = super::overlay::get_overlay_log_mut(step_data_map) {
                     overlay_log.set_scale_factor(scale);
                 }
-            }
         }
 
         if video_recording_enabled_for_test(&self.test_name) {
@@ -467,26 +466,24 @@ impl TestDriver {
             step_data_map.remove::<_, OverlayLog>(OVERLAY_LOG_KEY);
         if let Some(recorder) = video_recorder::get_recorder_mut(step_data_map) {
             recorder.stop_recording();
-            if recorder.frame_count() > 0 {
-                if let Some(ref dir) = artifacts_dir {
+            if recorder.frame_count() > 0
+                && let Some(ref dir) = artifacts_dir {
                     let output = dir.join("recording.mp4");
                     if let Err(e) = recorder.finalize(&output, overlay_log.as_ref()) {
                         report_error!(e.context("VideoRecorder: finalization failed"));
                     }
                 }
-            }
         }
 
         if let Some(ref dir) = artifacts_dir {
             let log_output = dir.join("recording.log");
-            if let Some(action_log) = action_log::get_action_log(step_data_map) {
-                if let Err(e) = action_log
+            if let Some(action_log) = action_log::get_action_log(step_data_map)
+                && let Err(e) = action_log
                     .write_to_file(&log_output)
                     .context("ActionLog: finalization failed")
                 {
                     report_error!(e);
                 }
-            }
         }
     }
     pub(crate) fn setup(&mut self, create_temp_dir_for_test: bool) {

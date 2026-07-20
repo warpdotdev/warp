@@ -225,8 +225,8 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         let target_entity = handle.id();
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
-        if let Some(ref mut pending) = self.app.pending_unsubscribes {
-            if pending.entity_id == target_entity {
+        if let Some(ref mut pending) = self.app.pending_unsubscribes
+            && pending.entity_id == target_entity {
                 pending
                     .keys
                     .insert(SubscriptionKey::View(self.window_id, self.view_id));
@@ -249,7 +249,6 @@ impl<'a, T: Entity> ViewContext<'a, T> {
 
                 return;
             }
-        }
 
         // Otherwise process immediately.
         self.app
@@ -272,8 +271,8 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         let target_entity = handle.id();
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
-        if let Some(ref mut pending) = self.app.pending_unsubscribes {
-            if pending.entity_id == target_entity {
+        if let Some(ref mut pending) = self.app.pending_unsubscribes
+            && pending.entity_id == target_entity {
                 pending
                     .keys
                     .insert(SubscriptionKey::View(self.window_id, self.view_id));
@@ -296,7 +295,6 @@ impl<'a, T: Entity> ViewContext<'a, T> {
 
                 return;
             }
-        }
 
         // Otherwise process immediately.
         self.app

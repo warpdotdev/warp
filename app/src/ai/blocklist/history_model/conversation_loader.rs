@@ -361,13 +361,12 @@ impl BlocklistAIHistoryModel {
             });
 
             // Convert the persisted conversation to an AIConversation
-            if let Some(persisted_conversation) = persisted_ai_conversation {
-                if let Some(conversation) =
+            if let Some(persisted_conversation) = persisted_ai_conversation
+                && let Some(conversation) =
                     convert_persisted_conversation_to_ai_conversation(persisted_conversation)
                 {
                     return Some(conversation);
                 }
-            }
         }
 
         None
@@ -388,11 +387,10 @@ impl BlocklistAIHistoryModel {
         // Collect tokens belonging to child agent conversations so we can skip them.
         let mut child_conversation_tokens: HashSet<String> = HashSet::new();
         for conv in self.conversations_by_id.values() {
-            if let Some(token) = conv.server_conversation_token() {
-                if conv.is_child_agent_conversation() {
+            if let Some(token) = conv.server_conversation_token()
+                && conv.is_child_agent_conversation() {
                     child_conversation_tokens.insert(token.as_str().to_string());
                 }
-            }
         }
 
         for server_meta in cloud_metadata_list {

@@ -147,11 +147,10 @@ impl AnyModelHandle {
     }
 
     pub fn downcast<T: Entity>(self) -> Option<ModelHandle<T>> {
-        if self.is::<T>() {
-            if let Some(ref_counts) = self.ref_counts.upgrade() {
+        if self.is::<T>()
+            && let Some(ref_counts) = self.ref_counts.upgrade() {
                 return Some(ModelHandle::new(self.model_id, &ref_counts));
             }
-        }
         None
     }
 

@@ -862,13 +862,12 @@ impl TemplatableMCPServerManager {
             // matches user expectations for repo-relative commands in `.mcp.json`.
             // Cloud-templated installations (lookup returns None) are unaffected and
             // continue to inherit Warp's process cwd.
-            if cli_server.cwd_parameter.is_none() {
-                if let Some(spawn_root) =
+            if cli_server.cwd_parameter.is_none()
+                && let Some(spawn_root) =
                     FileBasedMCPManager::as_ref(ctx).spawn_root_for_installation(installation_uuid)
                 {
                     cli_server.cwd_parameter = Some(spawn_root.to_string_lossy().into_owned());
                 }
-            }
         }
 
         let executor = ctx.background_executor().clone();
@@ -1469,8 +1468,8 @@ impl TemplatableMCPServerManager {
 
         self.delete_templatable_mcp_server_installation(installation_uuid, ctx);
 
-        if reuse_variable_values {
-            if let Some(existing_variable_values) = existing_variable_values {
+        if reuse_variable_values
+            && let Some(existing_variable_values) = existing_variable_values {
                 self.install_from_template(
                     templatable_mcp_server.clone(),
                     existing_variable_values,
@@ -1478,7 +1477,6 @@ impl TemplatableMCPServerManager {
                     ctx,
                 );
             }
-        }
     }
 
     pub fn is_authorized_editor(&self, template_uuid: Uuid, ctx: &AppContext) -> bool {
@@ -1640,8 +1638,8 @@ impl TemplatableMCPServerManager {
             .map(|server| server.sync_id());
         let team_uid = TemplatableMCPServerManager::get_first_team_space_id(ctx);
 
-        if let Some(sync_id) = sync_id {
-            if let Some(team_uid) = team_uid {
+        if let Some(sync_id) = sync_id
+            && let Some(team_uid) = team_uid {
                 let object_type_and_id = CloudObjectTypeAndId::GenericStringObject {
                     object_type: GenericStringObjectFormat::Json(
                         JsonObjectType::TemplatableMCPServer,
@@ -1657,7 +1655,6 @@ impl TemplatableMCPServerManager {
                 });
                 send_telemetry_from_ctx!(TelemetryEvent::MCPTemplateShared, ctx);
             }
-        }
     }
 
     pub fn share_templatable_mcp_server_installation(

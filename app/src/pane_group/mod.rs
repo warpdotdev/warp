@@ -1698,8 +1698,8 @@ impl PaneGroup {
                 let pane_id = terminal_pane_id.into();
                 pane_contents.insert(pane_id, Box::new(pane_data));
 
-                if let Some(llm_override) = &terminal_snapshot.llm_model_override {
-                    if let Ok(llm_id) = serde_json::from_str::<LLMId>(llm_override) {
+                if let Some(llm_override) = &terminal_snapshot.llm_model_override
+                    && let Ok(llm_id) = serde_json::from_str::<LLMId>(llm_override) {
                         log::info!("Selecting base agent model {llm_id} (from terminal snapshot)");
                         crate::ai::llms::LLMPreferences::handle(ctx).update(
                             ctx,
@@ -1712,7 +1712,6 @@ impl PaneGroup {
                             },
                         );
                     }
-                }
 
                 if let Some(active_profile_sync_id) = &terminal_snapshot.active_profile_id {
                     log::info!(
@@ -2004,17 +2003,14 @@ impl PaneGroup {
         };
 
         if let (Ok((pane_data, _)), Some(title)) = (&result, custom_vertical_tabs_title.as_deref())
-        {
-            if let PaneNode::Leaf(pane_id) = &pane_data.root {
-                if let Some(pane) = pane_contents.get(pane_id) {
+            && let PaneNode::Leaf(pane_id) = &pane_data.root
+                && let Some(pane) = pane_contents.get(pane_id) {
                     pane.as_pane()
                         .pane_configuration()
                         .update(ctx, |configuration, ctx| {
                             configuration.set_custom_vertical_tabs_title(title, ctx);
                         });
                 }
-            }
-        }
 
         result
     }
@@ -2104,15 +2100,14 @@ impl PaneGroup {
                     .nodes
                     .iter()
                     .filter_map(|(flex, node)| {
-                        if let PaneNode::Leaf(pane_id) = node {
-                            if self.panes.is_hidden_closed_pane(pane_id) {
+                        if let PaneNode::Leaf(pane_id) = node
+                            && self.panes.is_hidden_closed_pane(pane_id) {
                                 // Don't snapshot hidden panes (undo, move, job,
                                 // child agent, etc.). Child agent panes are
                                 // restored lazily once their parent agent view
                                 // is re-entered.
                                 return None;
                             }
-                        }
                         Some((
                             app_state::PaneFlex(flex.0),
                             self.snapshot_for_node(app, node),
@@ -2164,11 +2159,10 @@ impl PaneGroup {
 
                 // After substitution, propagate the visible leaf's
                 // active-session bit so restore focuses the right pane.
-                if is_substituted && visible_leaf_is_active_session {
-                    if let LeafContents::Terminal(ref mut snapshot) = contents {
+                if is_substituted && visible_leaf_is_active_session
+                    && let LeafContents::Terminal(ref mut snapshot) = contents {
                         snapshot.is_active = true;
                     }
-                }
                 let custom_vertical_tabs_title =
                     self.pane_contents.get(&snapshot_pane_id).and_then(|pane| {
                         pane.as_pane()
@@ -2195,11 +2189,10 @@ impl PaneGroup {
         ctx: &AppContext,
     ) -> Option<PaneId> {
         for pane_id in self.pane_contents.keys() {
-            if let Some(terminal_pane) = self.downcast_pane_by_id::<TerminalPane>(*pane_id) {
-                if terminal_pane.terminal_view(ctx).id() == terminal_view_id {
+            if let Some(terminal_pane) = self.downcast_pane_by_id::<TerminalPane>(*pane_id)
+                && terminal_pane.terminal_view(ctx).id() == terminal_view_id {
                     return Some(*pane_id);
                 }
-            }
         }
         None
     }
@@ -3694,8 +3687,8 @@ impl PaneGroup {
         let ambient_agent_task_id =
             ambient_agent_task_id.or_else(|| Self::ambient_agent_task_id(&cloud_conversation));
 
-        if FeatureFlag::HandoffCloudCloud.is_enabled() {
-            if let Some(task_id) = ambient_agent_task_id {
+        if FeatureFlag::HandoffCloudCloud.is_enabled()
+            && let Some(task_id) = ambient_agent_task_id {
                 if terminal_view
                     .as_ref(ctx)
                     .ambient_agent_view_model()
@@ -3723,7 +3716,6 @@ impl PaneGroup {
                     return;
                 }
             }
-        }
 
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, _ctx| {
             history_model
@@ -3782,15 +3774,14 @@ impl PaneGroup {
                         ctx,
                     );
                     // Keep the viewer's AmbientAgentViewModel harness in sync with the loaded run.
-                    if let Some(harness) = harness {
-                        if let Some(ambient_agent_view_model) =
+                    if let Some(harness) = harness
+                        && let Some(ambient_agent_view_model) =
                             view.ambient_agent_view_model().cloned()
                         {
                             ambient_agent_view_model.update(ctx, |model, ctx| {
                                 model.set_harness(harness, ctx);
                             });
                         }
-                    }
                     // 3p runs have no materialized AIConversation, so enter agent view with a
                     // fresh vehicle conversation and retag the restored snapshot block onto it so
                     // it passes `should_hide_block`'s agent view filter.
@@ -4430,8 +4421,7 @@ impl PaneGroup {
         if let Some(terminal_manager) = self
             .terminal_session_by_id(pane_id)
             .map(|session| session.terminal_manager(ctx))
-        {
-            if terminal_manager.read(ctx, |terminal_manager, _ctx| {
+            && terminal_manager.read(ctx, |terminal_manager, _ctx| {
                 terminal_manager
                     .model()
                     .lock()
@@ -4441,7 +4431,6 @@ impl PaneGroup {
                 ctx.emit(Event::CloseSharedSessionPaneRequested { pane_id });
                 return;
             }
-        }
 
         let summary = UnsavedStateSummary::for_pane(self, pane_id, ctx);
         if summary.save_unsaved_code_and_should_warn(ctx)
@@ -5406,15 +5395,14 @@ impl PaneGroup {
                         |_, _| {},
                         ctx,
                     );
-                    if let Some(harness) = harness {
-                        if let Some(ambient_agent_view_model) =
+                    if let Some(harness) = harness
+                        && let Some(ambient_agent_view_model) =
                             view.ambient_agent_view_model().cloned()
                         {
                             ambient_agent_view_model.update(ctx, |model, ctx| {
                                 model.set_harness(harness, ctx);
                             });
                         }
-                    }
                     if let Some(vehicle_conversation_id) =
                         view.enter_agent_view_for_restored_cli_agent(fallback_title, ctx)
                     {
@@ -5485,8 +5473,8 @@ impl PaneGroup {
     /// Restore a pane that was closed by showing it, attaching it, and focusing it.
     /// Returns true if the pane was successfully restored, false otherwise.
     pub fn restore_closed_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) -> bool {
-        if self.unhide_closed_pane(pane_id, ctx) {
-            if let Some(pane_content) = self
+        if self.unhide_closed_pane(pane_id, ctx)
+            && let Some(pane_content) = self
                 .pane_contents
                 .get(&pane_id)
                 .map(|content| content.as_ref())
@@ -5503,7 +5491,6 @@ impl PaneGroup {
                 ctx.emit(Event::AppStateChanged);
                 return true;
             }
-        }
         false
     }
 
@@ -5575,11 +5562,10 @@ impl PaneGroup {
                 }
             });
 
-        if let Some(id) = candidate {
-            if self.has_pane_id(id) && !self.is_pane_hidden_for_close(id) {
+        if let Some(id) = candidate
+            && self.has_pane_id(id) && !self.is_pane_hidden_for_close(id) {
                 return Some(id);
             }
-        }
 
         // Fall back to the most recently focused pane that still exists and is visible.
         self.pane_history
@@ -5671,19 +5657,17 @@ impl PaneGroup {
     }
 
     fn navigate_prev_pane(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(id) = self.prev_pane_id_navigation(self.focused_pane_id(ctx)) {
-            if self.focus_pane(id, true, ctx) {
+        if let Some(id) = self.prev_pane_id_navigation(self.focused_pane_id(ctx))
+            && self.focus_pane(id, true, ctx) {
                 ctx.emit(Event::AppStateChanged);
             }
-        }
     }
 
     fn navigate_next_pane(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(id) = self.next_pane_id(self.focused_pane_id(ctx)) {
-            if self.focus_pane(id, true, ctx) {
+        if let Some(id) = self.next_pane_id(self.focused_pane_id(ctx))
+            && self.focus_pane(id, true, ctx) {
                 ctx.emit(Event::AppStateChanged);
             }
-        }
     }
 
     fn navigate_pane_by_direction(&mut self, direction: Direction, ctx: &mut ViewContext<Self>) {
@@ -6338,8 +6322,8 @@ impl PaneGroup {
         cloud_conversation: CloudConversationData,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        if FeatureFlag::HandoffCloudCloud.is_enabled() {
-            if let Some(task_id) = Self::ambient_agent_task_id(&cloud_conversation) {
+        if FeatureFlag::HandoffCloudCloud.is_enabled()
+            && let Some(task_id) = Self::ambient_agent_task_id(&cloud_conversation) {
                 return self.replace_loading_pane_with_restored_ambient_cloud_mode_pane(
                     loading_pane_id,
                     cloud_conversation,
@@ -6347,7 +6331,6 @@ impl PaneGroup {
                     ctx,
                 );
             }
-        }
         let restoration = match cloud_conversation {
             CloudConversationData::Oz(conversation) => {
                 ConversationRestorationInNewPaneType::Historical {
@@ -6725,12 +6708,10 @@ impl PaneGroup {
         if let Some(idx) = pane_ids
             .iter()
             .position(|pane_id| *pane_id == self.focused_pane_id(ctx))
-        {
-            if idx < pane_ids.len() - 1 {
+            && idx < pane_ids.len() - 1 {
                 self.navigate_next_pane(ctx);
                 return true;
             }
-        }
 
         false
     }
@@ -6745,12 +6726,10 @@ impl PaneGroup {
         if let Some(idx) = pane_ids
             .iter()
             .position(|pane_id| *pane_id == self.focused_pane_id(ctx))
-        {
-            if idx > 0 {
+            && idx > 0 {
                 self.navigate_prev_pane(ctx);
                 return true;
             }
-        }
 
         false
     }
@@ -6893,11 +6872,10 @@ impl PaneGroup {
     pub fn focus_active_session(&mut self, ctx: &mut ViewContext<Self>) {
         self.update_session_visibility(ctx);
 
-        if let Some(session_id) = self.active_session_id(ctx) {
-            if self.focus_pane(session_id.into(), true, ctx) {
+        if let Some(session_id) = self.active_session_id(ctx)
+            && self.focus_pane(session_id.into(), true, ctx) {
                 ctx.emit(Event::AppStateChanged);
             }
-        }
     }
 
     pub fn active_session_terminal_model(
@@ -7014,11 +6992,10 @@ impl PaneGroup {
         let owner_view_id = BlocklistAIHistoryModel::as_ref(ctx)
             .terminal_surface_id_for_conversation(&conversation_id)?;
         for pane_id in self.pane_contents.keys() {
-            if let Some(terminal_view) = self.terminal_view_from_pane_id(*pane_id, ctx) {
-                if terminal_view.id() == owner_view_id {
+            if let Some(terminal_view) = self.terminal_view_from_pane_id(*pane_id, ctx)
+                && terminal_view.id() == owner_view_id {
                     return Some(*pane_id);
                 }
-            }
         }
         None
     }
@@ -7872,15 +7849,13 @@ impl PaneGroup {
 
         // Now that the Agent Mode pane has been inserted into the pane tree, we can update its
         // `PaneFlex` value.
-        if let Some(custom_flex) = flex_for_min_width {
-            if let PaneNode::Branch(ref mut root_branch) = self.panes.root {
-                if let Some((agent_mode_pane_flex, PaneNode::Leaf(_))) =
+        if let Some(custom_flex) = flex_for_min_width
+            && let PaneNode::Branch(ref mut root_branch) = self.panes.root
+                && let Some((agent_mode_pane_flex, PaneNode::Leaf(_))) =
                     root_branch.nodes.last_mut()
                 {
                     *agent_mode_pane_flex = custom_flex;
                 }
-            }
-        }
 
         ctx.emit(Event::AppStateChanged);
 
@@ -7949,8 +7924,8 @@ impl PaneGroup {
     /// receiving focus.
     fn handle_focus_change(&mut self, ctx: &mut ViewContext<Self>) {
         for pane_index in 0..self.pane_count() {
-            if let Some(content) = self.pane_by_index(pane_index) {
-                if content.has_application_focus(ctx) {
+            if let Some(content) = self.pane_by_index(pane_index)
+                && content.has_application_focus(ctx) {
                     if let Some(pane_id) = self.pane_id_from_index(pane_index) {
                         // Mark the pane as the focused pane _without_ moving
                         // application focus to it.
@@ -7966,7 +7941,6 @@ impl PaneGroup {
                     };
                     break;
                 }
-            }
         }
     }
 }
@@ -8121,15 +8095,13 @@ impl View for PaneGroup {
         }
 
         // Render the summarization cancel dialog at tab level when open.
-        if let Some(terminal_pane_id) = self.terminal_with_open_summarization_dialog {
-            if let Some(terminal_view) = self.terminal_view_from_pane_id(terminal_pane_id, app) {
-                if let Some(dialog_handle) = terminal_view.read(app, |view, ctx| {
+        if let Some(terminal_pane_id) = self.terminal_with_open_summarization_dialog
+            && let Some(terminal_view) = self.terminal_view_from_pane_id(terminal_pane_id, app)
+                && let Some(dialog_handle) = terminal_view.read(app, |view, ctx| {
                     view.summarization_cancel_dialog_handle(ctx)
                 }) {
                     stack.add_child(ChildView::new(&dialog_handle).finish());
                 }
-            }
-        }
 
         // Render environment setup mode selector at tab level when open.
         if let Some(pane_id) = self.pane_with_open_environment_setup_mode_selector {
@@ -8155,8 +8127,8 @@ impl View for PaneGroup {
         }
 
         // Render auth-secret delete confirmation at tab level when open.
-        if let Some(pane_id) = self.pane_with_open_auth_secret_delete_confirmation_dialog {
-            if let Some(dialog) = self
+        if let Some(pane_id) = self.pane_with_open_auth_secret_delete_confirmation_dialog
+            && let Some(dialog) = self
                 .terminal_view_from_pane_id(pane_id, app)
                 .and_then(|tv| {
                     tv.as_ref(app)
@@ -8165,10 +8137,9 @@ impl View for PaneGroup {
             {
                 stack.add_child(dialog);
             }
-        }
         // Render agent-assisted environment modal at tab level when open.
-        if let Some(pane_id) = self.pane_with_open_agent_assisted_environment_modal {
-            if let Some(handle) = self
+        if let Some(pane_id) = self.pane_with_open_agent_assisted_environment_modal
+            && let Some(handle) = self
                 .downcast_pane_by_id::<EnvironmentManagementPane>(pane_id)
                 .and_then(|emp| {
                     emp.environments_page_view(app)
@@ -8179,7 +8150,6 @@ impl View for PaneGroup {
             {
                 stack.add_child(ChildView::new(&handle).finish());
             }
-        }
 
         stack.finish()
     }

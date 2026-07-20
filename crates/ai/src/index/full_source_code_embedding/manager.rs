@@ -988,8 +988,7 @@ impl CodebaseIndexManager {
                             .as_ref()
                             .is_some_and(|storage| storage.has_snapshot(&p))
                     })
-            {
-                if let Some(snapshot_storage) = snapshot_storage.as_ref() {
+                && let Some(snapshot_storage) = snapshot_storage.as_ref() {
                     let read_snapshot_start_time = Instant::now();
                     match read_snapshot(
                         store_client.clone(),
@@ -1018,7 +1017,6 @@ impl CodebaseIndexManager {
                         }
                     }
                 }
-            }
 
             CodebaseIndex::new_from_scratch(
                 repository,

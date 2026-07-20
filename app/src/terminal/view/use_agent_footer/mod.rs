@@ -1356,11 +1356,10 @@ impl View for UseAgentToolbar {
             // the horizontal padding area as well, preventing a visible color mismatch
             // between the padding and the footer content.
             let terminal_model = self.terminal_model.lock();
-            if terminal_model.is_alt_screen_active() {
-                if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
+            if terminal_model.is_alt_screen_active()
+                && let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
                     container = container.with_background(bg_color);
                 }
-            }
 
             return container.finish();
         }
@@ -1399,11 +1398,10 @@ impl View for UseAgentToolbar {
             .with_horizontal_padding(*super::PADDING_LEFT)
             .with_vertical_padding(4.);
 
-        if terminal_model.is_alt_screen_active() {
-            if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
+        if terminal_model.is_alt_screen_active()
+            && let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
                 container = container.with_background(bg_color);
             }
-        }
 
         container.finish()
     }

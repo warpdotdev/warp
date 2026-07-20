@@ -14,12 +14,11 @@ impl EnvVarCollectionView {
         index: Option<VariableRowIndex>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(VariableRowIndex(index)) = index {
-            if let EnvVarValue::Command(cmd) = &self.variable_rows[index].value {
+        if let Some(VariableRowIndex(index)) = index
+            && let EnvVarValue::Command(cmd) = &self.variable_rows[index].value {
                 self.env_var_command_dialog
                     .update(ctx, |dialog, ctx| dialog.load(cmd, ctx))
             }
-        }
         self.dialog_open_states.env_var_command_dialog_open = true;
         self.update_open_modal_state(ctx);
         ctx.focus(&self.env_var_command_dialog);

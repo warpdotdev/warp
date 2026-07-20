@@ -7618,8 +7618,8 @@ impl EditorView {
     /// TODO: ideally, this wouldn't be treated as a separate 'edit' from the 'edit' that was
     /// produced by the initial user-action.
     fn vim_maybe_enforce_cursor_line_cap(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(VimMode::Normal) = self.vim_mode(ctx) {
-            if self.editor_model.as_ref(ctx).vim_needs_line_capping(ctx) {
+        if let Some(VimMode::Normal) = self.vim_mode(ctx)
+            && self.editor_model.as_ref(ctx).vim_needs_line_capping(ctx) {
                 self.edit(
                     ctx,
                     Edits::new().with_change_selections(|model, ctx| {
@@ -7627,7 +7627,6 @@ impl EditorView {
                     }),
                 );
             }
-        }
     }
 
     /// Returns an option around the string that represents the current state of whatever content

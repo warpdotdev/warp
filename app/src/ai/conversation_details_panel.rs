@@ -1496,8 +1496,8 @@ impl ConversationDetailsPanel {
             .with_child(Shrinkable::new(1., oz_link).finish());
 
         // Add GitHub source link if we have enough info to construct it.
-        if let (Some(org), Some(repo)) = (&skill_spec.org, &skill_spec.repo) {
-            if skill_spec.is_full_path() {
+        if let (Some(org), Some(repo)) = (&skill_spec.org, &skill_spec.repo)
+            && skill_spec.is_full_path() {
                 let github_url = format!(
                     "https://github.com/{}/{}/blob/-/{}",
                     org, repo, skill_spec.skill_identifier
@@ -1515,7 +1515,6 @@ impl ConversationDetailsPanel {
                 row.add_child(separator());
                 row.add_child(Shrinkable::new(1., source_link).finish());
             }
-        }
 
         Some(row.finish())
     }

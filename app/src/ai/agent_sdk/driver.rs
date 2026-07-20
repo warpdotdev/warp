@@ -211,11 +211,10 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
 
     /// End the run by sending `value` immediately.
     fn end_run_now(&self, value: T) {
-        if let Ok(mut guard) = self.tx_cell.lock() {
-            if let Some(sender) = guard.take() {
+        if let Ok(mut guard) = self.tx_cell.lock()
+            && let Some(sender) = guard.take() {
                 let _ = sender.send(value);
             }
-        }
     }
 
     /// End the run after `timeout` by sending `value`, unless cancelled before then.
@@ -236,12 +235,11 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
             if generation.load(Ordering::SeqCst) != current_gen {
                 return;
             }
-            if let Ok(mut guard) = tx_cell.lock() {
-                if let Some(sender) = guard.take() {
+            if let Ok(mut guard) = tx_cell.lock()
+                && let Some(sender) = guard.take() {
                     // Send the value after the idle timeout expires.
                     let _ = sender.send(value);
                 }
-            }
         });
     }
 
@@ -866,8 +864,8 @@ impl AgentDriver {
                 // Mark the task as IN_PROGRESS before starting work. This covers
                 // the gap during environment setup, MCP startup, etc. — before any
                 // conversation exists and LocalAgentTaskSyncModel can fire.
-                if let Some(task_id) = task_id {
-                    if let Err(e) = server_api
+                if let Some(task_id) = task_id
+                    && let Err(e) = server_api
                         .update_agent_task(
                             task_id,
                             Some(AgentTaskState::InProgress),
@@ -880,7 +878,6 @@ impl AgentDriver {
                     {
                         report_error!(e);
                     }
-                }
                 // Primary: WARP_SANDBOX_DEADLINE client-side timer.
                 //
                 // The server injects WARP_SANDBOX_DEADLINE (Unix timestamp, seconds since
@@ -1674,8 +1671,7 @@ impl AgentDriver {
                 wait_server_uuids,
                 ..
             } = event
-            {
-                if pending_repos.remove(repo_path) {
+                && pending_repos.remove(repo_path) {
                     collected_wait_uuids.extend(wait_server_uuids.iter().copied());
                     // If we've received all scan results from all cloud environment repos, send
                     // back the auto-start-requested UUIDs and begin waiting for initialization.
@@ -1691,7 +1687,6 @@ impl AgentDriver {
                         ctx.unsubscribe_from_model(&manager);
                     }
                 }
-            }
         });
 
         rx
@@ -2654,8 +2649,8 @@ impl AgentDriver {
             {
                 log::warn!("Plugin update failed (continuing): {e}");
             }
-        } else if !manager.is_installed() {
-            if let Err(e) = events
+        } else if !manager.is_installed()
+            && let Err(e) = events
                 .record_result(
                     SetupStep::ThirdPartyHarnessPreparationNotificationPluginInstall,
                     manager.install(),
@@ -2664,7 +2659,6 @@ impl AgentDriver {
             {
                 log::warn!("Plugin installation failed (continuing): {e}");
             }
-        }
     }
 
     async fn setup_platform_plugin(
@@ -2689,8 +2683,8 @@ impl AgentDriver {
                 }
                 log::warn!("Platform plugin update failed (continuing): {e}");
             }
-        } else if !manager.is_platform_plugin_installed() {
-            if let Err(e) = events
+        } else if !manager.is_platform_plugin_installed()
+            && let Err(e) = events
                 .record_result(
                     SetupStep::ThirdPartyHarnessPreparationPlatformPluginInstall,
                     manager.install_platform_plugin(),
@@ -2705,7 +2699,6 @@ impl AgentDriver {
                 }
                 log::warn!("Platform plugin installation failed (continuing): {e}");
             }
-        }
 
         if required {
             Self::verify_required_platform_plugin(harness_name, manager)?;
@@ -3135,8 +3128,8 @@ impl AgentDriver {
             // Fresh runs learn their conversation_id via
             // `ConversationServerTokenAssigned`; resumed runs already
             // registered in `new` (and so skip this branch).
-            if me.run_conversation_id.is_none() {
-                if let BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+            if me.run_conversation_id.is_none()
+                && let BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                     conversation_id,
                     ..
                 } = event
@@ -3149,7 +3142,6 @@ impl AgentDriver {
                     );
                     register_agent_event_consumer(*conversation_id, ctx.model_id(), ctx);
                 }
-            }
 
             match event {
                 BlocklistAIHistoryEvent::UpdatedTodoList { .. } => {
@@ -3183,8 +3175,8 @@ impl AgentDriver {
                     if let Some(writer) = me.snapshot_file_writer.as_ref() {
                         let mut paths = Vec::new();
                         for input in &exchange.input {
-                            if let AIAgentInput::ActionResult { result, .. } = input {
-                                if let AIAgentActionResultType::RequestFileEdits(
+                            if let AIAgentInput::ActionResult { result, .. } = input
+                                && let AIAgentActionResultType::RequestFileEdits(
                                     RequestFileEditsResult::Success { updated_files, .. },
                                 ) = &result.result
                                 {
@@ -3192,7 +3184,6 @@ impl AgentDriver {
                                         paths.push(updated.file_context.file_name.clone());
                                     }
                                 }
-                            }
                         }
                         writer.append(paths);
                     }
@@ -3220,15 +3211,14 @@ impl AgentDriver {
                         return;
                     };
 
-                    if !written_conversation_id {
-                        if let Some(token) = token_opt {
+                    if !written_conversation_id
+                        && let Some(token) = token_opt {
                             report_if_error!(output::with_stdout_buffered(|buf| match me.output_format {
                                 OutputFormat::Json | OutputFormat::Ndjson => output::json::conversation_started(&token, buf),
                                 OutputFormat::Text | OutputFormat::Pretty => output::text::conversation_started(&token, buf),
                             }).context("Failed to write conversation ID"));
                             written_conversation_id = true;
                         }
-                    }
 
                     // Once the outputs are fully streamed from the server, write them to stdout.
                     if exchange.output_status.is_finished() {

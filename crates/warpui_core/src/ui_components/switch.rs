@@ -98,8 +98,8 @@ impl UiComponent for Switch {
             };
 
             // If a tooltip is configured and we're hovered, show it above the switch
-            if let Some(TooltipConfig { text, styles }) = &tooltip {
-                if state.is_hovered() {
+            if let Some(TooltipConfig { text, styles }) = &tooltip
+                && state.is_hovered() {
                     let tooltip_element = Tooltip::new(text.clone(), *styles).build().finish();
                     return Stack::new()
                         .with_child(switch_element)
@@ -114,7 +114,6 @@ impl UiComponent for Switch {
                         )
                         .finish();
                 }
-            }
 
             switch_element
         });
@@ -240,8 +239,8 @@ impl Switch {
 
             // If a border is specified and the mouse is over the element,
             // render a circle behind the thumb with the border color.
-            if let Some(border_size) = self.hover_border_size {
-                if !is_disabled && state.is_mouse_over_element() {
+            if let Some(border_size) = self.hover_border_size
+                && !is_disabled && state.is_mouse_over_element() {
                     let mut hover_background = *TRACK_COLOR;
                     hover_background.a = 100;
 
@@ -280,7 +279,6 @@ impl Switch {
                         ),
                     );
                 }
-            }
 
             stack.add_child(thumb);
             stack.finish()

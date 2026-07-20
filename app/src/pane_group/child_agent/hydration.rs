@@ -89,11 +89,10 @@ impl PaneGroup {
         let child_id = child_conversation.id();
 
         // Idempotency guard — see fn doc.
-        if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied() {
-            if self.has_pane_id(existing_pane_id) {
+        if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied()
+            && self.has_pane_id(existing_pane_id) {
                 return;
             }
-        }
 
         let new_pane_id =
             self.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);

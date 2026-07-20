@@ -66,8 +66,8 @@ pub(crate) fn terminal_view_agent_icon_variant(
         && !is_local_child;
 
     // Defer to the card helper when we have task data and no CLI session takes precedence.
-    if cli_agent_session.is_none() {
-        if let Some(task) = task_data.as_ref() {
+    if cli_agent_session.is_none()
+        && let Some(task) = task_data.as_ref() {
             let status = AgentRunDisplayStatus::from_task(task, app).to_conversation_status();
             let harness = task
                 .agent_config_snapshot
@@ -77,7 +77,6 @@ pub(crate) fn terminal_view_agent_icon_variant(
                 .unwrap_or(Harness::Oz);
             return Some(agent_icon_variant_for_run(harness, status, is_cloud));
         }
-    }
 
     let inputs = TerminalIconInputs {
         is_ambient: is_cloud,
@@ -162,8 +161,8 @@ fn agent_icon_variant_from_terminal_inputs(
     // 2. Live ambient run with a third-party harness selected, before task data is
     //    available (e.g. Claude pre-dispatch). `Unknown` is filtered so an unrecognized
     //    harness doesn't render as an unbranded gray circle.
-    if inputs.is_ambient {
-        if let Some(agent) = inputs
+    if inputs.is_ambient
+        && let Some(agent) = inputs
             .selected_third_party_cli_agent
             .filter(|agent| !matches!(agent, CLIAgent::Unknown))
         {
@@ -173,7 +172,6 @@ fn agent_icon_variant_from_terminal_inputs(
                 is_ambient: true,
             });
         }
-    }
 
     // 3. Selected conversation OR ambient (Oz) terminal: Oz agent variant.
     if inputs.has_selected_conversation || inputs.is_ambient {

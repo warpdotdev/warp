@@ -355,11 +355,10 @@ impl PresenceManager {
     pub fn get_participant(&self, id: &ParticipantId) -> Option<&Participant> {
         if let Some(viewer) = self.present_viewers.get(id) {
             return Some(viewer);
-        } else if let Some(sharer) = self.sharer.as_ref() {
-            if self.sharer_id == *id {
+        } else if let Some(sharer) = self.sharer.as_ref()
+            && self.sharer_id == *id {
                 return Some(sharer);
             }
-        }
         None
     }
 
@@ -594,11 +593,10 @@ impl PresenceManager {
         }
 
         // Ensure viewer doesn't already have requested role
-        if let Some(old_role) = self.viewer_role(&participant_id) {
-            if role == old_role {
+        if let Some(old_role) = self.viewer_role(&participant_id)
+            && role == old_role {
                 return;
             }
-        }
 
         self.role_requests
             .insert(participant_id.clone(), role_request_id.clone());

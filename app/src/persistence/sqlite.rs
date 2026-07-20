@@ -1097,11 +1097,10 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                     // and `read_node` would fail to resolve the leaf on
                     // restore, causing the entire surrounding tab to be
                     // dropped. See `LeafContents::is_persisted`.
-                    if let PaneNodeSnapshot::Leaf(leaf) = pane_node {
-                        if !leaf.contents.is_persisted() {
+                    if let PaneNodeSnapshot::Leaf(leaf) = pane_node
+                        && !leaf.contents.is_persisted() {
                             continue;
                         }
-                    }
 
                     let is_leaf = matches!(pane_node, PaneNodeSnapshot::Leaf(_));
                     let new_pane_node = model::NewPaneNode {
@@ -2103,8 +2102,8 @@ fn save_workspaces(
             .execute(conn)?;
     }
 
-    if let Some(current_workspace_uid) = current_workspace_uid {
-        if !workspaces_to_insert
+    if let Some(current_workspace_uid) = current_workspace_uid
+        && !workspaces_to_insert
             .iter()
             .any(|workspace| workspace.uid == current_workspace_uid)
         {
@@ -2118,7 +2117,6 @@ fn save_workspaces(
                 .execute(conn)?;
             }
         }
-    }
 
     Ok(())
 }

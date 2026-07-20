@@ -688,8 +688,8 @@ impl AgentDriverRunner {
             // can currently be passed together (the worker server-side appends `--conversation`
             // alongside `--task-id` for Slack/Linear followups); when both are set, the explicit
             // `--conversation` value wins via the merge below.
-            if !has_task_id {
-                if let Some(conversation_id) = args.conversation.as_deref() {
+            if !has_task_id
+                && let Some(conversation_id) = args.conversation.as_deref() {
                     common::fetch_and_validate_conversation_harness(
                         server_api.clone(),
                         conversation_id,
@@ -697,7 +697,6 @@ impl AgentDriverRunner {
                     )
                     .await?;
                 }
-            }
             let resume_conversation_id = args.conversation.clone();
 
             // Build driver options and task, handling task creation or existing task setup.
@@ -807,11 +806,10 @@ impl AgentDriverRunner {
         }
         .await;
 
-        if let Err(ref err) = result {
-            if let Some(task_id) = task_id {
+        if let Err(ref err) = result
+            && let Some(task_id) = task_id {
                 driver::report_driver_error(task_id, err, &server_api).await;
             }
-        }
         result
     }
 

@@ -1356,8 +1356,8 @@ impl BlockListElement {
             let model = self.model.lock();
             let viewport = self.viewport_state_after_layout(model.block_list());
 
-            if let Some(blocklist_point) = blocklist_point {
-                if let Some(block_index) = viewport.block_index_from_point(blocklist_point) {
+            if let Some(blocklist_point) = blocklist_point
+                && let Some(block_index) = viewport.block_index_from_point(blocklist_point) {
                     let on_long_running_block = model
                         .block_list()
                         .block_at(block_index)
@@ -1386,7 +1386,6 @@ impl BlockListElement {
                         }
                     }
                 }
-            }
             ctx.dispatch_typed_action(TerminalAction::Scroll { delta: delta_lines });
             true
         } else {
@@ -1711,7 +1710,9 @@ impl BlockListElement {
             ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(BlockTextSelectAction::End));
         }
 
-        let handled = if self.is_mouse_position_within_bounds(position) {
+        
+
+        if self.is_mouse_position_within_bounds(position) {
             if let Some(point) = self.coord_to_point(
                 SnackbarPoint::within_snackbar(position),
                 ClampingMode::ReturnNoneIfNotInGrid,
@@ -1778,9 +1779,7 @@ impl BlockListElement {
             true
         } else {
             false
-        };
-
-        handled
+        }
     }
 
     /// Handle a mouse move event when we've determined the mouse is over the block list (and not
@@ -1971,8 +1970,8 @@ impl BlockListElement {
             let side = self
                 .size_info
                 .get_mouse_side(position - vec2f(bounds.origin().x(), snackbar_bottom));
-            if !is_selecting_blocks {
-                if let Some(point) = self.coord_to_point(
+            if !is_selecting_blocks
+                && let Some(point) = self.coord_to_point(
                     SnackbarPoint::underneath_snackbar(position),
                     ClampingMode::ClampToGrid,
                 ) {
@@ -1985,7 +1984,6 @@ impl BlockListElement {
                         },
                     ));
                 }
-            }
 
             if let Some(point) = self.coord_to_point(
                 SnackbarPoint::within_snackbar(position),
@@ -2380,14 +2378,13 @@ impl BlockListElement {
         }
 
         let mut did_render_ai_stripe = false;
-        if !FeatureFlag::AgentView.is_enabled() {
-            if let Some(ai_context_stripe_color) =
+        if !FeatureFlag::AgentView.is_enabled()
+            && let Some(ai_context_stripe_color) =
                 ai_render_context.context_color_for_block(block, warp_theme)
             {
                 draw_flag_pole(grid_origin, block_height, ai_context_stripe_color, ctx);
                 did_render_ai_stripe = true;
             }
-        }
 
         if block.has_failed() {
             ctx.scene
@@ -3747,8 +3744,8 @@ impl Element for BlockListElement {
         let mut visible_selected_blocks = HashSet::new();
         let mut start_of_continuous_selected_blocks = HashSet::new();
         let mut end_of_continuous_selected_blocks = HashSet::new();
-        if let Some(visible_blocks) = &self.visible_blocks {
-            if !visible_blocks.is_empty() {
+        if let Some(visible_blocks) = &self.visible_blocks
+            && !visible_blocks.is_empty() {
                 let visible_blocks_inclusive_range =
                     visible_blocks.start..=(visible_blocks.end - 1.into());
                 for range in self.selected_blocks.ranges() {
@@ -3758,7 +3755,6 @@ impl Element for BlockListElement {
                     end_of_continuous_selected_blocks.insert(range.end());
                 }
             }
-        }
 
         // Used to determine border styling of selected blocks.
         let is_singleton = self.selected_blocks.is_singleton();
@@ -4086,11 +4082,9 @@ impl Element for BlockListElement {
 
                     if let Some(snackbar_toggle_button_origin) =
                         self.compute_snackbar_toggle_button_draw_location(&block_grid_params)
-                    {
-                        if let Some(snackbar_toggle_button) = self.snackbar_toggle_button.as_mut() {
+                        && let Some(snackbar_toggle_button) = self.snackbar_toggle_button.as_mut() {
                             snackbar_toggle_button.paint(snackbar_toggle_button_origin, ctx, app);
                         }
-                    }
 
                     // The block buttons might overlap with the prompt. If that's the case,
                     // we want to detect that it will overlap and draw a background behind
@@ -4819,8 +4813,8 @@ where
         };
         let mut stack = Stack::new().with_child(container.finish());
 
-        if let Some(tooltip_info) = tooltip_info {
-            if state.is_hovered() {
+        if let Some(tooltip_info) = tooltip_info
+            && state.is_hovered() {
                 let tool_tip = ui_builder.tool_tip(tooltip_info.label).build().finish();
                 // Adjust the position of the tooltip depending on whether it is showing on the snackbar header
                 let (parent_anchor, child_anchor, offset) = if tooltip_info.tool_tip_below_button {
@@ -4846,7 +4840,6 @@ where
                     ),
                 );
             }
-        }
 
         stack.finish()
     });

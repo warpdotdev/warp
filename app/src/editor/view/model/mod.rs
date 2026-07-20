@@ -772,31 +772,28 @@ impl EditorModel {
             });
         }
 
-        if can_select {
-            if let Some(change_selection) = edit.change_selections_callback {
+        if can_select
+            && let Some(change_selection) = edit.change_selections_callback {
                 change_selection(self, ctx);
             }
-        }
 
         if let Some(before_buffer_edit) = edit.before_buffer_edit_callback {
             before_buffer_edit(self, ctx);
         }
 
         let prev_state = self.consecutive_autocomplete_insertion_edits_counter;
-        if can_edit {
-            if let Some(update_buffer) = edit.update_buffer {
+        if can_edit
+            && let Some(update_buffer) = edit.update_buffer {
                 (update_buffer.callback)(self, ctx);
             }
-        }
         let next_state = self.consecutive_autocomplete_insertion_edits_counter;
 
-        if can_select {
-            if let Some(post_buffer_edit_change_selection) =
+        if can_select
+            && let Some(post_buffer_edit_change_selection) =
                 edit.post_buffer_edit_change_selections_callback
             {
                 post_buffer_edit_change_selection(self, ctx);
             }
-        }
 
         // Only emit a11y content for pure selection changes because edits
         // have their own a11y content already.
@@ -2380,8 +2377,8 @@ impl EditorModel {
         let buffer = self.buffer(ctx);
         let mut new_selections = self.selections(ctx).clone();
         new_selections.iter_mut().for_each(|selection| {
-            if let Ok(initial_offset) = selection.end().to_char_offset(buffer) {
-                if let Ok(boundaries) = vim_word_iterator_from_offset(
+            if let Ok(initial_offset) = selection.end().to_char_offset(buffer)
+                && let Ok(boundaries) = vim_word_iterator_from_offset(
                     initial_offset,
                     buffer,
                     *direction,
@@ -2407,11 +2404,9 @@ impl EditorModel {
                                 // case.
                                 if let Ok(mut text) =
                                     buffer.chars_for_range(initial_offset..word_boundary)
-                                {
-                                    if let Some((i, _)) = text.find_position(|c| *c == '\n') {
+                                    && let Some((i, _)) = text.find_position(|c| *c == '\n') {
                                         word_boundary = initial_offset + i;
                                     }
-                                }
                             }
                             (initial_offset, word_boundary)
                         }
@@ -2419,15 +2414,13 @@ impl EditorModel {
                             // `db` will traverse *but not delete* a newline if the count is 1 and
                             // the cursor starts on column zero and the line above is not empty.
                             let mut end = initial_offset;
-                            if *bound == WordBound::Start && word_count == 1 {
-                                if let Ok(mut char_iter) = buffer.chars_rev_at(initial_offset) {
-                                    if char_iter.next().is_some_and(|c| c == '\n')
+                            if *bound == WordBound::Start && word_count == 1
+                                && let Ok(mut char_iter) = buffer.chars_rev_at(initial_offset)
+                                    && char_iter.next().is_some_and(|c| c == '\n')
                                         && char_iter.next().is_some_and(|c| c != '\n')
                                     {
                                         end -= 1;
                                     }
-                                }
-                            }
                             (word_boundary, end)
                         }
                     };
@@ -2439,7 +2432,6 @@ impl EditorModel {
                         selection.set_end(anchor_end);
                     }
                 }
-            }
         });
         self.change_selections(new_selections, ctx);
     }
@@ -3195,15 +3187,14 @@ impl EditorModel {
                 }
 
             // If that's not possible, attempt to select the newline before the line text.
-            } else if start_newline {
-                if let Ok(point) = start.saturating_sub(&1.into()).to_point(buffer) {
+            } else if start_newline
+                && let Ok(point) = start.saturating_sub(&1.into()).to_point(buffer) {
                     selection.set_start(
                         buffer
                             .anchor_before(point)
                             .expect("valid point should be valid anchor"),
                     );
                 }
-            }
         });
         self.change_selections(new_selections, ctx);
     }

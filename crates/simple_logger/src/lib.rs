@@ -130,8 +130,8 @@ impl SimpleLogger {
                         let _ = log_file.flush().await;
                         written_bytes = written_bytes.saturating_add(bytes.len() as u64);
 
-                        if let Some(config) = rotation {
-                            if written_bytes >= config.max_file_size_bytes {
+                        if let Some(config) = rotation
+                            && written_bytes >= config.max_file_size_bytes {
                                 // Drop the active file handle before renaming so platforms
                                 // that disallow renaming an open file (notably Windows)
                                 // succeed, and so the subsequent reopen receives a fresh
@@ -186,7 +186,6 @@ impl SimpleLogger {
                                     0
                                 };
                             }
-                        }
                     }
                     Err(e) => {
                         log::warn!("SimpleLogger: channel closed: {e}");
@@ -274,25 +273,23 @@ pub(crate) async fn perform_rotation(
     // Tolerate ENOENT silently: it just means we haven't accumulated enough
     // rotations yet.
     let oldest = path_with_suffix(base_path, max_rotation);
-    if let Err(e) = async_fs::remove_file(&oldest).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
+    if let Err(e) = async_fs::remove_file(&oldest).await
+        && e.kind() != std::io::ErrorKind::NotFound {
             log::debug!(
                 "SimpleLogger: could not remove oldest rotation {:?}: {e}",
                 oldest
             );
         }
-    }
 
     // Step 2 — shift every existing `.N` up by one, going from oldest to
     // youngest so we never overwrite a file we haven't moved yet.
     for n in (1..max_rotation).rev() {
         let src = path_with_suffix(base_path, n);
         let dst = path_with_suffix(base_path, n + 1);
-        if let Err(e) = async_fs::rename(&src, &dst).await {
-            if e.kind() != std::io::ErrorKind::NotFound {
+        if let Err(e) = async_fs::rename(&src, &dst).await
+            && e.kind() != std::io::ErrorKind::NotFound {
                 log::debug!("SimpleLogger: could not rotate {:?} -> {:?}: {e}", src, dst,);
             }
-        }
     }
 
     // Step 3 — promote the current active file to `.1`. This is the rename

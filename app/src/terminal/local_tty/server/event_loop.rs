@@ -287,13 +287,12 @@ impl EventLoop {
 
                     // Close the leader file descriptor now that the host
                     // process is holding a copy of it.
-                    if let Some(leader_fd) = leader_fd {
-                        if let Err(err) = nix::unistd::close(leader_fd) {
+                    if let Some(leader_fd) = leader_fd
+                        && let Err(err) = nix::unistd::close(leader_fd) {
                             log::warn!(
                                 "Failed to close leader fd after sending it back to host process: {err:#}"
                             );
                         }
-                    }
                 }
                 api::Message::KillChildRequest { pid } => {
                     let result = match self.children.remove(&pid) {

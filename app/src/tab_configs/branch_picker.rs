@@ -197,11 +197,10 @@ impl BranchPicker {
 
                 // Add the default as the first item if it isn't already in the list
                 // (e.g. the user typed a branch name that doesn't exist locally yet).
-                if let Some(ref default) = me.default_value {
-                    if !branches.iter().any(|entry| entry.name == *default) {
+                if let Some(ref default) = me.default_value
+                    && !branches.iter().any(|entry| entry.name == *default) {
                         items.insert(0, DropdownItem::new(default.clone(), default.clone()));
                     }
-                }
 
                 // Determine which branch to auto-select: explicit default
                 // first, then the detected main branch — but only if the

@@ -658,8 +658,8 @@ impl QueuedPromptsPanelView {
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.commit_edit(conv_id, new_text, ctx);
         });
-        if let Some(origin) = origin {
-            if !was_empty {
+        if let Some(origin) = origin
+            && !was_empty {
                 send_telemetry_from_ctx!(
                     TelemetryEvent::QueuedPromptEdited {
                         origin: origin.into(),
@@ -667,7 +667,6 @@ impl QueuedPromptsPanelView {
                     ctx
                 );
             }
-        }
         ctx.emit(QueuedPromptsPanelEvent::EditEnded);
     }
 
@@ -857,8 +856,7 @@ impl TypedActionView for QueuedPromptsPanelView {
                 let origin = to_index.map(|idx| queue[idx].origin());
                 if let (Some(from_index), Some(to_index), Some(origin)) =
                     (from_index, to_index, origin)
-                {
-                    if from_index != to_index {
+                    && from_index != to_index {
                         send_telemetry_from_ctx!(
                             TelemetryEvent::QueuedPromptReordered {
                                 origin: origin.into(),
@@ -868,7 +866,6 @@ impl TypedActionView for QueuedPromptsPanelView {
                             ctx
                         );
                     }
-                }
                 ctx.notify();
             }
         }
@@ -1002,23 +999,21 @@ fn updated_index_from_vertical_drag(
 ) -> usize {
     let dragged_midpoint_y = (drag_position.min_y() + drag_position.max_y()) / 2.;
 
-    if current_index > 0 {
-        if let Some(neighbor_rect) = item_rect(current_index - 1) {
+    if current_index > 0
+        && let Some(neighbor_rect) = item_rect(current_index - 1) {
             let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
             if dragged_midpoint_y < neighbor_midpoint_y {
                 return current_index - 1;
             }
         }
-    }
 
-    if current_index + 1 < item_count {
-        if let Some(neighbor_rect) = item_rect(current_index + 1) {
+    if current_index + 1 < item_count
+        && let Some(neighbor_rect) = item_rect(current_index + 1) {
             let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
             if dragged_midpoint_y > neighbor_midpoint_y {
                 return current_index + 1;
             }
         }
-    }
 
     current_index
 }

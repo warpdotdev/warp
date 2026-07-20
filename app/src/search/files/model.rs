@@ -599,22 +599,20 @@ impl FileSearchModel {
         if !query_path.is_absolute() {
             return None;
         }
-        if let Some(root) = repo_root {
-            if let Ok(rel) = query_path.strip_prefix(root) {
+        if let Some(root) = repo_root
+            && let Ok(rel) = query_path.strip_prefix(root) {
                 let s = rel.to_string_lossy().to_string();
                 if !s.is_empty() {
                     return Some(s);
                 }
             }
-        }
-        if let Some(cwd) = working_dir {
-            if let Ok(rel) = query_path.strip_prefix(cwd) {
+        if let Some(cwd) = working_dir
+            && let Ok(rel) = query_path.strip_prefix(cwd) {
                 let s = rel.to_string_lossy().to_string();
                 if !s.is_empty() {
                     return Some(s);
                 }
             }
-        }
         None
     }
 

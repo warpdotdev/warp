@@ -54,8 +54,8 @@ where
 
     // Finally, if we're doing a command that preserves leading padding, e.g. `c`, check if we need
     // to remove that from the range.
-    if preserve_leading_padding {
-        if let Some((i, _)) = buffer
+    if preserve_leading_padding
+        && let Some((i, _)) = buffer
             .chars_at(block_start)
             .ok()?
             .take_while(|c| c.is_whitespace())
@@ -63,7 +63,6 @@ where
         {
             block_start += i + 1;
         }
-    }
 
     Some(block_start..block_end)
 }

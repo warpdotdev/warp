@@ -309,8 +309,8 @@ impl Repository {
         if let Some(external_git_dir) = &self.external_git_directory {
             paths.push(external_git_dir.clone());
         }
-        if let Some(common_git_dir) = &self.common_git_directory {
-            if let Some(common_local) = common_git_dir.to_local_path() {
+        if let Some(common_git_dir) = &self.common_git_directory
+            && let Some(common_local) = common_git_dir.to_local_path() {
                 let refs_dir = common_local.join("refs");
                 if let Ok(refs_std) = StandardizedPath::from_local_canonicalized(&refs_dir) {
                     paths.push(refs_std);
@@ -320,7 +320,6 @@ impl Repository {
                     paths.push(config_std);
                 }
             }
-        }
         paths
     }
 

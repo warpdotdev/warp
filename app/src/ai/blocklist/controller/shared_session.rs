@@ -388,8 +388,8 @@ impl BlocklistAIController {
                             _ => None,
                         };
 
-                        if let Some(input_ctx) = ctx_opt {
-                            if let Some(dir) = &input_ctx.directory {
+                        if let Some(input_ctx) = ctx_opt
+                            && let Some(dir) = &input_ctx.directory {
                                 self.context_model.update(ctx, |context_model, ctx| {
                                     context_model.update_directory_context(
                                         if dir.pwd.is_empty() {
@@ -406,7 +406,6 @@ impl BlocklistAIController {
                                     );
                                 });
                             }
-                        }
                     }
                 }
             }

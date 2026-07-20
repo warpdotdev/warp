@@ -1705,8 +1705,8 @@ fn schedule_synthetic_drag(
         .executor
         .spawn(async move {
             Timer::at(instant).await;
-            if let Some(window_state) = weak_window_state.upgrade() {
-                if window_state.synthetic_drag_counter.get() == drag_id {
+            if let Some(window_state) = weak_window_state.upgrade()
+                && window_state.synthetic_drag_counter.get() == drag_id {
                     schedule_synthetic_drag(&window_state, position, modifiers);
                     app::callback_dispatcher()
                         .for_window(&Window(window_state))
@@ -1715,7 +1715,6 @@ fn schedule_synthetic_drag(
                             modifiers,
                         });
                 }
-            }
         })
         .detach();
 }

@@ -47,8 +47,8 @@ impl<'g> GraphemeCursor<'g> {
     /// Returns a new grapheme cursor that starts at the given point and
     /// adheres to the provided wrapping behavior.
     pub fn new(point: Point, grid: &'g GridHandler, wrap: Wrap) -> Self {
-        if let Some(row) = grid.row(point.row) {
-            if let Some(cell) = row.get(point.col) {
+        if let Some(row) = grid.row(point.row)
+            && let Some(cell) = row.get(point.col) {
                 let flags = cell.flags;
 
                 let mut cursor = Self {
@@ -73,7 +73,6 @@ impl<'g> GraphemeCursor<'g> {
 
                 return cursor;
             }
-        }
 
         Self {
             grid,

@@ -558,12 +558,11 @@ fn list_nvm_versions() -> Vec<String> {
         for base in candidates {
             if let Ok(read_dir) = std::fs::read_dir(&base) {
                 for entry in read_dir.flatten() {
-                    if let Ok(ft) = entry.file_type() {
-                        if ft.is_dir() {
+                    if let Ok(ft) = entry.file_type()
+                        && ft.is_dir() {
                             let name = entry.file_name().to_string_lossy().to_string();
                             out.push(name);
                         }
-                    }
                 }
             }
         }

@@ -587,16 +587,11 @@ impl TerminalFindModel {
             }
         } else if let Some(controller) = &mut self.async_find_controller {
             controller.clear_results(ctx);
-        } else {
-            match self.block_list_find_run.take() {
-                Some(run) => {
-                    for (_, rich_content_view) in self.rich_content_views.iter() {
-                        rich_content_view.clear_matches(ctx);
-                    }
-                    self.block_list_find_run = Some(run.cleared());
-                }
-                _ => {}
+        } else if let Some(run) = self.block_list_find_run.take() {
+            for (_, rich_content_view) in self.rich_content_views.iter() {
+                rich_content_view.clear_matches(ctx);
             }
+            self.block_list_find_run = Some(run.cleared());
         }
         ctx.emit(FindEvent::RanFind);
     }

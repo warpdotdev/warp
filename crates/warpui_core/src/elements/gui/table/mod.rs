@@ -1419,21 +1419,19 @@ impl SelectableElement for Table {
 
         let mut header_fragments: Vec<SelectionFragment> = Vec::new();
         for header in &self.headers {
-            if let Some(selectable_child) = header.content.as_selectable_element() {
-                if let Some(child_fragments) =
+            if let Some(selectable_child) = header.content.as_selectable_element()
+                && let Some(child_fragments) =
                     selectable_child.get_selection(selection_start, selection_end, is_rect)
                 {
-                    if !header_fragments.is_empty() {
-                        if let Some(last_fragment) = header_fragments.last() {
+                    if !header_fragments.is_empty()
+                        && let Some(last_fragment) = header_fragments.last() {
                             header_fragments.push(SelectionFragment {
                                 text: "\t".to_string(),
                                 origin: last_fragment.origin,
                             });
                         }
-                    }
                     header_fragments.extend(child_fragments);
                 }
-            }
         }
 
         if !header_fragments.is_empty() {
@@ -1467,31 +1465,28 @@ impl SelectableElement for Table {
         for row_elements in &self.children {
             let mut row_fragments: Vec<SelectionFragment> = Vec::new();
             for cell in row_elements {
-                if let Some(selectable_child) = cell.as_selectable_element() {
-                    if let Some(child_fragments) =
+                if let Some(selectable_child) = cell.as_selectable_element()
+                    && let Some(child_fragments) =
                         selectable_child.get_selection(selection_start, selection_end, is_rect)
                     {
-                        if !row_fragments.is_empty() {
-                            if let Some(last_fragment) = row_fragments.last() {
+                        if !row_fragments.is_empty()
+                            && let Some(last_fragment) = row_fragments.last() {
                                 row_fragments.push(SelectionFragment {
                                     text: "\t".to_string(),
                                     origin: last_fragment.origin,
                                 });
                             }
-                        }
                         row_fragments.extend(child_fragments);
                     }
-                }
             }
             if !row_fragments.is_empty() {
-                if had_prior_row {
-                    if let Some(last_fragment) = selection_fragments.last() {
+                if had_prior_row
+                    && let Some(last_fragment) = selection_fragments.last() {
                         selection_fragments.push(SelectionFragment {
                             text: "\n".to_string(),
                             origin: last_fragment.origin,
                         });
                     }
-                }
                 selection_fragments.extend(row_fragments);
                 had_prior_row = true;
             }
@@ -1514,8 +1509,8 @@ impl SelectableElement for Table {
         let mut expanded_selection = None;
 
         for header in &self.headers {
-            if let Some(selectable_child) = header.content.as_selectable_element() {
-                if let Some(selection) = selectable_child.expand_selection(
+            if let Some(selectable_child) = header.content.as_selectable_element()
+                && let Some(selection) = selectable_child.expand_selection(
                     point,
                     direction,
                     unit,
@@ -1528,13 +1523,12 @@ impl SelectableElement for Table {
                         }
                     }
                 }
-            }
         }
 
         for row_elements in &self.children {
             for cell in row_elements {
-                if let Some(selectable_child) = cell.as_selectable_element() {
-                    if let Some(selection) = selectable_child.expand_selection(
+                if let Some(selectable_child) = cell.as_selectable_element()
+                    && let Some(selection) = selectable_child.expand_selection(
                         point,
                         direction,
                         unit,
@@ -1547,7 +1541,6 @@ impl SelectableElement for Table {
                             }
                         }
                     }
-                }
             }
         }
 
@@ -1560,24 +1553,22 @@ impl SelectableElement for Table {
         absolute_point_other: Vector2F,
     ) -> Option<bool> {
         for header in &self.headers {
-            if let Some(selectable_child) = header.content.as_selectable_element() {
-                if let Some(result) = selectable_child
+            if let Some(selectable_child) = header.content.as_selectable_element()
+                && let Some(result) = selectable_child
                     .is_point_semantically_before(absolute_point, absolute_point_other)
                 {
                     return Some(result);
                 }
-            }
         }
 
         for row_elements in &self.children {
             for cell in row_elements {
-                if let Some(selectable_child) = cell.as_selectable_element() {
-                    if let Some(result) = selectable_child
+                if let Some(selectable_child) = cell.as_selectable_element()
+                    && let Some(result) = selectable_child
                         .is_point_semantically_before(absolute_point, absolute_point_other)
                     {
                         return Some(result);
                     }
-                }
             }
         }
 
@@ -1590,24 +1581,22 @@ impl SelectableElement for Table {
         smart_select_fn: SmartSelectFn,
     ) -> Option<(Vector2F, Vector2F)> {
         for header in &self.headers {
-            if let Some(selectable_child) = header.content.as_selectable_element() {
-                if let Some(selection) =
+            if let Some(selectable_child) = header.content.as_selectable_element()
+                && let Some(selection) =
                     selectable_child.smart_select(absolute_point, smart_select_fn)
                 {
                     return Some(selection);
                 }
-            }
         }
 
         for row_elements in &self.children {
             for cell in row_elements {
-                if let Some(selectable_child) = cell.as_selectable_element() {
-                    if let Some(selection) =
+                if let Some(selectable_child) = cell.as_selectable_element()
+                    && let Some(selection) =
                         selectable_child.smart_select(absolute_point, smart_select_fn)
                     {
                         return Some(selection);
                     }
-                }
             }
         }
 

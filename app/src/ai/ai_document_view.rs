@@ -236,8 +236,8 @@ impl AIDocumentView {
                     }
 
                     // Auto-set pending document ID when document becomes dirty
-                    if status.is_dirty() {
-                        if let Some(terminal_view) = &me.original_terminal_view {
+                    if status.is_dirty()
+                        && let Some(terminal_view) = &me.original_terminal_view {
                             terminal_view.update(ctx, |terminal_view, ctx| {
                                 terminal_view.ai_context_model().update(
                                     ctx,
@@ -247,7 +247,6 @@ impl AIDocumentView {
                                 );
                             });
                         }
-                    }
 
                     me.update_header_buttons(ctx);
                 }
@@ -269,11 +268,10 @@ impl AIDocumentView {
                         ..
                     } => {
                         // Check if this is our terminal view
-                        if let Some(tv) = &me.original_terminal_view {
-                            if tv.id() == *terminal_surface_id {
+                        if let Some(tv) = &me.original_terminal_view
+                            && tv.id() == *terminal_surface_id {
                                 me.update_header_buttons(ctx);
                             }
-                        }
                     }
                     BlocklistAIHistoryEvent::RestoredConversations {
                         terminal_surface_id,
@@ -311,13 +309,12 @@ impl AIDocumentView {
                             };
                             // Arm auto-pop for live agent dispatches but
                             // not for restore-hydrated events.
-                            if was_freshly_created && !*from_restore {
-                                if let Some(block) = &me.orchestration_config_block {
+                            if was_freshly_created && !*from_restore
+                                && let Some(block) = &me.orchestration_config_block {
                                     block.update(ctx, |block, ctx| {
                                         block.arm_for_fresh_dispatch(ctx);
                                     });
                                 }
-                            }
                             ctx.notify();
                         }
                     }
@@ -549,15 +546,14 @@ impl AIDocumentView {
 
         // Search for the terminal view by ID
         let window_id = ctx.window_id();
-        if let Some(terminal_views) = ctx.views_of_type::<TerminalView>(window_id) {
-            if let Some(terminal_view) = terminal_views
+        if let Some(terminal_views) = ctx.views_of_type::<TerminalView>(window_id)
+            && let Some(terminal_view) = terminal_views
                 .into_iter()
                 .find(|tv| tv.id() == terminal_view_id)
             {
                 self.original_terminal_view = Some(terminal_view);
                 ctx.notify();
             }
-        }
     }
 
     /// Returns true if the conversation associated with this document is actively streaming.
@@ -1050,13 +1046,12 @@ impl AIDocumentView {
 
         ctx.open_save_file_picker(
             move |path_opt: Option<String>, _me: &mut Self, _ctx: &mut ViewContext<Self>| {
-                if let Some(path) = path_opt {
-                    if let Err(e) =
+                if let Some(path) = path_opt
+                    && let Err(e) =
                         std::fs::write(&path, &markdown).context("Failed to export AI document")
                     {
                         report_error!(e);
                     }
-                }
             },
             config,
         );
@@ -1094,8 +1089,8 @@ impl View for AIDocumentView {
 
         // Orchestration config block — shown above the editor when the
         // conversation has an active OrchestrationConfigSnapshot.
-        if has_orchestration_config {
-            if let Some(config_block) = &self.orchestration_config_block {
+        if has_orchestration_config
+            && let Some(config_block) = &self.orchestration_config_block {
                 content_column.add_child(
                     Container::new(ChildView::new(config_block).finish())
                         .with_horizontal_padding(16.)
@@ -1104,7 +1099,6 @@ impl View for AIDocumentView {
                         .finish(),
                 );
             }
-        }
 
         let editor = Container::new(ChildView::new(&self.editor).finish())
             .with_padding_left(8.)
@@ -1278,13 +1272,11 @@ impl TypedActionView for AIDocumentView {
             AIDocumentAction::ShowInWarpDrive => {
                 if let Some(document) =
                     AIDocumentModel::as_ref(ctx).get_current_document(&self.document_id)
-                {
-                    if let Some(sync_id) = document.sync_id {
+                    && let Some(sync_id) = document.sync_id {
                         ctx.emit(AIDocumentEvent::ViewInWarpDrive(WarpDriveItemId::Object(
                             CloudObjectTypeAndId::Notebook(sync_id),
                         )));
                     }
-                }
             }
             AIDocumentAction::AttachToActiveSession => {
                 ctx.emit(AIDocumentEvent::AttachPlanAsContext(self.document_id));

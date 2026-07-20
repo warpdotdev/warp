@@ -618,7 +618,9 @@ impl<P: BackingView> PaneHeader<P> {
         );
         let should_display_overflow_menu_button = !self.overflow_menu.as_ref(app).is_empty();
 
-        let hoverable = Hoverable::new(
+        
+
+        (Hoverable::new(
             self.mouse_state_handles.header_hover_handle.clone(),
             |hover_state| {
                 // Determine if icons should be shown based on hover state and options.
@@ -664,8 +666,8 @@ impl<P: BackingView> PaneHeader<P> {
                         .finish();
                 title_row.add_child(Shrinkable::new(1., title_text).finish());
 
-                if let Some(secondary) = &title_secondary {
-                    if !secondary.is_empty() {
+                if let Some(secondary) = &title_secondary
+                    && !secondary.is_empty() {
                         let secondary_text = Text::new_inline(
                             secondary.clone(),
                             appearance.ui_font_family(),
@@ -675,7 +677,6 @@ impl<P: BackingView> PaneHeader<P> {
                         .finish();
                         title_row.add_child(secondary_text);
                     }
-                }
 
                 // If a max width is set, constrain the title to that width.
                 let title_element = if let Some(max_width) = title_max_width {
@@ -744,9 +745,7 @@ impl<P: BackingView> PaneHeader<P> {
                 .finish()
             },
         )
-        .finish();
-
-        hoverable
+        .finish()) as _
     }
 }
 

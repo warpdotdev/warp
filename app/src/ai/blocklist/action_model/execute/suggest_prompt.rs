@@ -51,8 +51,8 @@ impl PromptSuggestionExecutor {
             return ActionExecution::InvalidAction;
         };
 
-        if FeatureFlag::PromptSuggestionsViaMAA.is_enabled() {
-            if let SuggestPromptRequest::PromptSuggestion { prompt, label } = request {
+        if FeatureFlag::PromptSuggestionsViaMAA.is_enabled()
+            && let SuggestPromptRequest::PromptSuggestion { prompt, label } = request {
                 ctx.emit(PromptSuggestionExecutorEvent::NewPromptSuggestion {
                     prompt: prompt.clone(),
                     label: label.clone(),
@@ -60,7 +60,6 @@ impl PromptSuggestionExecutor {
                     action_id: input.action.id.clone(),
                 });
             }
-        }
 
         let (result_tx, result_rx) = oneshot::channel();
         self.suggest_prompt_result_tx = Some(result_tx);

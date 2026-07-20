@@ -334,8 +334,8 @@ impl Adapter {
             );
         }
 
-        if let Some(sharer) = self.presence_manager.as_ref(app).get_sharer() {
-            if let Some(mouse_state_handle) = self
+        if let Some(sharer) = self.presence_manager.as_ref(app).get_sharer()
+            && let Some(mouse_state_handle) = self
                 .sharer()
                 .map(|s| s.block_selection_mouse_state_handle.clone())
             {
@@ -348,7 +348,6 @@ impl Adapter {
                     ),
                 );
             }
-        }
 
         avatars
     }

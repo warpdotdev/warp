@@ -125,14 +125,13 @@ impl SearchItem for RewindSearchItem {
         .with_color(primary_text_color(theme, background.into()).into())
         .with_clip(ClipConfig::ellipsis());
 
-        if let Some(match_result) = &self.query_match_result {
-            if !match_result.matched_indices.is_empty() {
+        if let Some(match_result) = &self.query_match_result
+            && !match_result.matched_indices.is_empty() {
                 query_text = query_text.with_single_highlight(
                     Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
                     match_result.matched_indices.clone(),
                 );
             }
-        }
 
         // Line 2: Code changes summary
         let secondary_text_color: warpui::color::ColorU =

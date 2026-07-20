@@ -367,11 +367,10 @@ impl TuiOrchestrationBlock {
         let state = &mut self.orchestration_edit_state.orchestration_config_state;
         if state.model_id.is_empty() {
             let harness = Harness::parse_orchestration_harness(&state.harness_type);
-            if matches!(harness, Some(Harness::Oz) | None) {
-                if let Some(base) = &self.fallback_base_model_id {
+            if matches!(harness, Some(Harness::Oz) | None)
+                && let Some(base) = &self.fallback_base_model_id {
                     state.model_id = base.clone();
                 }
-            }
         }
         if let RunAgentsExecutionMode::Remote {
             environment_id,
@@ -386,11 +385,10 @@ impl TuiOrchestrationBlock {
                     .unwrap_or_else(|| ORCHESTRATION_WARP_WORKER_HOST.to_string());
                 state.set_worker_host(default_host);
             }
-            if needs_env {
-                if let Some(default_env) = resolve_default_environment_id(ctx) {
+            if needs_env
+                && let Some(default_env) = resolve_default_environment_id(ctx) {
                     state.set_environment_id(default_env);
                 }
-            }
         }
         if matches!(state.auth_secret_selection, AuthSecretSelection::Unset) {
             state.auth_secret_selection =

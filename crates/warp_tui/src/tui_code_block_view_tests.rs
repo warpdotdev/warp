@@ -129,11 +129,10 @@ fn syntax_highlights_apply_only_to_the_latest_editor_revision() {
         app.update(|ctx| {
             let mut tx = Some(tx);
             ctx.subscribe_to_view(&view, move |_, event, _| {
-                if matches!(event, TuiCodeBlockViewEvent::SyntaxUpdated) {
-                    if let Some(tx) = tx.take() {
+                if matches!(event, TuiCodeBlockViewEvent::SyntaxUpdated)
+                    && let Some(tx) = tx.take() {
                         let _ = tx.send(());
                     }
-                }
             });
             view.update(ctx, |view, ctx| {
                 view.sync(

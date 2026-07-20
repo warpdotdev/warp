@@ -211,8 +211,8 @@ pub fn render_item(props: ItemProps<'_>, app: &AppContext) -> Box<dyn Element> {
     )
     .with_color(theme.main_text_color(theme.background()).into());
 
-    if let Some(indices) = highlight_indices {
-        if !indices.is_empty() {
+    if let Some(indices) = highlight_indices
+        && !indices.is_empty() {
             let highlight = Highlight::new()
                 .with_properties(Properties::default().weight(Weight::Bold))
                 .with_text_style(
@@ -224,7 +224,6 @@ pub fn render_item(props: ItemProps<'_>, app: &AppContext) -> Box<dyn Element> {
                 );
             title_text = title_text.with_single_highlight(highlight, indices.clone());
         }
-    }
 
     let title_element: Box<dyn Element> =
         if let Some(rename_editor) = rename_editor.filter(|_| is_renaming) {

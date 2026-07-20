@@ -622,11 +622,10 @@ impl FileModel {
 
     /// Ensures all parent directories of the given path exist, creating them if necessary.
     pub async fn ensure_parent_directories(path: &Path) -> Result<(), io::Error> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty() {
                 async_fs::create_dir_all(parent).await?;
             }
-        }
         Ok(())
     }
 
@@ -642,8 +641,8 @@ impl FileModel {
             let path = file.path;
             let watcher_type = file.watcher_type;
 
-            if let Some(ref path) = path {
-                if !path_still_used {
+            if let Some(ref path) = path
+                && !path_still_used {
                     match watcher_type {
                         WatcherType::Individual => {
                             // Unwatch the parent directory (matching the register
@@ -672,16 +671,13 @@ impl FileModel {
                         WatcherType::Repository => {
                             if let Some((repo_root, unused_repo)) =
                                 self.repo_path_mapping.remove(path)
-                            {
-                                if unused_repo {
+                                && unused_repo {
                                     self.unsubscribe_from_repo(&repo_root, ctx);
                                 }
-                            }
                         }
                         WatcherType::None => {}
                     }
                 }
-            }
         }
         // Remote files have no watcher to clean up.
     }

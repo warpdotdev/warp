@@ -161,11 +161,10 @@ impl EnvVarCollectionManager {
                     let env_var_collection = CloudModel::as_ref(ctx)
                         .get_env_var_collection(env_var_collection_id)
                         .cloned();
-                    if let Some(env_var_collection) = env_var_collection {
-                        if let Some(data) = pane_data.handle.upgrade(ctx) {
+                    if let Some(env_var_collection) = env_var_collection
+                        && let Some(data) = pane_data.handle.upgrade(ctx) {
                             data.update(ctx, |view, ctx| view.load(env_var_collection, ctx));
                         }
-                    }
                 }
             }
             _ => log::warn!("Can only reload existing environment variable collection"),

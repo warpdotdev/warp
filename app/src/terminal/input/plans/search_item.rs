@@ -99,14 +99,13 @@ impl SearchItem for PlanSearchItem {
                 .with_color(primary_text_color.into())
                 .with_clip(ClipConfig::ellipsis());
 
-        if let Some(name_match) = &self.name_match_result {
-            if !name_match.matched_indices.is_empty() {
+        if let Some(name_match) = &self.name_match_result
+            && !name_match.matched_indices.is_empty() {
                 name_text = name_text.with_single_highlight(
                     Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
                     name_match.matched_indices.clone(),
                 );
             }
-        }
 
         let mut primary_row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)

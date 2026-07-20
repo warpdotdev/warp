@@ -757,15 +757,14 @@ impl ReferralsWidget {
             )
             .with_child(self.render_rewards_list(view, appearance));
 
-        if !is_anonymous {
-            if let Some(count) = self.render_claimed_referrals_count(view, appearance) {
+        if !is_anonymous
+            && let Some(count) = self.render_claimed_referrals_count(view, appearance) {
                 reward_status_row.add_child(
                     Container::new(count)
                         .with_margin_left(CLAIMED_REFERRAL_COUNT_LEFT_MARGIN)
                         .finish(),
                 );
-            }
-        };
+            };
 
         rewards_section.add_child(reward_status_row.finish());
 

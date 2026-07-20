@@ -376,11 +376,10 @@ impl CommandSearchView {
         visible_results_range: Range<usize>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(current_visible_results_range) = &self.state.visible_results_range {
-            if current_visible_results_range == &visible_results_range {
+        if let Some(current_visible_results_range) = &self.state.visible_results_range
+            && current_visible_results_range == &visible_results_range {
                 return;
             }
-        }
         self.state.visible_results_range = Some(visible_results_range);
         ctx.notify();
     }
@@ -1071,12 +1070,12 @@ impl View for CommandSearchView {
             ),
         );
 
-        if !should_show_zero_state {
-            if let (Some(selected_result_renderer), Some(details_panel_positioning)) = (
+        if !should_show_zero_state
+            && let (Some(selected_result_renderer), Some(details_panel_positioning)) = (
                 self.selected_result_renderer(app),
                 self.offset_positioning_for_details_panel(app),
-            ) {
-                if let Some(details) = selected_result_renderer.render_details(app) {
+            )
+                && let Some(details) = selected_result_renderer.render_details(app) {
                     stack.add_positioned_overlay_child(
                         Container::new(details)
                             .with_margin_bottom(DETAILS_PANEL_MARGIN)
@@ -1085,8 +1084,6 @@ impl View for CommandSearchView {
                         details_panel_positioning,
                     );
                 }
-            }
-        }
 
         Dismiss::new(Container::new(stack.finish()).with_margin_top(36.).finish())
             .on_dismiss(|ctx, _app| {

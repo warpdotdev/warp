@@ -249,11 +249,10 @@ pub trait CloudObject: Debug {
     /// is not in a folder, this will be the object's space. Otherwise, it will
     /// be the folder the object is placed in directly, even if that folder is nested.
     fn location(&self, cloud_model: &CloudModel, app: &AppContext) -> CloudObjectLocation {
-        if let Some(folder_id) = self.metadata().folder_id {
-            if cloud_model.get_folder(&folder_id).is_some() {
+        if let Some(folder_id) = self.metadata().folder_id
+            && cloud_model.get_folder(&folder_id).is_some() {
                 return CloudObjectLocation::Folder(folder_id);
             }
-        }
 
         CloudObjectLocation::Space(self.space(app))
     }
@@ -669,8 +668,8 @@ where
 
         self.set_pending_content_changes_status(CloudObjectSyncStatus::NoLocalChanges);
 
-        if let ConflictStatus::ConflictingChanges { object } = new_conflict {
-            if self.model().should_update_after_server_conflict() {
+        if let ConflictStatus::ConflictingChanges { object } = new_conflict
+            && self.model().should_update_after_server_conflict() {
                 // Update metadata revision from the server object.
                 self.metadata.update_revision_from_server(&object.metadata);
                 // Update the model from the server.
@@ -682,7 +681,6 @@ where
                     self.conflict_status = ConflictStatus::NoConflicts;
                 }
             }
-        }
     }
 
     fn set_server_id(&mut self, server_id: ServerId) {

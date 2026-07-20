@@ -610,14 +610,13 @@ impl AIAgentOutput {
                 }
                 AIAgentOutputMessageType::Action(action) => {
                     // Include action results from the action model if available
-                    if let Some(action_model) = action_model {
-                        if let Some(action_result) = action_model.get_action_result(&action.id) {
+                    if let Some(action_model) = action_model
+                        && let Some(action_result) = action_model.get_action_result(&action.id) {
                             result.push(format!("{}", MarkdownActionResult(&action_result.result)));
                             // Add an extra newline after tool call results for readability
                             result.push(String::new());
                             last_was_action = true;
                         }
-                    }
                 }
                 AIAgentOutputMessageType::TodoOperation(operation) => {
                     result.push(format!("{operation}"));
@@ -1252,11 +1251,10 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                     for file in files {
                         writeln!(f, "**{}**", file.file_name)?;
                         let content = &file.content;
-                        if let AnyFileContent::StringContent(text) = content {
-                            if !text.trim().is_empty() {
+                        if let AnyFileContent::StringContent(text) = content
+                            && !text.trim().is_empty() {
                                 writeln!(f, "```\n{text}\n```\n")?;
                             }
-                        }
                     }
                     if !failed_files.is_empty() {
                         write!(f, "\n**Files Failed:**\n\n")?;
@@ -1301,11 +1299,10 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                     for file in files {
                         writeln!(f, "- **{}**", file.file_name)?;
                         let content = &file.content;
-                        if let AnyFileContent::StringContent(text) = content {
-                            if !text.trim().is_empty() {
+                        if let AnyFileContent::StringContent(text) = content
+                            && !text.trim().is_empty() {
                                 writeln!(f, "```\n{text}\n```\n")?;
                             }
-                        }
                     }
                     Ok(())
                 }

@@ -491,8 +491,8 @@ impl DisplayChipMenu {
                 self.menu_items.iter().map(|item| item.name()),
                 trimmed,
             );
-            if !already_matches_existing {
-                if let Some(synthetic) = builder(trimmed) {
+            if !already_matches_existing
+                && let Some(synthetic) = builder(trimmed) {
                     filtered_items.insert(
                         0,
                         FilteredMenuItem {
@@ -501,7 +501,6 @@ impl DisplayChipMenu {
                         },
                     );
                 }
-            }
         }
 
         self.filtered_items = Rc::new(filtered_items);
@@ -1334,11 +1333,10 @@ impl View for DisplayChipMenu {
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() {
-            if let Some(ref search_input) = self.search_input {
+        if focus_ctx.is_self_focused()
+            && let Some(ref search_input) = self.search_input {
                 ctx.focus(search_input);
             }
-        }
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
@@ -1433,11 +1431,10 @@ impl View for DisplayChipMenu {
         let mut stack = Stack::new();
         stack.add_child(menu_card);
 
-        if self.should_show_environment_sidecar() {
-            if let Some((sidecar, positioning)) = self.environment_sidecar_overlay(app) {
+        if self.should_show_environment_sidecar()
+            && let Some((sidecar, positioning)) = self.environment_sidecar_overlay(app) {
                 stack.add_positioned_overlay_child(sidecar, positioning);
             }
-        }
 
         Dismiss::new(stack.finish())
             .on_dismiss(|ctx, _app| ctx.dispatch_typed_action(DisplayChipMenuAction::Close))

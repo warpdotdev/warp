@@ -2438,8 +2438,8 @@ fn render_tab_group_internal(
                     theme,
                 );
             }
-            if let Some(insert_after_index) = drag_state.insert_after_index {
-                if show_before_indicator(
+            if let Some(insert_after_index) = drag_state.insert_after_index
+                && show_before_indicator(
                     workspace.hovered_tab_index,
                     insert_after_index,
                     tab.group_id,
@@ -2452,7 +2452,6 @@ fn render_tab_group_internal(
                         theme,
                     );
                 }
-            }
         }
         // Pane view inside a tab group: the group container adds
         // `GROUP_HORIZONTAL_PADDING` of right padding and the member wrapper
@@ -5329,8 +5328,8 @@ fn render_terminal_right_badges(
         .with_spacing(4.);
     let mut has_badges = false;
 
-    if show_diff_stats {
-        if let Some(git_line_changes) = terminal_view.current_diff_line_changes(app) {
+    if show_diff_stats
+        && let Some(git_line_changes) = terminal_view.current_diff_line_changes(app) {
             right_badges.add_child(render_terminal_diff_stats_badge(
                 &git_line_changes,
                 pane_group_id,
@@ -5341,10 +5340,9 @@ fn render_terminal_right_badges(
             ));
             has_badges = true;
         }
-    }
 
-    if show_pr_link {
-        if let Some(pull_request_url) = terminal_view.current_pull_request_url(app) {
+    if show_pr_link
+        && let Some(pull_request_url) = terminal_view.current_pull_request_url(app) {
             let label = terminal_pull_request_badge_label(&pull_request_url);
             right_badges.add_child(render_terminal_pull_request_badge(
                 label,
@@ -5355,7 +5353,6 @@ fn render_terminal_right_badges(
             ));
             has_badges = true;
         }
-    }
 
     has_badges.then(|| right_badges.finish())
 }

@@ -132,13 +132,12 @@ impl<'a, T: TextBuffer + ?Sized> SubwordBoundaries<'a, T> {
                 } else if c.is_lowercase() {
                     self.step();
 
-                    if let Some(c_next) = self.char_window.first() {
-                        if c_next.is_uppercase() {
+                    if let Some(c_next) = self.char_window.first()
+                        && c_next.is_uppercase() {
                             let point = self.buffer.to_point(self.offset).ok();
                             self.step();
                             return point;
                         }
-                    }
                 } else {
                     self.step();
                 }
@@ -174,8 +173,8 @@ impl<'a, T: TextBuffer + ?Sized> SubwordBoundaries<'a, T> {
                 self.in_word = true;
             }
 
-            if self.in_word {
-                if let Some(c_next) = self.char_window.second() {
+            if self.in_word
+                && let Some(c_next) = self.char_window.second() {
                     if c.is_lowercase() && c_next.is_uppercase() {
                         // c is the end of a word, and c_next begins the next word.
                         self.step();
@@ -183,15 +182,13 @@ impl<'a, T: TextBuffer + ?Sized> SubwordBoundaries<'a, T> {
                     } else if c.is_uppercase() && c_next.is_uppercase() {
                         // c_next could be part of an all-caps word
                         // or the start of a new Capitalized word
-                        if let Some(c_next_next) = self.char_window.third() {
-                            if c_next_next.is_lowercase() {
+                        if let Some(c_next_next) = self.char_window.third()
+                            && c_next_next.is_lowercase() {
                                 self.step();
                                 return self.buffer.to_point(self.offset).ok();
                             }
-                        }
                     }
                 }
-            }
 
             self.step();
         }
@@ -214,8 +211,8 @@ impl<'a, T: TextBuffer + ?Sized> SubwordBoundaries<'a, T> {
                 self.in_word = true;
             }
 
-            if self.in_word {
-                if let Some(c_next) = self.char_window.second() {
+            if self.in_word
+                && let Some(c_next) = self.char_window.second() {
                     if c.is_lowercase() && c_next.is_uppercase() {
                         // c_next is the start of the c's subword.
                         self.step();
@@ -232,7 +229,6 @@ impl<'a, T: TextBuffer + ?Sized> SubwordBoundaries<'a, T> {
                         return point;
                     }
                 }
-            }
 
             self.step();
         }

@@ -528,9 +528,9 @@ impl PersistedWorkspace {
         // When skip_cached is true (initial startup), always scan to pick up new server types.
         let mut paths_to_scan = Vec::new();
         for workspace_path in workspace_paths {
-            if !skip_cached {
-                if let Some(workspace) = self.workspaces.get(&workspace_path) {
-                    if !workspace.language_servers.is_empty() {
+            if !skip_cached
+                && let Some(workspace) = self.workspaces.get(&workspace_path)
+                    && !workspace.language_servers.is_empty() {
                         let servers: Vec<LSPServerType> =
                             workspace.language_servers.keys().copied().collect();
                         ctx.emit(PersistedWorkspaceEvent::AvailableServersDetected {
@@ -539,8 +539,6 @@ impl PersistedWorkspace {
                         });
                         continue;
                     }
-                }
-            }
             paths_to_scan.push(workspace_path);
         }
 

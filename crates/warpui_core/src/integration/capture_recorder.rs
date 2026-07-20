@@ -94,11 +94,10 @@ impl CaptureRecorder {
     }
 
     pub fn stop_recording(&mut self) {
-        if let Ok(mut s) = self.inner.lock() {
-            if s.recorder_state == RecorderState::Recording {
+        if let Ok(mut s) = self.inner.lock()
+            && s.recorder_state == RecorderState::Recording {
                 s.recorder_state = RecorderState::Idle;
             }
-        }
     }
 
     /// Signals the capture loop to exit on its next iteration.

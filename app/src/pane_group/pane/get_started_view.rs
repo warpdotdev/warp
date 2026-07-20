@@ -374,8 +374,8 @@ where
     F: FnOnce(&mut TerminalView, &mut ViewContext<TerminalView>) -> S,
 {
     let window_id = ctx.window_id();
-    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-        if let Some(workspace) = workspaces.into_iter().next() {
+    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+        && let Some(workspace) = workspaces.into_iter().next() {
             workspace.update(ctx, |workspace, ctx| {
                 let pane_group = workspace.active_tab_pane_group();
                 pane_group.update(ctx, |pane_group, ctx| {
@@ -385,5 +385,4 @@ where
                 });
             });
         }
-    }
 }

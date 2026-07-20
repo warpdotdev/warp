@@ -557,8 +557,7 @@ impl WorkflowView {
 
         if let (ObjectOperation::Create { .. }, OperationSuccessType::Success) =
             (&result.operation, &result.success_type)
-        {
-            if self.workflow_id.into_client() == result.client_id {
+            && self.workflow_id.into_client() == result.client_id {
                 let server_id = result
                     .server_id
                     .expect("Expect server id on success creation");
@@ -586,12 +585,10 @@ impl WorkflowView {
                 }
                 ctx.notify();
             }
-        }
 
         if let (ObjectOperation::Update, OperationSuccessType::Success) =
             (&result.operation, &result.success_type)
-        {
-            if let Some(workflow) = self.get_cloud_workflow(ctx) {
+            && let Some(workflow) = self.get_cloud_workflow(ctx) {
                 // This makes sure we get the correct updated revision_ts. So our subsequent
                 // updates don't fail
                 if self.workflow_id.into_client() == result.client_id
@@ -605,7 +602,6 @@ impl WorkflowView {
                     );
                 }
             }
-        }
     }
 
     fn should_show_unsaved_changes_dialog(&self, app: &AppContext) -> bool {
@@ -1287,17 +1283,15 @@ impl WorkflowView {
 
             // Check to see if we have enum data for this id, then create a request for it
             for enum_id in type_selector.get_created_enums() {
-                if !sent_requests.contains(&enum_id) {
-                    if let Some(enum_data) = self.all_workflow_enums.get(&enum_id) {
-                        if enum_data.new_data.is_some() {
+                if !sent_requests.contains(&enum_id)
+                    && let Some(enum_data) = self.all_workflow_enums.get(&enum_id)
+                        && enum_data.new_data.is_some() {
                             workflow_arg_type_helpers::save_enum(enum_data, owner, ctx);
 
                             // Make sure we aren't sending duplicate requests.
                             // If an enum is used in multiple arguments, we'll only save it once
                             sent_requests.insert(enum_id);
                         }
-                    }
-                }
             }
 
             argument_row.arg_type_editor.update(ctx, |selector, ctx| {
@@ -2485,8 +2479,8 @@ impl WorkflowView {
         }
 
         // If on the web, then show a button to run this workflow on the desktop.
-        if !ContextFlag::RunWorkflow.is_enabled() && self.can_open_on_desktop(app) {
-            if let Some(url) = self
+        if !ContextFlag::RunWorkflow.is_enabled() && self.can_open_on_desktop(app)
+            && let Some(url) = self
                 .workflow_link(app)
                 .and_then(|link| Url::parse(&link).ok())
             {
@@ -2516,7 +2510,6 @@ impl WorkflowView {
                         .finish(),
                 );
             }
-        }
 
         Flex::column()
             .with_child(
@@ -3196,9 +3189,9 @@ impl BackingView for WorkflowView {
             );
         }
 
-        if self.can_open_on_desktop(ctx) {
-            if let Some(link) = self.workflow_link(ctx) {
-                if let Ok(url) = Url::parse(&link) {
+        if self.can_open_on_desktop(ctx)
+            && let Some(link) = self.workflow_link(ctx)
+                && let Ok(url) = Url::parse(&link) {
                     menu_items.push(
                         MenuItemFields::new("Open on Desktop")
                             .with_on_select_action(WorkflowAction::OpenLinkOnDesktop(url))
@@ -3206,8 +3199,6 @@ impl BackingView for WorkflowView {
                             .into_item(),
                     );
                 }
-            }
-        }
 
         let space = CloudViewModel::as_ref(ctx).object_space(&self.workflow_id.uid(), ctx);
 

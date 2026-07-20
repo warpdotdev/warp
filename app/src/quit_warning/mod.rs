@@ -521,8 +521,8 @@ impl<'a> QuitWarningDialog<'a> {
             buttons.push(ModalButton::for_app("Don't Save".to_string(), callback));
         }
 
-        if let Some(callback) = on_show_processes {
-            if state.total_long_running_commands > 0 {
+        if let Some(callback) = on_show_processes
+            && state.total_long_running_commands > 0 {
                 buttons.push(ModalButton::for_app(
                     "Show running processes".to_string(),
                     move |app| {
@@ -530,7 +530,6 @@ impl<'a> QuitWarningDialog<'a> {
                     },
                 ))
             }
-        }
 
         if let Some(callback) = on_cancel {
             buttons.push(ModalButton::for_app("Cancel".to_string(), callback));

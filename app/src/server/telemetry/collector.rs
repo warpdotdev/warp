@@ -153,13 +153,12 @@ impl TelemetryCollector {
                     );
                     // Remove the file regardless of outcome  of flushing the events to avoid the
                     // case where we accidentally try to re-flush the events on the next app startup.
-                    if let Err(e) = remove_file(&path) {
-                        if e.kind() != std::io::ErrorKind::NotFound {
+                    if let Err(e) = remove_file(&path)
+                        && e.kind() != std::io::ErrorKind::NotFound {
                             report_error!(
                                 anyhow::anyhow!(e).context("Failed to remove persisted event file")
                             );
                         }
-                    }
                 }
             },
             |_, _, _| (),
@@ -179,8 +178,7 @@ impl TelemetryCollector {
                 if is_telemetry_enabled
                     && last_active_timestamp + ACTIVE_USAGE_DURATION.as_secs() as i64
                         > Utc::now().timestamp()
-                {
-                    if let LocalResult::Single(timestamp) =
+                    && let LocalResult::Single(timestamp) =
                         Utc.timestamp_opt(last_active_timestamp, 0)
                     {
                         warpui::telemetry::record_app_active_event(
@@ -189,7 +187,6 @@ impl TelemetryCollector {
                             timestamp,
                         );
                     }
-                }
                 Timer::after(ACTIVE_USAGE_DURATION).await;
             },
             |me, _, ctx| me.schedule_send_active_usage_event(ctx),

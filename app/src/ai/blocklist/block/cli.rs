@@ -1127,8 +1127,8 @@ impl View for CLISubagentView {
                             .as_ref(app)
                             .get_action_status(&action.id)
                             .is_some_and(|status| status.is_cancelled());
-                        if blocked_action.is_none() && !is_cancelled && !should_hide_responses {
-                            if let Some(rendered_action) = render_action(action.action.clone(), app)
+                        if blocked_action.is_none() && !is_cancelled && !should_hide_responses
+                            && let Some(rendered_action) = render_action(action.action.clone(), app)
                             {
                                 result.add_child(
                                     render_scrollable_container(
@@ -1152,7 +1152,6 @@ impl View for CLISubagentView {
                                     .finish(),
                                 );
                             }
-                        }
                     }
                     AIAgentOutputMessageType::WebSearch(WebSearchStatus::Searching { query }) => {
                         if !should_hide_responses {
@@ -2152,8 +2151,8 @@ fn render_blocked_action(props: BlockedActionProps<'_>, app: &AppContext) -> Box
             .finish(),
     );
 
-    if props.is_allow_menu_open {
-        if let Some(allow_menu) = props.allow_menu {
+    if props.is_allow_menu_open
+        && let Some(allow_menu) = props.allow_menu {
             stack.add_positioned_child(
                 ChildView::new(allow_menu).finish(),
                 OffsetPositioning::offset_from_save_position_element(
@@ -2165,7 +2164,6 @@ fn render_blocked_action(props: BlockedActionProps<'_>, app: &AppContext) -> Box
                 ),
             );
         }
-    }
 
     Expanded::new(
         1.0,

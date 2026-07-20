@@ -129,8 +129,8 @@ impl EventStore {
         anonymous_id: String,
         timestamp: DateTime<Utc>,
     ) {
-        if !self.is_session_stale(timestamp) {
-            if let Some(last_event) = self.events.back_mut().filter(|event| {
+        if !self.is_session_stale(timestamp)
+            && let Some(last_event) = self.events.back_mut().filter(|event| {
                 event.payload
                     == EventPayload::AppActive {
                         user_id: user_id.clone(),
@@ -141,7 +141,6 @@ impl EventStore {
                 self.last_event_timestamp_seen = self.last_event_timestamp_seen.max(timestamp);
                 return;
             }
-        }
 
         let session_created_at = if self.is_session_stale(timestamp) {
             self.current_session_created_at = timestamp;

@@ -216,15 +216,12 @@ impl AgentMessageBar {
             ctx.subscribe_to_model(
                 &TemplatableMCPServerManager::handle(ctx),
                 |_, model, event, ctx| {
-                    if let TemplatableMCPServerManagerEvent::StateChanged { uuid, .. } = event {
-                        if let Some(figma_mcp_uuid) =
+                    if let TemplatableMCPServerManagerEvent::StateChanged { uuid, .. } = event
+                        && let Some(figma_mcp_uuid) =
                             model.as_ref(ctx).get_figma_installation_uuid()
-                        {
-                            if uuid == &figma_mcp_uuid {
+                            && uuid == &figma_mcp_uuid {
                                 ctx.notify();
                             }
-                        }
-                    }
                 },
             );
         }
@@ -639,8 +636,8 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         let has_conversation_been_updated_since_agent_view_entry =
             *original_conversation_length != active_conversation.exchange_count();
 
-        if !is_cloud_agent && !has_conversation_been_updated_since_agent_view_entry {
-            if let Some(conversations_keystroke) =
+        if !is_cloud_agent && !has_conversation_been_updated_since_agent_view_entry
+            && let Some(conversations_keystroke) =
                 keybinding_name_to_keystroke(commands::CONVERSATIONS.name, app)
             {
                 items.push(MessageItem::clickable(
@@ -654,7 +651,6 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
                     mouse_states.toggle_conversation_menu.clone(),
                 ));
             }
-        }
 
         // Code review only works locally.
         #[cfg(not(target_family = "wasm"))]

@@ -41,15 +41,14 @@ impl Input {
 
         let mut column = Flex::column();
 
-        if matches!(input_mode, InputMode::PinnedToBottom | InputMode::Waterfall) {
-            if let Some(banner) = self.render_input_banner(appearance, app, input_mode, false) {
+        if matches!(input_mode, InputMode::PinnedToBottom | InputMode::Waterfall)
+            && let Some(banner) = self.render_input_banner(appearance, app, input_mode, false) {
                 column.add_child(
                     Container::new(banner)
                         .with_margin_top(spacing::UDI_CHIP_MARGIN)
                         .finish(),
                 );
             }
-        }
 
         let prompt_elements = self
             .prompt_render_helper
@@ -85,15 +84,14 @@ impl Input {
             );
         }
 
-        if matches!(input_mode, InputMode::PinnedToTop) {
-            if let Some(banner) = self.render_input_banner(appearance, app, input_mode, false) {
+        if matches!(input_mode, InputMode::PinnedToTop)
+            && let Some(banner) = self.render_input_banner(appearance, app, input_mode, false) {
                 column.add_child(
                     Container::new(banner)
                         .with_margin_bottom(spacing::UDI_CHIP_MARGIN)
                         .finish(),
                 );
             }
-        }
 
         stack.add_child(wrap_input_with_terminal_padding_and_focus_handler(
             self.focus_handle
@@ -104,8 +102,7 @@ impl Input {
         ));
 
         if let Some(selected_workflow_state) = self.workflows_state.selected_workflow_state.as_ref()
-        {
-            if selected_workflow_state.should_show_more_info_view {
+            && selected_workflow_state.should_show_more_info_view {
                 add_workflow_info_overlay(
                     &mut stack,
                     selected_workflow_state,
@@ -113,7 +110,6 @@ impl Input {
                     menu_positioning,
                 );
             }
-        }
 
         let is_focused = self.focus_handle.as_ref().is_none_or(|h| h.is_focused(app));
         if self.is_voltron_open && is_focused {

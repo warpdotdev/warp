@@ -181,8 +181,8 @@ impl LocalShellState {
                         let path = result.ok();
 
                         // Notify all waiting receivers
-                        if let LocalShellState::Loaded(local_shell) = me {
-                            if let InteractiveEnvState::Pending { waiters } = std::mem::replace(
+                        if let LocalShellState::Loaded(local_shell) = me
+                            && let InteractiveEnvState::Pending { waiters } = std::mem::replace(
                                 &mut local_shell.interactive_env_state,
                                 InteractiveEnvState::Ready(path.clone()),
                             ) {
@@ -190,7 +190,6 @@ impl LocalShellState {
                                     let _ = waiter.try_send(path.clone());
                                 }
                             }
-                        }
                     },
                 );
 

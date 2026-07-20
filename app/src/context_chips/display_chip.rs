@@ -398,8 +398,8 @@ impl GitLineChanges {
 
         let words: Vec<&str> = line.split_whitespace().collect();
         for (i, word) in words.iter().enumerate() {
-            if let Ok(num) = word.parse::<u32>() {
-                if let Some(next_word) = words.get(i + 1) {
+            if let Ok(num) = word.parse::<u32>()
+                && let Some(next_word) = words.get(i + 1) {
                     if next_word.starts_with("file") {
                         files_changed = num;
                     } else if next_word.starts_with("insertion") {
@@ -408,7 +408,6 @@ impl GitLineChanges {
                         lines_removed = num;
                     }
                 }
-            }
         }
 
         Some(Self {
@@ -1583,8 +1582,8 @@ impl DisplayChip {
             }
 
             let mut stack = Stack::new().with_child(chip_element.finish());
-            if state.is_hovered() {
-                if let Some(tooltip_text) = tooltip_text.clone() {
+            if state.is_hovered()
+                && let Some(tooltip_text) = tooltip_text.clone() {
                     let tool_tip = appearance
                         .ui_builder()
                         .tool_tip(tooltip_text)
@@ -1592,7 +1591,6 @@ impl DisplayChip {
                         .finish();
                     stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
                 }
-            }
             stack.finish()
         })
         .finish()

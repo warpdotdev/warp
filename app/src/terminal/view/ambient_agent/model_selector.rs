@@ -285,8 +285,8 @@ impl ModelSelector {
             .value()
             .get(harness.config_name())
             .cloned();
-        if let Some(saved) = saved {
-            if HarnessAvailabilityModel::as_ref(ctx)
+        if let Some(saved) = saved
+            && HarnessAvailabilityModel::as_ref(ctx)
                 .models_for(harness)
                 .is_some_and(|models| {
                     models.iter().any(|m| {
@@ -302,7 +302,6 @@ impl ModelSelector {
                     );
                 });
             }
-        }
     }
 
     fn active_harness(&self, app: &AppContext) -> Option<Harness> {
@@ -671,8 +670,8 @@ impl TypedActionView for ModelSelector {
                 reasoning_level,
             } => {
                 let is_default = model_id.is_empty();
-                if let Some(ambient_agent_model) = self.ambient_agent_model.clone() {
-                    if ambient_agent_model.as_ref(ctx).selected_harness() == *harness {
+                if let Some(ambient_agent_model) = self.ambient_agent_model.clone()
+                    && ambient_agent_model.as_ref(ctx).selected_harness() == *harness {
                         ambient_agent_model.update(ctx, |model, ctx| {
                             model.set_harness_model_selection(
                                 (!is_default).then(|| model_id.clone()),
@@ -685,7 +684,6 @@ impl TypedActionView for ModelSelector {
                             );
                         });
                     }
-                }
                 // Persist the selection per-harness to settings for next time.
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.persist_harness_model_selection(

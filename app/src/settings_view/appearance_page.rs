@@ -1671,11 +1671,10 @@ impl AppearanceSettingsPageView {
         // If we're on a non-Linux platform, render the dropdown item in the
         // actual font.  We currently don't do this on Linux because
         // pre-loading all of the fonts is too expensive.
-        if cfg!(not(any(target_os = "linux", target_os = "freebsd"))) {
-            if let Some(family_id) = ctx.font_cache().family_id_for_name(&font_name) {
+        if cfg!(not(any(target_os = "linux", target_os = "freebsd")))
+            && let Some(family_id) = ctx.font_cache().family_id_for_name(&font_name) {
                 initial_dropdown_item = initial_dropdown_item.with_font_override(family_id);
             }
-        }
 
         initial_dropdown_item
     }
@@ -1755,8 +1754,8 @@ impl AppearanceSettingsPageView {
             EditorEvent::Edited(EditOrigin::UserTyped | EditOrigin::UserInitiated) => {
                 let buffer_text = self.alt_screen_padding_editor.as_ref(ctx).buffer_text(ctx);
 
-                if let Ok(padding) = buffer_text.parse::<f32>() {
-                    if padding >= 0. {
+                if let Ok(padding) = buffer_text.parse::<f32>()
+                    && padding >= 0. {
                         TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
                             let new_mode = AltScreenPaddingMode::Custom {
                                 uniform_padding: padding.into_pixels(),
@@ -1772,7 +1771,6 @@ impl AppearanceSettingsPageView {
                             );
                         });
                     }
-                }
 
                 ctx.notify();
             }
@@ -1886,8 +1884,8 @@ impl AppearanceSettingsPageView {
 
     fn set_font_size(&mut self, ctx: &mut ViewContext<Self>) {
         let user_input = self.font_size_editor.as_ref(ctx).buffer_text(ctx);
-        if let Ok(num) = user_input.parse::<usize>() {
-            if (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&num) {
+        if let Ok(num) = user_input.parse::<usize>()
+            && (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&num) {
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
                     report_if_error!(
                         font_settings
@@ -1896,7 +1894,6 @@ impl AppearanceSettingsPageView {
                     );
                 });
             }
-        }
     }
 
     pub fn set_font_weight(&mut self, value: Weight, ctx: &mut ViewContext<Self>) {
@@ -1907,13 +1904,12 @@ impl AppearanceSettingsPageView {
 
     fn set_notebook_font_size(&mut self, ctx: &mut ViewContext<Self>) {
         let user_input = self.notebook_font_size_editor.as_ref(ctx).buffer_text(ctx);
-        if let Ok(num) = user_input.parse::<usize>() {
-            if (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&num) {
+        if let Ok(num) = user_input.parse::<usize>()
+            && (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&num) {
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
                     report_if_error!(font_settings.notebook_font_size.set_value(num as f32, ctx,));
                 });
             }
-        }
     }
 
     fn set_opacity(
@@ -2096,11 +2092,10 @@ impl AppearanceSettingsPageView {
                         // If we're on a non-Linux platform, render the dropdown item in the
                         // actual font.  We currently don't do this on Linux because
                         // pre-loading all of the fonts is too expensive.
-                        if cfg!(not(any(target_os = "linux", target_os = "freebsd"))) {
-                            if let Some(family_id) = family {
+                        if cfg!(not(any(target_os = "linux", target_os = "freebsd")))
+                            && let Some(family_id) = family {
                                 dropdown = dropdown.with_font_override(*family_id)
                             }
-                        }
 
                         Some(dropdown)
                     } else {
@@ -2157,11 +2152,10 @@ impl AppearanceSettingsPageView {
                     // If we're on a non-Linux platform, render the dropdown item in the
                     // actual font.  We currently don't do this on Linux because
                     // pre-loading all of the fonts is too expensive.
-                    if cfg!(not(any(target_os = "linux", target_os = "freebsd"))) {
-                        if let Some(family_id) = family {
+                    if cfg!(not(any(target_os = "linux", target_os = "freebsd")))
+                        && let Some(family_id) = family {
                             dropdown = dropdown.with_font_override(*family_id)
                         }
-                    }
 
                     Some(dropdown)
                 })
@@ -3508,8 +3502,8 @@ impl SettingsWidget for WindowBlurTextureWidget {
                 .finish(),
             None,
         ));
-        if let Some(window) = app.windows().platform_window(view.window_id) {
-            if !window.supports_transparency() && window.graphics_backend() != GraphicsBackend::Gl {
+        if let Some(window) = app.windows().platform_window(view.window_id)
+            && !window.supports_transparency() && window.graphics_backend() != GraphicsBackend::Gl {
                 col.add_child(
                     Container::new(
                         FormattedTextElement::from_str(
@@ -3524,7 +3518,6 @@ impl SettingsWidget for WindowBlurTextureWidget {
                     .finish(),
                 );
             }
-        }
         col.finish()
     }
 }
@@ -5260,11 +5253,10 @@ fn open_directory_tab_color_folder_picker(ctx: &mut ViewContext<AppearanceSettin
     let file_picker_config = FilePickerConfiguration::new().folders_only();
     ctx.open_file_picker(
         move |result, ctx| {
-            if let Ok(paths) = result {
-                if let Some(directory_path) = paths.first() {
+            if let Ok(paths) = result
+                && let Some(directory_path) = paths.first() {
                     add_directory_tab_color_path(PathBuf::from(directory_path), ctx);
                 }
-            }
         },
         file_picker_config,
     );

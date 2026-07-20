@@ -386,12 +386,12 @@ fn dispatch_mouse_event(app: &mut warpui_core::App, window_id: WindowId, event: 
 
 fn tab_bounds(app: &mut warpui_core::App, window_id: WindowId, tab_index: usize) -> RectF {
     let presenter = app.presenter(window_id).expect("presenter should exist");
-    let bounds = presenter
+    
+    presenter
         .borrow()
         .position_cache()
         .get_position(tab_position_id(tab_index))
-        .unwrap_or_else(|| panic!("tab_position_{tab_index} should exist for {window_id:?}"));
-    bounds
+        .unwrap_or_else(|| panic!("tab_position_{tab_index} should exist for {window_id:?}"))
 }
 
 fn tab_center(app: &mut warpui_core::App, window_id: WindowId, tab_index: usize) -> Vector2F {

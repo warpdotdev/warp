@@ -169,12 +169,11 @@ pub fn test_file_tree_open_in_new_tab() -> Builder {
                             })
                         });
 
-                        if let Some(title) = title {
-                            if config_regex.is_match(&title) {
+                        if let Some(title) = title
+                            && config_regex.is_match(&title) {
                                 found = true;
                                 break;
                             }
-                        }
                     }
 
                     async_assert!(found, "Expected a tab with config.json opened")

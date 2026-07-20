@@ -791,14 +791,13 @@ impl WorkingDirectoriesModel {
         if let Some(focused_id) = focused_terminal_id {
             let mut repos_to_insert = Vec::new();
             for (dir, terminal_id) in &new_root_to_terminal {
-                if *terminal_id == focused_id {
-                    if let Some(repo_root) =
+                if *terminal_id == focused_id
+                    && let Some(repo_root) =
                         DetectedRepositories::as_ref(ctx).get_root_for_path(dir)
                     {
                         repos_to_insert.push((repo_root.clone(), focused_id));
                         focused_repo = Some(repo_root);
                     }
-                }
             }
             for (repo_key, focused_id) in repos_to_insert {
                 new_root_to_terminal.insert(repo_key, focused_id);

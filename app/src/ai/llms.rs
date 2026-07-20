@@ -855,13 +855,12 @@ impl LLMPreferences {
     ) -> &LLMInfo {
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
-            if let Some(llm_id) = raw_override {
-                if let Some(llm_info) =
+            if let Some(llm_id) = raw_override
+                && let Some(llm_info) =
                     self.model_info_for_id(&self.models_by_feature.agent_mode, llm_id, app)
                 {
                     return llm_info;
                 }
-            }
         }
 
         // In the TUI, the file-backed `agents.model` setting is the default
@@ -1227,11 +1226,10 @@ impl LLMPreferences {
         let mut models = Vec::new();
         let mut seen = HashSet::new();
         for id in [base_id, coding_id] {
-            if let Some(entry) = self.custom_router_proto_entry(id) {
-                if seen.insert(entry.config_key.clone()) {
+            if let Some(entry) = self.custom_router_proto_entry(id)
+                && seen.insert(entry.config_key.clone()) {
                     models.push(entry);
                 }
-            }
         }
         api::request::settings::CustomModelRouters { routers: models }
     }
@@ -1630,15 +1628,14 @@ impl LLMPreferences {
     }
 
     pub fn mark_new_choices_popup_as_shown(&self, view_id: EntityId) {
-        if let Some(update) = self.last_update.as_ref() {
-            if matches!(
+        if let Some(update) = self.last_update.as_ref()
+            && matches!(
                 &*update.popup_visibility_state.lock(),
                 UpdatePopupVisibilityState::WaitingToBeShown
             ) {
                 *update.popup_visibility_state.lock() =
                     UpdatePopupVisibilityState::Visible(view_id);
             }
-        }
     }
 
     pub fn hide_llm_popup(&self, view_id: EntityId) {
@@ -1864,15 +1861,14 @@ impl LLMPreferences {
                             profiles.set_cli_agent_model(profile_id, None, ctx);
                         }
                     }
-                    if let Some(preferred_llm_id) = &profile.data().computer_use_model {
-                        if self
+                    if let Some(preferred_llm_id) = &profile.data().computer_use_model
+                        && self
                             .get_computer_use_available()
                             .usable_info_for_id(preferred_llm_id, ctx)
                             .is_none()
                         {
                             profiles.set_computer_use_model(profile_id, None, ctx);
                         }
-                    }
                 }
             }
         });

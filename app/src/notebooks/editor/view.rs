@@ -1934,8 +1934,8 @@ impl RichTextEditorView {
         cmd: bool,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        if let Some(hovered_file_path) = &self.hovered_file_path {
-            if hovered_file_path.range.start <= offset && offset <= hovered_file_path.range.end {
+        if let Some(hovered_file_path) = &self.hovered_file_path
+            && hovered_file_path.range.start <= offset && offset <= hovered_file_path.range.end {
                 // In read-only comment chips (Selectable), open the file directly
                 // on click instead of showing a tooltip.
                 if cmd || matches!(self.interaction_state(ctx), InteractionState::Selectable) {
@@ -1950,7 +1950,6 @@ impl RichTextEditorView {
                 }
                 return true;
             }
-        }
         false
     }
 
@@ -2045,11 +2044,10 @@ impl RichTextEditorView {
 
     /// Cuts the current selection.
     pub fn cut(&mut self, entrypoint: ActionEntrypoint, ctx: &mut ViewContext<Self>) {
-        if self.is_editable(ctx) {
-            if let Some(block) = self.model.update(ctx, |model, ctx| model.cut(ctx)) {
+        if self.is_editable(ctx)
+            && let Some(block) = self.model.update(ctx, |model, ctx| model.cut(ctx)) {
                 ctx.emit(EditorViewEvent::CopiedBlock { block, entrypoint });
             }
-        }
     }
 
     /// Paste from the clipboard.
@@ -2182,11 +2180,10 @@ impl RichTextEditorView {
         };
 
         // Early return if char_offset is already on the hovered file path
-        if let Some(hovered) = &self.hovered_file_path {
-            if hovered.range.start <= char_offset && char_offset <= hovered.range.end {
+        if let Some(hovered) = &self.hovered_file_path
+            && hovered.range.start <= char_offset && char_offset <= hovered.range.end {
                 return;
             }
-        }
 
         self.hovered_file_path = None;
 
@@ -2239,8 +2236,8 @@ impl RichTextEditorView {
                 // Adjust link_range which is relative to context_range to absolute buffer offsets
                 let absolute_range = search_start + CharOffset::from(link_range.start)
                     ..search_start + CharOffset::from(link_range.end);
-                if absolute_range.contains(&char_offset) {
-                    if let DetectedLinkType::FilePath {
+                if absolute_range.contains(&char_offset)
+                    && let DetectedLinkType::FilePath {
                         absolute_path,
                         line_and_column_num,
                     } = link_type
@@ -2252,7 +2249,6 @@ impl RichTextEditorView {
                         });
                         break;
                     }
-                }
             }
         }
 
@@ -3559,15 +3555,13 @@ impl RichTextAction<RichTextEditorView> for EditorViewAction {
             clamped,
             ..
         } = location.clone()
-        {
-            if !clamped {
+            && !clamped {
                 actions_to_dispatch.push(EditorViewAction::MaybeOpenFileOrUrl {
                     offset: char_offset + 1,
                     link_in_text: link.map(UserInput::new),
                     cmd,
                 });
             }
-        }
 
         match view.as_ref(ctx).ongoing_mouse_state {
             OngoingMouseEvent::Selecting => {

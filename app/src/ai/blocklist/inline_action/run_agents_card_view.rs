@@ -288,11 +288,10 @@ fn resolve_interactive_defaults(
         let harness = warp_cli::agent::Harness::parse_orchestration_harness(
             &orchestration_config_state.harness_type,
         );
-        if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
-            if let Some(base) = block_model.base_model(ctx).map(|id| id.to_string()) {
+        if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None)
+            && let Some(base) = block_model.base_model(ctx).map(|id| id.to_string()) {
                 orchestration_config_state.model_id = base;
             }
-        }
     }
     if let RunAgentsExecutionMode::Remote {
         environment_id,
@@ -311,11 +310,10 @@ fn resolve_interactive_defaults(
                 .unwrap_or_else(|| oc::ORCHESTRATION_WARP_WORKER_HOST.to_string());
             orchestration_config_state.set_worker_host(default_host);
         }
-        if needs_env {
-            if let Some(default_env) = oc::resolve_default_environment_id(ctx) {
+        if needs_env
+            && let Some(default_env) = oc::resolve_default_environment_id(ctx) {
                 orchestration_config_state.set_environment_id(default_env);
             }
-        }
     }
 }
 impl RunAgentsCardView {
@@ -441,8 +439,8 @@ impl RunAgentsCardView {
         // Only relevant for Oz harness — non-Oz harnesses get their
         // model catalog from HarnessAvailabilityModel, not LLMPreferences.
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
-            if let LLMPreferencesEvent::UpdatedAvailableLLMs = event {
-                if let Some(handle) = &me.handles.pickers.model_picker {
+            if let LLMPreferencesEvent::UpdatedAvailableLLMs = event
+                && let Some(handle) = &me.handles.pickers.model_picker {
                     let is_local = !me
                         .orchestration_edit_state
                         .orchestration_config_state
@@ -460,7 +458,6 @@ impl RunAgentsCardView {
                         ctx,
                     );
                 }
-            }
         });
 
         // Repopulate pickers when the server-provided harness list,
@@ -590,22 +587,20 @@ impl RunAgentsCardView {
         self.original_tool_call_request = request.clone();
         let mut new_state = RunAgentsEditState::from_request(request);
         // Resolve empty fields from the active config (same as in new()).
-        if let Some((config, status)) = &self.active_config {
-            if status.is_approved() {
+        if let Some((config, status)) = &self.active_config
+            && status.is_approved() {
                 new_state
                     .orchestration_config_state
                     .resolve_from_config(config);
             }
-        }
         if new_state.orchestration_config_state.model_id.is_empty() {
             let harness = warp_cli::agent::Harness::parse_orchestration_harness(
                 &new_state.orchestration_config_state.harness_type,
             );
-            if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
-                if let Some(base) = self.block_model.base_model(ctx).map(|id| id.to_string()) {
+            if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None)
+                && let Some(base) = self.block_model.base_model(ctx).map(|id| id.to_string()) {
                     new_state.orchestration_config_state.model_id = base;
                 }
-            }
         }
         // Re-seed an Unset selection from persisted per-harness settings,
         // honoring an explicit `Inherit` choice for this harness.

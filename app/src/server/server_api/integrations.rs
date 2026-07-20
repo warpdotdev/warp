@@ -291,8 +291,8 @@ impl IntegrationsClient for ServerApi {
         //
         // Important: this runs after the network request completes so the UI can still
         // show the loading state.
-        if FeatureFlag::SimulateGithubUnauthed.is_enabled() {
-            if let UserGithubInfoResult::GithubConnectedOutput(connected) = &result {
+        if FeatureFlag::SimulateGithubUnauthed.is_enabled()
+            && let UserGithubInfoResult::GithubConnectedOutput(connected) = &result {
                 let auth_url = format!("{}/oauth/connect/github", ChannelState::server_root_url());
                 return Ok(UserGithubInfoResult::GithubAuthRequiredOutput(
                     GithubAuthRequiredOutput {
@@ -305,7 +305,6 @@ impl IntegrationsClient for ServerApi {
                     },
                 ));
             }
-        }
 
         Ok(result)
     }

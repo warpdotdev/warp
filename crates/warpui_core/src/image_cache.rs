@@ -933,13 +933,12 @@ impl ImageCache {
                 // If it is already in the image cache at the target size and fit, return it.
                 let cache = if should_cache_rendered_image {
                     let cache = self.images.upgradable_read();
-                    if let Some(inner_map) = cache.get(&cache_key) {
-                        if let Some(image) = inner_map.get(&rendered_image_cache_key) {
+                    if let Some(inner_map) = cache.get(&cache_key)
+                        && let Some(image) = inner_map.get(&rendered_image_cache_key) {
                             return AssetState::Loaded {
                                 data: image.clone(),
                             };
                         }
-                    }
                     Some(cache)
                 } else {
                     None

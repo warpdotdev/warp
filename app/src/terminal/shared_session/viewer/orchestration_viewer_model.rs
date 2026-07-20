@@ -381,11 +381,10 @@ impl OrchestrationViewerModel {
             // Suppress server-side status reporting (viewer-side); also
             // disambiguates viewer-spawned children downstream.
             history.set_viewing_shared_session_for_conversation(conversation_id, true);
-            if let Some(conversation) = history.conversation_mut(&conversation_id) {
-                if !fallback_title.is_empty() {
+            if let Some(conversation) = history.conversation_mut(&conversation_id)
+                && !fallback_title.is_empty() {
                     conversation.set_fallback_display_title(fallback_title);
                 }
-            }
             // Stamp run_id/task_id and populate the agent_id index so
             // transcript references resolve to this child.
             history.assign_run_id_for_conversation(

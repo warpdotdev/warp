@@ -409,12 +409,10 @@ impl Sessions {
                 session_info.session_type,
                 BootstrapSessionType::WarpifiedRemote
             )
-        {
-            if let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
+            && let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
             {
                 session.set_remote_host_id(Some(host_id.clone()));
             }
-        }
 
         let bootstrap_duration_seconds =
             pending_session_start_time.map(|start| start.elapsed().as_secs_f64());
@@ -526,13 +524,11 @@ impl Sessions {
         event: ExecutedExecutorCommandEvent,
     ) {
         if let Some(in_band_command_output_tx) = self.in_band_command_output_tx_map.get(&session_id)
-        {
-            if let Err(e) = in_band_command_output_tx.try_send(event) {
+            && let Err(e) = in_band_command_output_tx.try_send(event) {
                 log::warn!(
                     "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor: {e:#}"
                 );
             }
-        }
     }
 
     /// Registers a session in the map for the purpose of testing.
@@ -1648,11 +1644,11 @@ impl Session {
                     );
                     return vec![];
                 };
-                let res = output_string
+                
+                output_string
                     .lines()
                     .map(|s| s.trim().to_string())
-                    .collect();
-                res
+                    .collect()
             }
             _ => {
                 log::warn!("failed to get git_branches_for_command_corrections");

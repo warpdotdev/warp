@@ -848,11 +848,10 @@ impl AvailableShells {
                 let Ok(path) = dunce::canonicalize(line) else {
                     continue;
                 };
-                if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
-                    if let Some(set) = shells.get_mut(file_name) {
+                if let Some(file_name) = path.file_name().and_then(|name| name.to_str())
+                    && let Some(set) = shells.get_mut(file_name) {
                         set.insert(path);
                     }
-                }
             }
         }
         Ok(shells)
@@ -893,13 +892,11 @@ impl AvailableShells {
                             executable_path,
                             ..
                         }) = shell.state.as_ref()
-                        {
-                            if shell_command == command {
+                            && shell_command == command {
                                 return Some(NewSessionShell::Executable(
                                     executable_path.display().to_string(),
                                 ));
                             }
-                        }
                     }
                     None
                 })

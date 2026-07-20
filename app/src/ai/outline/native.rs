@@ -199,11 +199,10 @@ impl RepoOutlines {
 
     /// Computes the outline for the repo containing the next path in the queue, if any.
     fn compute_next_outline(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.should_build_outlines(ctx) && self.active_outline_task.is_none() {
-            if let Some(repo_root) = self.outline_queue.pop_front() {
+        if self.should_build_outlines(ctx) && self.active_outline_task.is_none()
+            && let Some(repo_root) = self.outline_queue.pop_front() {
                 self.compute_outline_for_repo(repo_root, ctx);
             }
-        }
     }
 
     /// Computes the outline for the repo with the given root path.

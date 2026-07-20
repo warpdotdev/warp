@@ -241,8 +241,8 @@ fn render_button(
         let mut stack = Stack::new();
         stack.add_child(container.finish());
 
-        if is_button_disabled && mouse_state.is_hovered() {
-            if let Some(tooltip_text) = get_tooltip_text_for_alert_state(prompt_alert_state) {
+        if is_button_disabled && mouse_state.is_hovered()
+            && let Some(tooltip_text) = get_tooltip_text_for_alert_state(prompt_alert_state) {
                 let tooltip = appearance
                     .ui_builder()
                     .tool_tip(tooltip_text)
@@ -268,7 +268,6 @@ fn render_button(
                 );
                 stack.add_positioned_overlay_child(tooltip, tooltip_offset);
             }
-        }
 
         ConstrainedBox::new(stack.finish())
             .with_height(button_height)

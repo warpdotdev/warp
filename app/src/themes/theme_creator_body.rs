@@ -118,8 +118,8 @@ impl ThemeCreatorBody {
     }
 
     pub fn handle_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
-        if let EditorEvent::Edited(_) = event {
-            if let Some(theme_options) = &mut self.theme_options {
+        if let EditorEvent::Edited(_) = event
+            && let Some(theme_options) = &mut self.theme_options {
                 self.editor.update(ctx, |editor, ctx| {
                     theme_options.set_name(editor.buffer_text(ctx));
 
@@ -129,7 +129,6 @@ impl ThemeCreatorBody {
                     });
                 });
             }
-        }
         ctx.notify();
     }
 
@@ -229,8 +228,8 @@ impl ThemeCreatorBody {
     ) -> Option<T> {
         if let Ok(theme_yaml) = serde_yaml::to_string(theme) {
             let path = dir.join(theme_yaml_file_name);
-            if let Ok(mut file) = crate::util::file::create_file(&path) {
-                if write!(file, "{theme_yaml}").is_ok() {
+            if let Ok(mut file) = crate::util::file::create_file(&path)
+                && write!(file, "{theme_yaml}").is_ok() {
                     match image_option {
                         Some((image_path, theme_name, image_extension)) => {
                             if copy(
@@ -245,7 +244,6 @@ impl ThemeCreatorBody {
                         None => return Some((success_callback)(path)),
                     }
                 }
-            }
         }
         None
     }

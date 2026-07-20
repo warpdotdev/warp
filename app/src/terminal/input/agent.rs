@@ -106,15 +106,13 @@ impl Input {
 
         if FeatureFlag::ImageAsContext.is_enabled()
             && matches!(ai_input_model.input_type(), InputType::AI)
-        {
-            if let Some(images) = self.render_attachment_chips(appearance) {
+            && let Some(images) = self.render_attachment_chips(appearance) {
                 column.add_child(
                     Container::new(images)
                         .with_margin_top(spacing::UDI_CHIP_MARGIN)
                         .finish(),
                 );
             }
-        }
 
         let show_harness_row = FeatureFlag::CloudMode.is_enabled()
             && HarnessAvailabilityModel::as_ref(app).should_show_harness_selector()
@@ -125,8 +123,8 @@ impl Input {
                         .as_ref(app)
                         .is_configuring_ambient_agent()
                 });
-        if show_harness_row {
-            if let Some(harness_selector) = self.harness_selector() {
+        if show_harness_row
+            && let Some(harness_selector) = self.harness_selector() {
                 // Temporarily render the harness selector in the cloud mode UDI until we fully
                 // implement the new designs.
                 let harness_row = Flex::row()
@@ -140,7 +138,6 @@ impl Input {
                         .finish(),
                 );
             }
-        }
 
         let terminal_spacing = TerminalSettings::as_ref(app)
             .terminal_input_spacing(appearance.line_height_ratio(), app);
@@ -167,8 +164,7 @@ impl Input {
         ));
 
         if let Some(selected_workflow_state) = self.workflows_state.selected_workflow_state.as_ref()
-        {
-            if selected_workflow_state.should_show_more_info_view {
+            && selected_workflow_state.should_show_more_info_view {
                 add_workflow_info_overlay(
                     &mut stack,
                     selected_workflow_state,
@@ -176,7 +172,6 @@ impl Input {
                     menu_positioning,
                 );
             }
-        }
 
         if self.is_voltron_open && self.is_pane_focused(app) {
             add_voltron_overlay(&mut stack, &self.voltron_view, menu_positioning);
@@ -316,11 +311,10 @@ impl Input {
             ));
         }
         column.add_child(ChildView::new(&self.agent_status_view).finish());
-        if let Some(panel) = self.queued_prompts_panel.as_ref() {
-            if panel.as_ref(app).should_render(app) {
+        if let Some(panel) = self.queued_prompts_panel.as_ref()
+            && panel.as_ref(app).should_render(app) {
                 column.add_child(ChildView::new(panel).finish());
             }
-        }
         column.add_child(input);
 
         let mut outer_stack = Stack::new().with_constrain_absolute_children();
@@ -399,8 +393,8 @@ impl Input {
             );
         }
 
-        if self.suggestions_mode_model.as_ref(app).is_slash_commands() {
-            if let Some(view) = self.cloud_mode_v2_slash_commands_view.as_ref() {
+        if self.suggestions_mode_model.as_ref(app).is_slash_commands()
+            && let Some(view) = self.cloud_mode_v2_slash_commands_view.as_ref() {
                 let cursor_position = position_id_for_cursor(self.editor.id());
                 stack.add_positioned_overlay_child(
                     ChildView::new(view).finish(),
@@ -420,11 +414,9 @@ impl Input {
                     ),
                 );
             }
-        }
 
         if let Some(selected_workflow_state) = self.workflows_state.selected_workflow_state.as_ref()
-        {
-            if selected_workflow_state.should_show_more_info_view {
+            && selected_workflow_state.should_show_more_info_view {
                 let prompt_position = self.prompt_save_position_id();
                 let workflows_info_view = Container::new(
                     ChildView::new(&selected_workflow_state.more_info_view).finish(),
@@ -451,7 +443,6 @@ impl Input {
                     ),
                 );
             }
-        }
         if self.is_voltron_open && self.is_pane_focused(app) {
             add_voltron_overlay(&mut stack, &self.voltron_view, menu_positioning);
         }
@@ -511,11 +502,10 @@ impl Input {
         if crate::ai::auth_secret_types::auth_secret_types_for_harness(harness).is_empty() {
             return false;
         }
-        if let Some(ftux_view) = self.auth_secret_ftux_view() {
-            if ftux_view.as_ref(app).has_creation_state() {
+        if let Some(ftux_view) = self.auth_secret_ftux_view()
+            && ftux_view.as_ref(app).has_creation_state() {
                 return true;
             }
-        }
         if crate::ai::cloud_agent_settings::CloudAgentSettings::as_ref(app)
             .is_harness_auth_ftux_completed(harness)
         {
@@ -536,11 +526,10 @@ impl Input {
 
         column.add_child(self.render_cloud_mode_v2_top_row(app));
 
-        if let Some(panel) = self.queued_prompts_panel.as_ref() {
-            if panel.as_ref(app).should_render(app) {
+        if let Some(panel) = self.queued_prompts_panel.as_ref()
+            && panel.as_ref(app).should_render(app) {
                 column.add_child(ChildView::new(panel).finish());
             }
-        }
 
         if self.should_show_auth_secret_ftux(app) {
             column.add_child(self.render_auth_secret_ftux_content());
@@ -582,11 +571,10 @@ impl Input {
             .with_spacing(CLOUD_MODE_V2_TOP_ROW_INNER_GAP);
 
         // Only show the host selector when a default host is configured.
-        if let Some(host) = self.host_selector() {
-            if host.as_ref(app).has_default_host() {
+        if let Some(host) = self.host_selector()
+            && host.as_ref(app).has_default_host() {
                 row.add_child(ChildView::new(host).finish());
             }
-        }
         if let Some(harness_selector) = self.harness_selector() {
             row.add_child(ChildView::new(harness_selector).finish());
         }
@@ -625,8 +613,8 @@ impl Input {
         let ai_input_model = self.ai_input_model.as_ref(app);
         let show_chips = FeatureFlag::ImageAsContext.is_enabled()
             && matches!(ai_input_model.input_type(), InputType::AI);
-        if show_chips {
-            if let Some(chips) = self.render_attachment_chips(appearance) {
+        if show_chips
+            && let Some(chips) = self.render_attachment_chips(appearance) {
                 editor_column.add_child(
                     Container::new(chips)
                         .with_padding_top(CLOUD_MODE_V2_CHIPS_ROW_TOP_PADDING)
@@ -635,7 +623,6 @@ impl Input {
                         .finish(),
                 );
             }
-        }
 
         editor_column.add_child(
             Container::new(editor_with_min_height)

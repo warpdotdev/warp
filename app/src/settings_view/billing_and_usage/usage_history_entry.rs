@@ -46,8 +46,8 @@ impl UsageHistoryEntry {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(self.render_header(appearance));
 
-        if let Some(entry) = &self.entry {
-            if self.is_expanded {
+        if let Some(entry) = &self.entry
+            && self.is_expanded {
                 res = res
                     .with_child(
                         // Separator between header and usage component
@@ -68,7 +68,6 @@ impl UsageHistoryEntry {
                         .render(app),
                     );
             }
-        }
 
         Container::new(res.finish())
             .with_border(Border::all(2.).with_border_fill(appearance.theme().surface_3()))

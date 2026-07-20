@@ -2215,13 +2215,12 @@ pub fn test_emits_after_block_completed_event() {
 
     let mut after_block_completed_events = Vec::new();
     while let Ok(event) = events_rx.try_recv() {
-        if let Event::AfterBlockCompleted(event) = event {
-            if matches!(event.block_type, BlockType::InBandCommand)
-                || matches!(event.block_type, BlockType::User(..))
+        if let Event::AfterBlockCompleted(event) = event
+            && (matches!(event.block_type, BlockType::InBandCommand)
+                || matches!(event.block_type, BlockType::User(..)))
             {
                 after_block_completed_events.push(event);
             }
-        }
     }
     assert_eq!(after_block_completed_events.len(), 2);
     assert!(matches!(

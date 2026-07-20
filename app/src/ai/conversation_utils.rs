@@ -79,8 +79,8 @@ pub fn remove_conversation(
     BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, model_ctx| {
         history.remove_conversation(conversation_id, terminal_view_id, model_ctx);
 
-        if let (Some(token), Some(server_api)) = (server_conversation_token, server_api) {
-            if FeatureFlag::CloudConversations.is_enabled() {
+        if let (Some(token), Some(server_api)) = (server_conversation_token, server_api)
+            && FeatureFlag::CloudConversations.is_enabled() {
                 // Delete the conversation from the cloud.
                 model_ctx.spawn(
                     async move {
@@ -91,7 +91,6 @@ pub fn remove_conversation(
                     |_, _, _| {},
                 );
             }
-        }
     });
 }
 

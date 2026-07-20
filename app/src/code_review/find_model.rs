@@ -283,8 +283,8 @@ impl CodeReviewFindModel {
         ctx: &mut ModelContext<Self>,
     ) {
         // Try to restore the previous selection if there was one
-        if let Some(selected) = self.selected_match.take() {
-            if let Some(searcher) = self.get_editor_searcher(selected.editor_id, ctx) {
+        if let Some(selected) = self.selected_match.take()
+            && let Some(searcher) = self.get_editor_searcher(selected.editor_id, ctx) {
                 let candidates = MultiEditorSearchMatches {
                     editor_id: selected.editor_id,
                     matches: all_matches.clone(),
@@ -299,7 +299,6 @@ impl CodeReviewFindModel {
                     });
                 }
             }
-        }
 
         // If we still don't have a selection and we have matches, select the first one
         if self.selected_match.is_none() && !all_matches.is_empty() {

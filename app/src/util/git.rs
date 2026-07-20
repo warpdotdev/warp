@@ -294,8 +294,8 @@ pub async fn get_file_change_entries(
     }
 
     // Also include untracked files when showing all changes.
-    if include_unstaged {
-        if let Ok(untracked) =
+    if include_unstaged
+        && let Ok(untracked) =
             run_git_command(repo_path, &["ls-files", "--others", "--exclude-standard"]).await
         {
             for file_name in untracked.lines() {
@@ -310,7 +310,6 @@ pub async fn get_file_change_entries(
                 });
             }
         }
-    }
 
     Ok(entries)
 }
@@ -585,8 +584,8 @@ pub async fn get_diff_for_commit_message(
     // `git diff HEAD` only shows changes to already-tracked files. New files that
     // haven't been staged yet are invisible to it, so we synthesise diff hunks for
     // them here — mirroring the logic in `get_file_change_entries`.
-    if include_unstaged {
-        if let Ok(untracked) = run_git_command(
+    if include_unstaged
+        && let Ok(untracked) = run_git_command(
             repo_path,
             &["ls-files", "--others", "--exclude-standard", "-z"],
         )
@@ -641,7 +640,6 @@ pub async fn get_diff_for_commit_message(
                 }
             }
         }
-    }
 
     if diff.len() <= MAX_DIFF_CHARS_FOR_AI {
         Ok(diff)

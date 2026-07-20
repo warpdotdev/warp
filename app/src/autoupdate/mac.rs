@@ -54,19 +54,17 @@ pub(super) fn remove_old_executable() -> Result<()> {
     //      a couple releases.
     log::info!("Removing old executable dir...");
     let old_executable_path = PathBuf::from(get_bundle_path()?).join(OLD_EXECUTABLE_PATH);
-    if let Ok(metadata) = fs::metadata(&old_executable_path) {
-        if metadata.is_dir() {
+    if let Ok(metadata) = fs::metadata(&old_executable_path)
+        && metadata.is_dir() {
             fs::remove_dir_all(old_executable_path)?;
         }
-    }
 
     log::info!("Removing old executable file...");
     let old_executable_file_path = old_executable_file_path();
-    if let Ok(metadata) = fs::metadata(&old_executable_file_path) {
-        if metadata.is_file() {
+    if let Ok(metadata) = fs::metadata(&old_executable_file_path)
+        && metadata.is_file() {
             fs::remove_file(old_executable_file_path)?;
         }
-    }
 
     Ok(())
 }
@@ -220,12 +218,11 @@ pub async fn cleanup_all_except(preserve_update_id: Option<&str>) {
         };
 
         // Skip the directory we want to preserve
-        if let Some(preserve_id) = preserve_update_id {
-            if file_name == preserve_id {
+        if let Some(preserve_id) = preserve_update_id
+            && file_name == preserve_id {
                 log::debug!("Preserving autoupdate directory: {path:?}");
                 continue;
             }
-        }
 
         let metadata = match async_fs::metadata(&path).await {
             Ok(metadata) => metadata,

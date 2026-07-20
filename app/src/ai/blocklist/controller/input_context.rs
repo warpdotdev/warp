@@ -249,8 +249,8 @@ pub(super) fn parse_context_attachments(
     }
 
     // Add pending AI document as attachment if present
-    if let Some(document_id) = context_model.pending_document_id() {
-        if let Some(content) = AIDocumentModel::as_ref(ctx).get_document_content(&document_id, ctx)
+    if let Some(document_id) = context_model.pending_document_id()
+        && let Some(content) = AIDocumentModel::as_ref(ctx).get_document_content(&document_id, ctx)
         {
             let document_id_str = document_id.to_string();
             let attachment = AIAgentAttachment::DocumentContent {
@@ -262,7 +262,6 @@ pub(super) fn parse_context_attachments(
             // Use the document ID as the reference key
             referenced_attachments.insert(document_id_str, attachment);
         }
-    }
 
     referenced_attachments
 }

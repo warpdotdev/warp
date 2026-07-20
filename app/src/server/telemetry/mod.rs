@@ -271,12 +271,11 @@ impl TelemetryApi {
             #[cfg(not(target_family = "wasm"))]
             if let Err(error) = &result {
                 for cause in error.chain() {
-                    if let Some(err) = cause.downcast_ref::<reqwest::Error>() {
-                        if err.is_connect() {
+                    if let Some(err) = cause.downcast_ref::<reqwest::Error>()
+                        && err.is_connect() {
                             log::warn!("Failed to send telemetry event: {error}");
                             return Ok(());
                         }
-                    }
                 }
             }
 
@@ -364,12 +363,11 @@ impl TelemetryApi {
                 // against `is_connect` and not the whole loop.
                 #[cfg(not(target_family = "wasm"))]
                 for cause in e.chain() {
-                    if let Some(err) = cause.downcast_ref::<reqwest::Error>() {
-                        if err.is_connect() {
+                    if let Some(err) = cause.downcast_ref::<reqwest::Error>()
+                        && err.is_connect() {
                             log::warn!("Failed to send event to RudderStack: {e}");
                             return Ok(());
                         }
-                    }
                 }
                 return Err(e);
             }

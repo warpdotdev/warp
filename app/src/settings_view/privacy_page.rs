@@ -545,8 +545,8 @@ impl TypedActionView for PrivacyPageView {
                             .filter(|r| !current_patterns.contains(&r.pattern))
                             .collect();
 
-                    if let Some(regex) = recommended_regexes.get(*idx) {
-                        if let Ok(pattern) = Regex::new(regex.pattern) {
+                    if let Some(regex) = recommended_regexes.get(*idx)
+                        && let Ok(pattern) = Regex::new(regex.pattern) {
                             let mut new_user_secret_regex_list =
                                 privacy_settings.user_secret_regex_list.to_vec();
                             new_user_secret_regex_list.push(CustomSecretRegex {
@@ -565,7 +565,6 @@ impl TypedActionView for PrivacyPageView {
                             }
                             ctx.notify();
                         }
-                    }
                 });
             }
             PrivacyPageAction::ToggleSafeMode => self.toggle_safe_mode(ctx),

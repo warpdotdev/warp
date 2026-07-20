@@ -97,11 +97,10 @@ impl TryFrom<InsertReviewComment> for PendingImportedReviewComment {
             },
         };
 
-        if let Some(file_path) = target.file_path() {
-            if file_path.is_absolute() {
+        if let Some(file_path) = target.file_path()
+            && file_path.is_absolute() {
                 return Err(ConversionError::InvalidFilePath(file_path.to_owned()));
             }
-        }
 
         let github_details = ImportedCommentDetails {
             author: comment.author,

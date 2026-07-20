@@ -79,14 +79,12 @@ impl ActiveNotebookData {
                 if self.is_active_notebook(*notebook_id) {
                     if let Some(new_editor) =
                         CloudViewModel::as_ref(ctx).object_current_editor(&notebook_id.uid(), ctx)
-                    {
-                        if self.mode == Mode::Editing
+                        && self.mode == Mode::Editing
                             && matches!(new_editor.state, EditorState::OtherUserActive)
                         {
                             self.mode = Mode::View;
                             ctx.emit(ActiveNotebookDataEvent::ModeChangedFromServer);
                         }
-                    }
                     ctx.notify();
                 }
             }
@@ -114,8 +112,8 @@ impl ActiveNotebookData {
 
         match (&result.operation, &result.success_type) {
             (ObjectOperation::Create { .. }, OperationSuccessType::Success) => {
-                if let Some(current_id) = self.id() {
-                    if current_id.into_client() == result.client_id {
+                if let Some(current_id) = self.id()
+                    && current_id.into_client() == result.client_id {
                         let server_id = result.server_id.expect("Expect server id on success");
                         let notebook_id: NotebookId = server_id.into();
                         self.feature_not_available = false;
@@ -126,7 +124,6 @@ impl ActiveNotebookData {
                         ctx.emit(ActiveNotebookDataEvent::CreatedOnServer);
                         ctx.notify();
                     }
-                }
             }
             (ObjectOperation::Update, OperationSuccessType::Success) => {
                 if let Some(current_id) = self.id() {
@@ -167,32 +164,29 @@ impl ActiveNotebookData {
             (ObjectOperation::TakeEditAccess, OperationSuccessType::Success) => {
                 let current_id = self.id();
                 let server_id = result.server_id.expect("Expect server id on success");
-                if let Some(id) = current_id {
-                    if id.into_server() == Some(server_id) {
+                if let Some(id) = current_id
+                    && id.into_server() == Some(server_id) {
                         self.feature_not_available = false;
                         self.mode = Mode::Editing;
                         ctx.emit(ActiveNotebookDataEvent::SwitchedToEditMode);
                     }
-                }
             }
             (ObjectOperation::Trash, OperationSuccessType::Success)
             | (ObjectOperation::Untrash, OperationSuccessType::Success) => {
                 let current_id = self.id();
                 let server_id = result.server_id.expect("Expect server id on success");
-                if let Some(id) = current_id {
-                    if id.into_server() == Some(server_id) {
+                if let Some(id) = current_id
+                    && id.into_server() == Some(server_id) {
                         ctx.emit(ActiveNotebookDataEvent::TrashStatusChanged);
                     }
-                }
             }
             (ObjectOperation::MoveToDrive, OperationSuccessType::Success) => {
                 let current_id = self.id();
                 let server_id = result.server_id.expect("Expect server id on success");
-                if let Some(id) = current_id {
-                    if id.into_server() == Some(server_id) {
+                if let Some(id) = current_id
+                    && id.into_server() == Some(server_id) {
                         ctx.emit(ActiveNotebookDataEvent::MovedToSpace);
                     }
-                }
             }
             _ => {}
         }

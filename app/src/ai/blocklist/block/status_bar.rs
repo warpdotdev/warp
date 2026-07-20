@@ -1139,14 +1139,13 @@ fn resolve_fallback_warping_message<V: View>(
             conv.exchange_with_id(exchange_id)
         })
         .is_some_and(|exchange| exchange.has_user_query());
-    if is_fallback.is_none() && !is_new_user_query {
-        if let Some(prev) = latest_model_used_before_exchange(model, app) {
+    if is_fallback.is_none() && !is_new_user_query
+        && let Some(prev) = latest_model_used_before_exchange(model, app) {
             is_fallback = Some(prev.is_fallback);
             if !prev.model_display_name.is_empty() {
                 display_name = Some(prev.model_display_name);
             }
         }
-    }
     if !is_fallback.unwrap_or(false) {
         return None;
     }

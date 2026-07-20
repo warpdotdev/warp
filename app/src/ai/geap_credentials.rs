@@ -194,18 +194,15 @@ fn refresh_geap_credentials_with_options(
     ) {
         return;
     }
-    if !force {
-        if let GeapCredentialsState::Loaded {
+    if !force
+        && let GeapCredentialsState::Loaded {
             credentials,
             minted_for: current_binding,
             ..
         } = manager.geap_credentials_state()
-        {
-            if *current_binding == minted_for && !credentials.needs_refresh() {
+            && *current_binding == minted_for && !credentials.needs_refresh() {
                 return;
             }
-        }
-    }
     let previous = match manager.geap_credentials_state() {
         GeapCredentialsState::Loaded {
             credentials,

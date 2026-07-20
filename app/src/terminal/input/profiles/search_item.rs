@@ -118,14 +118,13 @@ impl SearchItem for ProfileSearchItem {
             .with_clip(ClipConfig::ellipsis());
 
         // Apply search highlighting to the label.
-        if let Some(match_result) = &self.match_result {
-            if !match_result.matched_indices.is_empty() {
+        if let Some(match_result) = &self.match_result
+            && !match_result.matched_indices.is_empty() {
                 label = label.with_single_highlight(
                     Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
                     match_result.matched_indices.clone(),
                 );
             }
-        }
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)

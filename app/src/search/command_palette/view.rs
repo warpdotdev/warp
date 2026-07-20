@@ -730,8 +730,8 @@ impl View {
             });
         }
 
-        if let CommandPaletteItemAction::AcceptBinding { binding } = &result_action {
-            if let Some(action) = &binding.action {
+        if let CommandPaletteItemAction::AcceptBinding { binding } = &result_action
+            && let Some(action) = &binding.action {
                 match action.as_any().downcast_ref::<WorkspaceAction>() {
                     Some(WorkspaceAction::TogglePalette {
                         mode: PaletteMode::LaunchConfig,
@@ -775,7 +775,6 @@ impl View {
                     _ => {}
                 }
             }
-        }
 
         match result_action.clone() {
             CommandPaletteItemAction::AcceptBinding { binding } => {
@@ -927,12 +926,11 @@ impl View {
             } => {
                 let file_path = std::path::Path::new(&current_directory).join(&file_name);
 
-                if let Err(e) = std::fs::File::create_new(&file_path) {
-                    if e.kind() != std::io::ErrorKind::AlreadyExists {
+                if let Err(e) = std::fs::File::create_new(&file_path)
+                    && e.kind() != std::io::ErrorKind::AlreadyExists {
                         log::warn!("Failed to create file {}: {e}", file_path.display());
                         return;
                     }
-                }
 
                 ctx.emit(Event::OpenFile {
                     path: file_path.to_string_lossy().to_string(),

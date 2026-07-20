@@ -364,11 +364,10 @@ impl SelectableArea {
             selection_state.expanded_head = Some(SelectionBound::Relative(head - origin.xy));
             selection_state.expanded_tail = Some(SelectionBound::Relative(tail - origin.xy));
 
-            if head != tail {
-                if let Some(selection_updated_handler) = self.selection_updated_handler.as_mut() {
+            if head != tail
+                && let Some(selection_updated_handler) = self.selection_updated_handler.as_mut() {
                     selection_updated_handler(ctx, app);
                 }
-            }
         }
 
         // By this point, we've determined that a selection has successfully started.

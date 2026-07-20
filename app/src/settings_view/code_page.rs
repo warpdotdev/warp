@@ -1965,8 +1965,8 @@ impl CodePageWidget {
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(4.);
-        if let Some(refresh_action) = presentation.refresh_action {
-            if let Some(action_target) = action_target.clone() {
+        if let Some(refresh_action) = presentation.refresh_action
+            && let Some(action_target) = action_target.clone() {
                 buttons_row.add_child(
                     icon_button(appearance, Icon::Refresh, false, manual_resync_mouse_state)
                         .with_active_styles(UiComponentStyles {
@@ -2009,10 +2009,9 @@ impl CodePageWidget {
                         .finish(),
                 );
             }
-        }
 
-        if presentation.show_delete {
-            if let Some(action_target) = action_target {
+        if presentation.show_delete
+            && let Some(action_target) = action_target {
                 buttons_row.add_child(
                     icon_button(appearance, Icon::Trash, false, delete_mouse_state)
                         .with_active_styles(UiComponentStyles {
@@ -2038,7 +2037,6 @@ impl CodePageWidget {
                         .finish(),
                 );
             }
-        }
 
         (label_row.finish(), buttons_row.finish())
     }
@@ -2348,8 +2346,8 @@ impl CodePageWidget {
             .with_spacing(8.)
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        if is_failed {
-            if let Some(server_handle) = server_model.cloned() {
+        if is_failed
+            && let Some(server_handle) = server_model.cloned() {
                 let server_for_action = server_handle.clone();
                 let restart_button = ui_builder
                     .button(ButtonVariant::Secondary, mouse_states.restart)
@@ -2373,7 +2371,6 @@ impl CodePageWidget {
 
                 right_content.add_child(restart_button);
             }
-        }
 
         // Show "View logs" when the server has been started (Available, Starting/Busy, or Failed)
         #[cfg(not(target_family = "wasm"))]

@@ -823,12 +823,11 @@ impl FileNotebookView {
             let Some(path) = self.local_path() else {
                 return;
             };
-            if let Some(active_session) = handle.as_ref(ctx).session(ctx.window_id()) {
-                if active_session.is_local() {
+            if let Some(active_session) = handle.as_ref(ctx).session(ctx.window_id())
+                && active_session.is_local() {
                     self.set_context(&path, active_session, ctx);
                     ctx.unsubscribe_to_model(&handle);
                 }
-            }
         }
     }
 

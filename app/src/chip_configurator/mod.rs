@@ -598,11 +598,10 @@ impl ChipConfigurator {
     ) -> Option<ChipLocation> {
         if chips_count == 0 {
             let target_id = Self::drop_target_position_id(chip_index_to_location(0));
-            if let Some(target_pos) = ctx.element_position_by_id(target_id) {
-                if target_pos.intersects(dragged_position) {
+            if let Some(target_pos) = ctx.element_position_by_id(target_id)
+                && target_pos.intersects(dragged_position) {
                     return Some(chip_index_to_location(0));
                 }
-            }
             return None;
         }
 
@@ -779,14 +778,13 @@ impl ChipConfigurator {
         if let Some(state) = &self.current_dragging_state {
             let expected = state.current_location;
             let target_id = Self::drop_target_position_id(expected);
-            if let Some(target_pos) = ctx.element_position_by_id(target_id) {
-                if !target_pos.intersects(drop_position) {
+            if let Some(target_pos) = ctx.element_position_by_id(target_id)
+                && !target_pos.intersects(drop_position) {
                     self.remove_and_insert_chip_at_location(
                         state.current_location,
                         state.original_location,
                     );
                 }
-            }
         }
         self.current_dragging_state = None;
     }

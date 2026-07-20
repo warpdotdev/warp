@@ -287,14 +287,13 @@ impl JsonRpcService {
         notification_subscriptions: &AsyncMutex<HashMap<String, Subscription>>,
     ) {
         let subs = notification_subscriptions.lock().await;
-        if let Some(subscription) = subs.get(method) {
-            if let Err(e) = subscription.try_send(ServerNotificationEvent {
+        if let Some(subscription) = subs.get(method)
+            && let Err(e) = subscription.try_send(ServerNotificationEvent {
                 method: method.to_string(),
                 params,
             }) {
                 report_error!(anyhow::Error::new(e).context("Failed to send notification"));
             }
-        }
     }
 
     /// Returns the next available request ID

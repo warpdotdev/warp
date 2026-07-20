@@ -162,9 +162,9 @@ impl ScheduledAgentManager {
         event: &UpdateManagerEvent,
         _ctx: &mut ModelContext<Self>,
     ) {
-        if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-            if let ObjectOperation::Delete { .. } = result.operation {
-                if let Some(server_id) = result.server_id {
+        if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+            && let ObjectOperation::Delete { .. } = result.operation
+                && let Some(server_id) = result.server_id {
                     let sync_id = SyncId::ServerId(server_id);
                     if let Some(tx) = self.pending_deletes.remove(&sync_id) {
                         match result.success_type {
@@ -192,8 +192,6 @@ impl ScheduledAgentManager {
                         }
                     }
                 }
-            }
-        }
     }
 
     /// Create a new scheduled ambient agent.

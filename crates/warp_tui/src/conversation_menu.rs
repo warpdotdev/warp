@@ -157,11 +157,11 @@ impl TuiConversationMenuModel {
         if !self.is_open(ctx) {
             return None;
         }
-        let selected_id = match &self.state {
+        
+        match &self.state {
             TuiConversationMenuState::Open { list } => list.selected_row().map(|row| row.id),
             TuiConversationMenuState::Closed => None,
-        };
-        selected_id
+        }
     }
 
     /// Returns the render snapshot for the open menu.

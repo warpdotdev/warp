@@ -147,15 +147,14 @@ impl Workspace {
     /// visually active across a tab reorder. Pass the pane group id captured
     /// before the reorder; no-op if it can't be found.
     pub(super) fn restore_active_tab_index(&mut self, pane_group_id: Option<EntityId>) {
-        if let Some(active_id) = pane_group_id {
-            if let Some(new_index) = self
+        if let Some(active_id) = pane_group_id
+            && let Some(new_index) = self
                 .tabs
                 .iter()
                 .position(|tab| tab.pane_group.id() == active_id)
             {
                 self.active_tab_index = new_index;
             }
-        }
     }
 
     /// Context-aware "create group" entry point used by the

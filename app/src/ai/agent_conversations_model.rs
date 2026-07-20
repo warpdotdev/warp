@@ -1448,8 +1448,8 @@ impl AgentConversationsModel {
             }
         }
 
-        if let Some(conversation_id) = entry.identity.local_conversation_id {
-            if active_views_model.is_conversation_open(conversation_id, app) {
+        if let Some(conversation_id) = entry.identity.local_conversation_id
+            && active_views_model.is_conversation_open(conversation_id, app) {
                 if let Some(nav_data) = self
                     .conversations
                     .get(&conversation_id)
@@ -1472,7 +1472,6 @@ impl AgentConversationsModel {
                     });
                 }
             }
-        }
 
         if let Some(conversation_id) = entry.identity.local_conversation_id {
             let nav_data = self
@@ -1505,8 +1504,8 @@ impl AgentConversationsModel {
     }
 
     fn resolve_entry_copy_link(&self, entry: &AgentConversationEntry) -> Option<String> {
-        if let Some(task_id) = entry.identity.ambient_agent_task_id {
-            if let Some(session_link) = self.tasks.get(&task_id).and_then(|task| {
+        if let Some(task_id) = entry.identity.ambient_agent_task_id
+            && let Some(session_link) = self.tasks.get(&task_id).and_then(|task| {
                 task.has_active_execution()
                     .then(|| {
                         task.active_run_execution()
@@ -1517,7 +1516,6 @@ impl AgentConversationsModel {
             }) {
                 return Some(session_link);
             }
-        }
 
         entry
             .identity

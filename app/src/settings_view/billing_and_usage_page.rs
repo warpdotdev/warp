@@ -922,13 +922,11 @@ impl TypedActionView for BillingAndUsagePageView {
                     let team_uid = user_workspaces.current_team_uid();
                     if let Some((workspace, team_uid)) =
                         user_workspaces.current_workspace().zip(team_uid)
-                    {
-                        if workspace
+                        && workspace
                             .settings
                             .addon_credits_settings
                             .auto_reload_enabled
-                        {
-                            if let Some(option) = self
+                            && let Some(option) = self
                                 .addon_credits_options
                                 .get(self.selected_addon_denomination)
                             {
@@ -940,8 +938,6 @@ impl TypedActionView for BillingAndUsagePageView {
                                     ctx,
                                 );
                             }
-                        }
-                    }
                 });
                 ctx.notify();
             }
@@ -2243,8 +2239,8 @@ impl BillingAndUsagePageView {
         let show_alert = workspace_is_delinquent_due_to_payment_issue
             || matches!(divisor, Some(Divisor::Limit(limit)) if used >= limit);
 
-        if let Some(info) = prorated_request_limits_info {
-            if info.is_request_limit_prorated {
+        if let Some(info) = prorated_request_limits_info
+            && info.is_request_limit_prorated {
                 row.add_child(render_info_icon(
                 appearance,
                 AdditionalInfo::<BillingAndUsagePageAction> {
@@ -2258,7 +2254,6 @@ impl BillingAndUsagePageView {
                 },
             ))
             }
-        }
 
         if show_alert {
             row.add_child(
@@ -2907,8 +2902,8 @@ impl BillingAndUsagePageView {
 
         // For enterprise plan users with base limit = 0, show a limited usage reporting callout
         // as this is not applicable to them
-        if let Some(t) = team {
-            if t.billing_metadata.customer_type == CustomerType::Enterprise
+        if let Some(t) = team
+            && t.billing_metadata.customer_type == CustomerType::Enterprise
                 && t.billing_metadata
                     .tier
                     .warp_ai_policy
@@ -2921,7 +2916,6 @@ impl BillingAndUsagePageView {
                 ));
                 return usage.finish();
             }
-        }
 
         // Show a summed "Team total" row first.
         let num_team_members = workspace_team_members.len();
@@ -3223,8 +3217,8 @@ impl BillingAndUsagePageView {
         );
 
         let workspaces = UserWorkspaces::as_ref(app);
-        if let Some(team) = workspaces.current_team() {
-            if team.billing_metadata.is_usage_based_pricing_toggleable() {
+        if let Some(team) = workspaces.current_team()
+            && team.billing_metadata.is_usage_based_pricing_toggleable() {
                 let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
 
                 let enabled = self
@@ -3244,7 +3238,6 @@ impl BillingAndUsagePageView {
                     .finish(),
                 );
             }
-        }
 
         usage.finish()
     }

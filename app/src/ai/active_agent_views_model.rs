@@ -125,8 +125,8 @@ impl ActiveAgentViewsModel {
             }
         }
 
-        if let Some(last_focused_terminal_state) = &mut self.last_focused_terminal_state {
-            if last_focused_terminal_state.focused_terminal_id == terminal_view_id
+        if let Some(last_focused_terminal_state) = &mut self.last_focused_terminal_state
+            && last_focused_terminal_state.focused_terminal_id == terminal_view_id
                 && !matches!(
                     last_focused_terminal_state.active_conversation_id,
                     Some(ConversationOrTaskId::TaskId(_))
@@ -134,7 +134,6 @@ impl ActiveAgentViewsModel {
             {
                 last_focused_terminal_state.active_conversation_id = conversation_id;
             }
-        }
     }
 
     /// Register an agent view controller to track when the agent view is entered/exited.
@@ -147,15 +146,14 @@ impl ActiveAgentViewsModel {
         ctx: &mut ModelContext<Self>,
     ) {
         // Skip registering this controller if it is already registered.
-        if let Some(existing) = self.agent_view_handles.get(&terminal_view_id) {
-            if existing
+        if let Some(existing) = self.agent_view_handles.get(&terminal_view_id)
+            && existing
                 .controller
                 .upgrade(ctx)
                 .is_some_and(|c| c.id() == controller.id())
             {
                 return;
             }
-        }
 
         self.agent_view_handles.insert(
             terminal_view_id,
@@ -384,13 +382,12 @@ impl ActiveAgentViewsModel {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(task_id) = self.ambient_sessions.remove(&terminal_view_id) {
-            if !self.ambient_sessions.values().any(|id| *id == task_id) {
+        if let Some(task_id) = self.ambient_sessions.remove(&terminal_view_id)
+            && !self.ambient_sessions.values().any(|id| *id == task_id) {
                 self.last_opened_times
                     .remove(&ConversationOrTaskId::TaskId(task_id));
                 ctx.emit(ActiveAgentViewsEvent::AmbientSessionClosed { task_id });
             }
-        }
     }
 
     /// Returns the terminal view ID for a conversation if it's currently active
@@ -512,11 +509,10 @@ impl ActiveAgentViewsModel {
         entry: &AgentConversationEntry,
         ctx: &AppContext,
     ) -> Option<EntityId> {
-        if let Some(task_id) = entry.identity.ambient_agent_task_id {
-            if let Some(terminal_view_id) = self.get_terminal_view_id_for_ambient_task(task_id) {
+        if let Some(task_id) = entry.identity.ambient_agent_task_id
+            && let Some(terminal_view_id) = self.get_terminal_view_id_for_ambient_task(task_id) {
                 return Some(terminal_view_id);
             }
-        }
 
         if let Some(conversation_id) = entry.identity.local_conversation_id {
             return self.get_terminal_view_id_for_conversation(conversation_id, ctx);
@@ -565,15 +561,14 @@ impl ActiveAgentViewsModel {
 
         // Collect from interactive agent views (expanded).
         for handles in self.agent_view_handles.values() {
-            if let Some(controller) = handles.controller.upgrade(ctx) {
-                if let Some(conversation_id) = controller
+            if let Some(controller) = handles.controller.upgrade(ctx)
+                && let Some(conversation_id) = controller
                     .as_ref(ctx)
                     .agent_view_state()
                     .active_conversation_id()
                 {
                     ids.insert(ConversationOrTaskId::ConversationId(conversation_id));
                 }
-            }
         }
 
         // Collect from ambient sessions (open in tabs)

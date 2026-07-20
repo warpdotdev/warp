@@ -658,15 +658,14 @@ impl WorkflowsMoreInfoView {
             appearance,
         )];
 
-        if let Some(workflow_source) = workflow.source_url() {
-            if !workflow_source.is_empty() {
+        if let Some(workflow_source) = workflow.source_url()
+            && !workflow_source.is_empty() {
                 title_line.push(WorkflowsMoreInfoView::render_workflow_source(
                     self,
                     workflow_source.to_string(),
                     appearance,
                 ));
             }
-        }
 
         let collapse_button = self.render_collapse_button(appearance);
 
@@ -772,13 +771,12 @@ impl WorkflowsMoreInfoView {
 
         let mut children = vec![workflow_container];
 
-        if self.workflow.should_show_env_var_selection() {
-            if let Some(environment_variables_selection) =
+        if self.workflow.should_show_env_var_selection()
+            && let Some(environment_variables_selection) =
                 self.render_environment_variables_selection(appearance, app)
             {
                 children.push(Clipped::new(environment_variables_selection).finish());
             }
-        }
 
         if !self.show_shift_tab_treatment {
             children.push(self.render_command_edited_menu(appearance));

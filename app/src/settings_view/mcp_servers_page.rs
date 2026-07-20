@@ -169,14 +169,12 @@ impl MCPServersSettingsPageView {
             ServerCardItemId::FileBasedMCP(uuid) => {
                 if let Some(installation) =
                     FileBasedMCPManager::as_ref(ctx).get_installation_by_uuid(uuid)
-                {
-                    if let Some(hash) = installation.hash() {
+                    && let Some(hash) = installation.hash() {
                         TemplatableMCPServerManager::handle(ctx).update(ctx, |manager, ctx| {
                             manager.shutdown_server(uuid, ctx);
                             manager.purge_file_based_server_credentials(&vec![hash], ctx);
                         });
                     }
-                }
                 self.add_toast(&message, ctx);
             }
         }

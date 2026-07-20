@@ -251,11 +251,10 @@ fn tui_selection_reconciles_split_and_removed_selection() {
         let replacement_tx = std::cell::RefCell::new(Some(replacement_tx));
         app.update(|ctx| {
             ctx.subscribe_to_model(&selection, move |_, event, _| {
-                if matches!(event, ConversationSelectionEvent::Activated { .. }) {
-                    if let Some(tx) = replacement_tx.borrow_mut().take() {
+                if matches!(event, ConversationSelectionEvent::Activated { .. })
+                    && let Some(tx) = replacement_tx.borrow_mut().take() {
                         let _ = tx.send(());
                     }
-                }
             });
         });
 

@@ -1622,11 +1622,10 @@ impl AIContextMenu {
         app: &AppContext,
     ) -> Box<dyn Element> {
         #[cfg(not(target_family = "wasm"))]
-        if let Some(cat) = category {
-            if *cat == AIContextMenuCategory::Code && is_code_symbols_indexing(app) {
+        if let Some(cat) = category
+            && *cat == AIContextMenuCategory::Code && is_code_symbols_indexing(app) {
                 return self.render_code_symbols_indexing(app);
             }
-        }
 
         if self.mixer.as_ref(app).is_loading() {
             self.render_loading_results(app)
@@ -1683,12 +1682,12 @@ impl View for AIContextMenu {
         stack.add_child(main_container);
 
         // Add details panel overlay if there's a selected result
-        if !matches!(self.state.navigation_state, NavigationState::MainMenu) {
-            if let (Some(selected_result_renderer), Some(details_panel_positioning)) = (
+        if !matches!(self.state.navigation_state, NavigationState::MainMenu)
+            && let (Some(selected_result_renderer), Some(details_panel_positioning)) = (
                 self.selected_result_renderer(app),
                 self.offset_positioning_for_details_panel(app),
-            ) {
-                if let Some(details) = selected_result_renderer.render_details(app) {
+            )
+                && let Some(details) = selected_result_renderer.render_details(app) {
                     // QueryResultRenderer already applies styling, padding, border, etc.
                     // Just add some margin for spacing from the main menu
                     stack.add_positioned_overlay_child(
@@ -1699,8 +1698,6 @@ impl View for AIContextMenu {
                         details_panel_positioning,
                     );
                 }
-            }
-        }
 
         // Use proper keybinding handling instead of event handlers
         Dismiss::new(stack.finish())

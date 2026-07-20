@@ -252,8 +252,8 @@ impl EventLoop {
                         // When a non-agent command starts, clear the loading state and input buffer.
                         // We don't clear for agent commands because the viewer may be typing a
                         // follow-up.
-                        if should_clear_input {
-                            if let Some(view) = self.terminal_view.upgrade(ctx) {
+                        if should_clear_input
+                            && let Some(view) = self.terminal_view.upgrade(ctx) {
                                 view.update(ctx, |view, ctx| {
                                     // Skip during cloud setup: clearing on every setup command would
                                     // wipe a follow-up the viewer is composing. Mirrors the
@@ -288,10 +288,9 @@ impl EventLoop {
                                     });
                                 });
                             }
-                        }
-                        if let Some(ai_metadata) = reconstructed_ai_metadata {
-                            if let Some(view) = self.terminal_view.upgrade(ctx) {
-                                if let Some(action_id) = ai_metadata.requested_command_action_id() {
+                        if let Some(ai_metadata) = reconstructed_ai_metadata
+                            && let Some(view) = self.terminal_view.upgrade(ctx)
+                                && let Some(action_id) = ai_metadata.requested_command_action_id() {
                                     view.update(ctx, |view, ctx| {
                                         view.ai_controller().update(ctx, |controller, ctx| {
                                             controller
@@ -303,8 +302,6 @@ impl EventLoop {
                                         });
                                     });
                                 }
-                            }
-                        }
                     }
                 }
                 OrderedTerminalEventType::Resize { window_size } => {
@@ -403,8 +400,8 @@ impl EventLoop {
                 }
             }
 
-            if Some(self.next_event_no) == self.catching_up_to_event_no {
-                if let Some(view) = self.terminal_view.upgrade(ctx) {
+            if Some(self.next_event_no) == self.catching_up_to_event_no
+                && let Some(view) = self.terminal_view.upgrade(ctx) {
                     // TODO (suraj): reconsider how we query the role here.
                     if let Some(presence_manager) =
                         view.read(ctx, |view, _| view.shared_session_presence_manager())
@@ -419,7 +416,6 @@ impl EventLoop {
                         }
                     }
                 }
-            }
 
             self.channel_event_listener.send_wakeup_event();
 

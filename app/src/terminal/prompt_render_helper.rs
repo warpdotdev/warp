@@ -245,8 +245,8 @@ impl PromptRenderHelper {
 
         // If a remote server setup is in progress for the pending session,
         // show a stage-specific message instead of the generic "Starting shell...".
-        if let Some(pending_session_id) = model.pending_session_id() {
-            if let Some(state) = sessions.remote_server_setup_state(pending_session_id) {
+        if let Some(pending_session_id) = model.pending_session_id()
+            && let Some(state) = sessions.remote_server_setup_state(pending_session_id) {
                 return match state {
                     RemoteServerSetupState::Checking => "Starting shell...".to_string(),
                     RemoteServerSetupState::Installing {
@@ -267,7 +267,6 @@ impl PromptRenderHelper {
                     | RemoteServerSetupState::Unsupported { .. } => "Starting shell...".to_string(),
                 };
             }
-        }
 
         if !sessions.is_empty() {
             "Starting shell...".to_string()

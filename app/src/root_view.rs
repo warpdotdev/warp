@@ -2430,11 +2430,10 @@ impl RootView {
 
         let mut quake_mode_state = QUAKE_STATE.lock();
         // If the window we are focusing is the Quake Mode window, then update the QuakeModeState.
-        if let Some(mode) = quake_mode_state.as_mut() {
-            if mode.window_id == window_id {
+        if let Some(mode) = quake_mode_state.as_mut()
+            && mode.window_id == window_id {
                 mode.window_state = WindowState::Open;
             }
-        }
 
         ctx.windows().show_window_and_focus_app(window_id);
 

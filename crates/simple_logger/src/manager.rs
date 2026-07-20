@@ -94,11 +94,10 @@ impl LogManager {
 
         if purge_on_startup {
             let dir = log_directory_path(name);
-            if let Err(e) = std::fs::remove_dir_all(&dir) {
-                if e.kind() != ErrorKind::NotFound {
+            if let Err(e) = std::fs::remove_dir_all(&dir)
+                && e.kind() != ErrorKind::NotFound {
                     log::warn!("Failed to purge log directory {}: {e}", dir.display());
                 }
-            }
         }
 
         self.namespaces.insert(name.to_string());
@@ -151,8 +150,8 @@ impl LogManager {
         executor: Arc<Background>,
         rotation: Option<crate::RotationConfig>,
     ) -> Result<SimpleLogger, LogManagerError> {
-        if let Some(existing) = self.loggers.get(&path) {
-            if let Some(writer) = existing.upgrade() {
+        if let Some(existing) = self.loggers.get(&path)
+            && let Some(writer) = existing.upgrade() {
                 // A live `Arc` alone is not enough to keep the path reserved.
                 // Callers may explicitly close a logger to mark the stream as
                 // finished before every clone has been dropped.
@@ -160,7 +159,6 @@ impl LogManager {
                     return Err(LogManagerError::LoggerAlreadyActive { path });
                 }
             }
-        }
 
         // In the absence of an active logger at this path, initialize and return a new logger,
         // which truncates any existing log file on creation.

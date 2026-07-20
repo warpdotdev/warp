@@ -36,14 +36,13 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
     }
 
     let config_local_dir = warp_core::paths::config_local_dir();
-    if config_local_dir != data_dir {
-        if let Err(err) = fs::create_dir_all(&config_local_dir) {
+    if config_local_dir != data_dir
+        && let Err(err) = fs::create_dir_all(&config_local_dir) {
             log::warn!(
                 "Failed to create Warp config directory {}: {err}",
                 config_local_dir.display()
             );
         }
-    }
 
     // The TUI surface stores its settings in a separate config directory
     // (see `warp_core::paths::tui_config_local_dir`). Create it up front — only
@@ -308,8 +307,8 @@ impl WarpManagedPathsWatcher {
                     );
                 }
             }
-            if let Some(warp_home_skills_dir) = warp_home_skills_dir() {
-                if warp_home_skills_dir.exists()
+            if let Some(warp_home_skills_dir) = warp_home_skills_dir()
+                && warp_home_skills_dir.exists()
                     && !warp_home_skills_dir.starts_with(&data_dir)
                     && (!should_register_config_local_dir
                         || !warp_home_skills_dir.starts_with(&config_local_dir))
@@ -323,12 +322,10 @@ impl WarpManagedPathsWatcher {
                         "Warp home skills directory",
                     );
                 }
-            }
-            if let Some(active_mcp_config_path) = active_mcp_config_file_path() {
-                if let Some(active_mcp_config_dir) =
+            if let Some(active_mcp_config_path) = active_mcp_config_file_path()
+                && let Some(active_mcp_config_dir) =
                     active_mcp_config_path.parent().map(Path::to_path_buf)
-                {
-                    if active_mcp_config_dir.exists()
+                    && active_mcp_config_dir.exists()
                         && !active_mcp_config_dir.starts_with(&data_dir)
                         && (!should_register_config_local_dir
                             || !active_mcp_config_dir.starts_with(&config_local_dir))
@@ -345,8 +342,6 @@ impl WarpManagedPathsWatcher {
                             "Warp MCP config directory",
                         );
                     }
-                }
-            }
         }
 
         Self { _watcher: watcher }

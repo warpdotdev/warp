@@ -63,15 +63,14 @@ impl Input {
 
         // Render attachment chips (e.g. pasted screenshots) above the editor,
         // matching the pattern used by the agent view input in agent.rs.
-        if FeatureFlag::ImageAsContext.is_enabled() {
-            if let Some(images) = self.render_attachment_chips(appearance) {
+        if FeatureFlag::ImageAsContext.is_enabled()
+            && let Some(images) = self.render_attachment_chips(appearance) {
                 column.add_child(
                     Container::new(images)
                         .with_margin_top(spacing::UDI_CHIP_MARGIN)
                         .finish(),
                 );
             }
-        }
 
         column.add_child(editor_element);
         column.add_child(
@@ -102,11 +101,10 @@ impl Input {
         // the rich input background to the alt screen so it blends in.
         {
             let terminal_model = self.model.lock();
-            if terminal_model.is_alt_screen_active() {
-                if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
+            if terminal_model.is_alt_screen_active()
+                && let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
                     input_container = input_container.with_background(bg_color);
                 }
-            }
         }
 
         let drop_target = DropTarget::new(

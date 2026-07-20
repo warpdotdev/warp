@@ -104,8 +104,8 @@ pub(super) fn clean_up_snapshot_files(
             let path = fs_entry.path();
 
             // Check if this is a regular file with a snapshot_ prefix
-            if let Ok(fs_metadata) = fs_entry.metadata() {
-                if fs_metadata.is_file() {
+            if let Ok(fs_metadata) = fs_entry.metadata()
+                && fs_metadata.is_file() {
                     maybe_clean_up_snapshot_file(
                         &path,
                         &fs_metadata,
@@ -113,7 +113,6 @@ pub(super) fn clean_up_snapshot_files(
                         &expected_snapshot_filenames,
                     );
                 }
-            }
         }
     }
 }
@@ -124,18 +123,16 @@ fn maybe_clean_up_snapshot_file(
     fs_now: &std::time::SystemTime,
     expected_snapshot_filenames: &HashSet<PathBuf>,
 ) {
-    if let Some(filename) = path.file_name() {
-        if filename.to_string_lossy().starts_with("snapshot_") {
+    if let Some(filename) = path.file_name()
+        && filename.to_string_lossy().starts_with("snapshot_") {
             let mut should_remove = false;
 
             // Check if file itself is expired
-            if let Ok(modified_time) = fs_metadata.modified() {
-                if let Ok(age) = fs_now.duration_since(modified_time) {
-                    if age >= REPO_SNAPSHOT_SHELF_LIFE_DURATION {
+            if let Ok(modified_time) = fs_metadata.modified()
+                && let Ok(age) = fs_now.duration_since(modified_time)
+                    && age >= REPO_SNAPSHOT_SHELF_LIFE_DURATION {
                         should_remove = true;
                     }
-                }
-            }
 
             // Check if file is not in alive_files set
             if !expected_snapshot_filenames.contains(path) {
@@ -143,13 +140,11 @@ fn maybe_clean_up_snapshot_file(
             }
 
             // Remove file if either condition is true
-            if should_remove {
-                if let Err(e) = std::fs::remove_file(path) {
+            if should_remove
+                && let Err(e) = std::fs::remove_file(path) {
                     log::warn!("Failed to remove stale snapshot file {path:?}: {e}");
                 }
-            }
         }
-    }
 }
 
 #[cfg(feature = "local_fs")]

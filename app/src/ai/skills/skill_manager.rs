@@ -132,8 +132,8 @@ impl SkillManager {
             | (None, LocalOrRemotePath::Remote(_)) => false,
         };
 
-        if let Some(home_dir) = self.home_directory_for_origin(path_origin) {
-            if let Some(home_skill_paths) = self.directory_skills.get(&home_dir) {
+        if let Some(home_dir) = self.home_directory_for_origin(path_origin)
+            && let Some(home_skill_paths) = self.directory_skills.get(&home_dir) {
                 skill_paths.extend(
                     home_skill_paths
                         .iter()
@@ -141,7 +141,6 @@ impl SkillManager {
                         .map(|path| (home_dir.clone(), path)),
                 );
             }
-        }
 
         if self.is_cloud_environment {
             // In cloud environments, all skills in the working directory's location are in scope

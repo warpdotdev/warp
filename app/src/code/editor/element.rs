@@ -359,15 +359,13 @@ impl LineNumberConfig {
     }
 
     pub fn display_line_number(&self, line_count: LineCount) -> usize {
-        if self.mode == CodeEditorLineNumberMode::Relative {
-            if let Some(active_line_number) = self.active_line_number {
-                if active_line_number != line_count {
+        if self.mode == CodeEditorLineNumberMode::Relative
+            && let Some(active_line_number) = self.active_line_number
+                && active_line_number != line_count {
                     return active_line_number
                         .as_usize()
                         .abs_diff(line_count.as_usize());
                 }
-            }
-        }
 
         self.absolute_line_number(line_count)
     }
@@ -1013,8 +1011,8 @@ impl<V: EditorView> EditorWrapper<V> {
             };
 
             let mut stack = Stack::new().with_child(container.finish());
-            if state.is_hovered() {
-                if let Some(text) = gutter_button.tooltip_text() {
+            if state.is_hovered()
+                && let Some(text) = gutter_button.tooltip_text() {
                     let tooltip = appearance
                         .ui_builder()
                         .tool_tip(text.into())
@@ -1030,7 +1028,6 @@ impl<V: EditorView> EditorWrapper<V> {
                         ),
                     );
                 }
-            }
 
             stack.finish()
         });
@@ -1332,8 +1329,8 @@ impl<V: EditorView> Element for EditorWrapper<V> {
             for gutter_element in gutter_elements {
                 let gutter_element_size = gutter_element.element.layout(constraint, ctx, app);
 
-                if FeatureFlag::InlineCodeReview.is_enabled() {
-                    if let Some(comment_box) = &mut self.comment_box {
+                if FeatureFlag::InlineCodeReview.is_enabled()
+                    && let Some(comment_box) = &mut self.comment_box {
                         let highlight_line = &comment_box.line;
                         if gutter_element.line == *highlight_line {
                             let highlight_width = size.x();
@@ -1348,7 +1345,6 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                             );
                         }
                     }
-                }
             }
         }
 
@@ -1449,8 +1445,8 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                             .as_ref()
                             .is_some_and(|r| r == element.line.line_range()));
 
-                if let Some(size) = element.diff_hunk_size(is_hovered) {
-                    if let Some(color) = element.diff_indicator_color(diff_hunks_are_expanded) {
+                if let Some(size) = element.diff_hunk_size(is_hovered)
+                    && let Some(color) = element.diff_indicator_color(diff_hunks_are_expanded) {
                         let current_range = element.line.line_range();
                         let same_group = group.as_ref().is_some_and(|g| {
                             g.range == current_range
@@ -1480,7 +1476,6 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                             });
                         }
                     }
-                }
 
                 // Track positions for inline comment and find references.
                 if !matches!(
@@ -1534,9 +1529,9 @@ impl<V: EditorView> Element for EditorWrapper<V> {
 
             ctx.scene.stop_layer();
 
-            if FeatureFlag::InlineCodeReview.is_enabled() {
-                if let Some(comment_box) = &mut self.comment_box {
-                    if let Some((offset, height)) = inline_comment_gutter_element {
+            if FeatureFlag::InlineCodeReview.is_enabled()
+                && let Some(comment_box) = &mut self.comment_box
+                    && let Some((offset, height)) = inline_comment_gutter_element {
                         let gutter_origin = origin + vec2f(0., offset);
 
                         // Highlight the selected line.
@@ -1552,13 +1547,11 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                             rect,
                         );
                     }
-                }
-            }
         }
 
         // Cache find references anchor position if we have one.
-        if self.find_references_anchor.is_some() {
-            if let Some((offset, height)) = find_references_gutter_element {
+        if self.find_references_anchor.is_some()
+            && let Some((offset, height)) = find_references_gutter_element {
                 let gutter_origin = origin + vec2f(0., offset);
 
                 // Cache the gutter position for the find references anchor.
@@ -1569,7 +1562,6 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                     rect,
                 );
             }
-        }
 
         self.child_max_z_index = Some(ctx.scene.max_active_z_index());
     }
@@ -1653,13 +1645,12 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                 if !gutter_handled {
                     let was_clicking = self.state_handle.in_click.swap(false, Ordering::Relaxed);
 
-                    if was_clicking {
-                        if let Some(gutter_range) =
+                    if was_clicking
+                        && let Some(gutter_range) =
                             self.gutter_element_range_containing_position(*position, false)
                         {
                             (self.click_handler)(gutter_range, ctx);
                         }
-                    }
                 }
             }
             _ => (),

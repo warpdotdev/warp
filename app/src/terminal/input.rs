@@ -3870,11 +3870,10 @@ impl Input {
         };
 
         #[cfg(feature = "local_fs")]
-        if let Some(db_url) = database_file_path_for_current_scope().to_str() {
-            if let Ok(conn) = establish_ro_connection(db_url) {
+        if let Some(db_url) = database_file_path_for_current_scope().to_str()
+            && let Ok(conn) = establish_ro_connection(db_url) {
                 input.conn = Some(Arc::new(Mutex::new(conn)));
             }
-        }
 
         if input.model.lock().shared_session_status().is_viewer() {
             input.editor.update(ctx, |editor, ctx| {
@@ -6426,8 +6425,7 @@ impl Input {
             (InputType::AI, _) => {
                 if let Some(conversation) =
                     self.ai_context_model.as_ref(app).selected_conversation(app)
-                {
-                    if conversation.is_child_agent_conversation() {
+                    && conversation.is_child_agent_conversation() {
                         let agent_name = conversation.agent_name().unwrap_or("child");
                         if conversation.status().is_in_progress() {
                             if is_queue_next_prompt_enabled {
@@ -6437,7 +6435,6 @@ impl Input {
                         }
                         return format!("Ask the {agent_name} agent a follow up");
                     }
-                }
 
                 // Follow the `agent_indicator` pattern (see `app/src/tab.rs`):
                 //  * `None` (no conversation, empty, passive, or untitled) => new conversation => "Warp anything"
@@ -7482,8 +7479,8 @@ impl Input {
         {
             // Skip any empty blocks created by the user. Keep the last zero-state autosuggestion
             // until the user executes a command.
-            if !command.is_empty() {
-                if let Some(ZeroStateSuggestionInfo {
+            if !command.is_empty()
+                && let Some(ZeroStateSuggestionInfo {
                     request,
                     response,
                     is_from_ai,
@@ -7528,7 +7525,6 @@ impl Input {
                         ctx
                     );
                 }
-            }
             // Reset state for whether the user accepted the intelligent autosuggestion.
             self.was_intelligent_autosuggestion_accepted = false;
 
@@ -7796,11 +7792,10 @@ impl Input {
         }
 
         // The vim status bar should be shown and hidden immediately upon toggling.
-        if settings.as_ref(ctx).vim_mode_enabled() {
-            if let AppEditorSettingsChangedEvent::VimStatusBar { .. } = evt {
+        if settings.as_ref(ctx).vim_mode_enabled()
+            && let AppEditorSettingsChangedEvent::VimStatusBar { .. } = evt {
                 ctx.notify();
             }
-        }
     }
 
     pub fn set_autosuggestion(
@@ -8791,8 +8786,8 @@ impl Input {
         should_restore_buffer_before_history_up: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        if should_restore_buffer_before_history_up {
-            if let InputSuggestionsMode::HistoryUp {
+        if should_restore_buffer_before_history_up
+            && let InputSuggestionsMode::HistoryUp {
                 original_buffer,
                 original_cursor_point,
                 original_input_was_locked,
@@ -8826,7 +8821,6 @@ impl Input {
                     }
                 });
             }
-        }
         self.close_input_suggestions(/*should_focus_input=*/ should_focus_input, ctx);
     }
 
@@ -8910,14 +8904,13 @@ impl Input {
     }
 
     pub fn focus_input_box(&self, ctx: &mut ViewContext<Self>) {
-        if self.should_show_auth_secret_ftux(ctx) {
-            if let Some(ftux_view) = self.auth_secret_ftux_view().cloned() {
+        if self.should_show_auth_secret_ftux(ctx)
+            && let Some(ftux_view) = self.auth_secret_ftux_view().cloned() {
                 ftux_view.update(ctx, |view, ctx| {
                     view.focus_dropdown_editor(ctx);
                 });
                 return;
             }
-        }
         ctx.focus_self();
     }
 
@@ -8995,15 +8988,14 @@ impl Input {
             return;
         }
 
-        if let Some(selector) = self.auth_secret_selector() {
-            if selector.as_ref(ctx).is_menu_open() {
+        if let Some(selector) = self.auth_secret_selector()
+            && selector.as_ref(ctx).is_menu_open() {
                 let selector = selector.clone();
                 selector.update(ctx, |selector, ctx| {
                     selector.select_previous(ctx);
                 });
                 return;
             }
-        }
 
         if self.is_editing_queued_prompt(ctx) {
             return;
@@ -9618,8 +9610,8 @@ impl Input {
                     #[cfg(feature = "local_fs")]
                     // First, use rich history to find commands with a matching prefix that were run
                     // in a similar context, taking into account the most recent block run.
-                    if let Some(conn) = conn {
-                        if let Some(last_user_block_completed) =
+                    if let Some(conn) = conn
+                        && let Some(last_user_block_completed) =
                             &completer_data.last_user_block_completed
                         {
                             let similar_history_contexts = {
@@ -9667,7 +9659,6 @@ impl Input {
                                 }
                             }
                         }
-                    }
 
                     // If we have no suggestion from similar historical context, fallback to the most recent
                     // command with a matching prefix run in the same pwd (if exists, otherwise just most recent command anywhere with matching prefix).
@@ -9780,14 +9771,13 @@ impl Input {
         // If there is an abbreviation, we expand it as long as we aren't executing.
         // In fish, an alias formatted like `ls=echo Hello && ls` would get expanded
         // twice if we also performed expansion on enter.
-        if matches!(executing, Executing::No) {
-            if let Some(abbr_value) = session_context
+        if matches!(executing, Executing::No)
+            && let Some(abbr_value) = session_context
                 .session
                 .abbreviation_value(&first_token.item)
             {
                 return Some((first_token, abbr_value));
             }
-        }
 
         // We only expand aliases if the user has turned the setting on.
         if self.should_expand_aliases(ctx) {
@@ -10978,11 +10968,10 @@ impl Input {
                         self.start_xray_at_offset(pos, CommandXRayTrigger::Keystroke, ctx);
                     }
                     CommandXRayAnchor::Hover(mouse_position) => {
-                        if let Some(offset) = self.start_byte_index_at_point(mouse_position, ctx) {
-                            if !self.suggestions_mode_model.as_ref(ctx).is_visible() {
+                        if let Some(offset) = self.start_byte_index_at_point(mouse_position, ctx)
+                            && !self.suggestions_mode_model.as_ref(ctx).is_visible() {
                                 self.start_xray_at_offset(offset, CommandXRayTrigger::Hover, ctx);
                             }
-                        }
                     }
                 }
             }
@@ -11809,13 +11798,13 @@ impl Input {
             return Vec::new();
         };
 
-        let commands = history_model
+        
+        // TODO: append viewer's local shell history
+        history_model
             .as_ref(ctx)
             .entries()
             .map(|entry| HistoryInputSuggestion::Command { entry })
-            .collect();
-        // TODO: append viewer's local shell history
-        commands
+            .collect()
     }
 
     /// Returns a collection of history entries that are user AI queries or shell commands in order
@@ -12097,11 +12086,10 @@ impl Input {
             _ => CompletionsFallbackStrategy::None,
         };
 
-        if self.is_completions_while_typing_turned_on(ctx) {
-            if let Some(last_abort_handle) = self.completions_abort_handle.take() {
+        if self.is_completions_while_typing_turned_on(ctx)
+            && let Some(last_abort_handle) = self.completions_abort_handle.take() {
                 last_abort_handle.abort();
             }
-        }
 
         let input_type = self.ai_input_model.as_ref(ctx).input_type();
 
@@ -12409,8 +12397,8 @@ impl Input {
                             [0..self.start_byte_index_of_last_selection(ctx).as_usize()]
                             .to_string();
 
-                        if completions_trigger == CompletionsTrigger::Keybinding {
-                            if let Some(common_prefix) = longest_common_prefix(
+                        if completions_trigger == CompletionsTrigger::Keybinding
+                            && let Some(common_prefix) = longest_common_prefix(
                                 results
                                     .suggestions
                                     .iter()
@@ -12452,7 +12440,6 @@ impl Input {
                                     );
                                 }
                             }
-                        }
 
                         // If not using completions as you type, then
                         // clear any autosuggestions when tab completions are open.
@@ -13050,22 +13037,20 @@ impl Input {
                             // Kind of a quirk, but PowerShell only inserts a
                             // newline after a backtick if the character preceding
                             // the backtick is whitespace.
-                            if let Some(c) = preceding_chars.next() {
-                                if !c.is_ascii_whitespace() {
+                            if let Some(c) = preceding_chars.next()
+                                && !c.is_ascii_whitespace() {
                                     return false;
                                 }
-                            }
                             return true;
                         }
                     }
                     Some(ShellFamily::Posix) | None => {
                         if c == '\\' {
                             // Continue if there are more \ characters
-                            if let Some(c) = preceding_chars.next() {
-                                if c == '\\' {
+                            if let Some(c) = preceding_chars.next()
+                                && c == '\\' {
                                     continue;
                                 }
-                            }
                             // Odd number of \ characters
                             return true;
                         }
@@ -13392,8 +13377,8 @@ impl Input {
                     return;
                 }
 
-                if self.is_cloud_mode_input_v2_composing(ctx) {
-                    if let Some(ambient_agent_view_model) = self.ambient_agent_view_model() {
+                if self.is_cloud_mode_input_v2_composing(ctx)
+                    && let Some(ambient_agent_view_model) = self.ambient_agent_view_model() {
                         let needs_env_modal = ambient_agent_view_model
                             .as_ref(ctx)
                             .selected_environment_id()
@@ -13403,7 +13388,6 @@ impl Input {
                             return;
                         }
                     }
-                }
 
                 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
                 let attachments = self
@@ -14319,8 +14303,8 @@ impl Input {
 
         ctx.emit(Event::ExecuteAIQuery);
 
-        if let Some(workflow_state) = self.workflows_state.selected_workflow_state.as_ref() {
-            if let WorkflowType::Cloud(workflow) = &workflow_state.workflow_type {
+        if let Some(workflow_state) = self.workflows_state.selected_workflow_state.as_ref()
+            && let WorkflowType::Cloud(workflow) = &workflow_state.workflow_type {
                 send_telemetry_from_ctx!(
                     TelemetryEvent::ExecutedWarpDrivePrompt {
                         id: workflow.id.into_server().map(Into::into),
@@ -14338,7 +14322,6 @@ impl Input {
                     )
                 });
             }
-        }
     }
 
     /// Send the given query to the session sharer for them to execute on their machine.
@@ -14359,11 +14342,9 @@ impl Input {
             .slash_command_model
             .as_ref(ctx)
             .detect_command(&prompt, ctx)
-        {
-            if !slash_command_is_submitted_as_prompt(&detected.command) {
+            && !slash_command_is_submitted_as_prompt(&detected.command) {
                 return false;
             }
-        }
 
         // We're committed to sending the prompt, so finalize any in-flight image-attachment
         // processing. This drops images that haven't finished processing; already-processed ones
@@ -14714,8 +14695,8 @@ impl Input {
 
         // If the buffer is non-empty, we should kick off the autodetection process, in case the
         // classification doesn't match the previous locked mode.
-        if !buffer_text.is_empty() {
-            if let Some(completion_context) = self.completion_session_context(ctx) {
+        if !buffer_text.is_empty()
+            && let Some(completion_context) = self.completion_session_context(ctx) {
                 let ai_input_model = self.ai_input_model.clone();
 
                 ctx.spawn(
@@ -14739,7 +14720,6 @@ impl Input {
                     },
                 );
             }
-        }
     }
 
     /// Set input mode to Agent Mode (AI input)
@@ -15305,13 +15285,12 @@ impl Input {
             prompt_chip_snapshot: None,
         };
 
-        if let Some(block) = block {
-            if !is_udi && block.honor_ps1() && model.block_list().is_bootstrapped() {
+        if let Some(block) = block
+            && !is_udi && block.honor_ps1() && model.block_list().is_bootstrapped() {
                 // PS1 mode: capture the raw prompt grid so the command palette
                 // can render it with full fidelity (CORE-1683).
                 prompt_elements.ps1_prompt_grid = Some(block.prompt_grid().clone());
             }
-        }
 
         // Always capture a chip snapshot as the fallback prompt representation.
         // This covers both UDI mode and any edge cases where PS1 is not available
@@ -16165,11 +16144,10 @@ impl View for Input {
             ctx.set.insert(flags::CODE_SUGGESTIONS_FLAG);
         }
 
-        if let Some(workflow) = self.workflows_state.selected_workflow_state.clone() {
-            if workflow.should_show_more_info_view {
+        if let Some(workflow) = self.workflows_state.selected_workflow_state.clone()
+            && workflow.should_show_more_info_view {
                 ctx.set.insert("WorkflowInfoBox");
             }
-        }
 
         let is_profile_model_selector_open = self.should_show_universal_developer_input(app)
             && self

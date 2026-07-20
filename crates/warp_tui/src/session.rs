@@ -71,13 +71,12 @@ pub fn run() -> Result<()> {
         args.api_key,
         Box::new(move |ctx| init(resume_token, exit_summary_for_app, ctx)),
     );
-    if result.is_ok() {
-        if let Some(token) = exit_summary.token() {
+    if result.is_ok()
+        && let Some(token) = exit_summary.token() {
             let token = token.as_str();
             println!("To continue this conversation, run:");
             println!("warp --resume {token}");
         }
-    }
     result
 }
 

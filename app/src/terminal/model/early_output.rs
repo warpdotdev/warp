@@ -217,15 +217,14 @@ impl EarlyOutput {
             // background output.
             // We can't correctly identify the command in advance when this happens, so
             // instead we fix the block list afterwards.
-            if !block_list.active_block().started() {
-                if let Some(background_block) = block_list.remove_background_block() {
+            if !block_list.active_block().started()
+                && let Some(background_block) = block_list.remove_background_block() {
                     log::debug!("Repairing command from background block");
                     block_list
                         .active_block_mut()
                         .copy_command_grid(background_block.output_grid());
                     block_list.update_active_block_height();
                 }
-            }
         }
     }
 

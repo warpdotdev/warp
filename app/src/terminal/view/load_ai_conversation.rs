@@ -388,8 +388,7 @@ impl TerminalView {
                                     self.ai_action_model.read(ctx, |action_model, _| {
                                         action_model.get_action_result(&action.id).cloned()
                                     })
-                                {
-                                    if let AIAgentActionResultType::CreateDocuments(
+                                    && let AIAgentActionResultType::CreateDocuments(
                                         CreateDocumentsResult::Success { created_documents },
                                     ) = &result.result
                                     {
@@ -419,15 +418,13 @@ impl TerminalView {
                                             }
                                         });
                                     }
-                                }
                             }
                             AIAgentActionType::EditDocuments { .. } => {
                                 if let Some(result) =
                                     self.ai_action_model.read(ctx, |action_model, _| {
                                         action_model.get_action_result(&action.id).cloned()
                                     })
-                                {
-                                    if let AIAgentActionResultType::EditDocuments(
+                                    && let AIAgentActionResultType::EditDocuments(
                                         EditDocumentsResult::Success { updated_documents },
                                     ) = &result.result
                                     {
@@ -442,7 +439,6 @@ impl TerminalView {
                                             }
                                         });
                                     }
-                                }
                             }
                             _ => {}
                         }
@@ -792,8 +788,8 @@ impl TerminalView {
         );
 
         // If agent view was open before the session was saved, restore it
-        if FeatureFlag::AgentView.is_enabled() {
-            if let Some(conversation_id) = active_conversation_id_to_restore {
+        if FeatureFlag::AgentView.is_enabled()
+            && let Some(conversation_id) = active_conversation_id_to_restore {
                 // Check if the conversation was successfully restored
                 let conversation_exists = BlocklistAIHistoryModel::handle(ctx)
                     .as_ref(ctx)
@@ -814,7 +810,6 @@ impl TerminalView {
                     );
                 }
             }
-        }
     }
 
     /// When we fork a conversation, we copy all of the ai and terminal blocks that were part of the original conversation.

@@ -203,11 +203,9 @@ impl OrchestrationConfigBlockView {
                     conversation_id: cid,
                     ..
                 } = event
-                {
-                    if *cid == me.conversation_id {
+                    && *cid == me.conversation_id {
                         me.refresh_from_model(ctx);
                     }
-                }
             },
         );
 
@@ -215,8 +213,8 @@ impl OrchestrationConfigBlockView {
         // harness only — non-Oz harnesses get their catalog from
         // HarnessAvailabilityModel, not LLMPreferences).
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
-            if let LLMPreferencesEvent::UpdatedAvailableLLMs = event {
-                if let Some(handle) = &me.pickers.model_picker {
+            if let LLMPreferencesEvent::UpdatedAvailableLLMs = event
+                && let Some(handle) = &me.pickers.model_picker {
                     let is_local = !me
                         .orchestration_edit_state
                         .orchestration_config_state
@@ -234,7 +232,6 @@ impl OrchestrationConfigBlockView {
                         ctx,
                     );
                 }
-            }
         });
 
         // Repopulate pickers when the server-provided harness list,
@@ -408,8 +405,8 @@ impl OrchestrationConfigBlockView {
             return;
         }
         let history = BlocklistAIHistoryModel::as_ref(ctx);
-        if let Some(conv) = history.conversation(&self.conversation_id) {
-            if let Some((config, status)) = conv.orchestration_config_for_plan(&self.plan_id) {
+        if let Some(conv) = history.conversation(&self.conversation_id)
+            && let Some((config, status)) = conv.orchestration_config_for_plan(&self.plan_id) {
                 self.orchestration_edit_state.orchestration_config_state =
                     OrchestrationConfigState::from_orchestration_config(config);
                 self.is_approved = status.is_approved();
@@ -426,7 +423,6 @@ impl OrchestrationConfigBlockView {
                 }
                 ctx.notify();
             }
-        }
     }
 
     fn ensure_pickers(&mut self, ctx: &mut ViewContext<Self>) {
@@ -518,14 +514,13 @@ impl OrchestrationConfigBlockView {
                 .set_worker_host(default_host);
             filled_defaults = true;
         }
-        if needs_env {
-            if let Some(default_env) = oc::resolve_default_environment_id(ctx) {
+        if needs_env
+            && let Some(default_env) = oc::resolve_default_environment_id(ctx) {
                 self.orchestration_edit_state
                     .orchestration_config_state
                     .set_environment_id(default_env);
                 filled_defaults = true;
             }
-        }
         if filled_defaults && self.is_approved {
             self.apply_field_change(ctx);
         }

@@ -228,8 +228,8 @@ impl HeaderConfig {
         .with_color(text_color)
         .finish();
 
-        if self.use_markdown {
-            if let Ok(formatted_text) = markdown_parser::parse_markdown(&self.title) {
+        if self.use_markdown
+            && let Ok(formatted_text) = markdown_parser::parse_markdown(&self.title) {
                 let mut element = FormattedTextElement::new(
                     formatted_text,
                     appearance.monospace_font_size(),
@@ -244,7 +244,6 @@ impl HeaderConfig {
                 }
                 title_element = element.finish();
             }
-        }
 
         left_content_container.add_child(
             Expanded::new(

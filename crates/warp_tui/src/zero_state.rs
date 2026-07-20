@@ -224,11 +224,10 @@ fn render_project_section(
     let mut rule_files: Vec<String> = Vec::new();
     if let Some(rules) = &rules {
         for rule in &rules.active_rules {
-            if let Some(name) = rule.path.file_name() {
-                if !rule_files.iter().any(|file| file == name) {
+            if let Some(name) = rule.path.file_name()
+                && !rule_files.iter().any(|file| file == name) {
                     rule_files.push(name.to_owned());
                 }
-            }
         }
     }
 

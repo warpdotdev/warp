@@ -635,13 +635,11 @@ fn validate_request(request: &RunAgentsRequest) -> Result<(), String> {
     if request.agent_run_configs.is_empty() {
         return Err("orchestrate: empty agent_run_configs".to_string());
     }
-    if matches!(request.execution_mode, RunAgentsExecutionMode::Local) {
-        if let Some(harness) = Harness::parse_local_child_harness(&request.harness_type) {
-            if let Some(message) = local_harness_product_disabled_message(harness) {
+    if matches!(request.execution_mode, RunAgentsExecutionMode::Local)
+        && let Some(harness) = Harness::parse_local_child_harness(&request.harness_type)
+            && let Some(message) = local_harness_product_disabled_message(harness) {
                 return Err(message.to_string());
             }
-        }
-    }
     if matches!(
         request.execution_mode,
         RunAgentsExecutionMode::Remote { .. }
@@ -701,11 +699,10 @@ pub fn run_agents_to_start_agent_mode(
                     model_id,
                 })
             } else {
-                if let Some(harness) = Harness::parse_local_child_harness(trimmed) {
-                    if let Some(message) = local_harness_product_disabled_message(harness) {
+                if let Some(harness) = Harness::parse_local_child_harness(trimmed)
+                    && let Some(message) = local_harness_product_disabled_message(harness) {
                         return Err(message.to_string());
                     }
-                }
                 Ok(StartAgentExecutionMode::Local {
                     harness_type: Some(trimmed.to_string()),
                     model_id,

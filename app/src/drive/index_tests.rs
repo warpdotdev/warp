@@ -208,8 +208,7 @@ fn test_retry_menu_item_logic() {
         CloudModel::handle(&app).update(&mut app, |cloud_model, ctx| {
             if let CloudObjectTypeAndId::Workflow(SyncId::ClientId(client_id)) =
                 cloud_object_type_and_id
-            {
-                if let SyncId::ServerId(server_id) = new_sync_id {
+                && let SyncId::ServerId(server_id) = new_sync_id {
                     let server_creation_info = ServerCreationInfo {
                         server_id_and_type: ServerIdAndType {
                             id: server_id,
@@ -224,7 +223,6 @@ fn test_retry_menu_item_logic() {
                         ctx,
                     );
                 }
-            }
         });
 
         index.update(&mut app, |index, ctx| {

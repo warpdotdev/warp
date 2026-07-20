@@ -352,11 +352,9 @@ impl InlineModelSelectorView {
                     terminal_surface_id: event_terminal_surface_id,
                     ..
                 } = event
-                {
-                    if *event_terminal_surface_id == terminal_view_id {
+                    && *event_terminal_surface_id == terminal_view_id {
                         me.menu_view.update(ctx, |_, ctx| ctx.notify());
                     }
-                }
             },
         );
 
@@ -380,8 +378,8 @@ impl InlineModelSelectorView {
                         menu.select_first_where(|item| item.id == id, ctx)
                     })
                 });
-                if !found_by_id {
-                    if let Some(idx) = selection.index {
+                if !found_by_id
+                    && let Some(idx) = selection.index {
                         let count = me.menu_view.as_ref(ctx).result_count();
                         if count > 0 {
                             me.menu_view.update(ctx, |menu, ctx| {
@@ -389,7 +387,6 @@ impl InlineModelSelectorView {
                             });
                         }
                     }
-                }
                 return;
             }
 

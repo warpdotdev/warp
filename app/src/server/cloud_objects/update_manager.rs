@@ -1509,8 +1509,8 @@ impl UpdateManager {
                             if matches!(
                                 fetch_single_object_option,
                                 FetchSingleObjectOption::ForceOverwrite
-                            ) {
-                                if let Some(object) = cloud_model.get_mut_by_uid(&uid) {
+                            )
+                                && let Some(object) = cloud_model.get_mut_by_uid(&uid) {
                                     let had_conflict = object.has_conflicting_changes();
                                     object.replace_object_with_conflict();
                                     // If there was a conflict, `upsert_from_server_cloud_object` won't
@@ -1522,7 +1522,6 @@ impl UpdateManager {
                                         });
                                     }
                                 }
-                            }
 
                             Self::save_in_memory_object_to_sqlite(
                                 me,
@@ -1572,13 +1571,11 @@ impl UpdateManager {
         ctx: &mut ModelContext<UpdateManager>,
     ) -> bool {
         let cloud_model = CloudModel::as_ref(ctx);
-        if let Some(object) = cloud_model.get_by_uid(object_uid) {
-            if let Some(current_timestamp) = object.permissions().permissions_last_updated_ts {
-                if current_timestamp >= last_updated_at {
+        if let Some(object) = cloud_model.get_by_uid(object_uid)
+            && let Some(current_timestamp) = object.permissions().permissions_last_updated_ts
+                && current_timestamp >= last_updated_at {
                     return true;
                 }
-            }
-        }
         false
     }
 
@@ -3662,12 +3659,11 @@ impl UpdateManager {
         // Populate sync queue.
         SyncQueue::handle(ctx).update(ctx, |sync_queue, ctx| {
             let cloud_model = CloudModel::as_ref(ctx);
-            if let Some(object) = cloud_model.get_object_of_type::<K, M>(&object_id) {
-                if let Some(queue_item) = object.create_object_queue_item(entrypoint, initiated_by)
+            if let Some(object) = cloud_model.get_object_of_type::<K, M>(&object_id)
+                && let Some(queue_item) = object.create_object_queue_item(entrypoint, initiated_by)
                 {
                     sync_queue.enqueue(queue_item, ctx);
-                }
-            };
+                };
         });
     }
 

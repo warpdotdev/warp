@@ -1348,8 +1348,8 @@ impl<A: Action + Clone> MenuItemFields<A> {
             };
 
             // Render tooltip if present and hovered
-            if let Some(tooltip_text) = &self.tooltip {
-                if state.is_hovered() {
+            if let Some(tooltip_text) = &self.tooltip
+                && state.is_hovered() {
                     let tooltip_element = appearance
                         .ui_builder()
                         .tool_tip(tooltip_text.clone())
@@ -1377,7 +1377,6 @@ impl<A: Action + Clone> MenuItemFields<A> {
                     stack.add_positioned_child(tooltip_element, positioning);
                     return stack.finish();
                 }
-            }
 
             container_element
         });
@@ -1948,14 +1947,13 @@ impl<A: Action + Clone> SubMenu<A> {
         if matches!(
             selection_source,
             MenuSelectionSource::KeyboardOrProgrammatic
-        ) {
-            if let MenuVariant::Scrollable(scroll_state) = &self.menu_variant {
+        )
+            && let MenuVariant::Scrollable(scroll_state) = &self.menu_variant {
                 scroll_state.scroll_to_position(ScrollTarget {
                     position_id: Self::save_position_id(self.depth),
                     mode: ScrollToPositionMode::FullyIntoView,
                 });
             }
-        }
         ctx.emit(Event::ItemSelected);
         ctx.notify();
     }
@@ -2681,14 +2679,13 @@ impl<A: Action + Clone> TypedActionView for Menu<A> {
     }
 
     fn handle_action(&mut self, action: &MenuAction, ctx: &mut ViewContext<Self>) {
-        if let MenuAction::HoverSubmenuLeafNode { position, .. } = action {
-            if let Some(st) = &mut self.safe_triangle {
+        if let MenuAction::HoverSubmenuLeafNode { position, .. } = action
+            && let Some(st) = &mut self.safe_triangle {
                 if st.should_suppress_hover(*position) {
                     return;
                 }
                 st.update_position(*position);
             }
-        }
 
         self.menu
             .handle_action(action, self.dispatch_item_actions, ctx)

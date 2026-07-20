@@ -793,13 +793,12 @@ impl<'a> ViewportState<'a> {
                 // are rendered in one line. This changes the value of maximum scroll top and could
                 // make the previous scroll position invalid. Thus we add an additional check here
                 // to change the scroll position to stick to the bottom if previous scroll top is invalid.
-                if let ScrollPosition::FixedAtPosition { scroll_lines } = self.scroll_position {
-                    if scroll_lines.scroll_top(self.block_list, self.content_element_height_lines())
+                if let ScrollPosition::FixedAtPosition { scroll_lines } = self.scroll_position
+                    && scroll_lines.scroll_top(self.block_list, self.content_element_height_lines())
                         > max_scroll_top
                     {
                         return ScrollPosition::FollowsBottomOfMostRecentBlock;
                     }
-                }
                 self.scroll_position
             }
             ScrollPositionUpdate::AfterClear => self.scroll_position_after_clear(),

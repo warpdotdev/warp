@@ -315,13 +315,12 @@ impl RegexDFAs {
         }
 
         // Make sure the match point is at the "far" end of any wide character.
-        if let Some(match_point) = &mut regex_match {
-            if direction == Direction::Right
+        if let Some(match_point) = &mut regex_match
+            && direction == Direction::Right
                 && matches!(grid.cell_type(*match_point), Some(CellType::WideChar))
             {
                 match_point.col += 1;
             }
-        }
 
         regex_match
     }

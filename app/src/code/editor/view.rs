@@ -1027,8 +1027,8 @@ impl CodeEditorView {
             }
             FindViewEvent::SelectAll => {
                 // Get all search results from the find model
-                if let Some(results) = self.searcher.as_ref(ctx).results() {
-                    if !results.matches.is_empty() {
+                if let Some(results) = self.searcher.as_ref(ctx).results()
+                    && !results.matches.is_empty() {
                         // Convert all match ranges to selection offsets
                         let selection_offsets: Vec<warp_editor::content::buffer::SelectionOffsets> =
                             results
@@ -1055,7 +1055,6 @@ impl CodeEditorView {
                             });
                         }
                     }
-                }
                 self.close_find_bar(true, ctx);
             }
             FindViewEvent::ReplaceSelected => {
@@ -1097,8 +1096,8 @@ impl CodeEditorView {
                     });
                 if !replace_query.is_empty() {
                     // Get all search results from the find model
-                    if let Some(results) = self.searcher.as_ref(ctx).results() {
-                        if !results.matches.is_empty() {
+                    if let Some(results) = self.searcher.as_ref(ctx).results()
+                        && !results.matches.is_empty() {
                             // Convert all match ranges to selection offsets with case preservation
                             let edits: Vec<(String, Range<CharOffset>)> = results
                                 .matches
@@ -1135,7 +1134,6 @@ impl CodeEditorView {
                                 });
                             }
                         }
-                    }
                 }
             }
         }
@@ -1425,13 +1423,11 @@ impl CodeEditorView {
         self.focus(ctx);
 
         // If there is a hovered symbol range, don't handle the cmd-click.
-        if modifiers.cmd {
-            if let Some(range) = self.model.as_ref(ctx).hovered_symbol_range() {
-                if range.range().contains(&offset) {
+        if modifiers.cmd
+            && let Some(range) = self.model.as_ref(ctx).hovered_symbol_range()
+                && range.range().contains(&offset) {
                     return;
                 }
-            }
-        }
 
         let multiselect = modifiers.alt && FeatureFlag::RichTextMultiselect.is_enabled();
         self.model.update(ctx, |model, ctx| {
@@ -1861,7 +1857,7 @@ impl CodeEditorView {
                     first_replace = if first_replace.is_uppercase() {
                         first_replace
                     } else {
-                        { first_replace.to_uppercase().next().unwrap_or(first_replace) }
+                        first_replace.to_uppercase().next().unwrap_or(first_replace)
                     };
                     result.push(first_replace);
                     result.push_str(&replace_chars.collect::<String>().to_lowercase());
@@ -2033,19 +2029,18 @@ impl CodeEditorView {
     /// character on the line as the beam cursor can. We call this "line capping." This helper
     /// method determines if line capping needs to be enforced, and if so, enforces it.
     fn vim_maybe_enforce_cursor_line_cap(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(VimMode::Normal) = self.vim_mode(ctx) {
-            if self.model.as_ref(ctx).vim_needs_line_capping(ctx) {
+        if let Some(VimMode::Normal) = self.vim_mode(ctx)
+            && self.model.as_ref(ctx).vim_needs_line_capping(ctx) {
                 self.model.update(ctx, |model, ctx| {
                     model.vim_enforce_cursor_line_cap(ctx);
                 });
             }
-        }
     }
 
     fn user_insert(&mut self, typed: &str, ctx: &mut ViewContext<Self>) {
         if ctx.is_self_focused() {
-            if let Some(first_char) = typed.chars().next() {
-                if typed.chars().count() == 1 {
+            if let Some(first_char) = typed.chars().next()
+                && typed.chars().count() == 1 {
                     let all_cursors_next_character_matches_char =
                         self.model.update(ctx, |model, ctx| {
                             model.all_cursors_next_character_matches_char(first_char, ctx)
@@ -2086,7 +2081,6 @@ impl CodeEditorView {
                         return;
                     }
                 }
-            }
 
             self.model.update(ctx, |model, ctx| {
                 model.user_insert(typed, ctx);
@@ -2338,11 +2332,10 @@ impl View for CodeEditorView {
         let mut stack = Stack::new()
             .with_constrain_absolute_children()
             .with_child(col.finish());
-        if let Some(find_bar) = &self.find_bar {
-            if find_bar.as_ref(app).is_open() {
+        if let Some(find_bar) = &self.find_bar
+            && find_bar.as_ref(app).is_open() {
                 stack.add_overlay_child(ChildView::new(find_bar).finish());
             }
-        }
         if self.goto_line_dialog.as_ref(app).is_open() {
             let dialog = Dismiss::new(ChildView::new(&self.goto_line_dialog).finish())
                 .on_dismiss(|ctx, _app| {

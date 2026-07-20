@@ -844,8 +844,7 @@ impl TerminalManager {
 
                 if enable_orchestration_polling
                     && orchestration_viewer_model.lock().is_none()
-                {
-                    if let Some(task_id) = ambient_task_id {
+                    && let Some(task_id) = ambient_task_id {
                         let terminal_view_id = view.id();
                         let weak_view_handle_for_orch = weak_view_handle.clone();
                         let orchestration_viewer_model_slot =
@@ -860,7 +859,6 @@ impl TerminalManager {
                         });
                         *orchestration_viewer_model_slot.lock() = Some(model);
                     }
-                }
 
                 let session_id = network.as_ref(ctx).session_id();
                 Manager::handle(ctx).update(ctx, |manager, ctx| {

@@ -145,9 +145,9 @@ fn push_straight_transition_rects(
     height: f32,
     metrics: StrokeMetrics,
 ) -> bool {
-    if !edges.has_horizontal() {
-        if let (Some(up), Some(down)) = (edges.up, edges.down) {
-            if up != down {
+    if !edges.has_horizontal()
+        && let (Some(up), Some(down)) = (edges.up, edges.down)
+            && up != down {
                 let center_x = width / 2.0;
                 let split_y = (height / 2.0).round();
                 let (up_low, up_high) = band(center_x, metrics.thickness(up));
@@ -162,12 +162,10 @@ fn push_straight_transition_rects(
                 );
                 return true;
             }
-        }
-    }
 
-    if !edges.has_vertical() {
-        if let (Some(left), Some(right)) = (edges.left, edges.right) {
-            if left != right {
+    if !edges.has_vertical()
+        && let (Some(left), Some(right)) = (edges.left, edges.right)
+            && left != right {
                 let center_y = height / 2.0;
                 let split_x = (width / 2.0).round();
                 let (left_low, left_high) = band(center_y, metrics.thickness(left));
@@ -176,8 +174,6 @@ fn push_straight_transition_rects(
                 push_rect(rects, split_x, right_low, width, right_high);
                 return true;
             }
-        }
-    }
 
     false
 }

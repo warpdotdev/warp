@@ -241,11 +241,10 @@ impl CloudObjectNamingDialog {
             )
             .with_text_label(primary_button_text.into());
 
-        if let Some(title) = self.title(app) {
-            if title.is_empty() || !self.title_editor.as_ref(app).is_dirty(app) {
+        if let Some(title) = self.title(app)
+            && (title.is_empty() || !self.title_editor.as_ref(app).is_dirty(app)) {
                 primary_button = primary_button.disabled();
             }
-        }
 
         Flex::row()
             .with_child(

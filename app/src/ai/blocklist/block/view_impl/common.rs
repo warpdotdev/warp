@@ -1387,12 +1387,11 @@ fn collect_renderable_image_group<'a>(
         let (section_index, section) = indexed_sections[section_offset];
         // Skip whitespace-only plain text sections (e.g. blank lines between images)
         // so that adjacent images separated only by blank lines are grouped together.
-        if let AIAgentTextSection::PlainText { text } = section {
-            if !images.is_empty() && text.text().trim().is_empty() {
+        if let AIAgentTextSection::PlainText { text } = section
+            && !images.is_empty() && text.text().trim().is_empty() {
                 section_offset += 1;
                 continue;
             }
-        }
         let AIAgentTextSection::Image { image } = section else {
             break;
         };
@@ -1602,8 +1601,8 @@ pub(super) fn render_rich_text_output_text_section(
         }
 
         let secret_redaction = get_secret_obfuscation_mode(app);
-        if secret_redaction.should_redact_secret() {
-            if let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location) {
+        if secret_redaction.should_redact_secret()
+            && let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location) {
                 frame = redact_secrets_in_element(
                     frame,
                     secrets,
@@ -1611,7 +1610,6 @@ pub(super) fn render_rich_text_output_text_section(
                     secret_redaction.is_visually_obfuscated(),
                 );
             }
-        }
         frame
     });
 
@@ -3647,11 +3645,9 @@ pub(super) fn query_prefix_highlight_len(
     if let AIAgentInput::UserQuery {
         user_query_mode, ..
     } = input
-    {
-        if let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode) {
+        && let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode) {
             return Some(prefix_len);
         }
-    }
 
     if displayed_query.starts_with(commands::CREATE_ENVIRONMENT.name) {
         Some(commands::CREATE_ENVIRONMENT.name.len())

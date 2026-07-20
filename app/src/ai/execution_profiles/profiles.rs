@@ -218,8 +218,8 @@ impl AIExecutionProfilesModel {
         // (say, we switch between local and staging servers). When that happens the default profile starts as synced but
         // then the profile is deleted when initial load returns. To fix that, we listen for the deletion of the default
         // profile and reset the model state when that happens.
-        if ChannelState::channel().is_dogfood() {
-            if let DefaultProfileState::Synced { id } = &default_profile_state {
+        if ChannelState::channel().is_dogfood()
+            && let DefaultProfileState::Synced { id } = &default_profile_state {
                 let sync_id_of_default_profile = *profile_id_to_sync_id
                     .get(id)
                     .expect("default profile is synced but no sync id found");
@@ -230,15 +230,13 @@ impl AIExecutionProfilesModel {
                         ..
                     },
                     ..
-                } = event {
-                    if *deleted_sync_id == sync_id_of_default_profile {
+                } = event
+                    && *deleted_sync_id == sync_id_of_default_profile {
                         log::info!("Resetting execution profile model because default profile was deleted.");
                         me.reset();
                     }
-                }
             });
             }
-        }
 
         log::info!("Initialized execution profile model with state: {default_profile_state}",);
 
@@ -1260,17 +1258,16 @@ impl AIExecutionProfilesModel {
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         // We don't yet support editing the default profile for the CLI.
-        if let DefaultProfileState::Cli { id, .. } = &self.default_profile_state {
-            if *id == profile_id {
+        if let DefaultProfileState::Cli { id, .. } = &self.default_profile_state
+            && *id == profile_id {
                 log::warn!("Attempted to edit CLI default profile, which is not yet supported.");
                 return false;
             }
-        }
 
         // Case: this might be an edit to a not-yet-created default profile object. If so, we need to create
         // a cloud object to back the default profile.
-        if let DefaultProfileState::Unsynced { id, profile } = &self.default_profile_state {
-            if *id == profile_id {
+        if let DefaultProfileState::Unsynced { id, profile } = &self.default_profile_state
+            && *id == profile_id {
                 let mut new_profile = profile.clone();
                 // If the edit function didn't make any changes to the profile, it's still the default profile, so we don't need to sync it
                 let value_changed = edit_fn(&mut new_profile);
@@ -1318,7 +1315,6 @@ impl AIExecutionProfilesModel {
                 ctx.emit(AIExecutionProfilesModelEvent::ProfileUpdated(profile_id));
                 return true;
             }
-        }
 
         let mut value_changed = false;
         if let Some(sync_id) = self.profile_id_to_sync_id.get(&profile_id) {
@@ -1430,8 +1426,8 @@ impl AIExecutionProfilesModel {
             .collect();
 
         // Transition Unsynced -> Synced if cloud has a default profile.
-        if let DefaultProfileState::Unsynced { id, .. } = self.default_profile_state {
-            if let Some((sync_id, _)) = all_profiles.iter().find(|(_, is_default)| *is_default) {
+        if let DefaultProfileState::Unsynced { id, .. } = self.default_profile_state
+            && let Some((sync_id, _)) = all_profiles.iter().find(|(_, is_default)| *is_default) {
                 self.default_profile_state = DefaultProfileState::Synced { id };
                 self.profile_id_to_sync_id.insert(id, *sync_id);
                 log::info!(
@@ -1440,7 +1436,6 @@ impl AIExecutionProfilesModel {
                 );
                 ctx.emit(AIExecutionProfilesModelEvent::ProfileUpdated(id));
             }
-        }
 
         // Register non-default profiles from cloud that we aren't
         // already tracking so later edits find their backing sync_id.

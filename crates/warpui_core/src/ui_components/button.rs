@@ -386,8 +386,8 @@ impl Button {
 
         // The tooltip should only be shown if the element
         // is considered hovered (accounting for delays).
-        if state.is_hovered() {
-            if let Some(render_tooltip_fn) = self.render_tooltip_fn.take() {
+        if state.is_hovered()
+            && let Some(render_tooltip_fn) = self.render_tooltip_fn.take() {
                 // Keep stack within this rather than using a stack for all cases to allow multiple stack overlays to work
                 let mut stack = Stack::new();
                 stack.add_child(container);
@@ -433,7 +433,6 @@ impl Button {
                 stack.add_positioned_overlay_child(tooltip, tooltip_offset);
                 return stack.finish();
             }
-        }
 
         container
     }

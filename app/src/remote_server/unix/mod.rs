@@ -51,12 +51,11 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
     let socket_path = proxy::socket_path(identity_key);
     let pid_path = proxy::pid_path(identity_key);
 
-    if let Some(parent) = socket_path.parent() {
-        if let Err(e) = proxy::ensure_private_daemon_dir(parent) {
+    if let Some(parent) = socket_path.parent()
+        && let Err(e) = proxy::ensure_private_daemon_dir(parent) {
             report_error!(e.context("Failed to create daemon directory"));
             return;
         }
-    }
     if socket_path.exists() {
         let _ = std::fs::remove_file(&socket_path);
     }

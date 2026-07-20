@@ -183,13 +183,11 @@ impl TerminalView {
         }
         let exchange_count = conversation.exchange_count();
         // If there's only one exchange, make sure it's completed (not still streaming)
-        if exchange_count == 1 {
-            if let Some(latest_exchange) = conversation.latest_exchange() {
-                if latest_exchange.output_status.is_streaming() {
+        if exchange_count == 1
+            && let Some(latest_exchange) = conversation.latest_exchange()
+                && latest_exchange.output_status.is_streaming() {
                     return None;
                 }
-            }
-        }
 
         // Return the ShareableObject with the conversation ID
         Some(ShareableObject::AIConversation(conversation_id))

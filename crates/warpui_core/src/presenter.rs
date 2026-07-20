@@ -446,19 +446,18 @@ impl Presenter {
 
             // If the cursor shape had been changed by a view and that view is no longer being
             // rendered, reset the cursor.
-            if let Some((window_id, view_id)) = ctx.cursor_updated_for_view {
-                if self.window_id == window_id && !paint_ctx.views_painted.contains(&view_id) {
+            if let Some((window_id, view_id)) = ctx.cursor_updated_for_view
+                && self.window_id == window_id && !paint_ctx.views_painted.contains(&view_id) {
                     ctx.reset_cursor();
                 }
-            }
         }
 
         // If there is a highlighted view, draw a box over the entire scene with
         // the same bounds as the highlighted view.  This ensures that views
         // which are fully covered by a child view can still be highlighted.
-        if let Some(view_id) = self.highlighted_view.as_ref() {
-            if let Some(view) = self.rendered_views.get(view_id) {
-                if let Some(bounds) = view.bounds() {
+        if let Some(view_id) = self.highlighted_view.as_ref()
+            && let Some(view) = self.rendered_views.get(view_id)
+                && let Some(bounds) = view.bounds() {
                     scene.start_overlay_layer(ClipBounds::None);
                     scene.draw_rect_with_hit_recording(bounds).with_border(
                         crate::elements::Border::all(2.)
@@ -468,8 +467,6 @@ impl Presenter {
                     );
                     scene.stop_layer();
                 }
-            }
-        }
 
         (scene, repaint_at, pending_assets)
     }
@@ -584,8 +581,8 @@ impl PaintContext<'_> {
         if let Some(mut tree) = self.rendered_views.remove(&view_id) {
             // If this is the highlighted view, draw a debug rectangle with the
             // same bounds as the view.
-            if self.highlighted_view == Some(view_id) {
-                if let Some(size) = tree.size() {
+            if self.highlighted_view == Some(view_id)
+                && let Some(size) = tree.size() {
                     self.scene
                         .draw_rect_with_hit_recording(RectF::new(origin, size))
                         .with_border(
@@ -593,7 +590,6 @@ impl PaintContext<'_> {
                                 .with_border_color(pathfinder_color::ColorU::new(0, 255, 255, 255)),
                         );
                 }
-            }
             self.views_painted.insert(view_id);
             tree.paint(origin, self, app);
             self.rendered_views.insert(view_id, tree);

@@ -506,8 +506,8 @@ impl ShowBlocksView {
     }
 
     pub fn confirm_unshare(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(selected_index) = self.pending_unshared_block_index.take() {
-            if let GetBlocksForUserRequestState::Done(blocks) = &mut self.get_blocks_for_user_status
+        if let Some(selected_index) = self.pending_unshared_block_index.take()
+            && let GetBlocksForUserRequestState::Done(blocks) = &mut self.get_blocks_for_user_status
             {
                 // Only attempt to unshare if there isn't already an inflight request to unshare
                 // the block.
@@ -526,7 +526,6 @@ impl ShowBlocksView {
                     );
                 }
             }
-        }
         ctx.notify();
     }
 

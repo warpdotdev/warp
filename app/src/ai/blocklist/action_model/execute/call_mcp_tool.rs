@@ -225,11 +225,10 @@ fn coerce_number_to_int(n: &mut serde_json::Number) {
 /// multiple `oneOf`/`anyOf`/`allOf` branches: coercion is a no-op on values
 /// the schema does not match.
 fn coerce_value_against_schema(value: &mut serde_json::Value, schema: &serde_json::Value) {
-    if schema_declares_integer(schema) {
-        if let serde_json::Value::Number(n) = value {
+    if schema_declares_integer(schema)
+        && let serde_json::Value::Number(n) = value {
             coerce_number_to_int(n);
         }
-    }
 
     // Visit every combinator key independently — a schema may declare more than
     // one of {oneOf, anyOf, allOf} at the same level, and we need to walk every
@@ -256,11 +255,10 @@ fn coerce_value_against_schema(value: &mut serde_json::Value, schema: &serde_jso
             for (k, v) in map.iter_mut() {
                 if let Some(prop_schema) = properties.and_then(|p| p.get(k)) {
                     coerce_value_against_schema(v, prop_schema);
-                } else if let Some(extra_schema) = additional {
-                    if extra_schema.is_object() {
+                } else if let Some(extra_schema) = additional
+                    && extra_schema.is_object() {
                         coerce_value_against_schema(v, extra_schema);
                     }
-                }
             }
         }
         serde_json::Value::Array(items) => {

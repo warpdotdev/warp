@@ -329,11 +329,10 @@ impl InputSuggestions {
     }
 
     fn on_visible_items(&mut self, new_visible_items: Range<usize>, ctx: &mut ViewContext<Self>) {
-        if let Some(visible_items) = &self.visible_items {
-            if visible_items == &new_visible_items {
+        if let Some(visible_items) = &self.visible_items
+            && visible_items == &new_visible_items {
                 return;
             }
-        }
 
         self.visible_items = Some(new_visible_items);
         ctx.notify();
@@ -965,8 +964,8 @@ impl InputSuggestions {
         );
 
         // Render the overflow detail panel if the there is a visible, selected item with details.
-        if let Some(selected_index) = self.selected_index {
-            if let Some(details_box) =
+        if let Some(selected_index) = self.selected_index
+            && let Some(details_box) =
                 self.render_visible_item_details(selected_index, appearance, ctx)
             {
                 stack.add_positioned_child(
@@ -1001,7 +1000,6 @@ impl InputSuggestions {
                     ),
                 );
             }
-        }
 
         stack.finish()
     }
@@ -1208,11 +1206,9 @@ impl HistoryInputSuggestion<'_> {
                 // Check if this entry belongs to the current session
                 if let (Some(entry_session_id), Some(current_session_id)) =
                     (entry.session_id, current_session_id)
-                {
-                    if entry_session_id == current_session_id {
+                    && entry_session_id == current_session_id {
                         return HistoryOrder::CurrentSession;
                     }
-                }
                 // Other live session, or past session
                 HistoryOrder::DifferentSession
             }

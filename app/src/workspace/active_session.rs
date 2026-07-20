@@ -99,17 +99,12 @@ impl ActiveSession {
         if window_state.session.is_some() != session.is_some() {
             window_state.session = session;
             ctx.notify();
-        } else {
-            match window_state.session.as_ref().zip(session) {
-                Some((prev_session, next_session)) => {
-                    // Session IDs can't necessarily be compared across terminal panes, so check if the backing
-                    // allocation is the same. We can do this because each `Session` is a singleton.
-                    if !Weak::ptr_eq(prev_session, &next_session) {
-                        window_state.session = Some(next_session);
-                        ctx.notify();
-                    }
-                }
-                _ => {}
+        } else if let Some((prev_session, next_session)) = window_state.session.as_ref().zip(session) {
+            // Session IDs can't necessarily be compared across terminal panes, so check if the backing
+            // allocation is the same. We can do this because each `Session` is a singleton.
+            if !Weak::ptr_eq(prev_session, &next_session) {
+                window_state.session = Some(next_session);
+                ctx.notify();
             }
         }
 

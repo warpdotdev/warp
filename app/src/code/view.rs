@@ -354,8 +354,8 @@ impl CodeView {
 
     /// If a tab is a preview, promote it and emit "FileOpened"
     fn promote_if_preview(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(tab) = self.tab_group.get_mut(self.active_tab_index) {
-            if tab.preview {
+        if let Some(tab) = self.tab_group.get_mut(self.active_tab_index)
+            && tab.preview {
                 tab.preview = false;
                 self.set_title_after_content_update(ctx);
                 self.update_tab_bar_state(ctx);
@@ -363,7 +363,6 @@ impl CodeView {
                 send_telemetry_from_ctx!(TelemetryEvent::PreviewPanePromoted, ctx);
                 ctx.notify();
             }
-        }
     }
 
     /// Construct an editor backed by the global shared buffer for the given location.
@@ -1220,13 +1219,12 @@ impl CodeView {
                     if is_clearing_group {
                         let unsaved_indices = self.unsaved_indices(ctx);
                         for &unsaved_index in &unsaved_indices {
-                            if let Some(tab) = self.tab_group.get(unsaved_index) {
-                                if tab.editor_view.as_ref(ctx).file_id().is_some() {
+                            if let Some(tab) = self.tab_group.get(unsaved_index)
+                                && tab.editor_view.as_ref(ctx).file_id().is_some() {
                                     tab.editor_view.update(ctx, |editor, _| {
                                         editor.mark_next_save_as_auto_save()
                                     });
                                 }
-                            }
                         }
                         self.clear_tab_group_with_intent(
                             unsaved_indices,
@@ -1854,8 +1852,7 @@ impl CodeView {
                             .mouse_state_handles
                             .tab_draggable_state
                             .is_dragging()
-                    {
-                        if let Some(path) = tab_data.local_path() {
+                        && let Some(path) = tab_data.local_path() {
                             let tooltip = appearance
                                 .ui_builder()
                                 .tool_tip(Self::relative_path(path, self.window_id, app))
@@ -1871,7 +1868,6 @@ impl CodeView {
                                 ),
                             );
                         }
-                    }
 
                     stack.finish()
                 },

@@ -590,8 +590,8 @@ impl View for TabConfigParamsModal {
             }
 
             // Default value hint (text params only — pickers show the value in their top bar).
-            if matches!(param.param_type, TabConfigParamType::Text) {
-                if let Some(default_value) = &param.default {
+            if matches!(param.param_type, TabConfigParamType::Text)
+                && let Some(default_value) = &param.default {
                     form.add_child(
                         Container::new(
                             Text::new_inline(
@@ -606,7 +606,6 @@ impl View for TabConfigParamsModal {
                         .finish(),
                     );
                 }
-            }
 
             // The input field itself.
             // Text editors get the standard text_input border treatment;

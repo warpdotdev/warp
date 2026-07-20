@@ -47,8 +47,8 @@ pub(super) fn render(props: Props, app: &AppContext) -> Option<Box<dyn Element>>
     let mut left_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
     let font_size = prompt_font_size(appearance);
-    if !FeatureFlag::AgentView.is_enabled() {
-        if let Some(pwd) = &props.directory_context.pwd {
+    if !FeatureFlag::AgentView.is_enabled()
+        && let Some(pwd) = &props.directory_context.pwd {
             let current_directory =
                 user_friendly_path(pwd.as_str(), props.directory_context.home_dir.as_deref())
                     .to_string();
@@ -72,7 +72,6 @@ pub(super) fn render(props: Props, app: &AppContext) -> Option<Box<dyn Element>>
             );
             did_render_child |= true;
         }
-    }
 
     // When AgentViewBlockContext is enabled, blocks are auto-attached so we don't
     // show the attached context chip for blocks.

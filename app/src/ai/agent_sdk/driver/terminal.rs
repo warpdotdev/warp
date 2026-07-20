@@ -599,7 +599,9 @@ impl TerminalDriver {
         let bootstrap_rx = self.bootstrap_rx.take();
 
         async move {
-            let result = if let Some(rx) = bootstrap_rx {
+            
+
+            if let Some(rx) = bootstrap_rx {
                 // Map channel cancellation (sender dropped without sending)
                 // to InternalError — this shouldn't happen in practice.
                 let inner = async move { rx.await.unwrap_or(Err(BootstrapError::InternalError)) };
@@ -610,9 +612,7 @@ impl TerminalDriver {
             } else {
                 // bootstrap_rx already consumed — shouldn't happen in normal flow.
                 Err(BootstrapError::InternalError)
-            };
-
-            result
+            }
         }
     }
 

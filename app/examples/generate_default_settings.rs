@@ -134,11 +134,10 @@ fn main() {
         }
 
         // Skip settings whose feature flag is not active for this channel.
-        if let Some(flag) = entry.feature_flag {
-            if !active_flags.contains(&flag) {
+        if let Some(flag) = entry.feature_flag
+            && !active_flags.contains(&flag) {
                 continue;
             }
-        }
 
         // Skip settings that don't apply to the target surface.
         if !(entry.surfaces_fn)().includes(surface_mode) {

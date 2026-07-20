@@ -1125,17 +1125,15 @@ impl GridHandler {
             {
                 // If this cell is part of an obfuscated secret, push the placeholder char '*'
                 let mut obfuscated_char = false;
-                if should_show_secrets {
-                    if let Some((handle, _)) = self.secret_at_original_point(Point::new(row, col)) {
-                        if self
+                if should_show_secrets
+                    && let Some((handle, _)) = self.secret_at_original_point(Point::new(row, col))
+                        && self
                             .secret_by_handle(handle)
                             .is_some_and(Secret::is_obfuscated)
                         {
                             text.push('*');
                             obfuscated_char = true;
                         }
-                    }
-                }
 
                 // If it's not obfuscated, push cell's primary character.
                 if !obfuscated_char {
@@ -1172,13 +1170,10 @@ impl GridHandler {
                 .get(row_length - 1)
                 .is_some_and(|cell| cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER))
             && include_wrapped_wide
-        {
-            if let Some(row) = self.row(row - 1) {
-                if let Some(cell) = row.get(0) {
+            && let Some(row) = self.row(row - 1)
+                && let Some(cell) = row.get(0) {
                     text.push(cell.c);
                 }
-            }
-        }
 
         Some(text)
     }

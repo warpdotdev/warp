@@ -656,8 +656,8 @@ impl GlobalBufferModel {
             // but the content is identical (e.g. after a save). Sending an empty
             // BufferUpdatedPush would cause clients to advance base_content_version
             // without updating the buffer version, creating a spurious mismatch.
-            if !char_offset_edits.is_empty() {
-                if let BufferSource::ServerLocal { sync_clock, .. } = &mut state.source {
+            if !char_offset_edits.is_empty()
+                && let BufferSource::ServerLocal { sync_clock, .. } = &mut state.source {
                     let new_sv = sync_clock.bump_server();
                     ctx.emit(GlobalBufferModelEvent::ServerLocalBufferUpdated {
                         file_id,
@@ -666,7 +666,6 @@ impl GlobalBufferModel {
                         expected_client_version: sync_clock.client_version,
                     });
                 }
-            }
         } else {
             ctx.emit(GlobalBufferModelEvent::BufferUpdatedFromFileEvent {
                 file_id,
@@ -754,11 +753,10 @@ impl GlobalBufferModel {
 
                             // Abort any pending diff parse since the buffer has
                             // user edits that we must not overwrite.
-                            if let Some(state) = self.buffers.get_mut(id) {
-                                if let Some(pending) = state.pending_diff_parse.take() {
+                            if let Some(state) = self.buffers.get_mut(id)
+                                && let Some(pending) = state.pending_diff_parse.take() {
                                     pending.abort_handle.abort();
                                 }
-                            }
 
                             if internal_base_version != Some(*base_version) {
                                 log::warn!(
@@ -811,8 +809,8 @@ impl GlobalBufferModel {
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), FileSaveError> {
         // Check if this is a remote buffer — save via the remote server RPC.
-        if let Some(state) = self.buffers.get_mut(&file_id) {
-            if let BufferSource::Remote {
+        if let Some(state) = self.buffers.get_mut(&file_id)
+            && let BufferSource::Remote {
                 remote_path,
                 pending_batch,
                 ..
@@ -858,7 +856,6 @@ impl GlobalBufferModel {
                 );
                 return Ok(());
             }
-        }
 
         // Completion is observed via `FileModelEvent`s; drop the save future.
         FileModel::handle(ctx)
@@ -1106,11 +1103,10 @@ impl GlobalBufferModel {
                     .and_then(|id| me.buffers.get(&id))
                     .and_then(|state| state.latest_buffer_version);
 
-                if let Some(id) = fid {
-                    if let Some(state) = me.buffers.get_mut(&id) {
+                if let Some(id) = fid
+                    && let Some(state) = me.buffers.get_mut(&id) {
                         state.latest_buffer_version = Some(buffer_version.as_usize());
                     }
-                }
 
                 if matches!(origin, EditOrigin::SystemEdit) && version_matches_initial {
                     me.open_or_sync_document_with_lsp(buffer, &path_clone, *buffer_version, ctx);
@@ -1177,8 +1173,8 @@ impl GlobalBufferModel {
             .cloned()
         {
             debug_assert!(self.buffers.contains_key(&id));
-            if let Some(state) = self.buffers.get(&id) {
-                if let Some(handle) = state.buffer.upgrade(ctx) {
+            if let Some(state) = self.buffers.get(&id)
+                && let Some(handle) = state.buffer.upgrade(ctx) {
                     // Only emit buffer loaded if the base content version is set.
                     if state.is_loaded() {
                         ctx.emit(GlobalBufferModelEvent::BufferLoaded {
@@ -1188,7 +1184,6 @@ impl GlobalBufferModel {
                     }
                     return BufferState::new(id, handle.clone());
                 }
-            }
         }
 
         self.create_new_buffer(&path, is_server_local, ctx)
@@ -1276,11 +1271,10 @@ impl GlobalBufferModel {
 
                 // Always update the latest buffer version when we receive a ContentUpdated event,
                 // even if we early return. This ensures we track versioning correctly.
-                if let Some(id) = file_id {
-                    if let Some(state) = me.buffers.get_mut(&id) {
+                if let Some(id) = file_id
+                    && let Some(state) = me.buffers.get_mut(&id) {
                         state.latest_buffer_version = Some(buffer_version.as_usize());
                     }
-                }
 
                 // If this is a system edit AND the current buffer version matches the initial version
                 // that came from file loading, this is the initial buffer population. Instead of
@@ -1338,13 +1332,12 @@ impl GlobalBufferModel {
     }
 
     fn log_lsp_sync_debug(&self, path: &Path, message: String, ctx: &mut ModelContext<Self>) {
-        if cfg!(debug_assertions) {
-            if let Some(server) = self.lsp_server_for_path(path, ctx) {
+        if cfg!(debug_assertions)
+            && let Some(server) = self.lsp_server_for_path(path, ctx) {
                 server
                     .as_ref(ctx)
                     .log_to_server_log(LspServerLogLevel::Info, message);
             }
-        }
     }
 
     /// Attempts to retrieve specific lines from an in-memory buffer for the given file path.
@@ -1667,9 +1660,9 @@ impl GlobalBufferModel {
         let location = LocalOrRemotePath::Remote(remote_path.clone());
 
         // Return existing buffer if already open.
-        if let Some(id) = self.location_to_id.get_by_left(&location).cloned() {
-            if let Some(state) = self.buffers.get(&id) {
-                if let Some(handle) = state.buffer.upgrade(ctx) {
+        if let Some(id) = self.location_to_id.get_by_left(&location).cloned()
+            && let Some(state) = self.buffers.get(&id)
+                && let Some(handle) = state.buffer.upgrade(ctx) {
                     if state.is_loaded() {
                         ctx.emit(GlobalBufferModelEvent::BufferLoaded {
                             file_id: id,
@@ -1678,8 +1671,6 @@ impl GlobalBufferModel {
                     }
                     return BufferState::new(id, handle.clone());
                 }
-            }
-        }
 
         let file_id = FileId::new();
         let buffer = ctx.add_model(|_| Buffer::default());
@@ -1762,13 +1753,11 @@ impl GlobalBufferModel {
                         },
                     );
                     // Re-borrow after ctx.spawn since the closure captured `me`.
-                    if let Some(state) = me.buffers.get_mut(&file_id) {
-                        if let BufferSource::Remote { pending_batch, .. } = &mut state.source {
-                            if let Some(batch) = pending_batch.as_mut() {
+                    if let Some(state) = me.buffers.get_mut(&file_id)
+                        && let BufferSource::Remote { pending_batch, .. } = &mut state.source
+                            && let Some(batch) = pending_batch.as_mut() {
                                 batch.debounce_timer = Some(handle.abort_handle());
                             }
-                        }
-                    }
                 }
             });
         }
@@ -2246,13 +2235,11 @@ impl GlobalBufferModel {
         };
 
         // Discard any pending batch — conflict resolution handles re-sync.
-        if let Some(state) = self.buffers.get_mut(&file_id) {
-            if let BufferSource::Remote { pending_batch, .. } = &mut state.source {
-                if let Some(batch) = pending_batch.take() {
+        if let Some(state) = self.buffers.get_mut(&file_id)
+            && let BufferSource::Remote { pending_batch, .. } = &mut state.source
+                && let Some(batch) = pending_batch.take() {
                     batch.discard();
                 }
-            }
-        }
 
         ctx.emit(GlobalBufferModelEvent::RemoteBufferConflict { file_id });
     }

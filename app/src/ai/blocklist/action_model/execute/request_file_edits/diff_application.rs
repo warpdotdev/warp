@@ -636,16 +636,15 @@ async fn apply_search_replace<F, Fut>(
 
             // Add warnings from the failure info - the `DiffMatchFailures` type includes both
             // fatal and non-fatal errors.
-            if let Some(failures) = fuzzy_match_diffs.failures.as_ref() {
-                if failures.missing_line_numbers > 0 {
+            if let Some(failures) = fuzzy_match_diffs.failures.as_ref()
+                && failures.missing_line_numbers > 0 {
                     result.warnings.push(DiffWarning::MissingLineNumbers {
                         count: failures.missing_line_numbers,
                     });
                 }
-            }
 
-            if fuzzy_match_diffs.warrants_failure() {
-                if let Some(failures) = fuzzy_match_diffs.failures.as_ref() {
+            if fuzzy_match_diffs.warrants_failure()
+                && let Some(failures) = fuzzy_match_diffs.failures.as_ref() {
                     safe_warn!(
                         safe: ("Failure(s) applying diff: {failures:?}"),
                         full: ("Failure(s) applying diff for {absolute_path:?}: {failures:?}")
@@ -655,7 +654,6 @@ async fn apply_search_replace<F, Fut>(
                         match_failures: *failures,
                     });
                 }
-            }
             result.diffs.push(fuzzy_match_diffs);
         }
     }
@@ -804,8 +802,8 @@ async fn apply_v4a_update<F, Fut>(
     } else {
         // Normal case: no rename or rename to non-existent file
         let diffs = fuzzy_match_v4a_diffs(&file_path, &deltas, rename_to, file_content);
-        if diffs.warrants_failure() {
-            if let Some(failures) = diffs.failures.as_ref() {
+        if diffs.warrants_failure()
+            && let Some(failures) = diffs.failures.as_ref() {
                 safe_warn!(
                     safe: ("Failure(s) applying V4A diff: {failures:?}"),
                     full: ("Failure(s) applying V4A diff for {absolute_path:?}: {failures:?}")
@@ -815,7 +813,6 @@ async fn apply_v4a_update<F, Fut>(
                     match_failures: *failures,
                 });
             }
-        }
         result.diffs.push(diffs);
     }
 }

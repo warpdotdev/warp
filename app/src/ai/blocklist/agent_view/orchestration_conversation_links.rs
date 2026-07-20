@@ -69,11 +69,10 @@ pub(crate) fn pane_group_id_containing_terminal_view(
         for pane_group_handle in workspace.tab_views() {
             let pane_group = pane_group_handle.as_ref(app);
             for pane_id in pane_group.visible_pane_ids() {
-                if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app) {
-                    if terminal_view.id() == terminal_view_id {
+                if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app)
+                    && terminal_view.id() == terminal_view_id {
                         return Some(pane_group_handle.id());
                     }
-                }
             }
         }
     }
@@ -90,9 +89,8 @@ pub(crate) fn dispatch_focus_or_open_child_agent_pane(
 ) {
     if let Some(owner_view_id) =
         BlocklistAIHistoryModel::as_ref(app).terminal_surface_id_for_conversation(&conversation_id)
-    {
-        if owner_view_id != self_terminal_view_id {
-            if let Some(owner_pane_group_id) =
+        && owner_view_id != self_terminal_view_id
+            && let Some(owner_pane_group_id) =
                 pane_group_id_containing_terminal_view(owner_view_id, app)
             {
                 let self_pane_group_id =
@@ -106,8 +104,6 @@ pub(crate) fn dispatch_focus_or_open_child_agent_pane(
                 }
                 return;
             }
-        }
-    }
     ctx.dispatch_typed_action(TerminalAction::OpenChildAgentInNewPane { conversation_id });
 }
 

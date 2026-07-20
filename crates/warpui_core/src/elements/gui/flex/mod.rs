@@ -326,15 +326,14 @@ See https://www.notion.so/warpdev/Debugging-Flex-acc03383be5644a8af29d9c52b1142b
                     Axis::Vertical => constraint.max.set_y(cross_axis_max),
                 }
                 for child in &mut self.children {
-                    if let Some(size) = child.size() {
-                        if size.along(cross_axis).is_infinite() {
+                    if let Some(size) = child.size()
+                        && size.along(cross_axis).is_infinite() {
                             child.layout(
                                 SizeConstraint::tight_on_cross_axis(self.axis, constraint),
                                 ctx,
                                 app,
                             );
                         }
-                    }
                 }
             }
 
@@ -571,8 +570,8 @@ impl SelectableElement for Flex {
     ) -> Option<Vec<SelectionFragment>> {
         let mut selection_fragments: Vec<SelectionFragment> = Vec::new();
         for child in self.children.iter() {
-            if let Some(selectable_child) = child.as_selectable_element() {
-                if let Some(child_fragments) =
+            if let Some(selectable_child) = child.as_selectable_element()
+                && let Some(child_fragments) =
                     selectable_child.get_selection(selection_start, selection_end, is_rect)
                 {
                     // If we're adding new selection fragments from a new child in a Flex,
@@ -590,7 +589,6 @@ impl SelectableElement for Flex {
                     }
                     selection_fragments.extend(child_fragments);
                 }
-            }
         }
         if !selection_fragments.is_empty() {
             return Some(selection_fragments);
@@ -607,8 +605,8 @@ impl SelectableElement for Flex {
     ) -> Option<Vector2F> {
         let mut expanded_selection = None;
         for child in self.children.iter() {
-            if let Some(selectable_child) = child.as_selectable_element() {
-                if let Some(selection) = selectable_child.expand_selection(
+            if let Some(selectable_child) = child.as_selectable_element()
+                && let Some(selection) = selectable_child.expand_selection(
                     point,
                     direction,
                     unit,
@@ -623,7 +621,6 @@ impl SelectableElement for Flex {
                         }
                     }
                 }
-            }
         }
         expanded_selection
     }
@@ -634,13 +631,12 @@ impl SelectableElement for Flex {
         absolute_point_other: Vector2F,
     ) -> Option<bool> {
         for child in self.children.iter() {
-            if let Some(selectable_child) = child.as_selectable_element() {
-                if let Some(is_point_semantically_before) = selectable_child
+            if let Some(selectable_child) = child.as_selectable_element()
+                && let Some(is_point_semantically_before) = selectable_child
                     .is_point_semantically_before(absolute_point, absolute_point_other)
                 {
                     return Some(is_point_semantically_before);
                 }
-            }
         }
         None
     }
@@ -651,13 +647,12 @@ impl SelectableElement for Flex {
         smart_select_fn: crate::elements::SmartSelectFn,
     ) -> Option<(Vector2F, Vector2F)> {
         for child in self.children.iter() {
-            if let Some(selectable_child) = child.as_selectable_element() {
-                if let Some(selection) =
+            if let Some(selectable_child) = child.as_selectable_element()
+                && let Some(selection) =
                     selectable_child.smart_select(absolute_point, smart_select_fn)
                 {
                     return Some(selection);
                 }
-            }
         }
         None
     }

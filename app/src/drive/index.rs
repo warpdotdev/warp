@@ -782,8 +782,8 @@ impl DriveIndex {
                 .map(|object| {
                     if object.object_type() == ObjectType::Folder {
                         let folder: Option<&CloudFolder> = object.into();
-                        if let Some(folder) = folder {
-                            if folder.model().is_open {
+                        if let Some(folder) = folder
+                            && folder.model().is_open {
                                 self.sort_location(
                                     CloudObjectLocation::Folder(folder.id),
                                     cloud_model,
@@ -791,7 +791,6 @@ impl DriveIndex {
                                     app,
                                 )
                             }
-                        }
                     }
                     object.uid()
                 })
@@ -809,8 +808,8 @@ impl DriveIndex {
                 let cloud_id = cloud_object.cloud_object_type_and_id();
                 self.ordered_items.push(WarpDriveItemId::Object(cloud_id));
                 // If the item is a folder and the folder is open, recurse
-                if let CloudObjectTypeAndId::Folder(folder_id) = cloud_id {
-                    if self
+                if let CloudObjectTypeAndId::Folder(folder_id) = cloud_id
+                    && self
                         .sorted_orders_by_location
                         .contains_key(&CloudObjectLocation::Folder(folder_id))
                     {
@@ -820,7 +819,6 @@ impl DriveIndex {
                             cloud_model,
                         )
                     }
-                }
             }
         }
     }
@@ -836,8 +834,7 @@ impl DriveIndex {
                 if let Some(section_state) = self
                     .section_states
                     .get_mut(&DriveIndexSection::Space(space))
-                {
-                    if !section_state.collapsed {
+                    && !section_state.collapsed {
                         // Add AI fact collection object + MCP server collection object for personal space
                         if matches!(space, Space::Personal) {
                             if FeatureFlag::McpServer.is_enabled()
@@ -857,7 +854,6 @@ impl DriveIndex {
                         };
                         self.sort_ordered_items(uids.to_vec(), cloud_model);
                     }
-                }
             }
         }
         if self.index_variant == DriveIndexVariant::MainIndex {
@@ -1396,8 +1392,8 @@ impl DriveIndex {
 
         let mut stack = Stack::new();
         stack.add_child(header);
-        if let Some(space_menu_state) = &self.space_menu_open_for_space {
-            if space.eq(&space_menu_state.space) {
+        if let Some(space_menu_state) = &self.space_menu_open_for_space
+            && space.eq(&space_menu_state.space) {
                 stack.add_positioned_overlay_child(
                     ChildView::new(&self.menu).finish(),
                     OffsetPositioning::offset_from_save_position_element(
@@ -1409,7 +1405,6 @@ impl DriveIndex {
                     ),
                 );
             }
-        }
 
         // Align items in the header to span the horizontal direction and sit in the vertical
         // center of the row.
@@ -1420,13 +1415,12 @@ impl DriveIndex {
             .with_child(Shrinkable::new(1., stack.finish()).finish());
 
         // The teammates icon that redirects to the team settings page.
-        if matches!(section, DriveIndexSection::Space(Space::Team { .. })) && self.is_online(app) {
-            if let DriveIndexSection::Space(space) = section {
+        if matches!(section, DriveIndexSection::Space(Space::Team { .. })) && self.is_online(app)
+            && let DriveIndexSection::Space(space) = section {
                 let add_teammates_button =
                     self.render_add_teammates_button(appearance, section_state, space);
                 header_row.add_child(add_teammates_button)
             }
-        }
 
         // The "+" icon for adding new objects.
         if let DriveIndexSection::Space(space) = section {
@@ -1454,9 +1448,9 @@ impl DriveIndex {
 
         // If the space is focused, set background
         let mut is_focused = false;
-        if let DriveIndexSection::Space(space) = section {
-            if let Some(focused_index) = self.focused_index {
-                if Some(&WarpDriveItemId::Space(space)) == self.ordered_items.get(focused_index) {
+        if let DriveIndexSection::Space(space) = section
+            && let Some(focused_index) = self.focused_index
+                && Some(&WarpDriveItemId::Space(space)) == self.ordered_items.get(focused_index) {
                     container = container.with_background(
                         warp_core::ui::theme::color::internal_colors::fg_overlay_4(
                             appearance.theme(),
@@ -1464,8 +1458,6 @@ impl DriveIndex {
                     );
                     is_focused = true;
                 }
-            }
-        }
         Container::new(
             Hoverable::new(
                 section_state.header_hover_state.clone(),
@@ -1528,8 +1520,8 @@ impl DriveIndex {
 
         let mut left_stack = Stack::new();
         left_stack.add_child(collapse_all);
-        if let Some(space_menu_state) = &self.space_menu_open_for_space {
-            if space.eq(&space_menu_state.space) {
+        if let Some(space_menu_state) = &self.space_menu_open_for_space
+            && space.eq(&space_menu_state.space) {
                 left_stack.add_positioned_overlay_child(
                     ChildView::new(&self.menu).finish(),
                     OffsetPositioning::offset_from_save_position_element(
@@ -1541,7 +1533,6 @@ impl DriveIndex {
                     ),
                 );
             }
-        }
 
         // Empty Trash text button
         let (empty_trash_default_font_color, empty_trash_hovered_font_color): (ColorU, ColorU) =
@@ -1623,8 +1614,8 @@ impl DriveIndex {
                     .finish(),
             );
 
-            if let Some(space) = self.empty_trash_confirmation_dialog_space {
-                if space.eq(&space_clone) {
+            if let Some(space) = self.empty_trash_confirmation_dialog_space
+                && space.eq(&space_clone) {
                     self.add_dialog_to_stack(
                         &mut right_stack,
                         ChildView::new(&self.empty_trash_confirmation_dialog).finish(),
@@ -1632,7 +1623,6 @@ impl DriveIndex {
                         app,
                     );
                 }
-            }
         }
 
         // Align items in the header to span the horizontal direction and sit in the vertical
@@ -1657,9 +1647,9 @@ impl DriveIndex {
 
         // If the space is focused, set background
         let mut is_focused = false;
-        if let DriveIndexSection::Space(space) = section {
-            if let Some(focused_index) = self.focused_index {
-                if Some(&WarpDriveItemId::Space(space)) == self.ordered_items.get(focused_index) {
+        if let DriveIndexSection::Space(space) = section
+            && let Some(focused_index) = self.focused_index
+                && Some(&WarpDriveItemId::Space(space)) == self.ordered_items.get(focused_index) {
                     container = container.with_background(
                         warp_core::ui::theme::color::internal_colors::fg_overlay_4(
                             appearance.theme(),
@@ -1667,8 +1657,6 @@ impl DriveIndex {
                     );
                     is_focused = true;
                 }
-            }
-        }
 
         Hoverable::new(
             section_state.header_hover_state.clone(),
@@ -1844,14 +1832,13 @@ impl DriveIndex {
 
         // If the trash row is focused, set background
         let mut is_focused = false;
-        if let Some(focused_index) = self.focused_index {
-            if Some(&WarpDriveItemId::Trash) == self.ordered_items.get(focused_index) {
+        if let Some(focused_index) = self.focused_index
+            && Some(&WarpDriveItemId::Trash) == self.ordered_items.get(focused_index) {
                 container = container.with_background(
                     warp_core::ui::theme::color::internal_colors::fg_overlay_4(appearance.theme()),
                 );
                 is_focused = true;
             }
-        }
 
         // This represents the clickable region of the header where any mouse-up action will toggle the collapse boolean.
         let header = Hoverable::new(
@@ -1894,12 +1881,11 @@ impl DriveIndex {
         let warp_drive_item_id = WarpDriveItemId::AIFactCollection;
         let is_selected = self.selected == Some(warp_drive_item_id);
         let mut is_focused = false;
-        if let Some(focused_index) = self.focused_index {
-            if let Some(&WarpDriveItemId::AIFactCollection) = self.ordered_items.get(focused_index)
+        if let Some(focused_index) = self.focused_index
+            && let Some(&WarpDriveItemId::AIFactCollection) = self.ordered_items.get(focused_index)
             {
                 is_focused = true;
             }
-        }
 
         let row = WarpDriveRow::new(
             Box::new(self.ai_fact_collection.clone()),
@@ -1930,13 +1916,12 @@ impl DriveIndex {
         let warp_drive_item_id = WarpDriveItemId::MCPServerCollection;
         let is_selected = self.selected == Some(warp_drive_item_id);
         let mut is_focused = false;
-        if let Some(focused_index) = self.focused_index {
-            if let Some(&WarpDriveItemId::MCPServerCollection) =
+        if let Some(focused_index) = self.focused_index
+            && let Some(&WarpDriveItemId::MCPServerCollection) =
                 self.ordered_items.get(focused_index)
             {
                 is_focused = true;
             }
-        }
 
         let row = WarpDriveRow::new(
             Box::new(self.mcp_server_collection.clone()),
@@ -2311,13 +2296,11 @@ impl DriveIndex {
                         {
                             if FeatureFlag::McpServer.is_enabled()
                                 && ContextFlag::ShowMCPServers.is_enabled()
-                            {
-                                if let Some(mcp_server_collection_item) =
+                                && let Some(mcp_server_collection_item) =
                                     self.render_mcp_server_collection_item(space, appearance, app)
                                 {
                                     rendered_space.push(mcp_server_collection_item);
                                 }
-                            }
                             if let Some(ai_fact_collection_item) =
                                 self.render_ai_fact_collection_item(space, appearance, app)
                             {
@@ -2681,15 +2664,13 @@ impl DriveIndex {
         let mut is_focused = false;
 
         let is_selected = self.selected == Some(warp_drive_item_id);
-        if let Some(focused_index) = self.focused_index {
-            if !self.ordered_items.is_empty() {
-                if let Some(&WarpDriveItemId::Object(cloud_id)) =
+        if let Some(focused_index) = self.focused_index
+            && !self.ordered_items.is_empty()
+                && let Some(&WarpDriveItemId::Object(cloud_id)) =
                     self.ordered_items.get(focused_index)
                 {
                     is_focused = row_object_id == cloud_id;
                 }
-            }
-        }
 
         let row = WarpDriveRow::new_from_cloud_object(
             object,
@@ -2800,8 +2781,8 @@ impl DriveIndex {
                     // solution to ensure that we don't render something in this folder that is not a part of the space.
                     // Once we move to a permissions structure where we always look to the parent - this will not
                     // be needed.
-                    if object.permissions().owner == folder.permissions.owner {
-                        if let Some(child) = self.render_item_and_children(
+                    if object.permissions().owner == folder.permissions.owner
+                        && let Some(child) = self.render_item_and_children(
                             object,
                             item_mouse_states,
                             space,
@@ -2815,7 +2796,6 @@ impl DriveIndex {
                             item_and_children.push(child.element);
                             total_rows_for_item += child.num_items;
                         }
-                    }
                 });
             }
 
@@ -3360,11 +3340,9 @@ impl DriveIndex {
             .sections
             .iter()
             .find(|section| **section == DriveIndexSection::Space(space))
-        {
-            if let Some(section_state) = self.section_states.get_mut(target_section) {
+            && let Some(section_state) = self.section_states.get_mut(target_section) {
                 section_state.collapsed = false;
             }
-        }
     }
 
     fn set_section_collapsed_state(
@@ -3409,8 +3387,8 @@ impl DriveIndex {
 
                 // If the new notebook is being created in the team space, check if the team has
                 // reached the limit for notebooks.
-                if let Space::Team { team_uid } = space {
-                    if !UserWorkspaces::has_capacity_for_shared_notebooks(team_uid, ctx, 1) {
+                if let Space::Team { team_uid } = space
+                    && !UserWorkspaces::has_capacity_for_shared_notebooks(team_uid, ctx, 1) {
                         // If team has reached the limit for notebooks, show the modal
                         // and return early.
                         ctx.emit(DriveIndexEvent::OpenSharedObjectsCreationDeniedModal(
@@ -3419,7 +3397,6 @@ impl DriveIndex {
                         ));
                         return;
                     }
-                }
                 ctx.emit(DriveIndexEvent::CreateNotebook {
                     space,
                     title,
@@ -3497,8 +3474,8 @@ impl DriveIndex {
     }
 
     fn rename_folder(&mut self, folder_id: SyncId, ctx: &mut ViewContext<Self>) {
-        if let Some(new_name) = self.cloud_object_naming_dialog.title(ctx) {
-            if !new_name.is_empty() {
+        if let Some(new_name) = self.cloud_object_naming_dialog.title(ctx)
+            && !new_name.is_empty() {
                 self.reset_menus(ctx);
 
                 UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
@@ -3508,7 +3485,6 @@ impl DriveIndex {
                 self.cloud_object_naming_dialog.close(ctx);
                 ctx.notify();
             }
-        }
     }
 
     fn trash_object(
@@ -3848,16 +3824,16 @@ impl DriveIndex {
     ) -> Box<dyn Element> {
         let drop_target = Container::new(DropTarget::new(inner_element, location).finish());
 
-        let drop_target = if Some(location) == self.current_drop_target {
+        
+
+        (if Some(location) == self.current_drop_target {
             drop_target
                 .with_background(appearance.theme().surface_3())
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
                 .finish()
         } else {
             drop_target.finish()
-        };
-
-        drop_target
+        }) as _
     }
 
     fn retry_failed_object(
@@ -4445,8 +4421,8 @@ impl DriveIndex {
                     }
                 }
 
-                if let Some(object) = object {
-                    if let Some(object_link) = object.object_link() {
+                if let Some(object) = object
+                    && let Some(object_link) = object.object_link() {
                         menu_items.push(
                             MenuItemFields::new("Copy link")
                                 .with_on_select_action(DriveIndexAction::CopyObjectLinkToClipboard(
@@ -4466,7 +4442,6 @@ impl DriveIndex {
                             );
                         }
                     }
-                }
 
                 if !FeatureFlag::SharedWithMe.is_enabled() || editability.can_edit() {
                     menu_items.push(
@@ -4488,8 +4463,8 @@ impl DriveIndex {
                         .into_item(),
                 );
 
-                if let Some(object) = object {
-                    if FeatureFlag::SharedWithMe.is_enabled() && object.can_leave(app) {
+                if let Some(object) = object
+                    && FeatureFlag::SharedWithMe.is_enabled() && object.can_leave(app) {
                         menu_items.push(
                             MenuItemFields::new(REMOVE_LABEL)
                                 .with_on_select_action(DriveIndexAction::LeaveSharedObject {
@@ -4499,7 +4474,6 @@ impl DriveIndex {
                                 .into_item(),
                         )
                     }
-                }
             }
         } else {
             if let Some(object) = object {
@@ -4534,8 +4508,7 @@ impl DriveIndex {
                             _,
                             CloudNotebookModel,
                         >(object)
-                    {
-                        if let Some(ai_document_id) = notebook.model().ai_document_id {
+                        && let Some(ai_document_id) = notebook.model().ai_document_id {
                             menu_items.push(
                                 MenuItemFields::new("Attach to active session")
                                     .with_on_select_action(DriveIndexAction::AttachPlanAsContext(
@@ -4545,7 +4518,6 @@ impl DriveIndex {
                                     .into_item(),
                             );
                         }
-                    }
                     if let Some(_workflow) = workflow {
                         menu_items.push(
                             Self::pane_menu_item(
@@ -4700,9 +4672,8 @@ impl DriveIndex {
                                 .user_app_installation_detected
                                 .value()
                                 == UserAppInstallStatus::Detected
-                        {
-                            if let Some(object_link) = object.object_link() {
-                                if let Ok(url) = Url::parse(&object_link) {
+                            && let Some(object_link) = object.object_link()
+                                && let Ok(url) = Url::parse(&object_link) {
                                     menu_items.push(
                                         MenuItemFields::new("Open on Desktop")
                                             .with_on_select_action(
@@ -4712,8 +4683,6 @@ impl DriveIndex {
                                             .into_item(),
                                     );
                                 }
-                            }
-                        }
                         // Only allow duplicate if in Personal space, or Team space when online
                         if matches!(space, Space::Personal)
                             || (self.is_online(app) && matches!(space, Space::Team { .. }))
@@ -4803,8 +4772,8 @@ impl DriveIndex {
         let cloud_model = CloudModel::as_ref(app);
         let object = cloud_model.get_by_uid(&cloud_object_type_and_id.uid());
 
-        if let Some(object) = object {
-            if self.is_online(app) && object.metadata().is_errored() {
+        if let Some(object) = object
+            && self.is_online(app) && object.metadata().is_errored() {
                 menu_items.push(
                     MenuItemFields::new("Retry")
                         .with_on_select_action(DriveIndexAction::RetryFailedObject(
@@ -4823,7 +4792,6 @@ impl DriveIndex {
                     );
                 }
             }
-        }
 
         if self.online_only_operation_allowed(cloud_object_type_and_id, app) {
             if !FeatureFlag::SharedWithMe.is_enabled() || access_level.can_trash() {
@@ -4968,14 +4936,13 @@ impl DriveIndex {
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(focused_index) = self.focused_index {
-            if let DriveIndexAction::EscapeKey = key {
-                if self.index_variant == DriveIndexVariant::Trash {
+            if let DriveIndexAction::EscapeKey = key
+                && self.index_variant == DriveIndexVariant::Trash {
                     self.index_variant = DriveIndexVariant::MainIndex;
                     self.initialize_section_states(ctx);
                     self.focused_index = Some(0);
                     ctx.notify();
                 }
-            }
 
             let Some(focused_item_id) = self.ordered_items.get(focused_index) else {
                 return;
@@ -5023,11 +4990,9 @@ impl DriveIndex {
                     CloudObjectTypeAndId::GenericStringObject { object_type, id: _ } => {
                         if let GenericStringObjectFormat::Json(JsonObjectType::EnvVarCollection) =
                             object_type
-                        {
-                            if let DriveIndexAction::EnterKey = key {
+                            && let DriveIndexAction::EnterKey = key {
                                 ctx.emit(DriveIndexEvent::RunObject(*cloud_id))
                             }
-                        }
                     }
                 },
                 WarpDriveItemId::Space(space) => {
@@ -5538,18 +5503,16 @@ impl TypedActionView for DriveIndex {
                 ctx.notify();
             }
             DriveIndexAction::FocusPreviousItem => {
-                if let Some(current_focused_index) = self.focused_index {
-                    if current_focused_index > 0 {
+                if let Some(current_focused_index) = self.focused_index
+                    && current_focused_index > 0 {
                         self.set_focused_index(Some(current_focused_index - 1), true, ctx);
                     }
-                }
             }
             DriveIndexAction::FocusNextItem => {
-                if let Some(current_focused_index) = self.focused_index {
-                    if current_focused_index < self.ordered_items.len() - 1 {
+                if let Some(current_focused_index) = self.focused_index
+                    && current_focused_index < self.ordered_items.len() - 1 {
                         self.set_focused_index(Some(current_focused_index + 1), true, ctx);
                     }
-                }
             }
             DriveIndexAction::LeftArrowKey => {
                 self.execute_index_item_keyboard_action(DriveIndexAction::LeftArrowKey, ctx);
@@ -5564,8 +5527,8 @@ impl TypedActionView for DriveIndex {
                 self.execute_index_item_keyboard_action(DriveIndexAction::EscapeKey, ctx);
             }
             DriveIndexAction::ToggleDriveItemContextMenu => {
-                if let Some(focused_index) = self.focused_index {
-                    if let Some(&warp_drive_item_id) = self.ordered_items.get(focused_index) {
+                if let Some(focused_index) = self.focused_index
+                    && let Some(&warp_drive_item_id) = self.ordered_items.get(focused_index) {
                         // Retrieve space of the WD item (because context menu options depend on the space)
                         // by finding the last space before the focused item in ordered_items
                         if let Some(space) = self
@@ -5584,7 +5547,6 @@ impl TypedActionView for DriveIndex {
                             self.toggle_item_menu(&space, &warp_drive_item_id, ctx);
                         }
                     }
-                }
             }
             DriveIndexAction::CopyObjectLinkToClipboard(link) => {
                 send_telemetry_from_ctx!(

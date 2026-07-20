@@ -2220,11 +2220,10 @@ impl BlocklistAIRenderContext {
         if let (Some(ai_metadata), Some(active_conversation_id)) = (
             block.agent_interaction_metadata(),
             self.selected_conversation_id.as_ref(),
-        ) {
-            if ai_metadata.conversation_id() == active_conversation_id {
+        )
+            && ai_metadata.conversation_id() == active_conversation_id {
                 return Some(AIContextInclusionState::Active);
             }
-        }
 
         [
             AIContextInclusionState::Pending,
@@ -3246,15 +3245,14 @@ impl TerminalView {
                     // Skip the pop when this exit is immediately followed by re-entering agent view
                     // for a different conversation (e.g. a restored conversation taking over the
                     // pane).
-                    if *was_ambient_agent && !*is_exit_before_new_entrance {
-                        if let Some(pane_stack) =
+                    if *was_ambient_agent && !*is_exit_before_new_entrance
+                        && let Some(pane_stack) =
                             me.pane_stack.as_ref().and_then(|h| h.upgrade(ctx))
                         {
                             pane_stack.update(ctx, |stack, ctx| {
                                 stack.pop(ctx);
                             });
                         }
-                    }
 
                     // Clean up any rich content scoped to the agent view 'lifetime'.
                     let view_ids_to_remove = me
@@ -3291,11 +3289,10 @@ impl TerminalView {
                     let has_init_steps = me.has_init_steps_for_conversation(*conversation_id);
 
                     // Exiting agent view should cancel setup flows that hide the input box.
-                    if me.has_active_init_project(ctx) && has_init_steps {
-                        if let Some(model) = me.active_init_project_model.clone() {
+                    if me.has_active_init_project(ctx) && has_init_steps
+                        && let Some(model) = me.active_init_project_model.clone() {
                             model.update(ctx, |model, ctx| model.cancel(ctx));
                         }
-                    }
                     for rich_content in me.rich_content_views.iter().rev() {
                         if rich_content.agent_view_conversation_id() != Some(*conversation_id) {
                             continue;
@@ -3457,12 +3454,11 @@ impl TerminalView {
             );
 
             // If NLD is disabled, restore any input config that was saved.
-            if !model.is_autodetection_enabled_for_current_context(ctx) {
-                if let Some(input_config) = initial_input_config {
+            if !model.is_autodetection_enabled_for_current_context(ctx)
+                && let Some(input_config) = initial_input_config {
                     let is_input_buffer_empty = true;
                     model.set_input_config(input_config, is_input_buffer_empty, None, ctx);
                 }
-            }
             model
         });
 
@@ -3804,15 +3800,13 @@ impl TerminalView {
             if let CLIAgentSessionsModelEvent::Ended {
                 terminal_view_id, ..
             } = event
-            {
-                if *terminal_view_id == me.view_id
+                && *terminal_view_id == me.view_id
                     && me.auto_stop_sharing_on_cli_end
                     && me.model.lock().shared_session_status().is_active_sharer()
                 {
                     me.auto_stop_sharing_on_cli_end = false;
                     me.stop_sharing_session(SharedSessionActionSource::NonUser, ctx);
                 }
-            }
             me.handle_cli_agent_sessions_event(event, ctx)
         });
         ctx.subscribe_to_model(
@@ -4170,11 +4164,10 @@ impl TerminalView {
         }
 
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, ai_settings_event, ctx| {
-            if let AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. } = ai_settings_event {
-                if !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx) {
+            if let AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. } = ai_settings_event
+                && !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx) {
                     me.remove_aws_bedrock_login_banner(ctx);
                 }
-            }
         });
 
         let agent_todos_popup = Self::build_agent_todos_popup(ai_context_model.clone(), ctx);
@@ -4421,11 +4414,10 @@ impl TerminalView {
                 // `RemoteServerManager` is a singleton, so every `TerminalView` receives every event.
                 // Filter for session-scoped events that are specifically tracked by this view.
                 // Host-scoped variants return `None` and pass through unfiltered.
-                if let Some(sid) = event.session_id() {
-                    if !me.sessions.as_ref(ctx).tracks_session(sid) {
+                if let Some(sid) = event.session_id()
+                    && !me.sessions.as_ref(ctx).tracks_session(sid) {
                         return;
                     }
-                }
                 match event {
                     RemoteServerManagerEvent::SetupStateChanged { .. } => {
                         // Sessions handles the state update directly via its own
@@ -5300,11 +5292,10 @@ impl TerminalView {
                 if self.pending_user_query_view_id.is_some() && !is_same_conversation {
                     self.remove_pending_user_query_block(ctx);
                 }
-            } else if !has_active_subagent {
-                if let Some(last_ai_block) = self.last_ai_block() {
+            } else if !has_active_subagent
+                && let Some(last_ai_block) = self.last_ai_block() {
                     pane_finish_reason = last_ai_block.as_ref(ctx).finish_reason();
                 }
-            }
 
             // Pane-scoped: the one-shot conversation-finished callbacks fire
             // when the pane's most recent block is done.
@@ -5318,11 +5309,10 @@ impl TerminalView {
             // (orchestration panes host the lead and local child conversations
             // in one view), so it can't drive the drain decision or supply the
             // finish reason.
-            if !has_active_subagent {
-                if let Some(reason) = self.finish_reason_for_conversation(*conversation_id, ctx) {
+            if !has_active_subagent
+                && let Some(reason) = self.finish_reason_for_conversation(*conversation_id, ctx) {
                     self.drain_queued_prompts(*conversation_id, reason, ctx);
                 }
-            }
 
             // If the most recent action in the current interaction turn created or updated a plan
             // document, show an "Execute this plan" prompt suggestion.
@@ -5331,8 +5321,8 @@ impl TerminalView {
                 if let Some(ai_metadata) = view.ai_block_metadata() {
                     let block = ai_metadata.ai_block_handle.as_ref(ctx);
 
-                    if let Some(output) = block.output_status(ctx).output_to_render() {
-                        if let Some(most_recent_action) = output.get().actions().last() {
+                    if let Some(output) = block.output_status(ctx).output_to_render()
+                        && let Some(most_recent_action) = output.get().actions().last() {
                             should_show_execute_plan_suggestion = matches!(
                                 &most_recent_action.action,
                                 AIAgentActionType::CreateDocuments(_)
@@ -5340,7 +5330,6 @@ impl TerminalView {
                             );
                             break;
                         }
-                    }
 
                     if block.has_user_input(ctx) {
                         // We reached the start of the current interaction turn.
@@ -5351,8 +5340,7 @@ impl TerminalView {
 
             if should_show_execute_plan_suggestion
                 && !FeatureFlag::PromptSuggestionsViaMAA.is_enabled()
-            {
-                if let Some(block) = self.last_ai_block() {
+                && let Some(block) = self.last_ai_block() {
                     let block_id = BlockId::from(block.id().to_string());
                     let suggestion = AgentModePromptSuggestion::Success(PromptSuggestion {
                         id: Uuid::new_v4().to_string(),
@@ -5371,7 +5359,6 @@ impl TerminalView {
                         ctx,
                     );
                 }
-            }
 
             self.update_input_prompt_suggestions_banner_state(ctx);
             ctx.notify();
@@ -6412,11 +6399,9 @@ impl TerminalView {
                 if FeatureFlag::CloudMode.is_enabled()
                     && self.is_ambient_agent_session(ctx)
                     && !self.model.lock().is_shared_ambient_agent_session()
-                {
-                    if let Some(conversation) =
+                    && let Some(conversation) =
                         BlocklistAIHistoryModel::as_ref(ctx).conversation(conversation_id)
-                    {
-                        if matches!(
+                        && matches!(
                             conversation_output_status_from_conversation(conversation),
                             Some(AmbientConversationStatus::Error {
                                 error: RenderableAIError::QuotaLimit { .. }
@@ -6424,8 +6409,6 @@ impl TerminalView {
                         ) {
                             self.show_out_of_credits_modal(ctx);
                         }
-                    }
-                }
 
                 // For conversation transcript viewers (on WASM) and shared ambient sessions on
                 // non-CloudModeSetupV2 paths, insert a conversation-ended tombstone when the
@@ -6455,17 +6438,14 @@ impl TerminalView {
                     false
                 };
 
-                if should_insert_tombstone {
-                    if let Some(conversation) =
+                if should_insert_tombstone
+                    && let Some(conversation) =
                         BlocklistAIHistoryModel::as_ref(ctx).conversation(conversation_id)
-                    {
-                        if !conversation.status().is_in_progress()
+                        && !conversation.status().is_in_progress()
                             && conversation_output_status_from_conversation(conversation).is_some()
                         {
                             self.insert_conversation_ended_tombstone_with_cta(None, ctx);
                         }
-                    }
-                }
             }
             BlocklistAIHistoryEvent::UpdatedConversationTitle { .. } => {
                 self.update_pane_configuration(ctx);
@@ -7270,8 +7250,8 @@ impl TerminalView {
                 }
 
                 // Auto-open code review pane on first accepted file edits
-                if let Some(result) = action_result {
-                    if let AIAgentActionResultType::RequestFileEdits(
+                if let Some(result) = action_result
+                    && let AIAgentActionResultType::RequestFileEdits(
                         crate::ai::agent::RequestFileEditsResult::Success { .. },
                     ) = &result.result
                     {
@@ -7307,7 +7287,6 @@ impl TerminalView {
                             }
                         }
                     }
-                }
             }
             BlocklistAIActionEvent::InitProject(_) => {
                 self.on_next_conversation_finished(|me, _reason, ctx| {
@@ -7504,8 +7483,8 @@ impl TerminalView {
                 };
 
                 let model = self.model.lock();
-                if model.shared_session_status().is_sharer() {
-                    if let Some(participant_id) = self
+                if model.shared_session_status().is_sharer()
+                    && let Some(participant_id) = self
                         .shared_session_presence_manager()
                         .map(|m| m.as_ref(ctx).id())
                     {
@@ -7518,7 +7497,6 @@ impl TerminalView {
                             preserve_input: false,
                         }
                     }
-                }
                 let block_id = model.active_block_id().clone();
                 drop(model);
 
@@ -7713,17 +7691,15 @@ impl TerminalView {
         let is_active_window_current_window = Some(ctx.window_id()) == current.active_window;
 
         if window_changed {
-            if let Some(focus_out_window_id) = previous.active_window {
-                if focus_out_window_id == ctx.window_id() && ctx.is_self_or_child_focused() {
+            if let Some(focus_out_window_id) = previous.active_window
+                && focus_out_window_id == ctx.window_id() && ctx.is_self_or_child_focused() {
                     self.maybe_report_focus_out(ctx);
                 }
-            }
 
-            if let Some(focus_in_window_id) = current.active_window {
-                if focus_in_window_id == ctx.window_id() && ctx.is_self_or_child_focused() {
+            if let Some(focus_in_window_id) = current.active_window
+                && focus_in_window_id == ctx.window_id() && ctx.is_self_or_child_focused() {
                     self.maybe_report_focus_in(ctx);
                 }
-            }
         }
 
         // When we change windows, we need to update the timestamp of the newly focused terminal view.
@@ -7850,11 +7826,10 @@ impl TerminalView {
         let path = self.active_session_path_if_local(ctx)?;
 
         // Return the cached value when the non-canonical path has not changed.
-        if let Some(cached) = self.canonical_session_pwd_cache.borrow().as_ref() {
-            if cached.path == path {
+        if let Some(cached) = self.canonical_session_pwd_cache.borrow().as_ref()
+            && cached.path == path {
                 return Some(cached.canonical.clone());
             }
-        }
 
         let canonical = CanonicalizedPath::try_from(&path).ok()?;
 
@@ -8347,9 +8322,9 @@ impl TerminalView {
 
         // Hide the input box during the entire remote-server setup flow.
         // The loading footer renders instead.
-        if FeatureFlag::SshRemoteServer.is_enabled() {
-            if let Some(pending_sid) = model.pending_session_id() {
-                if self
+        if FeatureFlag::SshRemoteServer.is_enabled()
+            && let Some(pending_sid) = model.pending_session_id()
+                && self
                     .sessions
                     .as_ref(app)
                     .remote_server_setup_state(pending_sid)
@@ -8357,8 +8332,6 @@ impl TerminalView {
                 {
                     return false;
                 }
-            }
-        }
 
         let active_ai_block = self.active_ai_block(app);
         if active_ai_block.is_some_and(|ai_block| {
@@ -9698,8 +9671,8 @@ impl TerminalView {
 
     /// Util method to update the ssh block, with a lock
     fn update_long_running_ssh_block_with_lock(&self, f: impl FnOnce(&mut Block)) -> bool {
-        if let Some(block_id) = self.warpify_state.block_id() {
-            if let Some(block) = self
+        if let Some(block_id) = self.warpify_state.block_id()
+            && let Some(block) = self
                 .model
                 .lock()
                 .block_list_mut()
@@ -9708,7 +9681,6 @@ impl TerminalView {
                 f(block);
                 return true;
             }
-        }
         false
     }
 
@@ -11408,8 +11380,8 @@ impl TerminalView {
             return;
         }
 
-        if source == BlockMetadataUpdateSource::Osc7 {
-            if let Some(cwd) = block_metadata.current_working_directory() {
+        if source == BlockMetadataUpdateSource::Osc7
+            && let Some(cwd) = block_metadata.current_working_directory() {
                 let resolvable = block_metadata
                     .session_id()
                     .and_then(|sid| self.sessions.as_ref(ctx).get(sid))
@@ -11422,7 +11394,6 @@ impl TerminalView {
                     return;
                 }
             }
-        }
 
         if let Some(prev_block_metadata) = self.active_block_metadata.take() {
             // Only send event to save app state when the block is post bootstrap
@@ -11711,18 +11682,17 @@ impl TerminalView {
             ModelEvent::CursorBlinkingChange(_) => {}
             ModelEvent::MouseCursorDirty => {}
             ModelEvent::Bell => {
-                if *TerminalSettings::as_ref(ctx).use_audible_bell {
-                    if let Err(e) = AudibleBell::as_ref(ctx).ring() {
+                if *TerminalSettings::as_ref(ctx).use_audible_bell
+                    && let Err(e) = AudibleBell::as_ref(ctx).ring() {
                         log::warn!("Unable to play bell: {e:#}");
                     }
-                }
                 // TODO(vorporeal): Remove this once we have a visual bell
                 // indicator in terminal tabs.
                 ctx.request_user_attention();
             }
             ModelEvent::Exit { reason } => {
-                if !self.manual_pty_shutdown_requested {
-                    if let Some(conversation_id) = self.maybe_send_agent_exited_shell_telemetry(ctx)
+                if !self.manual_pty_shutdown_requested
+                    && let Some(conversation_id) = self.maybe_send_agent_exited_shell_telemetry(ctx)
                     {
                         // The agent's command caused the shell to exit. Finalize the
                         // conversation as a failure (with a message) before the pane is
@@ -11733,7 +11703,6 @@ impl TerminalView {
                             controller.fail_conversation_due_to_shell_exit(conversation_id, ctx);
                         });
                     }
-                }
 
                 // If the pty spawn has failed, we've already inserted a banner.
                 if !self.pty_spawn_failed {
@@ -11779,8 +11748,8 @@ impl TerminalView {
                     find_model.notify_block_completed(completed_block_index, ctx);
                 });
 
-                if !matches!(block_completed_event.block_type, BlockType::BootstrapHidden) {
-                    if let Some(env_var_block) = self.active_env_var_collection_block(ctx) {
+                if !matches!(block_completed_event.block_type, BlockType::BootstrapHidden)
+                    && let Some(env_var_block) = self.active_env_var_collection_block(ctx) {
                         let output_truncated =
                             if let BlockType::User(completed) = &block_completed_event.block_type {
                                 Some(completed.output_truncated.clone())
@@ -11801,7 +11770,6 @@ impl TerminalView {
                             }
                         });
                     }
-                }
 
                 // If this block ran a possible subshell command, and it exited before the 1s timer
                 // completed, abort showing the banner.
@@ -12101,13 +12069,12 @@ impl TerminalView {
                 let active_session = self
                     .active_block_session_id()
                     .and_then(|id| self.sessions.as_ref(ctx).get(id));
-                if let Some(active_session) = active_session {
-                    if !active_session.has_attempted_to_load_external_commands() {
+                if let Some(active_session) = active_session
+                    && !active_session.has_attempted_to_load_external_commands() {
                         ctx.background_executor()
                             .spawn(async move { active_session.load_external_commands().await })
                             .detach();
                     }
-                }
 
                 if let Some(delay) = command_finished_to_precmd_delay {
                     let delay_ms = delay.as_millis() as u64;
@@ -12196,8 +12163,8 @@ impl TerminalView {
 
                 // Emit PendingCommandCompleted when a pending command's block
                 // finishes (e.g. tab config setup commands like `git worktree add`).
-                if self.awaiting_pending_command_completion {
-                    if let Some(command_succeeded) = pending_command_succeeded {
+                if self.awaiting_pending_command_completion
+                    && let Some(command_succeeded) = pending_command_succeeded {
                         self.awaiting_pending_command_completion = false;
                         if command_succeeded && self.set_next_pending_command_from_queue(ctx) {
                             // The delayed pending-command scheduler below will
@@ -12222,17 +12189,15 @@ impl TerminalView {
                             }
                         }
                     }
-                }
 
                 // Advance the queued-prompts queue when a dispatched queued command's block
                 // completes. `on_queued_command_finished` no-ops unless a queued command is in
                 // flight, and the `!was_part_of_agent_interaction` filter keeps agent-executed
                 // command blocks (including LRC snapshots) from advancing the queue.
-                if let BlockType::User(user_block_completed) = block_type {
-                    if !user_block_completed.was_part_of_agent_interaction {
+                if let BlockType::User(user_block_completed) = block_type
+                    && !user_block_completed.was_part_of_agent_interaction {
                         self.on_queued_command_finished(ctx);
                     }
-                }
 
                 // For the case when the user uses session configuration with a
                 // command list, we execute the command after a delay.
@@ -12497,13 +12462,12 @@ impl TerminalView {
             }
             ModelEvent::PreInteractiveSSHSession => {}
             ModelEvent::SSH(remote_shell) => {
-                if let Some(shell) = ShellType::from_name(remote_shell) {
-                    if shell.is_fully_supported_remotely() {
+                if let Some(shell) = ShellType::from_name(remote_shell)
+                    && shell.is_fully_supported_remotely() {
                         // Start a bootstrap timer for the SSH session, so we can log when the session
                         // takes too long to initialize
                         self.start_bootstrap_timer(BOOTSTRAP_FAILED_DURATION, ctx);
                     }
-                }
                 send_telemetry_from_ctx!(
                     TelemetryEvent::SSHBootstrapAttempt(remote_shell.clone()),
                     ctx
@@ -13016,11 +12980,9 @@ impl TerminalView {
         for rich_content in self.rich_content_views.iter() {
             if let Some(RichContentMetadata::SshRemoteServerFailedBanner { handle }) =
                 rich_content.metadata()
-            {
-                if handle.as_ref(ctx).session_id() == session_id {
+                && handle.as_ref(ctx).session_id() == session_id {
                     view_ids_to_remove.push(rich_content.view_id());
                 }
-            }
         }
 
         if view_ids_to_remove.is_empty() {
@@ -13091,11 +13053,9 @@ impl TerminalView {
         for rich_content in self.rich_content_views.iter() {
             if let Some(RichContentMetadata::SshTmuxDeprecationBanner { handle }) =
                 rich_content.metadata()
-            {
-                if handle.as_ref(ctx).session_id() == session_id {
+                && handle.as_ref(ctx).session_id() == session_id {
                     view_ids_to_remove.push(rich_content.view_id());
                 }
-            }
         }
 
         if view_ids_to_remove.is_empty() {
@@ -13122,11 +13082,9 @@ impl TerminalView {
         for rich_content in self.rich_content_views.iter() {
             if let Some(RichContentMetadata::SshRemoteServerChoiceBlock { handle }) =
                 rich_content.metadata()
-            {
-                if handle.as_ref(ctx).session_id() == session_id {
+                && handle.as_ref(ctx).session_id() == session_id {
                     view_ids_to_remove.push(rich_content.view_id());
                 }
-            }
         }
 
         if view_ids_to_remove.is_empty() {
@@ -13780,11 +13738,11 @@ impl TerminalView {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn get_ps1_grid_info(&mut self) -> Option<(BlockGrid, SizeInfo)> {
         let model = self.model.lock();
-        let ps1_grid_info = model
+        
+        model
             .prompt_grid()
             .cloned()
-            .zip(Some(*model.block_list().size()));
-        ps1_grid_info
+            .zip(Some(*model.block_list().size()))
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
@@ -15178,8 +15136,8 @@ impl TerminalView {
     ) {
         let mut blocks_to_remove: Vec<(EntityId, ViewHandle<AIBlock>)> = vec![];
         self.rich_content_views.retain(|rich_content| {
-            if let Some(ai_metadata) = rich_content.ai_block_metadata() {
-                if ai_metadata.conversation_id == *conversation_id
+            if let Some(ai_metadata) = rich_content.ai_block_metadata()
+                && ai_metadata.conversation_id == *conversation_id
                     && exchange_ids.contains(&ai_metadata.exchange_id)
                 {
                     blocks_to_remove.push((
@@ -15188,7 +15146,6 @@ impl TerminalView {
                     ));
                     return false;
                 }
-            }
             true
         });
 
@@ -16030,8 +15987,8 @@ impl TerminalView {
     }
 
     pub fn override_colors(&self) -> color::OverrideList {
-        let override_colors = self.model.lock().override_colors();
-        override_colors
+        
+        self.model.lock().override_colors()
     }
 
     fn appearance<'a>(&self, ctx: &'a ViewContext<Self>) -> &'a Appearance {
@@ -16414,12 +16371,11 @@ impl TerminalView {
             .ambient_agent_view_model
             .as_ref()
             .map(|model| model.as_ref(ctx).ui_state.error_selected_text.clone());
-        if let Some(error_selected_text) = error_selected_text {
-            if let Some(text) = error_selected_text.read().clone().filter(|t| !t.is_empty()) {
+        if let Some(error_selected_text) = error_selected_text
+            && let Some(text) = error_selected_text.read().clone().filter(|t| !t.is_empty()) {
                 ctx.clipboard().write(ClipboardContent::plain_text(text));
                 return;
             }
-        }
 
         let semantic_selection = SemanticSelection::as_ref(ctx);
         if let Some(selected) = self.model.lock().selection_to_string(
@@ -16889,8 +16845,8 @@ impl TerminalView {
                 ]);
 
                 // Add debugging link for command blocks run by the agent
-                if is_single_selection {
-                    if let Some(metadata) = tail_block.agent_interaction_metadata() {
+                if is_single_selection
+                    && let Some(metadata) = tail_block.agent_interaction_metadata() {
                         let conversation_id = metadata.conversation_id();
 
                         // Try to find the exchange ID using the requested command action ID if available,
@@ -16930,7 +16886,6 @@ impl TerminalView {
                             }
                         }
                     }
-                }
 
                 items
             }
@@ -18449,8 +18404,8 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         for rich_content in self.rich_content_views.iter() {
-            if let Some(ai_metadata) = rich_content.ai_block_metadata() {
-                if ai_metadata.ai_block_handle.id() == tooltip_info.view_id {
+            if let Some(ai_metadata) = rich_content.ai_block_metadata()
+                && ai_metadata.ai_block_handle.id() == tooltip_info.view_id {
                     ai_metadata.ai_block_handle.update(ctx, |view, _ctx| {
                         view.set_secret_redaction_state(
                             &tooltip_info.location,
@@ -18460,7 +18415,6 @@ impl TerminalView {
                     });
                     break;
                 }
-            }
         }
 
         self.dismiss_tooltips(ctx);
@@ -18625,8 +18579,7 @@ impl TerminalView {
             while let Some(block_height_item) = block_cursor.item() {
                 if let BlockHeightItem::RichContent(RichContentItem { view_id, .. }) =
                     block_height_item
-                {
-                    if let Some(ai_block) = ctx.view_with_id::<AIBlock>(active_window_id, *view_id)
+                    && let Some(ai_block) = ctx.view_with_id::<AIBlock>(active_window_id, *view_id)
                     {
                         let x_pos = match selection_type {
                             SelectionType::Rect => Some(position.x()),
@@ -18650,7 +18603,6 @@ impl TerminalView {
                             ai_block_view.start_selection_at_min_point(selection_type, x_pos);
                         }
                     }
-                }
 
                 block_cursor.next();
             }
@@ -18923,12 +18875,10 @@ impl TerminalView {
         if let Some(session) = self
             .active_block_session_id()
             .and_then(|id| self.sessions.as_ref(ctx).get(id))
-        {
-            if let Some(info) = session.subshell_info() {
+            && let Some(info) = session.subshell_info() {
                 self.warpify_state
                     .add_subshell_separator(info, self.model.clone(), ctx);
             }
-        }
 
         // When we clear the blocklist, the user can't see past AI exchanges anymore, so these conversations should no longer
         // appear active for the terminal view anymore.
@@ -19039,10 +18989,9 @@ impl TerminalView {
         let block_index = block_list.last_non_hidden_block_by_index();
         if let Some((_, content)) =
             block_list.last_non_hidden_rich_content_block_after_block(block_index)
-        {
-            if let Some(rich_content) = self.rich_content_views.last() {
-                if rich_content.view_id() == content.view_id {
-                    if let Some(ai_metadata) = rich_content.ai_block_metadata() {
+            && let Some(rich_content) = self.rich_content_views.last()
+                && rich_content.view_id() == content.view_id
+                    && let Some(ai_metadata) = rich_content.ai_block_metadata() {
                         let ai_block = ai_metadata.ai_block_handle.as_ref(app);
                         if let Some(prompt) = ai_history_model
                             .conversation(&ai_block.conversation_id())
@@ -19053,9 +19002,6 @@ impl TerminalView {
                             };
                         }
                     }
-                }
-            }
-        }
 
         // Fall back to existing command context logic for terminal blocks
         let active_block = block_list.active_block();
@@ -19466,8 +19412,8 @@ impl TerminalView {
 
             // Don't interfere with potential autosuggestions based on text already in the input
             // buffer.
-            if input.buffer_text(ctx).is_empty() {
-                if let Some(autosuggestion) = auto_suggestion {
+            if input.buffer_text(ctx).is_empty()
+                && let Some(autosuggestion) = auto_suggestion {
                     input.set_autosuggestion(
                         autosuggestion,
                         AutosuggestionType::AgentModeQuery {
@@ -19477,7 +19423,6 @@ impl TerminalView {
                         ctx,
                     );
                 }
-            }
 
             input.focus_input_box(ctx);
         });
@@ -19499,11 +19444,9 @@ impl TerminalView {
             let semantic_selection = SemanticSelection::as_ref(ctx);
             if let Some(selected) =
                 model.selection_to_string(semantic_selection, inverted_blocklist, ctx)
-            {
-                if !selected.is_empty() {
+                && !selected.is_empty() {
                     view.set_query_text(selected.as_str(), ctx);
                 }
-            }
 
             // If the alt screen is not active and there are selected blocks, enable the find_within_block.
             view.display_find_within_block = match (
@@ -19850,8 +19793,8 @@ impl TerminalView {
             .block_list()
             .last_non_hidden_block_by_index();
 
-        if let Some(start_index) = first_block_index {
-            if let Some(end_index) = last_block_index {
+        if let Some(start_index) = first_block_index
+            && let Some(end_index) = last_block_index {
                 self.change_block_selections(
                     |selected_blocks| {
                         selected_blocks.reset_to_single(start_index);
@@ -19860,7 +19803,6 @@ impl TerminalView {
                     ctx,
                 );
             }
-        }
         ctx.focus_self();
         ctx.notify();
     }
@@ -21838,14 +21780,10 @@ impl TerminalView {
                         .rich_content_views
                         .iter()
                         .find(|content| content.view_id() == *view_id)
-                    {
-                        if let Some(agent_view_metadata) = rich_content.agent_view_entry_metadata()
-                        {
-                            if agent_view_metadata.conversation_id == conversation_id {
+                        && let Some(agent_view_metadata) = rich_content.agent_view_entry_metadata()
+                            && agent_view_metadata.conversation_id == conversation_id {
                                 return true;
-                            }
-                        }
-                    };
+                            };
                     return false;
                 }
                 _ => {
@@ -24486,8 +24424,8 @@ impl TerminalView {
                 .expect("Handle should be available")
                 .is_hovered();
 
-            if hovered {
-                if let Some(block) = model.block_list().block_at(*index) {
+            if hovered
+                && let Some(block) = model.block_list().block_at(*index) {
                     let snapshot = render_floating_block_snapshot(block, appearance);
 
                     stack.add_positioned_child(
@@ -24500,7 +24438,6 @@ impl TerminalView {
                         ),
                     );
                 }
-            }
         }
 
         stack.finish()
@@ -24640,40 +24577,37 @@ impl TerminalView {
             }
             CopyAIBlockQuery { ai_block_view_id } => {
                 for rich_content in self.rich_content_views.iter() {
-                    if let Some(ai_metadata) = rich_content.ai_block_metadata() {
-                        if ai_metadata.ai_block_handle.id() == *ai_block_view_id {
+                    if let Some(ai_metadata) = rich_content.ai_block_metadata()
+                        && ai_metadata.ai_block_handle.id() == *ai_block_view_id {
                             ai_metadata.ai_block_handle.update(ctx, |block, ctx| {
                                 block.handle_action(&AIBlockAction::CopyQuery, ctx);
                             });
                             break;
                         }
-                    }
                 }
             }
             CopyAIBlockOutput { ai_block_view_id } => {
                 // Copy only the current AI block's output
                 for rich_content in self.rich_content_views.iter() {
-                    if let Some(ai_metadata) = rich_content.ai_block_metadata() {
-                        if ai_metadata.ai_block_handle.id() == *ai_block_view_id {
+                    if let Some(ai_metadata) = rich_content.ai_block_metadata()
+                        && ai_metadata.ai_block_handle.id() == *ai_block_view_id {
                             ai_metadata.ai_block_handle.update(ctx, |block, ctx| {
                                 block.handle_action(&AIBlockAction::CopyOutput, ctx);
                             });
                             break;
                         }
-                    }
                 }
             }
             CopyAIBlock { ai_block_view_id } => {
                 // Copy current AI block's prompt and output
                 for rich_content in self.rich_content_views.iter() {
-                    if let Some(ai_metadata) = rich_content.ai_block_metadata() {
-                        if ai_metadata.ai_block_handle.id() == *ai_block_view_id {
+                    if let Some(ai_metadata) = rich_content.ai_block_metadata()
+                        && ai_metadata.ai_block_handle.id() == *ai_block_view_id {
                             ai_metadata.ai_block_handle.update(ctx, |block, ctx| {
                                 block.handle_action(&AIBlockAction::Copy, ctx);
                             });
                             break;
                         }
-                    }
                 }
             }
             CopyAIBlockConversation { ai_block_view_id } => {
@@ -24733,20 +24667,19 @@ impl TerminalView {
             }
             CopyAgentCommand { ai_block_view_id } => {
                 for rich_content in self.rich_content_views.iter() {
-                    if let Some(ai_metadata) = rich_content.ai_block_metadata() {
-                        if ai_metadata.ai_block_handle.id() == *ai_block_view_id {
+                    if let Some(ai_metadata) = rich_content.ai_block_metadata()
+                        && ai_metadata.ai_block_handle.id() == *ai_block_view_id {
                             ai_metadata.ai_block_handle.update(ctx, |block, ctx| {
                                 block.handle_action(&AIBlockAction::CopyCommand, ctx);
                             });
                             break;
                         }
-                    }
                 }
             }
             CopyAgentGitBranch { ai_block_view_id } => {
                 for rich_content in self.rich_content_views.iter() {
-                    if let Some(ai_metadata) = rich_content.ai_block_metadata() {
-                        if ai_metadata.ai_block_handle.id() == *ai_block_view_id {
+                    if let Some(ai_metadata) = rich_content.ai_block_metadata()
+                        && ai_metadata.ai_block_handle.id() == *ai_block_view_id {
                             let ai_block = ai_metadata.ai_block_handle.as_ref(ctx);
                             let model = self.model.lock();
                             let git_branch =
@@ -24764,7 +24697,6 @@ impl TerminalView {
                             }
                             break;
                         }
-                    }
                 }
             }
             ForkAIConversationFromBlock {
@@ -24797,8 +24729,8 @@ impl TerminalView {
             }
             SavePromptAsAgentModeWorkflow { ai_block_view_id } => {
                 for rich_content in self.rich_content_views.iter() {
-                    if let Some(ai_metadata) = rich_content.ai_block_metadata() {
-                        if ai_metadata.ai_block_handle.id() == *ai_block_view_id {
+                    if let Some(ai_metadata) = rich_content.ai_block_metadata()
+                        && ai_metadata.ai_block_handle.id() == *ai_block_view_id {
                             let prompt_text = ai_metadata
                                 .ai_block_handle
                                 .as_ref(ctx)
@@ -24808,7 +24740,6 @@ impl TerminalView {
                             });
                             break;
                         }
-                    }
                 }
             }
         }
@@ -25674,11 +25605,10 @@ impl TerminalView {
                 // The tmux-based SSH warpification flow has been removed in favor of the
                 // remote-server SSH extension. If this user had previously opted into the tmux
                 // wrapper, show them a one-time deprecation notice on their next SSH session.
-                if WarpifySettings::as_ref(ctx).should_show_tmux_deprecation_notice() {
-                    if let Some(session_id) = self.active_block_session_id() {
+                if WarpifySettings::as_ref(ctx).should_show_tmux_deprecation_notice()
+                    && let Some(session_id) = self.active_block_session_id() {
                         self.show_ssh_tmux_deprecation_banner(session_id, ctx);
                     }
-                }
             }
         }
     }
@@ -25940,11 +25870,10 @@ impl TerminalSurface for TerminalView {
             matches!(notification_settings.mode, NotificationsMode::Unset)
                 || (matches!(notification_settings.mode, NotificationsMode::Enabled)
                     && notification_settings.is_needs_attention_enabled);
-        if is_navigated_away_from_window && password_notification_setting_on {
-            if let Some(block_index) = block_index {
+        if is_navigated_away_from_window && password_notification_setting_on
+            && let Some(block_index) = block_index {
                 self.maybe_send_password_notification(block_index, ctx);
             }
-        }
     }
 
     #[cfg(unix)]
@@ -26779,8 +26708,8 @@ impl TypedActionView for TerminalView {
                 {
                     if FeatureFlag::AgentView.is_enabled() {
                         self.agent_view_controller.update(ctx, |controller, ctx| {
-                            if !controller.is_inline() {
-                                if let Err(e) = controller.try_enter_inline_agent_view(
+                            if !controller.is_inline()
+                                && let Err(e) = controller.try_enter_inline_agent_view(
                                     None,
                                     AgentViewEntryOrigin::LongRunningCommand,
                                     ctx,
@@ -26791,7 +26720,6 @@ impl TypedActionView for TerminalView {
                                         )
                                     );
                                 }
-                            }
                         });
                     }
                     self.tag_in_agent_for_user_long_running_command(ctx);
@@ -27629,8 +27557,7 @@ impl View for TerminalView {
             is_reconnecting,
             ..
         }) = self.shared_session_viewer()
-        {
-            if model.shared_session_status().is_reader()
+            && model.shared_session_status().is_reader()
                 && !*is_reconnecting
                 && !pending_role_request
                 && self.context_menu_state.is_none()
@@ -27670,7 +27597,6 @@ impl View for TerminalView {
                     ),
                 );
             }
-        }
 
         self.maybe_render_onboarding_callout(
             menu_positioning,
@@ -27859,8 +27785,8 @@ impl View for TerminalView {
             .as_ref(app)
             .show_jump_to_bottom_of_block_button
             .value();
-        if is_jump_to_bottom_enabled {
-            if let Some(overhanging_block) = viewport.overhanging_bottom_block(app) {
+        if is_jump_to_bottom_enabled
+            && let Some(overhanging_block) = viewport.overhanging_bottom_block(app) {
                 let button_hovered = self.is_jump_to_bottom_of_block_element_hovered();
                 let block_hovered = self
                     .hovered_block_index
@@ -27901,7 +27827,6 @@ impl View for TerminalView {
                     );
                 }
             }
-        }
 
         // Add a border above the input view when there's an overhanging block (or below in input at the top
         // mode).
@@ -27946,11 +27871,10 @@ impl View for TerminalView {
             );
         }
 
-        if let Some(sharer) = self.shared_session_sharer() {
-            if sharer.is_inactivity_warning_modal_open() {
+        if let Some(sharer) = self.shared_session_sharer()
+            && sharer.is_inactivity_warning_modal_open() {
                 stack.add_child(ChildView::new(sharer.inactivity_modal()).finish())
             }
-        }
 
         // Render first-time cloud agent setup view when in Setup status
         if self
@@ -28232,11 +28156,10 @@ impl View for TerminalView {
     fn self_or_child_interacted_with(&self, _ctx: &mut ViewContext<Self>) {
         if let Some(sharer) = self.shared_session_sharer() {
             // If warning modal is open, sharer must continue share through the modal
-            if !sharer.is_inactivity_warning_modal_open() {
-                if let Err(e) = sharer.activity_tx().try_send(()) {
+            if !sharer.is_inactivity_warning_modal_open()
+                && let Err(e) = sharer.activity_tx().try_send(()) {
                     log::warn!("Failed to send sharer activity over activity_tx channel {e:?}");
                 }
-            }
         }
     }
 
@@ -28390,8 +28313,7 @@ impl Drop for TerminalView {
                     model.has_pending_ssh_session(),
                 )
             })
-        {
-            if has_pending_ssh_session || !is_bootstrapped {
+            && (has_pending_ssh_session || !is_bootstrapped) {
                 // Only treat session abandonment as an error if the session was
                 // visible to the user at some point.  This filters out
                 // bootstrap "failures" such as oh-my-zsh prompting the user
@@ -28432,8 +28354,7 @@ impl Drop for TerminalView {
                     }
                 });
                 task.detach();
-            }
-        };
+            };
     }
 }
 

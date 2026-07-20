@@ -57,8 +57,8 @@ where
     F: Fn(String, T) -> G,
     T: DeserializeOwned,
 {
-    if let Some(file_name) = get_file_name(item) {
-        if is_config_file(&file_name) {
+    if let Some(file_name) = get_file_name(item)
+        && is_config_file(&file_name) {
             let parsed = from_yaml::<T>(item.path().into());
             match parsed {
                 Ok(parsed) => return Some(post_deserialize_fn(file_name, parsed)),
@@ -67,7 +67,6 @@ where
                 }
             }
         }
-    }
     None
 }
 
@@ -90,8 +89,8 @@ where
     F: Fn(String, T) -> G,
     T: DeserializeOwned,
 {
-    if let Some(file_name) = get_file_name(item) {
-        if is_config_file(&file_name) {
+    if let Some(file_name) = get_file_name(item)
+        && is_config_file(&file_name) {
             let parsed = from_multi_doc_yaml::<T>(item.path().into());
             match parsed {
                 Ok(parsed) => {
@@ -107,7 +106,6 @@ where
                 }
             }
         }
-    }
     None
 }
 

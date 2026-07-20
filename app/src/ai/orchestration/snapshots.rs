@@ -237,11 +237,10 @@ fn build_harness_snapshot(
         if selected_id.is_none() {
             if harness_str.eq_ignore_ascii_case(initial_harness) {
                 selected_id = Some(harness_str.clone());
-            } else if let Some(target_display) = &target_display {
-                if &entry.display_name == target_display {
+            } else if let Some(target_display) = &target_display
+                && &entry.display_name == target_display {
                     selected_id = Some(harness_str.clone());
                 }
-            }
         }
         rows.push(OptionRow {
             id: harness_str,
@@ -519,8 +518,8 @@ fn build_host_snapshot(
     }
     // `recent_host` already comes from the persisted last selection. Only add
     // its row when the same slug was not emitted from a higher-priority source.
-    if let Some(slug) = recent_host.filter(|s| !s.trim().is_empty()) {
-        if !added_slugs
+    if let Some(slug) = recent_host.filter(|s| !s.trim().is_empty())
+        && !added_slugs
             .iter()
             .any(|known| known.eq_ignore_ascii_case(&slug))
         {
@@ -529,7 +528,6 @@ fn build_host_snapshot(
                 ..OptionRow::new(slug.clone(), slug)
             });
         }
-    }
     OptionSnapshot {
         rows,
         selected_id: Some(current.to_string()),

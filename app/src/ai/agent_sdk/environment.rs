@@ -758,8 +758,8 @@ impl EnvironmentCommandRunner {
         // for our environment to be assigned a ServerId. Environments are not
         // usable without first being synced.
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
-            if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-                if matches!(result.operation, ObjectOperation::Create { .. })
+            if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+                && matches!(result.operation, ObjectOperation::Create { .. })
                     && matches!(result.success_type, OperationSuccessType::Success)
                     && result.client_id == Some(client_id)
                 {
@@ -767,7 +767,6 @@ impl EnvironmentCommandRunner {
                     println!("Environment created successfully with ID: {server_id}");
                     ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
                 }
-            }
         });
     }
 
@@ -1003,8 +1002,8 @@ impl EnvironmentCommandRunner {
 
         // Subscribe to UpdateManager to wait for the update to complete
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
-            if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-                if matches!(result.operation, ObjectOperation::Update)
+            if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+                && matches!(result.operation, ObjectOperation::Update)
                     && result.server_id == Some(server_id)
                 {
                     match result.success_type {
@@ -1024,7 +1023,6 @@ impl EnvironmentCommandRunner {
                         }
                     }
                 }
-            }
         });
     }
 
@@ -1089,8 +1087,8 @@ impl EnvironmentCommandRunner {
 
         // Listen to the UpdateManager for a completed object deletion
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
-            if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-                if matches!(result.operation, ObjectOperation::Delete { .. }) {
+            if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+                && matches!(result.operation, ObjectOperation::Delete { .. }) {
                     match result.success_type {
                         OperationSuccessType::Success => {
                             println!("Environment deleted successfully");
@@ -1107,7 +1105,6 @@ impl EnvironmentCommandRunner {
                         }
                     }
                 }
-            }
         });
     }
 }

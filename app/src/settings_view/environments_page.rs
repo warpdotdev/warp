@@ -306,7 +306,8 @@ impl EnvironmentsPageView {
         placeholder: &'static str,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<EditorView> {
-        let editor = ctx.add_typed_action_view(|ctx| {
+        
+        ctx.add_typed_action_view(|ctx| {
             let appearance = Appearance::as_ref(ctx);
             let options = SingleLineEditorOptions {
                 text: TextOptions {
@@ -322,8 +323,7 @@ impl EnvironmentsPageView {
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text(placeholder, ctx);
             editor
-        });
-        editor
+        })
     }
 
     fn update_search_editor_text_colors(&mut self, ctx: &mut ViewContext<Self>) {
@@ -645,36 +645,30 @@ impl EnvironmentsPageView {
         // Check if this is a successful create for our pending create
         if let (ObjectOperation::Create { .. }, OperationSuccessType::Success) =
             (&result.operation, &result.success_type)
-        {
-            if let Some(pending_client_id) = self.pending_create_client_id.take() {
+            && let Some(pending_client_id) = self.pending_create_client_id.take() {
                 // Check if the client_id in the result matches our pending client_id
-                if let Some(result_client_id) = &result.client_id {
-                    if *result_client_id == pending_client_id {
+                if let Some(result_client_id) = &result.client_id
+                    && *result_client_id == pending_client_id {
                         self.show_success_toast(
                             "Successfully created environment".to_string(),
                             ctx,
                         );
                     }
-                }
             }
-        }
 
         // Check if this is a successful delete for our pending delete
         if let (ObjectOperation::Delete { .. }, OperationSuccessType::Success) =
             (&result.operation, &result.success_type)
-        {
-            if let Some(pending_env_id) = self.pending_delete_env_id.take() {
+            && let Some(pending_env_id) = self.pending_delete_env_id.take() {
                 // Check if the server_id matches our pending environment
-                if let Some(server_id) = &result.server_id {
-                    if server_id.uid() == pending_env_id.uid() {
+                if let Some(server_id) = &result.server_id
+                    && server_id.uid() == pending_env_id.uid() {
                         self.show_success_toast(
                             "Environment deleted successfully".to_string(),
                             ctx,
                         );
                     }
-                }
             }
-        }
 
         // Check if this is a completion event for our pending share (personal -> team)
         if matches!(&result.operation, ObjectOperation::MoveToDrive) {
@@ -1788,8 +1782,8 @@ impl EnvironmentsPageWidget {
             );
 
             // Description (if present) - lighter than other details
-            if let Some(description) = &env_description {
-                if !description.is_empty() {
+            if let Some(description) = &env_description
+                && !description.is_empty() {
                     content_column.add_child(
                         Text::new(
                             description.clone(),
@@ -1807,7 +1801,6 @@ impl EnvironmentsPageWidget {
                         .finish(),
                     );
                 }
-            }
 
             let mut details_parts = vec![format!("Image: {}", env_docker_image)];
 

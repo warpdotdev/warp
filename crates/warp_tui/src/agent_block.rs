@@ -299,13 +299,12 @@ impl TuiAIBlock {
                 return;
             };
             if me.renders_action(&action_id) {
-                if should_schedule_auto_expand {
-                    if let Some(TuiToolCallView::ShellCommand(view)) =
+                if should_schedule_auto_expand
+                    && let Some(TuiToolCallView::ShellCommand(view)) =
                         me.action_views.get(&action_id)
                     {
                         view.update(ctx, |view, ctx| view.schedule_auto_expand(ctx));
                     }
-                }
                 me.invalidate_action(&action_id, ctx);
             }
         });
@@ -716,7 +715,8 @@ impl TuiAIBlock {
     fn latest_exposed_plan(&self, ctx: &AppContext) -> Option<ViewHandle<TuiPlanView>> {
         let status = self.block_model.status(ctx);
         let output = status.output_to_render()?;
-        let plan = output.get().messages.iter().rev().find_map(|message| {
+        
+        output.get().messages.iter().rev().find_map(|message| {
             let AIAgentOutputMessageType::Action(action) = &message.message else {
                 return None;
             };
@@ -724,8 +724,7 @@ impl TuiAIBlock {
                 return None;
             };
             view.as_ref(ctx).renders_rich_body().then(|| view.clone())
-        });
-        plan
+        })
     }
     pub(super) fn has_exposed_plan(&self, ctx: &AppContext) -> bool {
         self.latest_exposed_plan(ctx).is_some()

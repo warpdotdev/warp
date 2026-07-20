@@ -204,11 +204,10 @@ impl ShareBlockModal {
             if matches!(
                 event,
                 EditorEvent::Paste | EditorEvent::Edited(EditOrigin::UserTyped)
-            ) {
-                if let Some(handle) = me.title_generation_future_handle.take() {
+            )
+                && let Some(handle) = me.title_generation_future_handle.take() {
                     handle.abort();
                 }
-            }
             ctx.notify();
         });
 
@@ -690,12 +689,11 @@ impl ShareBlockModal {
                     .set_width(200.),
             )
             .with_text_and_icon_label(text_and_icon);
-        if let ShareRequestState::Pending(pending_share_type) = self.request_state {
-            if pending_share_type != share_type {
+        if let ShareRequestState::Pending(pending_share_type) = self.request_state
+            && pending_share_type != share_type {
                 // Disable the share button that wasn't selected while request is pending.
                 button = button.disabled();
             }
-        }
 
         button
             .build()
@@ -1301,15 +1299,14 @@ impl SingleBlock {
         if self.show_prompt {
             // If we're rendering Warp prompt (above the command).
             if !block.honor_ps1() {
-                if let Some(native_prompt_text) = self.native_prompt_text.as_mut() {
-                    if self.scroll_top - padding_top_rendered <= Lines::zero() {
+                if let Some(native_prompt_text) = self.native_prompt_text.as_mut()
+                    && self.scroll_top - padding_top_rendered <= Lines::zero() {
                         native_prompt_text.paint(
                             grid_origin + vec2f(size_info.padding_x_px().as_f32(), 0.),
                             ctx,
                             app,
                         );
                     }
-                }
                 // The height of the native prompt will always be 1.
                 let hidden_prompt_rows_above =
                     (self.scroll_top - padding_top_rendered).clamp(0.into_lines(), 1.into_lines());
@@ -1534,8 +1531,7 @@ impl Element for SingleBlock {
             precise,
             modifiers: ModifiersState { ctrl: false, .. },
         }) = event.at_z_index(self.z_index().unwrap(), ctx)
-        {
-            if self.rect().unwrap().contains_point(*position) {
+            && self.rect().unwrap().contains_point(*position) {
                 if *precise {
                     self.scroll_by_pixels(delta.y().into_pixels(), ctx);
                 } else {
@@ -1543,7 +1539,6 @@ impl Element for SingleBlock {
                 }
                 return true;
             }
-        }
         false
     }
 }

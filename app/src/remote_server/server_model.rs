@@ -659,8 +659,8 @@ impl ServerModel {
                     // When a file-watcher update couldn't be applied because
                     // the buffer has unsaved client edits, forward the conflict
                     // to connected clients so they can show a resolution banner.
-                    if !success {
-                        if let Some(conns) = me.buffers.connections_for_buffer(file_id) {
+                    if !success
+                        && let Some(conns) = me.buffers.connections_for_buffer(file_id) {
                             // Collect to break the immutable borrow on `me.buffers`
                             // before calling `me.send_server_message(&mut self)`.
                             let conns: Vec<_> = conns.iter().copied().collect();
@@ -677,7 +677,6 @@ impl ServerModel {
                                 );
                             }
                         }
-                    }
                 }
                 GlobalBufferModelEvent::RemoteBufferConflict { .. } => {
                     // Not relevant for server-local buffers.
@@ -2133,14 +2132,13 @@ impl ServerModel {
                                 },
                             ),
                         );
-                        if is_git {
-                            if let Some(sent_roots) = me
+                        if is_git
+                            && let Some(sent_roots) = me
                                 .snapshot_sent_roots_by_connection
                                 .get_mut(&conn_id_for_response)
                             {
                                 sent_roots.insert(root_path);
                             }
-                        }
                     }
                 }
             },
@@ -2438,8 +2436,8 @@ impl ServerModel {
         // For force_reload on an already-tracked buffer, skip open_server_local
         // to avoid a spurious BufferLoaded event that would consume the pending
         // request before ServerLocalBufferUpdated can use it for exclusion.
-        if msg.force_reload {
-            if let Some(file_id) = self.buffers.file_id_for_path(&msg.path) {
+        if msg.force_reload
+            && let Some(file_id) = self.buffers.file_id_for_path(&msg.path) {
                 self.buffers.add_connection(file_id, conn_id);
                 let gbm = GlobalBufferModel::handle(ctx);
 
@@ -2467,7 +2465,6 @@ impl ServerModel {
                 return HandlerOutcome::Async(None);
             }
             // Buffer not yet tracked — fall through to open_server_local below.
-        }
 
         let path = PathBuf::from(&msg.path);
         let gbm = GlobalBufferModel::handle(ctx);
@@ -3618,11 +3615,10 @@ impl ServerModel {
         };
         let already_tracked = self.github_repo_models.contains_key(&std_path);
         self.subscribe_to_github_info_updates(&std_path, ctx);
-        if already_tracked {
-            if let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
+        if already_tracked
+            && let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
                 handle.update(ctx, |model, ctx| model.refresh_pr_info(ctx));
             }
-        }
     }
 
     /// Handles the `UpdateGitHubRepoInfo` notification (fire-and-forget).
@@ -3642,11 +3638,10 @@ impl ServerModel {
         };
         let already_tracked = self.github_repo_models.contains_key(&std_path);
         self.subscribe_to_github_info_updates(&std_path, ctx);
-        if already_tracked {
-            if let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
+        if already_tracked
+            && let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
                 handle.update(ctx, |model, ctx| model.refresh_repository_info(ctx));
             }
-        }
     }
 
     fn push_github_pr_info(&mut self, repo_path: &StandardizedPath, ctx: &mut ModelContext<Self>) {

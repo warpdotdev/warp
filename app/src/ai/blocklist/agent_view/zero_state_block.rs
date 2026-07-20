@@ -107,8 +107,7 @@ impl AgentViewZeroStateBlock {
                 if let BlocklistAIHistoryEvent::AppendedExchange {
                     conversation_id, ..
                 } = event
-                {
-                    if *conversation_id == me.conversation_id {
+                    && *conversation_id == me.conversation_id {
                         me.should_hide = true;
                         ctx.unsubscribe_to_model(&model_events_clone);
                         ctx.unsubscribe_to_model(&history_model);
@@ -119,7 +118,6 @@ impl AgentViewZeroStateBlock {
                         ctx.notify();
                         return;
                     }
-                }
 
                 match event {
                     BlocklistAIHistoryEvent::StartedNewConversation { .. }
@@ -429,8 +427,8 @@ impl View for AgentViewZeroStateBlock {
             .with_main_axis_size(MainAxisSize::Min)
             .with_children(render_title_and_description(header_props, app));
 
-        if !self.origin.is_cloud_agent() {
-            if let Some(oz_updates_section) = render_oz_updates(
+        if !self.origin.is_cloud_agent()
+            && let Some(oz_updates_section) = render_oz_updates(
                 OzUpdatesProps {
                     is_expanded: self.is_oz_updates_expanded,
                     state_handles: &self.state_handles,
@@ -442,7 +440,6 @@ impl View for AgentViewZeroStateBlock {
                     .with_margin_bottom(16.)
                     .finish()]);
             }
-        }
 
         let active_session = self.active_session(app);
         let body = render_body(

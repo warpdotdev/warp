@@ -777,8 +777,8 @@ fn render_grid_without_ligatures<'a>(
                 has_seen_cell_in_link = true;
             }
 
-            if obfuscate_secrets.should_redact_secret() {
-                if let Some((handle, secret)) =
+            if obfuscate_secrets.should_redact_secret()
+                && let Some((handle, secret)) =
                     grid.secret_at_displayed_point(Point::new(offset_row, col))
                 {
                     let range = secret.range();
@@ -792,7 +792,6 @@ fn render_grid_without_ligatures<'a>(
                         is_obfuscated: secret.is_obfuscated(),
                     });
                 }
-            }
 
             // Don't apply cursor contrast colouring when hide_cursor_cell
             // is active — the cursor itself won't be drawn, so the cell
@@ -1314,8 +1313,8 @@ fn render_grid_with_ligatures<'a>(
                 has_seen_cell_in_link = true;
             }
 
-            if obfuscate_secrets.should_redact_secret() {
-                if let Some((handle, secret)) =
+            if obfuscate_secrets.should_redact_secret()
+                && let Some((handle, secret)) =
                     grid.secret_at_displayed_point(Point::new(offset_row, col))
                 {
                     let range = secret.range();
@@ -1329,7 +1328,6 @@ fn render_grid_with_ligatures<'a>(
                         is_obfuscated: secret.is_obfuscated(),
                     });
                 }
-            }
 
             // Don't apply cursor contrast colouring when hide_cursor_cell
             // is active — the cursor itself won't be drawn, so the cell

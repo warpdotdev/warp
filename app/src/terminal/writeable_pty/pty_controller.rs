@@ -317,15 +317,14 @@ impl<T: EventLoopSender> PtyController<T> {
             before_write_fn: Some(Box::new(move || {
                 let mut terminal_model = terminal_model.lock();
                 let outcome = terminal_model.start_in_band_command_execution();
-                if !outcome.is_accepted() {
-                    if let Err(err) = block_on(cancel_tx.send(InBandCommandCancelledEvent {
+                if !outcome.is_accepted()
+                    && let Err(err) = block_on(cancel_tx.send(InBandCommandCancelledEvent {
                         command_id: callback_command_id.clone(),
                     })) {
                         log::warn!(
                             "Pty Controller failed to cancel rejected in band command: {err:?}"
                         );
                     }
-                }
                 outcome
             })),
         });
@@ -691,11 +690,10 @@ impl<T: EventLoopSender> PtyController<T> {
             return false;
         }
 
-        if let Some(on_write_fn) = on_write_fn {
-            if !on_write_fn().is_accepted() {
+        if let Some(on_write_fn) = on_write_fn
+            && !on_write_fn().is_accepted() {
                 return false;
             }
-        }
 
         if is_for_command {
             self.line_editor_status

@@ -201,8 +201,7 @@ impl AliasBar {
         if let Some(alias) = self
             .selected_alias
             .and_then(|index| self.aliases.get_mut(index))
-        {
-            if alias.env_vars != sync_id {
+            && alias.env_vars != sync_id {
                 alias.env_vars = sync_id;
                 self.mark_dirty(true, ctx);
 
@@ -221,7 +220,6 @@ impl AliasBar {
                     ctx
                 );
             }
-        }
     }
 
     /// Environment variables associated with the current alias.

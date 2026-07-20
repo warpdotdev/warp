@@ -734,11 +734,10 @@ impl Network {
         update: UniversalDeveloperInputContextUpdate,
     ) {
         // Skip update if nothing would change
-        if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context {
-            if !update.changes_cached_context(cached) {
+        if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context
+            && !update.changes_cached_context(cached) {
                 return;
             }
-        }
 
         sharer_info!(
             self,
@@ -1660,14 +1659,13 @@ impl Network {
                 .insert(event.event_no, event.clone());
         }
 
-        if let Stage::StartedSuccessfully { .. } = self.stage {
-            if let Err(e) = self.ws_proxy_tx.try_send(message) {
+        if let Stage::StartedSuccessfully { .. } = self.stage
+            && let Err(e) = self.ws_proxy_tx.try_send(message) {
                 sharer_warn!(
                     self,
                     "Failed to send message over ws_proxy channel in session sharer: {e}"
                 );
             }
-        }
     }
 
     pub fn extend_session_retention(&mut self, reason: SessionRetentionReason) {

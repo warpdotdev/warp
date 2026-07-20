@@ -2044,14 +2044,13 @@ impl TypedActionView for BillingAndUsagePageV2View {
                             .is_some_and(|email| team.has_admin_permissions(&email))
                     });
                     let team_uid = ws.current_team_uid();
-                    if let Some((workspace, team_uid)) = ws.current_workspace().zip(team_uid) {
-                        if has_admin_permissions
+                    if let Some((workspace, team_uid)) = ws.current_workspace().zip(team_uid)
+                        && has_admin_permissions
                             && workspace
                                 .settings
                                 .addon_credits_settings
                                 .auto_reload_enabled
-                        {
-                            if let Some(opt) = self
+                            && let Some(opt) = self
                                 .addon_credits
                                 .options
                                 .get(self.addon_credits.selected_denomination)
@@ -2064,8 +2063,6 @@ impl TypedActionView for BillingAndUsagePageV2View {
                                     ctx,
                                 );
                             }
-                        }
-                    }
                 });
                 ctx.notify();
             }

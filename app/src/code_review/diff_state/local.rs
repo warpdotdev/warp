@@ -303,14 +303,13 @@ impl LocalDiffStateModel {
             });
 
             ctx.spawn(fut, move |me, repo_path, ctx| {
-                if let Some(repo_path) = &repo_path {
-                    if let Some(repo_handle) = DetectedRepositories::as_ref(ctx)
+                if let Some(repo_path) = &repo_path
+                    && let Some(repo_handle) = DetectedRepositories::as_ref(ctx)
                         .get_local_watched_repo_for_path(repo_path, ctx)
                     {
                         me.set_active_repository(repo_handle, ctx);
                         return;
                     }
-                }
                 // Repo detection completed but found no repository.
                 // Emit so subscribers (e.g. the server model) can drain
                 // pending responses with the NotInRepository state.
@@ -713,13 +712,12 @@ impl LocalDiffStateModel {
                             }
                         }
 
-                        if let Err(e) = fs::remove_file(repo_path.join(file_path)) {
-                            if e.kind() != std::io::ErrorKind::NotFound {
+                        if let Err(e) = fs::remove_file(repo_path.join(file_path))
+                            && e.kind() != std::io::ErrorKind::NotFound {
                                 log::warn!(
                                     "Failed to remove file '{file_path}' from filesystem: {e}"
                                 );
                             }
-                        }
                     }
                     Ok(())
                 } else {
@@ -1470,13 +1468,12 @@ impl LocalDiffStateModel {
     /// `DirectoryWatcher` can be cleaned up.
     #[cfg(feature = "local_fs")]
     pub(crate) fn stop_active_watcher(&mut self, ctx: &mut ModelContext<Self>) {
-        if let Some(repository) = &self.repository {
-            if let Some(subscriber_id) = self.subscriber_id.take() {
+        if let Some(repository) = &self.repository
+            && let Some(subscriber_id) = self.subscriber_id.take() {
                 repository.update(ctx, |repo, ctx| {
                     repo.stop_watching(subscriber_id, ctx);
                 });
             }
-        }
     }
 
     /// Gets the merge base between HEAD and the specified branch

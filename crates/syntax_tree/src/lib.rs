@@ -151,12 +151,11 @@ impl SyntaxTreeState {
             .map(|q| q.language.grammar.clone());
 
         // Check cache first
-        if let Ok(cache) = Ref::filter_map(self.highlight_cache.borrow(), |c| c.as_ref()) {
-            if cache.key.matches(buffer_version, &ranges, &language_id) {
+        if let Ok(cache) = Ref::filter_map(self.highlight_cache.borrow(), |c| c.as_ref())
+            && cache.key.matches(buffer_version, &ranges, &language_id) {
                 // Return a borrowed reference to the cached highlights
                 return Some(Ref::map(cache, |c| &c.highlights));
             }
-        }
 
         // Cache miss - compute highlights
         let mut syntax_tree_lock = self.syntax_tree.lock();
@@ -269,11 +268,10 @@ impl SyntaxTreeState {
     pub fn invalidate_highlight_cache_for_version(&self, version: BufferVersion) {
         // Check if the cache exists and if it matches the version being invalidated
         let mut cache = self.highlight_cache.borrow_mut();
-        if let Some(ref cached) = *cache {
-            if cached.key.version == version {
+        if let Some(ref cached) = *cache
+            && cached.key.version == version {
                 *cache = None;
             }
-        }
     }
 
     pub fn set_color_map(&mut self, color_map: ColorMap) {

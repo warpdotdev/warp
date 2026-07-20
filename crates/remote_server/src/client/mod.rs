@@ -1010,11 +1010,10 @@ impl RemoteServerClient {
                     let request_id = RequestId::from(msg.request_id.clone());
                     if request_id.is_empty() {
                         // Push message — convert to a domain event and forward.
-                        if let Some(event) = Self::push_message_to_event(msg) {
-                            if event_tx.send(event).await.is_err() {
+                        if let Some(event) = Self::push_message_to_event(msg)
+                            && event_tx.send(event).await.is_err() {
                                 log::warn!("Event channel closed, dropping push message");
                             }
-                        }
                     } else if let Some((_, tx)) = pending_requests.remove(&request_id) {
                         // Session-scoped response — resolve the caller's oneshot.
                         let _ = tx.send(Ok(msg));

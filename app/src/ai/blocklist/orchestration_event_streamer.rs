@@ -1868,8 +1868,8 @@ impl OrchestrationEventStreamer {
     }
 
     fn teardown_dormant_claude_wake_listener(&mut self, conversation_id: AIConversationId) {
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            if let Some(connection) = stream.wake_connection.take() {
+        if let Some(stream) = self.streams.get_mut(&conversation_id)
+            && let Some(connection) = stream.wake_connection.take() {
                 log::info!(
                     "Tearing down dormant Claude wake listener for {conversation_id:?} \
                      (gen={})",
@@ -1877,7 +1877,6 @@ impl OrchestrationEventStreamer {
                 );
                 connection.task.abort();
             }
-        }
     }
 
     /// Opens a long-lived SSE connection for `conversation_id`. Events
@@ -2120,11 +2119,10 @@ impl OrchestrationEventStreamer {
         // Drain buffered events before dropping the channel so we don't
         // discard already-fetched message bodies.
         self.drain_sse_events(conversation_id, ctx);
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            if let Some(connection) = stream.sse_connection.take() {
+        if let Some(stream) = self.streams.get_mut(&conversation_id)
+            && let Some(connection) = stream.sse_connection.take() {
                 connection.abort_handle.abort();
             }
-        }
 
         if self.is_eligible(conversation_id, ctx) {
             self.start_sse_connection(conversation_id, ctx);
@@ -2137,12 +2135,11 @@ impl OrchestrationEventStreamer {
     fn teardown_sse(&mut self, conversation_id: AIConversationId, ctx: &mut ModelContext<Self>) {
         // Drain anything buffered so we don't lose hydrated messages.
         self.drain_sse_events(conversation_id, ctx);
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            if let Some(connection) = stream.sse_connection.take() {
+        if let Some(stream) = self.streams.get_mut(&conversation_id)
+            && let Some(connection) = stream.sse_connection.take() {
                 log::info!("Tearing down SSE for {conversation_id:?} (no longer eligible)");
                 connection.abort_handle.abort();
             }
-        }
     }
 }
 

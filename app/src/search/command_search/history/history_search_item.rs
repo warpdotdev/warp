@@ -172,8 +172,8 @@ impl HistorySearchItem {
 
         let mut metadata_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        if let Some(exit_code) = self.entry.exit_code {
-            if !exit_code.was_successful() {
+        if let Some(exit_code) = self.entry.exit_code
+            && !exit_code.was_successful() {
                 metadata_row.add_child(
                     Container::new(
                         ConstrainedBox::new(
@@ -190,7 +190,6 @@ impl HistorySearchItem {
                     .finish(),
                 );
             }
-        }
 
         if let Some(start) = self.entry.start_ts {
             metadata_row.add_child(

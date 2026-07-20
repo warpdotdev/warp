@@ -254,8 +254,8 @@ fn render_command_context(
     let mut command_row = Flex::row();
     let command_row_font_size = appearance.monospace_font_size() - 2.;
 
-    if let Some(command_text) = command_render_info.command_text {
-        if !command_text.is_empty() {
+    if let Some(command_text) = command_render_info.command_text
+        && !command_text.is_empty() {
             let running_command_text_color =
                 item_highlight_state.main_text_fill(appearance).into_solid();
 
@@ -288,7 +288,6 @@ fn render_command_context(
                 .finish(),
             );
         }
-    }
 
     let hint_font_color = item_highlight_state.sub_text_fill(appearance).into_solid();
 

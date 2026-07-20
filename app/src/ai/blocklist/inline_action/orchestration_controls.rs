@@ -723,11 +723,10 @@ pub fn apply_harness_change<A: OrchestrationControlAction, V: View>(
     orchestration_edit_state.apply_harness_change(new_harness_type, fallback_base_model_id, ctx);
     let state = &orchestration_edit_state.orchestration_config_state;
     let is_local = !state.execution_mode.is_remote();
-    if is_local && state.harness_type != new_harness_type {
-        if let Some(handle) = &handles.harness_picker {
+    if is_local && state.harness_type != new_harness_type
+        && let Some(handle) = &handles.harness_picker {
             populate_harness_picker(handle, &state.harness_type, true, ctx);
         }
-    }
     if let Some(handle) = &handles.model_picker {
         populate_model_picker_for_harness(
             handle,

@@ -52,8 +52,8 @@ impl RewindDataSource {
 
         for exchange in exchanges {
             for input in &exchange.input {
-                if let Some(action_result) = input.action_result() {
-                    if let AIAgentActionResultType::RequestFileEdits(
+                if let Some(action_result) = input.action_result()
+                    && let AIAgentActionResultType::RequestFileEdits(
                         RequestFileEditsResult::Success {
                             updated_files,
                             lines_added,
@@ -69,7 +69,6 @@ impl RewindDataSource {
                             file_paths.insert(updated_file.file_context.file_name.clone());
                         }
                     }
-                }
             }
         }
 

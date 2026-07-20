@@ -804,11 +804,10 @@ impl settings_value::SettingsValue for ToolbarCommandMap {
 
     fn from_file_value(value: &serde_json::Value) -> Option<Self> {
         // Try map format first (using from_value to preserve insertion order), then legacy array format.
-        if value.is_object() {
-            if let Ok(map) = serde_json::from_value::<IndexMap<String, String>>(value.clone()) {
+        if value.is_object()
+            && let Ok(map) = serde_json::from_value::<IndexMap<String, String>>(value.clone()) {
                 return Some(ToolbarCommandMap::new(map));
             }
-        }
         if let Some(arr) = value.as_array() {
             let result: IndexMap<String, String> = arr
                 .iter()
@@ -1987,11 +1986,10 @@ impl AISettings {
             .rev()
             .find(|cycle| cycle.end_date < Utc::now());
 
-        if let Some(cycle) = most_recent_completed_cycle {
-            if cycle.was_quota_exceeded && !cycle.banner_state.dismissed {
+        if let Some(cycle) = most_recent_completed_cycle
+            && cycle.was_quota_exceeded && !cycle.banner_state.dismissed {
                 return true;
             }
-        }
 
         false
     }
@@ -2035,13 +2033,12 @@ impl AISettings {
         let mut updated_existing_cycle = false;
 
         // Find or create a cycle that matches the current period
-        if let Some(current_cycle) = cycle_history.last_mut() {
-            if now <= current_cycle.end_date {
+        if let Some(current_cycle) = cycle_history.last_mut()
+            && now <= current_cycle.end_date {
                 // Update existing cycle
                 current_cycle.was_quota_exceeded = is_quota_exceeded;
                 updated_existing_cycle = true;
             }
-        }
 
         // Only create a new cycle if we didn't update an existing one
         if !updated_existing_cycle {

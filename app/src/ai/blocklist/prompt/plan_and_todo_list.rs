@@ -321,11 +321,10 @@ impl PlanAndTodoListView {
             return None;
         }
 
-        if let Some(todo_list) = todo_list {
-            if !todo_list.is_empty() {
+        if let Some(todo_list) = todo_list
+            && !todo_list.is_empty() {
                 return Some(todo_list.clone());
             }
-        }
 
         None
     }
@@ -484,8 +483,8 @@ impl View for PlanAndTodoListView {
 
         let mut row = Flex::row();
         // Only show plan chip when AgentView is not enabled
-        if !FeatureFlag::AgentView.is_enabled() {
-            if let Some(ai_document_id) = ai_document_id {
+        if !FeatureFlag::AgentView.is_enabled()
+            && let Some(ai_document_id) = ai_document_id {
                 row.add_child(self.render_plan_button(
                     ai_document_id,
                     todo_list.is_some(),
@@ -494,7 +493,6 @@ impl View for PlanAndTodoListView {
                     app,
                 ));
             }
-        }
         if let Some(todo_list) = todo_list {
             row.add_child(self.render_todo_button(
                 &todo_list,

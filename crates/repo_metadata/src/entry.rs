@@ -607,11 +607,10 @@ fn evaluate_entry(
         match options.ignored_path_strategy {
             IgnoredPathStrategy::Exclude => return Err(BuildTreeError::Ignored),
             IgnoredPathStrategy::IncludeOnly(patterns) => {
-                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str()) {
-                    if !patterns.iter().any(|pattern| file_name == pattern) {
+                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str())
+                    && !patterns.iter().any(|pattern| file_name == pattern) {
                         return Err(BuildTreeError::Ignored);
                     }
-                }
             }
             IgnoredPathStrategy::IncludeLazy => {
                 lazy = !force_included;

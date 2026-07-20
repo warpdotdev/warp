@@ -965,11 +965,10 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
     }
 
     fn details_display_idx(&self) -> Option<usize> {
-        if self.details_pane_target == DetailsPaneTarget::Hover {
-            if let Some(idx) = self.hovered_idx {
+        if self.details_pane_target == DetailsPaneTarget::Hover
+            && let Some(idx) = self.hovered_idx {
                 return Some(idx);
             }
-        }
         self.selection.selected_index()
     }
 

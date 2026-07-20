@@ -477,8 +477,8 @@ impl EditorElement {
             .expect("paint should be set at event handling");
 
         let mut state_guard = self.mouse_state.lock().expect("mouse state lock");
-        if let Some(state) = &mut *state_guard {
-            if state.user_dismissed {
+        if let Some(state) = &mut *state_guard
+            && state.user_dismissed {
                 if (state.hover_point - position).length() < COMMAND_X_RAY_HOVER_THRESHOLD_PX {
                     // Early exit if some user action has caused the x-ray tooltip to be dismissed
                     // and the mouse hasn't moved.
@@ -487,7 +487,6 @@ impl EditorElement {
                     return self.reset_x_ray(&mut state_guard, Some(position), ctx);
                 }
             }
-        }
 
         if !paint.rect.contains_point(position) {
             // Mouse is outside of the editor, so clear any pending x-ray and exit early
@@ -855,8 +854,8 @@ impl EditorElement {
                 .with_corner_radius(CornerRadius::with_all(cursor_corner_radius));
 
             // Draw cursor avatars for remote selections
-            if !is_local {
-                if let Some(drawable_selections_data) =
+            if !is_local
+                && let Some(drawable_selections_data) =
                     remote_selections_data.get_mut(&cursor.replica_id)
                 {
                     // Offset for avatar's x origin is calculated based on avatar's size, border and cursor width.
@@ -875,7 +874,6 @@ impl EditorElement {
                         .paint(avatar_origin, ctx, app);
                     ctx.scene.stop_layer();
                 }
-            }
 
             if let Some(element) = voice_input_icon {
                 let icon_size = view_snapshot.voice_input_icon_size();
@@ -1169,14 +1167,12 @@ impl EditorElement {
                             if let Some(start) = layout
                                 .frame_layouts
                                 .to_soft_wrap_point(start.point, start.clamp_direction)
-                            {
-                                if let Some(end) = layout
+                                && let Some(end) = layout
                                     .frame_layouts
                                     .to_soft_wrap_point(end.point, end.clamp_direction)
                                 {
                                     visual_range = start..end;
                                 }
-                            }
                         }
                     }
 
@@ -1328,8 +1324,8 @@ impl EditorElement {
 
             // Render first line of autosuggestion text, if it exists. If not, render
             // first line of placeholder text, if it exists.
-            if paint_autosuggestion_here {
-                if let Some(suggestion_line) =
+            if paint_autosuggestion_here
+                && let Some(suggestion_line) =
                     layout.placeholder_suggestion_text_line_layouts.first()
                 {
                     let line_origin = line_origin + vec2f(line.width, 0.);
@@ -1351,7 +1347,6 @@ impl EditorElement {
                         *pos = line_origin + vec2f(suggestion_line.width, 0.);
                     }
                 }
-            }
         }
     }
 
@@ -2075,36 +2070,31 @@ impl Element for EditorElement {
 
         // These icons have tooltips in overlay layers, so they need to be dispatched before checking event.at_z_index below.
         // This is because event.at_z_index will filter the event due to the overlay layer above.
-        if let Some(icon) = &mut self.autosuggestion_shortcut_icon {
-            if icon.bounds().is_some() && icon.dispatch_event(event, ctx, app) {
+        if let Some(icon) = &mut self.autosuggestion_shortcut_icon
+            && icon.bounds().is_some() && icon.dispatch_event(event, ctx, app) {
                 return true;
             }
-        }
 
-        if let Some(ignore_icon) = &mut self.autosuggestion_ignore_icon {
-            if ignore_icon.bounds().is_some() && ignore_icon.dispatch_event(event, ctx, app) {
+        if let Some(ignore_icon) = &mut self.autosuggestion_ignore_icon
+            && ignore_icon.bounds().is_some() && ignore_icon.dispatch_event(event, ctx, app) {
                 return true;
             }
-        }
 
         // Since editor decorator elements may be clickable, we need to prioritize dispatching events from them.
-        if let Some(top_section) = &mut self.editor_decorator_elements.top_section {
-            if top_section.dispatch_event(event, ctx, app) {
+        if let Some(top_section) = &mut self.editor_decorator_elements.top_section
+            && top_section.dispatch_event(event, ctx, app) {
                 return true;
             }
-        }
 
-        if let Some(left_notch) = &mut self.editor_decorator_elements.left_notch {
-            if left_notch.dispatch_event(event, ctx, app) {
+        if let Some(left_notch) = &mut self.editor_decorator_elements.left_notch
+            && left_notch.dispatch_event(event, ctx, app) {
                 return true;
             }
-        }
 
-        if let Some(right_notch) = &mut self.editor_decorator_elements.right_notch {
-            if right_notch.dispatch_event(event, ctx, app) {
+        if let Some(right_notch) = &mut self.editor_decorator_elements.right_notch
+            && right_notch.dispatch_event(event, ctx, app) {
                 return true;
             }
-        }
 
         let Some(event_at_z_index) = event.at_z_index(z_index, ctx) else {
             return false;
@@ -2129,31 +2119,25 @@ impl Element for EditorElement {
                 .top_section
                 .as_mut()
                 .filter(|n| n.z_index().is_some())
-            {
-                if top_section.dispatch_event(event, ctx, app) {
+                && top_section.dispatch_event(event, ctx, app) {
                     return true;
                 }
-            }
             if let Some(left_notch) = self
                 .editor_decorator_elements
                 .left_notch
                 .as_mut()
                 .filter(|n| n.z_index().is_some())
-            {
-                if left_notch.dispatch_event(event, ctx, app) {
+                && left_notch.dispatch_event(event, ctx, app) {
                     return true;
                 }
-            }
             if let Some(right_notch) = self
                 .editor_decorator_elements
                 .right_notch
                 .as_mut()
                 .filter(|n| n.z_index().is_some())
-            {
-                if right_notch.dispatch_event(event, ctx, app) {
+                && right_notch.dispatch_event(event, ctx, app) {
                     return true;
                 }
-            }
         }
 
         match event_at_z_index {

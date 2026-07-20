@@ -584,8 +584,8 @@ impl SyncQueue {
         queue_item_id: QueueItemId,
         item_id: &str,
     ) -> QueueDependency {
-        if let Some(client_id) = ClientId::from_hash(item_id) {
-            if self
+        if let Some(client_id) = ClientId::from_hash(item_id)
+            && self
                 .in_flight_bulk_create_objects
                 .get(&queue_item_id)
                 .is_some_and(|client_ids| client_ids.contains(&client_id))
@@ -595,7 +595,6 @@ impl SyncQueue {
                     client_id,
                 };
             }
-        }
 
         QueueDependency::QueueItem(queue_item_id)
     }

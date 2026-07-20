@@ -488,8 +488,8 @@ impl MerkleNode {
                 dir_paths.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
 
                 for dir_path in dir_paths {
-                    if let Some(parent_path) = dir_path.parent() {
-                        if let Some(child_dir) = created_dirs.remove(&dir_path) {
+                    if let Some(parent_path) = dir_path.parent()
+                        && let Some(child_dir) = created_dirs.remove(&dir_path) {
                             // Skip if parent is the root directory
                             if parent_path != absolute_path {
                                 if let Some(parent_dir) = created_dirs.get_mut(parent_path) {
@@ -500,7 +500,6 @@ impl MerkleNode {
                                 entries_to_create.push(Entry::Directory(child_dir));
                             }
                         }
-                    }
                 }
 
                 for entry in entries_to_create {

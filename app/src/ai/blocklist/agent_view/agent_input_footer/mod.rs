@@ -599,14 +599,14 @@ impl AgentInputFooter {
                 // When a session starts, update the install chip label and
                 // start a debounce timer for non-auto-install agents.
                 #[cfg(not(target_family = "wasm"))]
-                if let CLIAgentSessionsModelEvent::Started { .. } = event {
-                    if let Some(agent) = me.cli_agent(ctx) {
+                if let CLIAgentSessionsModelEvent::Started { .. } = event
+                    && let Some(agent) = me.cli_agent(ctx) {
                         let label = format!("Enable {} notifications", agent.display_name());
                         me.install_plugin_button.update(ctx, |button, ctx| {
                             button.set_label(label, ctx);
                         });
-                        if let Some(manager) = plugin_manager_for(agent) {
-                            if !manager.can_auto_install() {
+                        if let Some(manager) = plugin_manager_for(agent)
+                            && !manager.can_auto_install() {
                                 ctx.spawn(
                                     Timer::after(PLUGIN_CHIP_DEBOUNCE),
                                     |me, _, ctx: &mut ViewContext<Self>| {
@@ -620,9 +620,7 @@ impl AgentInputFooter {
                                     },
                                 );
                             }
-                        }
                     }
-                }
 
                 let CLIAgentSessionsModelEvent::InputSessionChanged {
                     new_input_state, ..
@@ -1222,11 +1220,10 @@ impl AgentInputFooter {
         }
 
         #[cfg(not(target_family = "wasm"))]
-        if let Some(manager) = plugin_manager_for(session.agent) {
-            if !manager.can_auto_install() {
+        if let Some(manager) = plugin_manager_for(session.agent)
+            && !manager.can_auto_install() {
                 return true;
             }
-        }
         if session.is_remote() {
             return true;
         }
@@ -1600,8 +1597,8 @@ impl AgentInputFooter {
             .with_spacing(4.);
 
         // CLI agent brand icon is always rendered (not configurable).
-        if let Some(agent) = self.cli_agent(app) {
-            if let Some(icon) = agent.icon() {
+        if let Some(agent) = self.cli_agent(app)
+            && let Some(icon) = agent.icon() {
                 let icon_color = agent
                     .brand_color()
                     .map(|c| c.on_background(background_color, MinimumAllowedContrast::NonText))
@@ -1617,7 +1614,6 @@ impl AgentInputFooter {
                     .finish(),
                 );
             }
-        }
 
         if let Some(chip_kind) = self.plugin_chip_kind(app) {
             let manual = self.should_use_manual_mode(app);
@@ -2581,8 +2577,8 @@ impl TypedActionView for AgentInputFooter {
             AgentInputFooterAction::DismissPluginChip => {
                 let chip_kind = self.plugin_chip_kind(ctx);
                 let is_update = matches!(chip_kind, Some(PluginChipKind::Update));
-                if let Some(agent) = self.cli_agent(ctx) {
-                    if let Some(kind) = chip_kind {
+                if let Some(agent) = self.cli_agent(ctx)
+                    && let Some(kind) = chip_kind {
                         send_telemetry_from_ctx!(
                             TelemetryEvent::CLIAgentPluginChipDismissed {
                                 cli_agent: agent.into(),
@@ -2591,7 +2587,6 @@ impl TypedActionView for AgentInputFooter {
                             ctx
                         );
                     }
-                }
                 let session = CLIAgentSessionsModel::as_ref(ctx)
                     .session(self.terminal_view_id)
                     .cloned();

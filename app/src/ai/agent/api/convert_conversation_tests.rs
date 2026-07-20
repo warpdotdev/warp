@@ -886,8 +886,8 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
     let mut found_successful = 0;
 
     for input in &second_exchange.input {
-        if let crate::ai::agent::AIAgentInput::ActionResult { result, .. } = input {
-            if let crate::ai::agent::AIAgentActionResultType::RequestCommandOutput(command_result) =
+        if let crate::ai::agent::AIAgentInput::ActionResult { result, .. } = input
+            && let crate::ai::agent::AIAgentActionResultType::RequestCommandOutput(command_result) =
                 &result.result
             {
                 match command_result {
@@ -900,7 +900,6 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                     _ => {}
                 }
             }
-        }
     }
 
     assert!(

@@ -298,15 +298,14 @@ impl FileDataSource {
 
             // If no files matched and we have a valid query and current directory,
             // add a "Create a file named <filename>..." option
-            if allow_create_file && results.is_empty() && !query_file_name.trim().is_empty() {
-                if let Some(current_dir) = current_directory {
+            if allow_create_file && results.is_empty() && !query_file_name.trim().is_empty()
+                && let Some(current_dir) = current_directory {
                     let create_item = CreateFileSearchItem {
                         file_name: query_file_name,
                         current_directory: current_dir,
                     };
                     results.push(QueryResult::from(create_item));
                 }
-            }
 
             Ok(results)
         })

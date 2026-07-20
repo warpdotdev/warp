@@ -867,15 +867,12 @@ impl BlocklistAIHistoryModel {
             // Drop the old entry only if it still points at the given
             // conversation_id, so we don't wrongly remove an entry that's
             // been remapped.
-            if let Some(old_token) = old_token {
-                if let Entry::Occupied(entry) =
+            if let Some(old_token) = old_token
+                && let Entry::Occupied(entry) =
                     self.server_token_to_conversation_id.entry(old_token)
-                {
-                    if *entry.get() == conversation_id {
+                    && *entry.get() == conversation_id {
                         entry.remove();
                     }
-                }
-            }
 
             conversation.set_server_conversation_token(token);
         }
@@ -1094,11 +1091,9 @@ impl BlocklistAIHistoryModel {
             && !self
                 .ambient_agent_terminal_surface_ids
                 .contains(&terminal_surface_id)
-        {
-            if let Some((text, start_ts)) = new_prompt {
+            && let Some((text, start_ts)) = new_prompt {
                 self.append_session_prompt(text, start_ts);
             }
-        }
         Ok(())
     }
 
@@ -1988,11 +1983,10 @@ impl BlocklistAIHistoryModel {
         exchange_id: AIAgentExchangeId,
         time_to_first_token_ms: i64,
     ) {
-        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
-            if let Ok(exchange) = conversation.get_exchange_to_update(exchange_id) {
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id)
+            && let Ok(exchange) = conversation.get_exchange_to_update(exchange_id) {
                 exchange.time_to_first_token_ms = Some(time_to_first_token_ms);
             }
-        }
     }
 
     pub fn mark_response_stream_cancelled(
@@ -2010,18 +2004,13 @@ impl BlocklistAIHistoryModel {
                 {
                     log::warn!("Failed to mark exchange as cancelled: {e}");
                 }
-            } else {
-                match conversation.mark_request_cancelled(
-                    stream_id,
-                    terminal_surface_id,
-                    reason,
-                    ctx,
-                ) {
-                    Err(e) => {
-                        log::warn!("Failed to mark exchange as cancelled: {e}");
-                    }
-                    _ => {}
-                }
+            } else if let Err(e) = conversation.mark_request_cancelled(
+                stream_id,
+                terminal_surface_id,
+                reason,
+                ctx,
+            ) {
+                log::warn!("Failed to mark exchange as cancelled: {e}");
             }
         }
         AIDocumentModel::handle(ctx).update(ctx, |model, ctx| {
@@ -2039,8 +2028,8 @@ impl BlocklistAIHistoryModel {
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
-            if let Err(e) = conversation.mark_request_completed_with_error(
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id)
+            && let Err(e) = conversation.mark_request_completed_with_error(
                 stream_id,
                 error.clone(),
                 recovery_pending,
@@ -2049,7 +2038,6 @@ impl BlocklistAIHistoryModel {
             ) {
                 log::warn!("Failed to mark exchange as completed with error: {e}");
             }
-        }
     }
 
     /// Handle clearing the blocklist for a terminal surface.
@@ -2178,21 +2166,18 @@ impl BlocklistAIHistoryModel {
             if let Some(key) = agent_id_key(conversation) {
                 self.agent_id_to_conversation_id.remove(&key);
             }
-            if let Some(token) = conversation.server_conversation_token() {
-                if self.server_token_to_conversation_id.get(token) == Some(&conversation_id) {
+            if let Some(token) = conversation.server_conversation_token()
+                && self.server_token_to_conversation_id.get(token) == Some(&conversation_id) {
                     self.server_token_to_conversation_id.remove(token);
                 }
-            }
         }
         // Also clean up the token index entry that might have been installed
         // via the metadata path (no live conversation present).
-        if let Some(metadata) = self.all_conversations_metadata.get(&conversation_id) {
-            if let Some(token) = &metadata.server_conversation_token {
-                if self.server_token_to_conversation_id.get(token) == Some(&conversation_id) {
+        if let Some(metadata) = self.all_conversations_metadata.get(&conversation_id)
+            && let Some(token) = &metadata.server_conversation_token
+                && self.server_token_to_conversation_id.get(token) == Some(&conversation_id) {
                     self.server_token_to_conversation_id.remove(token);
                 }
-            }
-        }
 
         self.all_conversations_metadata.remove(&conversation_id);
         self.conversations_by_id.remove(&conversation_id);
@@ -2564,11 +2549,10 @@ impl BlocklistAIHistoryModel {
         conversation_id: &AIConversationId,
     ) -> Option<&ServerAIConversationMetadata> {
         // Check if conversation exists in memory and has server metadata
-        if let Some(conversation) = self.conversation(conversation_id) {
-            if let Some(m) = conversation.server_metadata() {
+        if let Some(conversation) = self.conversation(conversation_id)
+            && let Some(m) = conversation.server_metadata() {
                 return Some(m);
             }
-        }
 
         // Fall back to conversation metadata
         if let Some(metadata) = self.get_conversation_metadata(conversation_id) {

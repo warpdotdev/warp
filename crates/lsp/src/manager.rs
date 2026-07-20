@@ -102,8 +102,8 @@ impl LspManagerModel {
         let path_lang = LanguageId::from_path(path)?;
 
         // First check if this is an external file that was registered via goto-definition
-        if let Some(server_id) = self.external_file_servers.get(path) {
-            if let Some(server) = self.server_by_id(*server_id, ctx) {
+        if let Some(server_id) = self.external_file_servers.get(path)
+            && let Some(server) = self.server_by_id(*server_id, ctx) {
                 // Validate that the server supports this file's language
                 if server.as_ref(ctx).supports_language(&path_lang) {
                     return Some(server);
@@ -114,7 +114,6 @@ impl LspManagerModel {
                     path_lang
                 );
             }
-        }
 
         // Then try workspace-based lookup
         let lsp_model = self.lsp_model_for_path(path)?;

@@ -213,11 +213,10 @@ impl FrameLayouts {
                 if point.column() as usize == glyph.index + 1 {
                     clamp_direction = ClampDirection::Up;
                 }
-            } else if let Some(glyph) = line.first_glyph() {
-                if point.column() as usize == glyph.index {
+            } else if let Some(glyph) = line.first_glyph()
+                && point.column() as usize == glyph.index {
                     clamp_direction = ClampDirection::Down;
                 }
-            }
         }
 
         DisplayPointAndClampDirection {

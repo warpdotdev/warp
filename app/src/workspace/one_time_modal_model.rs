@@ -251,11 +251,10 @@ impl OneTimeModalModel {
             // workspace only renders / populates the view when
             // `target_window_id` matches, and `on_active_window_changed` may not
             // have run yet when the startup modal queue fires.
-            if intro.is_some() && self.target_window_id.is_none() {
-                if let Some(window_id) = ctx.windows().active_window() {
+            if intro.is_some() && self.target_window_id.is_none()
+                && let Some(window_id) = ctx.windows().active_window() {
                     self.target_window_id = Some(window_id);
                 }
-            }
             ctx.emit(OneTimeModalEvent::VisibilityChanged {
                 is_open: intro.is_some(),
             });

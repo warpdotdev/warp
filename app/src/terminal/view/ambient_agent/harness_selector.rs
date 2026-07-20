@@ -144,15 +144,12 @@ impl HarnessSelector {
             .last_selected_harness
             .value()
             .as_deref()
-        {
-            if let Some(harness) = Harness::from_config_name(saved) {
-                if HarnessAvailabilityModel::as_ref(ctx).is_harness_enabled(harness) {
+            && let Some(harness) = Harness::from_config_name(saved)
+                && HarnessAvailabilityModel::as_ref(ctx).is_harness_enabled(harness) {
                     me.ambient_agent_model.update(ctx, |model, ctx| {
                         model.set_harness(harness, ctx);
                     });
                 }
-            }
-        }
         me.refresh_button(ctx);
         me.refresh_menu(ctx);
         me

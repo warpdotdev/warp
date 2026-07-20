@@ -104,8 +104,8 @@ impl DetectedRepositories {
             };
 
             let local_key = path.to_local_path().map(LocalOrRemotePath::Local);
-            if let Some(ref key) = local_key {
-                if self.repository_roots.contains(key) {
+            if let Some(ref key) = local_key
+                && self.repository_roots.contains(key) {
                     if let Some(local_path) = path.to_local_path() {
                         if let Some(repository) = DirectoryWatcher::as_ref(ctx)
                             .get_watched_directory_for_path(&local_path)
@@ -124,7 +124,6 @@ impl DetectedRepositories {
                         return Either::Right(ready(path.to_local_path()));
                     }
                 }
-            }
 
             let local_path_for_search = path.to_local_path();
             let (tx, rx) = oneshot::channel::<Option<PathBuf>>();
@@ -345,14 +344,13 @@ async fn find_git_repo(path: &Path) -> Option<GitRepoInfo> {
         }
 
         // First, check if the current directory is a bare git repository.
-        if let Some(dir_name) = current.file_name().and_then(|s| s.to_str()) {
-            if dir_name.ends_with(".git") && is_valid_git_dir(&current).await {
+        if let Some(dir_name) = current.file_name().and_then(|s| s.to_str())
+            && dir_name.ends_with(".git") && is_valid_git_dir(&current).await {
                 return Some(GitRepoInfo {
                     working_tree_path: None,
                     git_dir_path: current.clone(),
                 });
             }
-        }
 
         // Check for a .git directory.
         let dot_git_path = current.join(".git");

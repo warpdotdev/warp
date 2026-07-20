@@ -75,8 +75,8 @@ impl Element for TerminalSizeElement {
             return false;
         };
 
-        if !handled_by_child {
-            if let Some(event_at_z_index) = event.at_z_index(z_index, ctx) {
+        if !handled_by_child
+            && let Some(event_at_z_index) = event.at_z_index(z_index, ctx) {
                 match event_at_z_index {
                     Event::DragFiles { location } => {
                         if self.mouse_position_is_in_bounds(*location) {
@@ -100,7 +100,6 @@ impl Element for TerminalSizeElement {
                     _ => {}
                 };
             }
-        }
         handled_by_child
     }
 }

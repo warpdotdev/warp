@@ -171,8 +171,8 @@ impl SyncDataSource for DataSource {
             // The command palette renders items in reverse order, so we need to add the sections in reverse order
             // and add each separator item after all of the items in the section.
             for section in ConversationSection::reverse_order() {
-                if let Some(conversations) = grouped.get(&section) {
-                    if !conversations.is_empty() {
+                if let Some(conversations) = grouped.get(&section)
+                    && !conversations.is_empty() {
                         for conversation in conversations {
                             let matched_conversation = MatchedConversation {
                                 conversation: conversation.clone(),
@@ -187,7 +187,6 @@ impl SyncDataSource for DataSource {
                         }
                         results.push(SeparatorSearchItem::new(section.title().to_string()).into());
                     }
-                }
             }
 
             Ok(results)
@@ -203,8 +202,8 @@ impl SyncDataSource for DataSource {
         // When the query is empty, we want to add the "new conversation" and "fork conversation" items.
         if self.add_conversation_actions && query.text.trim().is_empty() {
             result.map(|mut results| {
-                if !cfg!(target_family = "wasm") {
-                    if let Some(conversation) = selected_conversation_in_focused_pane(app) {
+                if !cfg!(target_family = "wasm")
+                    && let Some(conversation) = selected_conversation_in_focused_pane(app) {
                         // Only surface the fork option if the selected conversation is done.
                         if conversation.status().is_done() {
                             results.push(
@@ -216,7 +215,6 @@ impl SyncDataSource for DataSource {
                             );
                         }
                     }
-                }
                 results.push(ConversationSearchItem::new(ConversationAction::New).into());
                 results
             })

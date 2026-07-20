@@ -456,8 +456,8 @@ impl AuthSecretFtuxView {
 
         let mut stack = Stack::new();
         stack.add_child(trigger);
-        if self.is_harness_menu_open {
-            if let Some(menu) = &self.harness_menu {
+        if self.is_harness_menu_open
+            && let Some(menu) = &self.harness_menu {
                 stack.add_positioned_overlay_child(
                     ChildView::new(menu).finish(),
                     OffsetPositioning::offset_from_parent(
@@ -468,7 +468,6 @@ impl AuthSecretFtuxView {
                     ),
                 );
             }
-        }
         stack.finish()
     }
 
@@ -683,13 +682,12 @@ impl AuthSecretFtuxView {
     }
 
     fn resolve_secret_owner(&self, ctx: &ViewContext<Self>) -> SecretOwner {
-        if self.share_with_team {
-            if let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
+        if self.share_with_team
+            && let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
                 return SecretOwner::Team {
                     team_uid: team.uid.uid(),
                 };
             }
-        }
         SecretOwner::CurrentUser
     }
 

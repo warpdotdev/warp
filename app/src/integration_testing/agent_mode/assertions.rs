@@ -391,13 +391,11 @@ pub fn assert_no_requested_command(
                 };
                 for action in output.get().actions() {
                     if let AIAgentActionType::RequestCommandOutput { command, .. } = &action.action
-                    {
-                        if forbidden_predicate(command) {
+                        && forbidden_predicate(command) {
                             return AssertionOutcome::immediate_failure(format!(
                                 "Found forbidden command: {command}"
                             ));
                         }
-                    }
                 }
             }
 
@@ -617,8 +615,8 @@ pub fn assert_task_is_blocked(conversation_target: ConversationTarget) -> Assert
 fn check_for_api_error_in_latest_exchange(
     conversation: &AIConversation,
 ) -> Option<AssertionOutcome> {
-    if let Some(latest_exchange) = conversation.latest_exchange() {
-        if let AIAgentOutputStatus::Finished {
+    if let Some(latest_exchange) = conversation.latest_exchange()
+        && let AIAgentOutputStatus::Finished {
             finished_output: FinishedAIAgentOutput::Error { error, .. },
         } = &latest_exchange.output_status
         {
@@ -626,7 +624,6 @@ fn check_for_api_error_in_latest_exchange(
                 "Conversation ended with API error: {error:?}"
             )));
         }
-    }
     None
 }
 
@@ -843,14 +840,12 @@ pub fn assert_conversation_contains_no_actions(
                 if let AIAgentOutputStatus::Finished {
                     finished_output: FinishedAIAgentOutput::Success { output },
                 } = &exchange.output_status
-                {
-                    if output.get().actions().next().is_some() {
+                    && output.get().actions().next().is_some() {
                         return AssertionOutcome::immediate_failure(
                             "Expected no actions in conversation, but found at least one"
                                 .to_owned(),
                         );
                     }
-                }
             }
 
             AssertionOutcome::Success
@@ -1234,14 +1229,13 @@ pub fn assert_no_md_file_edits() -> AssertionCallback {
                         {
                             // Check if any file edit is for a .md file
                             for file_edit in file_edits {
-                                if let Some(file_path) = file_edit.file() {
-                                    if file_path.ends_with(".md") {
+                                if let Some(file_path) = file_edit.file()
+                                    && file_path.ends_with(".md") {
                                         return AssertionOutcome::immediate_failure(format!(
                                             "Found .md file edit request: {}",
                                             file_path
                                         ));
                                     }
-                                }
                             }
                         }
                     }

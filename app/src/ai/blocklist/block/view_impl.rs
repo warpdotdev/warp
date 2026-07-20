@@ -170,18 +170,17 @@ fn add_highlights_to_text(
         Highlight::new().with_text_style(TextStyle::new().with_foreground_color(*URL_COLOR));
     let mut highlighted_ranges = vec![];
 
-    if let Some(open_secret_tooltip) = &secret_redaction_state.open_tooltip_location() {
-        if open_secret_tooltip.location == location {
+    if let Some(open_secret_tooltip) = &secret_redaction_state.open_tooltip_location()
+        && open_secret_tooltip.location == location {
             text_element = text_element.with_saved_char_position(
                 open_secret_tooltip.secret_range.char_range.start,
                 RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID.to_owned(),
             );
         }
-    }
 
     // Add gray + strikethrough styling for all detected secrets when in strikethrough mode
-    if let Some(detected_secrets) = secret_redaction_state.secrets_for_location(&location) {
-        if matches!(
+    if let Some(detected_secrets) = secret_redaction_state.secrets_for_location(&location)
+        && matches!(
             get_secret_obfuscation_mode(app),
             ObfuscateSecrets::Strikethrough
         ) {
@@ -201,11 +200,10 @@ fn add_highlights_to_text(
                 }
             }
         }
-    }
 
     // If we have an open tooltip, that secret should be highlighted.
-    if let Some(open_secret_tooltip) = &secret_redaction_state.open_tooltip_location() {
-        if open_secret_tooltip.location == location {
+    if let Some(open_secret_tooltip) = &secret_redaction_state.open_tooltip_location()
+        && open_secret_tooltip.location == location {
             let highlight_indices = open_secret_tooltip
                 .secret_range
                 .char_range
@@ -218,10 +216,9 @@ fn add_highlights_to_text(
                 });
             }
         }
-    }
     // Also highlight any currently hovered secret if it's different.
-    if let Some(currently_hovered_secret) = &secret_redaction_state.hovered_location() {
-        if currently_hovered_secret.location == location
+    if let Some(currently_hovered_secret) = &secret_redaction_state.hovered_location()
+        && currently_hovered_secret.location == location
             && secret_redaction_state.hovered_location()
                 != secret_redaction_state.open_tooltip_location()
         {
@@ -237,7 +234,6 @@ fn add_highlights_to_text(
                 });
             }
         }
-    }
 
     if !is_selecting {
         if let Some(properties) = hover_properties {
@@ -246,8 +242,8 @@ fn add_highlights_to_text(
 
         // Link highlighting.
         // If we have an open tooltip, that link should be highlighted.
-        if let Some(open_link_tooltip) = &detected_links_state.link_location_open_tooltip {
-            if open_link_tooltip.location == location {
+        if let Some(open_link_tooltip) = &detected_links_state.link_location_open_tooltip
+            && open_link_tooltip.location == location {
                 let highlight_indices = open_link_tooltip.link_range.clone().collect_vec();
                 if !highlight_indices.is_empty() {
                     highlighted_ranges.push(HighlightedRange {
@@ -260,11 +256,9 @@ fn add_highlights_to_text(
                     detected_links_state.resolved_tooltip_position_id(),
                 );
             }
-        }
         // Also highlight any currently hovered link if it's different.
         if let Some(currently_hovered_link) = &detected_links_state.currently_hovered_link_location
-        {
-            if currently_hovered_link.location == location
+            && currently_hovered_link.location == location
                 && detected_links_state.currently_hovered_link_location
                     != detected_links_state.link_location_open_tooltip
             {
@@ -276,7 +270,6 @@ fn add_highlights_to_text(
                     });
                 }
             }
-        }
 
         if let Some(find_context) = find_context {
             highlighted_ranges.extend(get_highlight_ranges_for_find_matches(
@@ -476,8 +469,8 @@ pub(crate) fn add_highlights_to_rich_text(
                             link_highlight_location = None;
                         }
 
-                        if let Some(link_location) = link_highlight_location {
-                            if link_location.location == location
+                        if let Some(link_location) = link_highlight_location
+                            && link_location.location == location
                                 && link_location.link_range == *range
                             {
                                 let hover_highlight =
@@ -491,7 +484,6 @@ pub(crate) fn add_highlights_to_rich_text(
                                     highlight: hover_highlight,
                                 });
                             }
-                        }
 
                         if matches!(link.link, DetectedLinkType::Url(_)) {
                             Some(HighlightedRange {
@@ -505,19 +497,18 @@ pub(crate) fn add_highlights_to_rich_text(
                     .collect_vec();
             }
 
-            if let Some(open_link_tooltip) = &detected_links_state.link_location_open_tooltip {
-                if open_link_tooltip.location == location {
+            if let Some(open_link_tooltip) = &detected_links_state.link_location_open_tooltip
+                && open_link_tooltip.location == location {
                     formatted_text_element = formatted_text_element.with_saved_glyph_position(
                         open_link_tooltip.link_range.start,
                         i,
                         detected_links_state.resolved_tooltip_position_id(),
                     );
                 }
-            }
         }
 
-        if let Some(open_secret_tooltip) = &secret_redaction_state.open_tooltip_location() {
-            if open_secret_tooltip.location == location {
+        if let Some(open_secret_tooltip) = &secret_redaction_state.open_tooltip_location()
+            && open_secret_tooltip.location == location {
                 formatted_text_element = formatted_text_element.with_saved_glyph_position(
                     open_secret_tooltip.secret_range.char_range.start,
                     i,
@@ -537,11 +528,10 @@ pub(crate) fn add_highlights_to_rich_text(
                     }
                 }
             }
-        }
 
         // Also highlight any currently hovered secret if it's different.
-        if let Some(currently_hovered_secret) = &secret_redaction_state.hovered_location() {
-            if currently_hovered_secret.location == location
+        if let Some(currently_hovered_secret) = &secret_redaction_state.hovered_location()
+            && currently_hovered_secret.location == location
                 && secret_redaction_state.hovered_location()
                     != secret_redaction_state.open_tooltip_location()
             {
@@ -557,14 +547,13 @@ pub(crate) fn add_highlights_to_rich_text(
                     });
                 }
             }
-        }
 
         // Add gray + strikethrough styling for all detected secrets in rich text
         if matches!(
             get_secret_obfuscation_mode(app),
             ObfuscateSecrets::Strikethrough
-        ) {
-            if let Some(detected_secrets) = secret_redaction_state.secrets_for_location(&location) {
+        )
+            && let Some(detected_secrets) = secret_redaction_state.secrets_for_location(&location) {
                 for secret_range in detected_secrets.detected_secrets.keys() {
                     // Skip gray styling if this secret is currently hovered or has tooltip open
                     if !secret_redaction_state.is_hovered(&location, secret_range)
@@ -581,7 +570,6 @@ pub(crate) fn add_highlights_to_rich_text(
                     }
                 }
             }
-        }
 
         if let Some(find_params) = find_context.as_ref() {
             style_ranges.extend(get_highlight_ranges_for_find_matches(

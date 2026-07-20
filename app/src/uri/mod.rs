@@ -1158,8 +1158,8 @@ impl Action {
                         .and_then(|window_id| active_terminal_view_id_in_window(window_id, ctx));
                 }
 
-                if let Some(terminal_view_id) = terminal_view_id {
-                    if let Some((window_id, workspace)) =
+                if let Some(terminal_view_id) = terminal_view_id
+                    && let Some((window_id, workspace)) =
                         find_workspace_for_terminal_view(terminal_view_id, ctx)
                     {
                         ctx.windows().show_window_and_focus_app(window_id);
@@ -1175,7 +1175,6 @@ impl Action {
                         });
                         return;
                     }
-                }
 
                 GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
                     notifier.notify_auth_completed(ctx);
@@ -1387,14 +1386,13 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
 
             ctx.windows().show_window_and_focus_app(window_id);
 
-            if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-                if let Some(workspace) = workspaces.into_iter().next() {
+            if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+                && let Some(workspace) = workspaces.into_iter().next() {
                     workspace.update(ctx, |workspace, ctx| {
                         let source = CodeSource::Finder { path: path.clone() };
                         workspace.open_file_with_target(path, target, None, source, ctx);
                     });
                 }
-            }
         }
     } else {
         let directory_path = if path.is_file() {
@@ -1416,11 +1414,10 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
             );
 
             // Run command after session has been added
-            if path.is_file() {
-                if let Some(path_str) = path.to_str() {
+            if path.is_file()
+                && let Some(path_str) = path.to_str() {
                     execute_file(primary_window_id, path_str, ctx);
                 }
-            }
         } else {
             let open_path = OpenPath {
                 path: directory_path,
@@ -1430,11 +1427,10 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
             // Run command after window has been added
             if path.is_file() {
                 let active_window_id = ctx.windows().active_window();
-                if let Some(primary_window_id) = get_primary_window(active_window_id, ctx) {
-                    if let Some(path_str) = path.to_str() {
+                if let Some(primary_window_id) = get_primary_window(active_window_id, ctx)
+                    && let Some(path_str) = path.to_str() {
                         execute_file(primary_window_id, path_str, ctx);
                     }
-                }
             }
         }
 
@@ -1481,8 +1477,8 @@ fn open_file_editor(
 
         ctx.windows().show_window_and_focus_app(window_id);
 
-        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-            if let Some(workspace) = workspaces.into_iter().next() {
+        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+            && let Some(workspace) = workspaces.into_iter().next() {
                 workspace.update(ctx, |workspace, ctx| {
                     let source = CodeSource::Link {
                         path: path.clone(),
@@ -1492,7 +1488,6 @@ fn open_file_editor(
                     workspace.open_file_with_target(path, target, line_col, source, ctx);
                 });
             }
-        }
     }
 }
 

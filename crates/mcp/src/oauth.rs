@@ -150,12 +150,10 @@ impl PersistingCredentialStore {
             .and_then(|opt| opt)
             .and_then(|prev| prev.token_response)
             .and_then(|prev_tr| prev_tr.refresh_token().cloned())
-        {
-            if let Some(tr) = credentials.token_response.as_mut() {
+            && let Some(tr) = credentials.token_response.as_mut() {
                 // Carry forward the existing/previous refresh token, constructing new if needed
                 tr.set_refresh_token(Some(RefreshToken::new(prev_rt.secret().to_string())));
             }
-        }
     }
 }
 

@@ -2545,8 +2545,8 @@ impl AppContext {
                             *shift = modifiers.shift;
                         }
 
-                        if let Some(presenter) = ctx.presenter(window_id) {
-                            if let Some(key_code) = key_code {
+                        if let Some(presenter) = ctx.presenter(window_id)
+                            && let Some(key_code) = key_code {
                                 // Based on the key code in question and the new state of the modifier key,
                                 // we can infer whether it was pressed or released.
                                 let key_pressed = match key_code {
@@ -2586,7 +2586,6 @@ impl AppContext {
                                     );
                                 }
                             }
-                        }
                     }
                     // Update the last mouse moved event on mouse up with the new position.
                     // This makes sure that hoverables are updated to the proper mouse
@@ -3339,15 +3338,14 @@ impl AppContext {
                 stack.extend(children.iter().copied());
             }
 
-            if let Some(current_window_id) = self.view_to_window.get(&view_id).copied() {
-                if let Some(view) = self
+            if let Some(current_window_id) = self.view_to_window.get(&view_id).copied()
+                && let Some(view) = self
                     .windows
                     .get(&current_window_id)
                     .and_then(|window| window.views.get(&view_id))
                 {
                     stack.extend(view.child_view_ids(self));
                 }
-            }
         }
 
         order
@@ -3413,24 +3411,21 @@ impl AppContext {
                     .unwrap_or(handle_window_id);
 
                 // Focus the root view if the view being removed is focused
-                if let Some(focused_view_id) = self.focused_view_id(current_window_id) {
-                    if view_id == focused_view_id {
-                        if let Some(root_view_id) = self.root_view_id(current_window_id) {
+                if let Some(focused_view_id) = self.focused_view_id(current_window_id)
+                    && view_id == focused_view_id
+                        && let Some(root_view_id) = self.root_view_id(current_window_id) {
                             self.focus(current_window_id, root_view_id);
                         }
-                    }
-                }
 
                 self.subscriptions.remove(&view_id);
                 self.observations.remove(&view_id);
-                if let Some(parent_id) = self.structural_child_to_parent.remove(&view_id) {
-                    if let Some(children) = self.structural_parent_to_children.get_mut(&parent_id) {
+                if let Some(parent_id) = self.structural_child_to_parent.remove(&view_id)
+                    && let Some(children) = self.structural_parent_to_children.get_mut(&parent_id) {
                         children.remove(&view_id);
                         if children.is_empty() {
                             self.structural_parent_to_children.remove(&parent_id);
                         }
                     }
-                }
                 self.structural_parent_to_children.remove(&view_id);
 
                 if let Some(window) = self.windows.get_mut(&current_window_id) {
@@ -3546,8 +3541,7 @@ impl AppContext {
                 is_composing,
                 ..
             } = &event
-            {
-                if let Some(focused_view_id) = self.focused_view_id(window_id) {
+                && let Some(focused_view_id) = self.focused_view_id(window_id) {
                     let responder_chain = self.view_ancestors(window_id, focused_view_id);
                     match self.dispatch_keystroke(
                         window_id,
@@ -3563,7 +3557,6 @@ impl AppContext {
                         }
                     }
                 }
-            }
         }
 
         let mut result = crate::windowing::EventDispatchResult::default();
@@ -3576,12 +3569,11 @@ impl AppContext {
         // Only dispatch `self_or_child_interacted_with` if:
         // (1) the event was handled by a view in the responder chain, and
         // (2) the event is a valid interaction (we exclude mouse and scroll movements to reduce noise)
-        if handled && !matches!(event, Event::MouseMoved { .. } | Event::ScrollWheel { .. }) {
-            if let Some(focused_view_id) = self.focused_view_id(window_id) {
+        if handled && !matches!(event, Event::MouseMoved { .. } | Event::ScrollWheel { .. })
+            && let Some(focused_view_id) = self.focused_view_id(window_id) {
                 let responder_chain = self.view_ancestors(window_id, focused_view_id);
                 self.dispatch_self_or_child_interacted_with(window_id, &responder_chain);
             }
-        }
 
         crate::windowing::EventDispatchResult {
             handled,
@@ -3810,11 +3802,10 @@ impl AppContext {
 
                 // If the font is loading, collect the future so we can wait
                 // for it to resolve.
-                if let AssetState::Loading { ref handle } = asset {
-                    if let Some(future) = handle.when_loaded(asset_cache) {
+                if let AssetState::Loading { ref handle } = asset
+                    && let Some(future) = handle.when_loaded(asset_cache) {
                         futures.push(future);
                     }
-                }
                 // We need to load the asset again once the future has resolved,
                 // so collect the asset source.
                 asset_sources.push(asset_source);
@@ -4035,8 +4026,8 @@ impl AppContext {
     fn notify_model_observers(&mut self, observed_id: EntityId) {
         // TODO: Apply the same deferred unsubscribe pattern used in `emit_event` to support
         // unobserving from inside an observation callback.
-        if let Some(observations) = self.observations.remove(&observed_id) {
-            if self.models.contains_key(&observed_id) {
+        if let Some(observations) = self.observations.remove(&observed_id)
+            && self.models.contains_key(&observed_id) {
                 for mut observation in observations {
                     let alive = match &mut observation {
                         Observation::FromModel { model_id, callback } => {
@@ -4092,7 +4083,6 @@ impl AppContext {
                     }
                 }
             }
-        }
     }
 
     pub(crate) fn notify_view_observers(&mut self, window_id: WindowId, view_id: EntityId) {

@@ -694,8 +694,8 @@ fn tokens_to_highlight_ranges(
     let mut highlights = Vec::new();
 
     // Handle slash commands: if code starts with '/', highlight the command prefix in magenta
-    if code.starts_with('/') {
-        if let Some(space_idx) = code.find(' ') {
+    if code.starts_with('/')
+        && let Some(space_idx) = code.find(' ') {
             let color = AnsiColorIdentifier::Magenta.to_ansi_color(terminal_colors);
             highlights.push(HighlightedRange {
                 highlight: Highlight::new()
@@ -704,7 +704,6 @@ fn tokens_to_highlight_ranges(
             });
             return highlights;
         }
-    }
 
     // Highlight commands in the code block (converting bytes to char indexes as we go).
     let mut char_counter = CharCounter::new(code);

@@ -214,11 +214,10 @@ impl NotificationMailboxView {
         // Clamp selection to valid range after list contents change.
         if self.filtered_ids.is_empty() {
             self.selected_index = None;
-        } else if let Some(idx) = self.selected_index {
-            if idx >= self.filtered_ids.len() {
+        } else if let Some(idx) = self.selected_index
+            && idx >= self.filtered_ids.len() {
                 self.selected_index = Some(self.filtered_ids.len() - 1);
             }
-        }
     }
 
     fn render_item_at_index(&self, index: usize, app: &AppContext) -> Box<dyn Element> {
@@ -321,11 +320,10 @@ impl TypedActionView for NotificationMailboxView {
                 self.set_active_filter(next_filter, ctx);
             }
             NotificationMailboxViewAction::ActivateSelected => {
-                if let Some(idx) = self.selected_index {
-                    if let Some(id) = self.filtered_ids.get(idx).copied() {
+                if let Some(idx) = self.selected_index
+                    && let Some(id) = self.filtered_ids.get(idx).copied() {
                         self.activate_notification(id, ctx);
                     }
-                }
             }
         }
     }

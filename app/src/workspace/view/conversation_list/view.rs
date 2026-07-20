@@ -1233,11 +1233,10 @@ impl TypedActionView for ConversationListView {
 
                 // If the selection is no longer valid (because it was one of the
                 // list items that we're now hiding), select the last selectable item.
-                if let Some(index) = self.selected_index {
-                    if !self.is_selectable(index) {
+                if let Some(index) = self.selected_index
+                    && !self.is_selectable(index) {
                         self.selected_index = self.find_last_selectable_index();
                     }
-                }
 
                 ctx.notify();
             }

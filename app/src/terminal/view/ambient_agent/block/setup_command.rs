@@ -69,8 +69,8 @@ impl CloudModeSetupCommandBlock {
         });
 
         ctx.subscribe_to_model(model_events, |me, model_events, event, ctx| {
-            if let ModelEvent::BlockCompleted(BlockCompletedEvent { block_id, .. }) = event {
-                if *block_id == me.block_id {
+            if let ModelEvent::BlockCompleted(BlockCompletedEvent { block_id, .. }) = event
+                && *block_id == me.block_id {
                     if me
                         .terminal_model
                         .lock()
@@ -85,7 +85,6 @@ impl CloudModeSetupCommandBlock {
                     ctx.unsubscribe_to_model(&model_events);
                     ctx.notify();
                 }
-            }
         });
 
         let command = terminal_model

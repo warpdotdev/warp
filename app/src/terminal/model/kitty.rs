@@ -760,11 +760,10 @@ fn read_file(decoded_payload: Vec<u8>, is_temp: bool) -> Result<Vec<u8>, Invalid
 
 #[cfg(feature = "local_fs")]
 fn safe_delete_temp_file(path: &str) {
-    if is_path_in_temp_dir(path) && path.contains("tty-graphics-protocol") {
-        if let Err(err) = fs::remove_file(path) {
+    if is_path_in_temp_dir(path) && path.contains("tty-graphics-protocol")
+        && let Err(err) = fs::remove_file(path) {
             log::warn!("Failed to delete kitty temporary file (path = {path}): {err:#}");
         }
-    }
 }
 
 #[cfg(feature = "local_fs")]
@@ -777,11 +776,10 @@ fn is_path_in_temp_dir(path: &str) -> bool {
         }
     }
 
-    if let Ok(temp_dir) = env::var("TMPDIR") {
-        if path.starts_with(&temp_dir) {
+    if let Ok(temp_dir) = env::var("TMPDIR")
+        && path.starts_with(&temp_dir) {
             return true;
         }
-    }
 
     false
 }

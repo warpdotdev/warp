@@ -1315,9 +1315,8 @@ impl AIConversation {
                     message: AIAgentOutputMessageType::Action(action),
                     ..
                 } = message
-                {
-                    if &action.id == action_id {
-                        if let super::AIAgentActionType::CreateDocuments(
+                    && &action.id == action_id
+                        && let super::AIAgentActionType::CreateDocuments(
                             super::CreateDocumentsRequest { documents },
                         ) = &action.action
                         {
@@ -1327,8 +1326,6 @@ impl AIConversation {
                                 .collect::<Vec<_>>();
                             return Some(titles);
                         }
-                    }
-                }
             }
         }
 
@@ -1406,11 +1403,11 @@ impl AIConversation {
         }
 
         // Check if conversation was never continued (no user queries in any exchange)
-        let never_continued = self
-            .root_task_exchanges()
-            .all(|exchange| !exchange.has_user_query());
+        
 
-        never_continued
+        self
+            .root_task_exchanges()
+            .all(|exchange| !exchange.has_user_query())
     }
 
     /// Returns true if this conversation should be unconditionally excluded
@@ -1651,8 +1648,7 @@ impl AIConversation {
                 notebook_uid: nb_uid,
                 ..
             } = artifact
-            {
-                if doc_uid == &document_uid {
+                && doc_uid == &document_uid {
                     *nb_uid = Some(notebook_uid);
                     let updated_artifact = artifact.clone();
                     self.write_updated_conversation_state(ctx);
@@ -1665,7 +1661,6 @@ impl AIConversation {
                     }
                     return;
                 }
-            }
         }
     }
 
@@ -2079,11 +2074,9 @@ impl AIConversation {
             if let Some(idx) = added_exchanges
                 .iter()
                 .position(|new_exchange| new_exchange.exchange_id == exchange_id)
-            {
-                if let Err(Size0Error) = added_exchanges.remove(idx) {
+                && let Err(Size0Error) = added_exchanges.remove(idx) {
                     response_entries_to_remove.push(stream_id.clone());
                 }
-            }
         }
         for response_id in response_entries_to_remove.into_iter() {
             self.added_exchanges_by_response.remove(&response_id);
@@ -2096,11 +2089,10 @@ impl AIConversation {
                 .then(|| task.id().clone())
         });
 
-        if let Some(task_id) = task_id {
-            if let Some(exchange) = self.task_store.remove_task_exchange(&task_id, exchange_id) {
+        if let Some(task_id) = task_id
+            && let Some(exchange) = self.task_store.remove_task_exchange(&task_id, exchange_id) {
                 return Ok(exchange);
             }
-        }
         Err(UpdateConversationError::ExchangeNotFound)
     }
 
@@ -2907,8 +2899,8 @@ impl AIConversation {
                         Some(api::message::Message::OrchestrationConfigSnapshot(
                             snapshot,
                         )) => {
-                            if !snapshot.plan_id.is_empty() {
-                                if let Some(config) = snapshot
+                            if !snapshot.plan_id.is_empty()
+                                && let Some(config) = snapshot
                                     .config
                                     .as_ref()
                                     .map(OrchestrationConfig::from_proto)
@@ -2929,7 +2921,6 @@ impl AIConversation {
                                         );
                                     }
                                 }
-                            }
                         }
                         Some(api::message::Message::ToolCallResult(tcr)) => {
                             // Shared-session viewers do not own temp directories created by
@@ -3081,9 +3072,8 @@ impl AIConversation {
                 // tool call result updating a single message in place).
                 if let Some(api::message::Message::OrchestrationConfigSnapshot(snapshot)) =
                     &message.message
-                {
-                    if !snapshot.plan_id.is_empty() {
-                        if let Some(config) = snapshot
+                    && !snapshot.plan_id.is_empty()
+                        && let Some(config) = snapshot
                             .config
                             .as_ref()
                             .map(OrchestrationConfig::from_proto)
@@ -3101,8 +3091,6 @@ impl AIConversation {
                                 });
                             }
                         }
-                    }
-                }
 
                 let task_id = TaskId::new(task_id);
                 let exchange_id = self
@@ -3789,11 +3777,11 @@ impl AIConversation {
             if let Some(tool_call) = message.tool_call() {
                 // Check if this is a moved-messages subtask (summarization subagent).
                 // If so, extract its command blocks here to maintain chronological order.
-                if let Some(subagent) = tool_call.subagent() {
-                    if subagent.is_summarization() {
+                if let Some(subagent) = tool_call.subagent()
+                    && subagent.is_summarization() {
                         let subtask_id = TaskId::new(subagent.task_id.clone());
-                        if let Some(subtask) = self.task_store.get(&subtask_id) {
-                            if let Some(subtask_source) = subtask.source() {
+                        if let Some(subtask) = self.task_store.get(&subtask_id)
+                            && let Some(subtask_source) = subtask.source() {
                                 // Recursively extract from subtask (in case of nested summarization).
                                 self.extract_command_blocks_from_messages(
                                     &subtask_source.messages,
@@ -3802,11 +3790,9 @@ impl AIConversation {
                                     seen_command_ids,
                                 );
                             }
-                        }
                         // Don't process this message further - it's just a subagent call.
                         continue;
                     }
-                }
 
                 // Extract from RunShellCommand tool calls.
                 if let Some(api::message::tool_call::Tool::RunShellCommand(run_cmd)) =
@@ -3818,8 +3804,7 @@ impl AIConversation {
                     // Find the corresponding tool call result in this message set.
                     if let Some((cmd_result, result_message_id, result_proto_ts)) =
                         tool_call_results.get(tool_call_id.as_str())
-                    {
-                        if let Some(api::run_shell_command_result::Result::CommandFinished(
+                        && let Some(api::run_shell_command_result::Result::CommandFinished(
                             api::ShellCommandFinished {
                                 output: command_output,
                                 exit_code,
@@ -3898,7 +3883,6 @@ impl AIConversation {
                                 completed_ts,
                             });
                         }
-                    }
                 }
             }
 
@@ -4226,14 +4210,12 @@ fn subagent_pair_message_ids_to_remove(
     // tool_call_id -> tool_call_result message id
     let mut tool_call_result_message_ids: HashMap<String, String> = HashMap::new();
     for message in &root_source.messages {
-        if let Some(tool_call) = message.tool_call() {
-            if let Some(subagent) = tool_call.subagent() {
-                if !subagent.task_id.is_empty() {
+        if let Some(tool_call) = message.tool_call()
+            && let Some(subagent) = tool_call.subagent()
+                && !subagent.task_id.is_empty() {
                     subagent_call_message_ids
                         .insert(tool_call.tool_call_id.clone(), message.id.clone());
                 }
-            }
-        }
         if let Some(result) = message.tool_call_result() {
             tool_call_result_message_ids.insert(result.tool_call_id.clone(), message.id.clone());
         }
@@ -4361,11 +4343,10 @@ fn cleanup_conversation_search_temp_dir(
 
     let base_dir = super::conversation_yaml::base_dir();
     for msg in subtask.messages() {
-        if let Some(api::message::Message::ToolCallResult(tcr)) = &msg.message {
-            if let Some(api::message::tool_call_result::Result::FetchConversation(result)) =
+        if let Some(api::message::Message::ToolCallResult(tcr)) = &msg.message
+            && let Some(api::message::tool_call_result::Result::FetchConversation(result)) =
                 &tcr.result
-            {
-                if let Some(api::fetch_conversation_result::Result::Success(success)) =
+                && let Some(api::fetch_conversation_result::Result::Success(success)) =
                     &result.result
                 {
                     let dir = std::path::Path::new(&success.directory_path);
@@ -4383,8 +4364,6 @@ fn cleanup_conversation_search_temp_dir(
                         }
                     }
                 }
-            }
-        }
     }
 }
 

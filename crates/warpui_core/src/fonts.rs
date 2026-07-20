@@ -312,15 +312,14 @@ impl Cache {
     pub fn get_or_load_system_font(&mut self, font_family: &str) -> Result<FamilyId> {
         match self.family_id_for_name(font_family) {
             Some(id) => {
-                if let Some(available_system_fonts) = self.available_system_fonts.as_mut() {
-                    if let Some(entry) =
+                if let Some(available_system_fonts) = self.available_system_fonts.as_mut()
+                    && let Some(entry) =
                         available_system_fonts.iter_mut().find(|(family_id, data)| {
                             data.family_name == font_family && family_id.is_none()
                         })
                     {
                         entry.0 = Some(id);
                     }
-                }
                 Ok(id)
             }
             None => self.load_system_font(font_family),

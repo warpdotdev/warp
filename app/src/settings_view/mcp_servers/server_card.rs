@@ -1039,8 +1039,8 @@ impl View for ServerCardView {
                 )
                 .with_spacing(style::SERVER_CARD_INTERIOR_SPACING);
 
-            if self.is_tools_expanded {
-                if let Some(tools) = &self.tools {
+            if self.is_tools_expanded
+                && let Some(tools) = &self.tools {
                     let tool_chips = ServerCardView::render_tool_chips(tools, appearance);
                     let tool_chips_row = Wrap::row()
                         .with_spacing(6.)
@@ -1049,7 +1049,6 @@ impl View for ServerCardView {
                         .finish();
                     card_body = card_body.with_child(tool_chips_row);
                 }
-            }
 
             let mut card = Container::new(
                 Flex::row()

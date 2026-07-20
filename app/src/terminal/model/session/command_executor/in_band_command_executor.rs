@@ -176,8 +176,8 @@ impl InBandCommandExecutor {
             if cmd.id != command_id {
                 return;
             }
-            if let Some(output_tx) = cmd.output_tx.clone() {
-                if !output_tx.is_closed() {
+            if let Some(output_tx) = cmd.output_tx.clone()
+                && !output_tx.is_closed() {
                     // TODO: we should consider turning this into a Result::Err
                     if let Err(error) = output_tx.try_send(CommandOutput {
                         stdout: vec![],
@@ -188,7 +188,6 @@ impl InBandCommandExecutor {
                         log::warn!("Error occurred when sending generator command output: {error}");
                     }
                 }
-            }
             *lock = None;
         }
         self.execute_command_internal();
@@ -207,8 +206,8 @@ impl InBandCommandExecutor {
             let mut current_command = self.running_command.lock();
             if let Some(cmd) = current_command.take() {
                 if cmd.id == event.command_id {
-                    if let Some(output_tx) = cmd.output_tx {
-                        if !output_tx.is_closed() {
+                    if let Some(output_tx) = cmd.output_tx
+                        && !output_tx.is_closed() {
                             let command_output = if event.exit_code == 0 {
                                 CommandOutput {
                                     stdout: event.output,
@@ -230,7 +229,6 @@ impl InBandCommandExecutor {
                                 );
                             }
                         }
-                    }
                 } else {
                     log::warn!(
                         "Cached in-band command ID {} does not match ID of executed in-band command output {}",

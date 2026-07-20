@@ -305,13 +305,11 @@ pub(crate) fn extract_paths_from_conversation(
 
         // Track the per-exchange cwd unconditionally (it doesn't count as a tool
         // call). Covers `RunShellCommand` cwds without walking action results.
-        if let Some(cwd) = cwd {
-            if let Ok(sp) = StandardizedPath::try_new(cwd) {
-                if seen.insert(sp.clone()) {
+        if let Some(cwd) = cwd
+            && let Ok(sp) = StandardizedPath::try_new(cwd)
+                && seen.insert(sp.clone()) {
                     paths.push(sp);
                 }
-            }
-        }
 
         let Some(output) = exchange.output_status.output() else {
             continue;

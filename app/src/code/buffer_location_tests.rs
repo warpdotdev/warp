@@ -645,11 +645,10 @@ fn server_push_does_not_echo_back_as_client_edit() {
             let tx = user_edit_tx.clone();
             ctx.subscribe_to_model(&state.buffer, move |_me, _, event, _ctx| {
                 use warp_editor::content::buffer::BufferEvent;
-                if let BufferEvent::ContentChanged { origin, .. } = event {
-                    if origin.from_user() {
+                if let BufferEvent::ContentChanged { origin, .. } = event
+                    && origin.from_user() {
                         let _ = tx.try_send(true);
                     }
-                }
             });
             state
         });

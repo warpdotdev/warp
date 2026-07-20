@@ -275,9 +275,8 @@ impl SuggestionChipView {
 
         if let (ObjectOperation::Create { .. }, OperationSuccessType::Success) =
             (&result.operation, &result.success_type)
-        {
-            if self.sync_id.into_client() == result.client_id {
-                if let Some(server_id) = result.server_id {
+            && self.sync_id.into_client() == result.client_id
+                && let Some(server_id) = result.server_id {
                     self.sync_id = SyncId::ServerId(server_id);
                     // Reload the rule from the cloud model.
                     match &mut self.suggestion {
@@ -291,8 +290,6 @@ impl SuggestionChipView {
                     }
                     self.on_add_suggestion(ctx);
                 }
-            }
-        }
     }
 
     fn handle_cloud_model_event(&mut self, event: &CloudModelEvent, ctx: &mut ViewContext<Self>) {

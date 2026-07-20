@@ -453,12 +453,10 @@ impl TypedActionView for OnboardingCalloutView {
                     if let OnboardingCalloutState::UniversalInput(
                         UniversalInputCalloutState::TalkToAgent,
                     ) = model.state()
-                    {
-                        if !model.has_project() {
+                        && !model.has_project() {
                             model.finish(ctx);
                             return;
                         }
-                    }
                     model.next(ctx);
                 });
                 ctx.notify();

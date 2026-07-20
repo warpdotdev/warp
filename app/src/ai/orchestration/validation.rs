@@ -86,8 +86,8 @@ pub fn accept_disabled_reason_with_auth(
     if let Some(reason) = state.accept_disabled_reason() {
         return Some(reason.to_string());
     }
-    if matches!(state.execution_mode, RunAgentsExecutionMode::Local) {
-        if let Some(harness) = Harness::parse_local_child_harness(&state.harness_type) {
+    if matches!(state.execution_mode, RunAgentsExecutionMode::Local)
+        && let Some(harness) = Harness::parse_local_child_harness(&state.harness_type) {
             match local_harness_setup_state(harness) {
                 LocalHarnessSetupState::MissingHarness { tooltip } => {
                     return Some(tooltip.to_string());
@@ -98,7 +98,6 @@ pub fn accept_disabled_reason_with_auth(
                 LocalHarnessSetupState::Ready => {}
             }
         }
-    }
     if auth_secret_selection_required(state, ctx) {
         return Some("Select an API key for this harness to continue.".to_string());
     }

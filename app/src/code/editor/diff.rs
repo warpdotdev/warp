@@ -494,8 +494,8 @@ impl DiffModel {
     /// Convert a line index in the base version of the text to an editor line location.
     pub fn base_line_index_to_line_location(&self, index: usize) -> Option<EditorLineLocation> {
         for (line_range, change) in self.status.change_mapping.iter() {
-            if let ChangeType::Replacement { replaced_range, .. } = change {
-                if replaced_range.contains(&index) {
+            if let ChangeType::Replacement { replaced_range, .. } = change
+                && replaced_range.contains(&index) {
                     return Some(EditorLineLocation::Removed {
                         // Subtracting 1 as the diff is currently represented as attaching to the _previous line_.
                         line_number: LineCount::from(line_range.start),
@@ -504,7 +504,6 @@ impl DiffModel {
                         index: index - replaced_range.start,
                     });
                 }
-            }
         }
 
         for (line_range, replaced_range) in self.status.deletion_mapping.iter() {

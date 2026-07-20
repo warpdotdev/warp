@@ -121,8 +121,8 @@ pub fn maybe_log_out(app: &mut AppContext) {
                     return;
                 };
 
-                if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-                    if let Some(handle) = workspaces.first() {
+                if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+                    && let Some(handle) = workspaces.first() {
                         ctx.dispatch_typed_action_for_view(
                             window_id,
                             handle.id(),
@@ -133,7 +133,6 @@ pub fn maybe_log_out(app: &mut AppContext) {
                             },
                         );
                     }
-                }
             }))
         }
 
