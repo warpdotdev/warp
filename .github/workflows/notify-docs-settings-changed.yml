@@ -16,6 +16,10 @@ on:
     paths:
       - 'app/src/settings_view/**'
 
+# This workflow does not use GITHUB_TOKEN, but we set an explicit empty
+# permissions block to satisfy CodeQL and follow least-privilege conventions.
+permissions: {}
+
 jobs:
   dispatch:
     name: Dispatch settings-ui-changed to docs
@@ -60,5 +64,5 @@ jobs:
             https://slack.com/api/chat.postMessage \
             -d "{
               \"channel\": \"C09BVK0PL3Y\",
-              \"text\": \":warning: *notify-docs-settings-changed* failed for <https://github.com/warpdotdev/warp-internal/commit/$GITHUB_SHA|$GITHUB_SHA>.\\n\\nThe \`valid_paths.json\` snapshot in the docs repo was *not* refreshed automatically.\\n\\n:point_right: Trigger it manually: <https://github.com/warpdotdev/docs/actions/workflows/refresh-ui-paths.yml|Refresh UI paths snapshot workflow>\"
+              \"text\": \":warning: *notify-docs-settings-changed* failed for <https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA|$GITHUB_SHA>.\\n\\nThe \`valid_paths.json\` snapshot in the docs repo was *not* refreshed automatically.\\n\\n:point_right: Trigger it manually: <https://github.com/warpdotdev/docs/actions/workflows/refresh-ui-paths.yml|Refresh UI paths snapshot workflow>\"
             }"
