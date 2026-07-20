@@ -814,10 +814,10 @@ impl CurrentPrompt {
         chip_kind: ContextChipKind,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(chip) = chip_kind.to_chip() {
-            if let Some(on_click_gen) = chip.on_click_generator().cloned() {
-                self.refresh_on_click_values(&chip_kind, on_click_gen, ctx);
-            }
+        if let Some(chip) = chip_kind.to_chip()
+            && let Some(on_click_gen) = chip.on_click_generator().cloned()
+        {
+            self.refresh_on_click_values(&chip_kind, on_click_gen, ctx);
         }
     }
 
