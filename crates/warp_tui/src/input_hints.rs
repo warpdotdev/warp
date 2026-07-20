@@ -23,6 +23,11 @@ pub(crate) const AGENT_HINT: &str = "Ask the agent anything • ! for shell mode
 /// empty input exits too).
 pub(crate) const SHELL_HINT: &str = "Run a shell command • esc for agent mode";
 
+/// Ghosted hint row shown in the input's slot while a user-controlled
+/// long-running command owns input (the input box itself stays hidden).
+/// ctrl-c is the reserved interrupt key in both the TUI keymap and the PTY.
+pub(crate) const LONG_RUNNING_COMMAND_HINT: &str = "ctrl-c to interrupt";
+
 /// The agent-mode placeholder hint for the current transcript state.
 pub(crate) fn agent_input_hint(transcript_is_empty: bool) -> &'static str {
     if transcript_is_empty {

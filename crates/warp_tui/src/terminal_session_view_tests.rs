@@ -496,6 +496,47 @@ fn long_running_command_keeps_input_hidden() {
             "LRC must keep the input editor hidden:\n{}",
             lines.join("\n")
         );
+        // The interrupt affordance renders as a ghosted row in the input's
+        // slot while the command owns input.
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.trim() == crate::input_hints::LONG_RUNNING_COMMAND_HINT),
+            "LRC must render the interrupt hint row:\n{}",
+            lines.join("\n")
+        );
+    });
+}
+
+/// Visible startup-script execution also routes input to the PTY, but it is
+/// not a user-controlled command: the interrupt hint row must not appear.
+#[test]
+fn visible_startup_script_shows_no_interrupt_hint() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, _| {
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.block_list_mut().reinit_shell();
+            terminal_model.update_blockheight_items(TRANSCRIPT_BLOCK_SPACING.block_padding, 0.0);
+            // Advance past WarpInput, then leave an unfinished startup-script
+            // block with visible output owning PTY input.
+            terminal_model.simulate_block("bootstrap", "");
+            terminal_model.simulate_long_running_block("shell init", "startup output\r\n");
+        });
+        assert!(
+            view.read(&app, |view, _| view.input_target().pty_owns_input()),
+            "fixture should route input to the PTY during the visible startup script"
+        );
+
+        let lines = render_session(&mut app, &view, 80, 40);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.trim() == crate::input_hints::LONG_RUNNING_COMMAND_HINT),
+            "startup-script execution must not advertise the interrupt hint:\n{}",
+            lines.join("\n")
+        );
     });
 }
 

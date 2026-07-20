@@ -69,6 +69,7 @@ use crate::exit_confirmation::{CTRL_C_EXIT_WINDOW, ExitConfirmation};
 use crate::inline_menu::{MAX_INLINE_MENU_ROWS, TuiInlineMenu, active_inline_menu};
 use crate::input::view::TuiInputAction;
 use crate::input::{TuiInputView, TuiInputViewEvent};
+use crate::input_hints;
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
 use crate::keybindings::{
@@ -93,7 +94,8 @@ use crate::tab_bar::{TuiTabBarConfig, TuiTabBarEvent, TuiTabBarView};
 use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
     TerminalUseInterruptAction, TuiInputTarget, hide_agent_requested_command_from_top_level,
-    terminal_use_conversation_to_resume, terminal_use_interrupt_action, tui_input_target,
+    inline_process_owns_input, terminal_use_conversation_to_resume, terminal_use_interrupt_action,
+    tui_input_target,
 };
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
@@ -2969,11 +2971,12 @@ impl TuiView for TuiTerminalSessionView {
         }
         // While a full-screen (alt-screen) app is active, hand the whole pane to
         // it: render its grid and forward input, instead of the block UI.
-        let (alt_screen_active, input_target) = {
+        let (alt_screen_active, input_target, user_owns_running_command) = {
             let terminal_model = self.terminal_model.lock();
             (
                 terminal_model.is_alt_screen_active(),
                 tui_input_target(&terminal_model),
+                inline_process_owns_input(&terminal_model),
             )
         };
         if alt_screen_active {
@@ -3092,6 +3095,26 @@ impl TuiView for TuiTerminalSessionView {
                     );
                 }
             }
+        }
+        // While a user-controlled long-running command owns input, the input
+        // box and footer stay hidden; a one-line ghosted hint row takes the
+        // input's slot so the interrupt affordance stays discoverable. Gated
+        // on the user-controlled-command predicate, not the broader PTY input
+        // target: visible startup-script execution also routes input to the
+        // PTY but is not a command the user should be told to interrupt.
+        // (Agent-driven terminal use keeps the composer, and its control
+        // hints come from the CLI-subagent status line.)
+        if !blocker_active && user_owns_running_command {
+            content = content.child(
+                TuiContainer::new(
+                    TuiText::new(input_hints::LONG_RUNNING_COMMAND_HINT)
+                        .with_style(builder.muted_text_style())
+                        .truncate()
+                        .finish(),
+                )
+                .with_padding_top(1)
+                .finish(),
+            );
         }
         if !blocker_active
             && (input_target.agent_editor_owns_input()
