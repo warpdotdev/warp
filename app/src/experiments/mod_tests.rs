@@ -1,3 +1,5 @@
+use serial_test::serial;
+
 use super::*;
 
 lazy_static! {
@@ -144,8 +146,16 @@ fn test_from_group_id_errors_if_incorrect_experiment() {
     assert!(res.is_err())
 }
 
+// `EXPERIMENT_LAYER_MAPPINGS` is a process-global, append-only cache. Other
+// tests that call `experiments::init` (e.g. via `test_util::terminal`) leave
+// the real layers mapped in it for the rest of the process, so this test
+// must reset the map before asserting its contents, and must run `#[serial]`
+// so a concurrently-running `experiments::init` can't repopulate it mid-test.
 #[test]
+#[serial]
 fn test_create_experiment_layer_mappings() {
+    EXPERIMENT_LAYER_MAPPINGS.clear();
+
     let layers = vec![&*TEST_LAYER];
     create_experiment_layer_mappings(&layers);
 
