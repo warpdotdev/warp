@@ -49,17 +49,17 @@ pub async fn complete(
 
     // If `cd`ing into a directory without entering `cd` is enabled, also suggest directories.
     // Note that the directories will be listed _after_ the top level commands.
-    if context.shell_supports_autocd().unwrap_or(false) {
-        if let Some(path_completion_context) = context.path_completion_context() {
-            return command_suggestions
-                .into_iter()
-                .chain(
-                    sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
-                        .await
-                        .into_iter(),
-                )
-                .collect();
-        }
+    if context.shell_supports_autocd().unwrap_or(false)
+        && let Some(path_completion_context) = context.path_completion_context()
+    {
+        return command_suggestions
+            .into_iter()
+            .chain(
+                sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
+                    .await
+                    .into_iter(),
+            )
+            .collect();
     }
 
     command_suggestions.into_iter().collect()

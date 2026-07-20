@@ -227,42 +227,41 @@ impl CommandRegistry {
                 // Get the shell command to execute for getting the alias.
                 let command_to_run = alias.command(&tokens[..token_idx + 1]);
 
-                if let Some(generator_context) = context.generator_context() {
-                    if let Ok(output) = generator_context
+                if let Some(generator_context) = context.generator_context()
+                    && let Ok(output) = generator_context
                         .execute_command_at_pwd(&command_to_run, None)
                         .await
-                    {
-                        match output.to_string() {
-                            Ok(output_string) => {
-                                // If the command output was successful, attempt to complete on the alias.
-                                match output.status {
-                                    CommandExitStatus::Success => {
-                                        let expanded_command =
-                                            alias.on_complete(&output_string, tokens, token_idx);
+                {
+                    match output.to_string() {
+                        Ok(output_string) => {
+                            // If the command output was successful, attempt to complete on the alias.
+                            match output.status {
+                                CommandExitStatus::Success => {
+                                    let expanded_command =
+                                        alias.on_complete(&output_string, tokens, token_idx);
 
-                                        if let Some(expanded_command) = expanded_command {
-                                            return SignatureResult::NeedAliasExpansion(
-                                                expanded_command,
-                                            );
-                                        }
-                                    }
-                                    CommandExitStatus::Failure => {
-                                        // We purposefully do not log an error here if the command failed because
-                                        // many commands (such as `git`) will fail if there isn't a valid alias for
-                                        // the token.
-                                        log::debug!(
-                                            "Execution of `{}` failed with output: {}",
-                                            command_to_run,
-                                            &output_string
-                                        )
+                                    if let Some(expanded_command) = expanded_command {
+                                        return SignatureResult::NeedAliasExpansion(
+                                            expanded_command,
+                                        );
                                     }
                                 }
+                                CommandExitStatus::Failure => {
+                                    // We purposefully do not log an error here if the command failed because
+                                    // many commands (such as `git`) will fail if there isn't a valid alias for
+                                    // the token.
+                                    log::debug!(
+                                        "Execution of `{}` failed with output: {}",
+                                        command_to_run,
+                                        &output_string
+                                    )
+                                }
                             }
-                            _ => {
-                                log::debug!(
-                                    "Execution of `{command_to_run}` returned an unparseable output",
-                                );
-                            }
+                        }
+                        _ => {
+                            log::debug!(
+                                "Execution of `{command_to_run}` returned an unparseable output",
+                            );
                         }
                     }
                 }
