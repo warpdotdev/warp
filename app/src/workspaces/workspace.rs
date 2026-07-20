@@ -135,19 +135,18 @@ impl Workspace {
     }
 
     pub fn are_overages_remaining(&self) -> bool {
-        if self.settings.usage_based_pricing_settings.enabled {
-            if let Some(max_spend_cents) = self
+        if self.settings.usage_based_pricing_settings.enabled
+            && let Some(max_spend_cents) = self
                 .settings
                 .usage_based_pricing_settings
                 .max_monthly_spend_cents
-            {
-                if let Some(ai_overages) = &self.billing_metadata.ai_overages {
-                    return ai_overages.current_monthly_request_cost_cents < max_spend_cents as i32;
-                } else {
-                    // If they have the setting enabled but no overages usage so far,
-                    // that means they have no database entry, so they have overages remaining.
-                    return true;
-                }
+        {
+            if let Some(ai_overages) = &self.billing_metadata.ai_overages {
+                return ai_overages.current_monthly_request_cost_cents < max_spend_cents as i32;
+            } else {
+                // If they have the setting enabled but no overages usage so far,
+                // that means they have no database entry, so they have overages remaining.
+                return true;
             }
         }
 

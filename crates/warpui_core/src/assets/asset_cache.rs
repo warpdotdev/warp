@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use anyhow::{anyhow, Error, Result};
+use anyhow::{Error, Result, anyhow};
 use async_channel::{self, Receiver, Sender};
 use bytes::Bytes;
 use derivative::Derivative;
@@ -16,8 +16,8 @@ use futures::{Future, FutureExt as _};
 use warp_errors::report_error;
 
 use super::AssetProvider;
-use crate::image_cache::ImageCache;
 use crate::r#async::executor;
+use crate::image_cache::ImageCache;
 use crate::{Entity, ModelContext, SingletonEntity};
 
 pub trait FetchAsset: crate::r#async::Spawnable + Future<Output = Result<Bytes>> {}
@@ -285,10 +285,10 @@ impl AssetCache {
             .borrow()
             .iter()
             .filter_map(|(handle, state)| {
-                if let AssetStateInternal::Loaded { size_in_bytes, .. } = state {
-                    if matches!(handle.source, AssetSource::Raw { .. }) {
-                        return Some(*size_in_bytes);
-                    }
+                if let AssetStateInternal::Loaded { size_in_bytes, .. } = state
+                    && matches!(handle.source, AssetSource::Raw { .. })
+                {
+                    return Some(*size_in_bytes);
                 }
                 None
             })
@@ -308,15 +308,14 @@ impl AssetCache {
         let mut raw_assets: Vec<_> = assets
             .iter()
             .filter_map(|(handle, state)| {
-                if matches!(handle.source, AssetSource::Raw { .. }) {
-                    if let AssetStateInternal::Loaded {
+                if matches!(handle.source, AssetSource::Raw { .. })
+                    && let AssetStateInternal::Loaded {
                         timestamp,
                         size_in_bytes,
                         ..
                     } = state
-                    {
-                        return Some((handle.clone(), *timestamp, *size_in_bytes));
-                    }
+                {
+                    return Some((handle.clone(), *timestamp, *size_in_bytes));
                 }
                 None
             })
@@ -332,15 +331,15 @@ impl AssetCache {
             if total_size <= Self::MAX_RAW_ASSET_SIZE {
                 break;
             }
-            if let AssetSource::Raw { id } = &handle.source {
-                if assets.remove(&handle).is_some() {
-                    assets.insert(handle.clone(), AssetStateInternal::Evicted);
-                    ImageCache::as_ref(ctx).evict_image(&handle.source);
-                    total_size -= size_in_bytes;
+            if let AssetSource::Raw { id } = &handle.source
+                && assets.remove(&handle).is_some()
+            {
+                assets.insert(handle.clone(), AssetStateInternal::Evicted);
+                ImageCache::as_ref(ctx).evict_image(&handle.source);
+                total_size -= size_in_bytes;
 
-                    if let Ok(id) = id.parse::<u32>() {
-                        evicted_image_ids.push(id);
-                    }
+                if let Ok(id) = id.parse::<u32>() {
+                    evicted_image_ids.push(id);
                 }
             }
         }
@@ -361,15 +360,13 @@ impl AssetCache {
                         content_version: Some(_),
                         ..
                     }
-                ) {
-                    if let AssetStateInternal::Loaded {
-                        timestamp,
-                        size_in_bytes,
-                        ..
-                    } = state
-                    {
-                        return Some((handle.clone(), *timestamp, *size_in_bytes));
-                    }
+                ) && let AssetStateInternal::Loaded {
+                    timestamp,
+                    size_in_bytes,
+                    ..
+                } = state
+                {
+                    return Some((handle.clone(), *timestamp, *size_in_bytes));
                 }
                 None
             })

@@ -14,12 +14,12 @@ use std::collections::HashSet;
 
 use warp::tui_export::{OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus};
 use warp_search_core::inline_menu::InlineMenuSelection;
+use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
     Modifier, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
     TuiHoverable, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiParentElement,
     TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
-use warpui_core::elements::MouseStateHandle;
 use warpui_core::{
     AppContext, BlurContext, Entity, EntityId, FocusContext, TuiView, TypedActionView, ViewContext,
     ViewHandle,

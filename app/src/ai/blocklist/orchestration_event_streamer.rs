@@ -16,15 +16,14 @@ use warpui::{
 
 use super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use super::orchestration_events::{
-    build_lifecycle_event, LifecycleEventDetailPayload, LifecycleEventDetailStage,
-    OrchestrationEventService, PendingEvent, PendingEventDetail,
+    LifecycleEventDetailPayload, LifecycleEventDetailStage, OrchestrationEventService,
+    PendingEvent, PendingEventDetail, build_lifecycle_event,
 };
 use crate::ai::agent::conversation::{AIAgentHarness, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentExchangeId, AIAgentOutputMessageType, ReceivedMessageInput};
 use crate::ai::agent_events::{
-    run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
-    AgentEventDriverConfig, AgentEventFilter, AgentMessageEventMetadata, MessageHydrator,
-    ServerApiAgentEventSource,
+    AgentEventConsumer, AgentEventConsumerControlFlow, AgentEventDriverConfig, AgentEventFilter,
+    AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource, run_agent_event_driver,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::retry_strategies::is_transient_http_error;
@@ -1484,7 +1483,9 @@ impl OrchestrationEventStreamer {
                         "Restore: get_agent_run failed for {conv_id:?}: {err:#}; will retry"
                     );
                 } else {
-                    log::warn!("Restore: get_agent_run hit permanent error for {conv_id:?}: {err:#}; retrying with slow backoff");
+                    log::warn!(
+                        "Restore: get_agent_run hit permanent error for {conv_id:?}: {err:#}; retrying with slow backoff"
+                    );
                 }
                 self.start_restore_fetch_retry_timer(conv_id, task_id, sqlite_cursor, &err, ctx);
             }
@@ -1867,15 +1868,15 @@ impl OrchestrationEventStreamer {
     }
 
     fn teardown_dormant_claude_wake_listener(&mut self, conversation_id: AIConversationId) {
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            if let Some(connection) = stream.wake_connection.take() {
-                log::info!(
-                    "Tearing down dormant Claude wake listener for {conversation_id:?} \
+        if let Some(stream) = self.streams.get_mut(&conversation_id)
+            && let Some(connection) = stream.wake_connection.take()
+        {
+            log::info!(
+                "Tearing down dormant Claude wake listener for {conversation_id:?} \
                      (gen={})",
-                    connection.generation
-                );
-                connection.task.abort();
-            }
+                connection.generation
+            );
+            connection.task.abort();
         }
     }
 
@@ -2119,10 +2120,10 @@ impl OrchestrationEventStreamer {
         // Drain buffered events before dropping the channel so we don't
         // discard already-fetched message bodies.
         self.drain_sse_events(conversation_id, ctx);
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            if let Some(connection) = stream.sse_connection.take() {
-                connection.abort_handle.abort();
-            }
+        if let Some(stream) = self.streams.get_mut(&conversation_id)
+            && let Some(connection) = stream.sse_connection.take()
+        {
+            connection.abort_handle.abort();
         }
 
         if self.is_eligible(conversation_id, ctx) {
@@ -2136,11 +2137,11 @@ impl OrchestrationEventStreamer {
     fn teardown_sse(&mut self, conversation_id: AIConversationId, ctx: &mut ModelContext<Self>) {
         // Drain anything buffered so we don't lose hydrated messages.
         self.drain_sse_events(conversation_id, ctx);
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            if let Some(connection) = stream.sse_connection.take() {
-                log::info!("Tearing down SSE for {conversation_id:?} (no longer eligible)");
-                connection.abort_handle.abort();
-            }
+        if let Some(stream) = self.streams.get_mut(&conversation_id)
+            && let Some(connection) = stream.sse_connection.take()
+        {
+            log::info!("Tearing down SSE for {conversation_id:?} (no longer eligible)");
+            connection.abort_handle.abort();
         }
     }
 }

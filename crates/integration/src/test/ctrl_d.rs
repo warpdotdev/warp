@@ -3,19 +3,19 @@
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::util::current_shell_starter_and_version;
 use warp::integration_testing::terminal::{
-    assert_active_block_command_for_single_terminal_in_tab, assert_bootstrapping_stage,
-    assert_no_block_executing, assert_terminal_bootstrapped, execute_python_interpreter_in_tab,
-    wait_until_bootstrapped_single_pane_for_tab, PYTHON_PROMPT_READY,
+    PYTHON_PROMPT_READY, assert_active_block_command_for_single_terminal_in_tab,
+    assert_bootstrapping_stage, assert_no_block_executing, assert_terminal_bootstrapped,
+    execute_python_interpreter_in_tab, wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::assert_no_views_of_type;
 use warp::pane_group::PaneGroup;
+use warp::terminal::TerminalView;
 use warp::terminal::model::bootstrap::BootstrapStage;
 use warp::terminal::shell::ShellType;
-use warp::terminal::TerminalView;
 use warp::workspace::Workspace;
 use warpui_core::integration::TestStep;
 
-use super::{new_builder, Builder};
+use super::{Builder, new_builder};
 use crate::util::write_all_rc_files_for_test;
 
 /// Verifies that ctrl-d correctly sends EOT to long-running commands.

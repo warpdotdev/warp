@@ -20,12 +20,12 @@ use super::grid::{Cursor, Dimensions as _, RespectDisplayedOutput};
 use super::index::{Point, VisibleRow};
 use super::selection::ScrollDelta;
 use super::{ObfuscateSecrets, RespectObfuscatedSecrets};
+use crate::terminal::SizeInfo;
 use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::SizeInfo;
 
 macro_rules! delegate {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         match $self.receiving_chars_for_prompt {
             Some(ansi::PromptKind::Initial) => {
                 let mut retval = None;
@@ -50,7 +50,7 @@ macro_rules! delegate {
 /// Any methods which write responses back to the shell process cannot have double delegation, since
 /// that would result in extra responses being sent back to the shell.
 macro_rules! delegate_with_writer {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         match $self.receiving_chars_for_prompt {
             Some(ansi::PromptKind::Initial) => {
                 if $self.honor_ps1 {
@@ -931,7 +931,9 @@ impl HeaderGrid {
 
 impl ansi::Handler for HeaderGrid {
     fn set_title(&mut self, _: Option<String>) {
-        report_error!("Handler method HeaderGrid::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method HeaderGrid::set_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
@@ -1158,11 +1160,15 @@ impl ansi::Handler for HeaderGrid {
     }
 
     fn push_title(&mut self) {
-        report_error!("Handler method HeaderGrid::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method HeaderGrid::push_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn pop_title(&mut self) {
-        report_error!("Handler method HeaderGrid::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method HeaderGrid::pop_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn prompt_marker(&mut self, marker: ansi::PromptMarker) {
@@ -1242,25 +1248,25 @@ impl ansi::Handler for HeaderGrid {
     }
 
     fn prompt_only_precmd(&mut self, data: PromptMetadata) {
-        if let Some(honor_ps1) = data.honor_ps1 {
-            if honor_ps1 != self.honor_ps1 {
-                log::debug!(
-                    "Honor PS1 value changed from {} to {}",
-                    self.honor_ps1,
-                    honor_ps1
-                );
-                // We send a terminal event which will result in bindkeys being issued to the shell session, to
-                // switch the prompt mode via the $WARP_HONOR_PS1 environment variable.
-                self.event_proxy
-                    .send_terminal_event(Event::HonorPS1OutOfSync);
+        if let Some(honor_ps1) = data.honor_ps1
+            && honor_ps1 != self.honor_ps1
+        {
+            log::debug!(
+                "Honor PS1 value changed from {} to {}",
+                self.honor_ps1,
+                honor_ps1
+            );
+            // We send a terminal event which will result in bindkeys being issued to the shell session, to
+            // switch the prompt mode via the $WARP_HONOR_PS1 environment variable.
+            self.event_proxy
+                .send_terminal_event(Event::HonorPS1OutOfSync);
 
-                // We synchronize the state of our `honor_ps1` setting with the value passed from the shell.
-                // Note that we ALWAYS want this to be synced properly since the shell determines the prompt
-                // to be emitted. This may be de-synced from Warp settings in particular niche cases (which are
-                // bugs), however, we still want consistent behavior for the prompt in the blocklist (we want to
-                // avoid double prompt or empty prompt issues).
-                self.honor_ps1 = honor_ps1;
-            }
+            // We synchronize the state of our `honor_ps1` setting with the value passed from the shell.
+            // Note that we ALWAYS want this to be synced properly since the shell determines the prompt
+            // to be emitted. This may be de-synced from Warp settings in particular niche cases (which are
+            // bugs), however, we still want consistent behavior for the prompt in the blocklist (we want to
+            // avoid double prompt or empty prompt issues).
+            self.honor_ps1 = honor_ps1;
         }
 
         if let Some(ps1) = data.ps1 {

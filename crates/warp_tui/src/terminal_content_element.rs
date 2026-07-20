@@ -20,20 +20,20 @@ use std::sync::Arc;
 use async_channel::Sender;
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    should_intercept_mouse, should_intercept_scroll, KeystrokeWithDetails, TermMode, TerminalModel,
-    ToEscapeSequence as _,
+    KeystrokeWithDetails, TermMode, TerminalModel, ToEscapeSequence as _, should_intercept_mouse,
+    should_intercept_scroll,
 };
+use warp_terminal::model::Point;
 use warp_terminal::model::escape_sequences::{
-    alt_screen_scroll_to_pty_bytes, ModeProvider, BRACKETED_PASTE_END, BRACKETED_PASTE_START,
+    BRACKETED_PASTE_END, BRACKETED_PASTE_START, ModeProvider, alt_screen_scroll_to_pty_bytes,
 };
 use warp_terminal::model::mouse::{MouseAction, MouseButton, MouseState};
-use warp_terminal::model::Point;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiPoint, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
     TuiScreenRect, TuiSize,
 };
-use warpui_core::AppContext;
 
 use crate::terminal_session_view::TuiTerminalSessionAction;
 /// Which terminal mouse reports the active process and user settings allow.

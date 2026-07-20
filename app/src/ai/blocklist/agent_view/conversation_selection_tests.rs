@@ -4,7 +4,7 @@ use parking_lot::FairMutex;
 use warpui::r#async::executor::Background;
 use warpui::{App, EntityId};
 
-use super::{classify_gui_list_entry, AgentViewConversationSelection};
+use super::{AgentViewConversationSelection, classify_gui_list_entry};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::{
     AgentConversationEntryId, AgentConversationListEntryState,
@@ -13,10 +13,10 @@ use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewEntryOrigin, EphemeralMessageModel,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryModel, ConversationSelection};
+use crate::terminal::TerminalModel;
 use crate::terminal::color::{self, Colors};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::test_utils::block_size;
-use crate::terminal::TerminalModel;
 use crate::test_util::settings::initialize_settings_for_tests;
 #[test]
 fn gui_list_policy_classifies_selected_entry() {

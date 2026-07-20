@@ -13,6 +13,7 @@ use warpui::{
 };
 
 use super::{AgentViewState, EphemeralMessageModel, EphemeralMessageModelEvent};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::{
     AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError,
@@ -20,15 +21,15 @@ use crate::ai::agent::{
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
 use crate::ai::blocklist::agent_view::zero_state_block::render_ambient_credits_banner;
 use crate::ai::blocklist::agent_view::{
-    is_in_cloud_context, AgentViewController, AgentViewControllerEvent,
+    AgentViewController, AgentViewControllerEvent, is_in_cloud_context,
 };
 use crate::ai::blocklist::{
-    ai_brand_color, BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
-    BlocklistAIInputEvent, BlocklistAIInputModel,
+    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
+    BlocklistAIInputEvent, BlocklistAIInputModel, ai_brand_color,
 };
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
-use crate::ai::mcp::templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::ai::mcp::templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent};
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
 };
@@ -53,10 +54,9 @@ use crate::terminal::model::TerminalModel;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;
 use crate::util::bindings::keybinding_name_to_keystroke;
-use crate::workspace::tab_settings::{TabSettings, TabSettingsChangedEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
-use crate::BlocklistAIHistoryModel;
+use crate::workspace::tab_settings::{TabSettings, TabSettingsChangedEvent};
 
 const FIGMA_ICON_SIZE: f32 = 14.;
 
@@ -216,14 +216,12 @@ impl AgentMessageBar {
             ctx.subscribe_to_model(
                 &TemplatableMCPServerManager::handle(ctx),
                 |_, model, event, ctx| {
-                    if let TemplatableMCPServerManagerEvent::StateChanged { uuid, .. } = event {
-                        if let Some(figma_mcp_uuid) =
+                    if let TemplatableMCPServerManagerEvent::StateChanged { uuid, .. } = event
+                        && let Some(figma_mcp_uuid) =
                             model.as_ref(ctx).get_figma_installation_uuid()
-                        {
-                            if uuid == &figma_mcp_uuid {
-                                ctx.notify();
-                            }
-                        }
+                        && uuid == &figma_mcp_uuid
+                    {
+                        ctx.notify();
                     }
                 },
             );
@@ -639,21 +637,21 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         let has_conversation_been_updated_since_agent_view_entry =
             *original_conversation_length != active_conversation.exchange_count();
 
-        if !is_cloud_agent && !has_conversation_been_updated_since_agent_view_entry {
-            if let Some(conversations_keystroke) =
+        if !is_cloud_agent
+            && !has_conversation_been_updated_since_agent_view_entry
+            && let Some(conversations_keystroke) =
                 keybinding_name_to_keystroke(commands::CONVERSATIONS.name, app)
-            {
-                items.push(MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(conversations_keystroke),
-                        MessageItem::text("open conversation"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(InputAction::ToggleConversationsMenu);
-                    },
-                    mouse_states.toggle_conversation_menu.clone(),
-                ));
-            }
+        {
+            items.push(MessageItem::clickable(
+                vec![
+                    MessageItem::keystroke(conversations_keystroke),
+                    MessageItem::text("open conversation"),
+                ],
+                |ctx| {
+                    ctx.dispatch_typed_action(InputAction::ToggleConversationsMenu);
+                },
+                mouse_states.toggle_conversation_menu.clone(),
+            ));
         }
 
         // Code review only works locally.

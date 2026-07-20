@@ -25,15 +25,15 @@ use warpui::{
 };
 
 use super::command_parser::{
-    compute_workflow_display_data, WorkflowArgumentIndex, WorkflowDisplayData,
+    WorkflowArgumentIndex, WorkflowDisplayData, compute_workflow_display_data,
 };
 use super::workflow::Argument;
 use super::workflow_view::env_var_selector::{EnvVarSelector, EnvVarSelectorEvent};
 use super::{AIWorkflowOrigin, CloudWorkflow};
 use crate::ai::blocklist::ai_brand_color;
 use crate::appearance::Appearance;
-use crate::cloud_object::model::actions::{ObjectActionType, ObjectActions};
 use crate::cloud_object::CloudObjectMetadataExt;
+use crate::cloud_object::model::actions::{ObjectActionType, ObjectActions};
 use crate::server::ids::SyncId;
 use crate::settings::InputModeSettings;
 use crate::terminal::block_list_viewport::InputMode;
@@ -658,14 +658,14 @@ impl WorkflowsMoreInfoView {
             appearance,
         )];
 
-        if let Some(workflow_source) = workflow.source_url() {
-            if !workflow_source.is_empty() {
-                title_line.push(WorkflowsMoreInfoView::render_workflow_source(
-                    self,
-                    workflow_source.to_string(),
-                    appearance,
-                ));
-            }
+        if let Some(workflow_source) = workflow.source_url()
+            && !workflow_source.is_empty()
+        {
+            title_line.push(WorkflowsMoreInfoView::render_workflow_source(
+                self,
+                workflow_source.to_string(),
+                appearance,
+            ));
         }
 
         let collapse_button = self.render_collapse_button(appearance);
@@ -772,12 +772,11 @@ impl WorkflowsMoreInfoView {
 
         let mut children = vec![workflow_container];
 
-        if self.workflow.should_show_env_var_selection() {
-            if let Some(environment_variables_selection) =
+        if self.workflow.should_show_env_var_selection()
+            && let Some(environment_variables_selection) =
                 self.render_environment_variables_selection(appearance, app)
-            {
-                children.push(Clipped::new(environment_variables_selection).finish());
-            }
+        {
+            children.push(Clipped::new(environment_variables_selection).finish());
         }
 
         if !self.show_shift_tab_treatment {

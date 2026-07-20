@@ -137,15 +137,14 @@ impl RecordingController {
     /// originating conversation.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn record_action(&mut self, conversation_id: AIConversationId, labels: Vec<String>) {
-        if !labels.is_empty() {
-            if let RecordingState::Active(recording) = &mut self.state {
-                if recording.conversation_id == conversation_id {
-                    recording.actions.push(computer_use::ActionLogEntry {
-                        offset: recording.started_at.elapsed(),
-                        labels,
-                    });
-                }
-            }
+        if !labels.is_empty()
+            && let RecordingState::Active(recording) = &mut self.state
+            && recording.conversation_id == conversation_id
+        {
+            recording.actions.push(computer_use::ActionLogEntry {
+                offset: recording.started_at.elapsed(),
+                labels,
+            });
         }
     }
 

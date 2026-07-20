@@ -5,8 +5,8 @@
 //! defers creating the first terminal session until login.
 
 use anyhow::{Context, Result};
-use clap::error::ErrorKind;
 use clap::Parser;
+use clap::error::ErrorKind;
 use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::telemetry::TelemetryEvent as _;
@@ -25,7 +25,7 @@ use crate::terminal_background::probe_and_select_theme;
 use crate::terminal_session_view::{TuiConversationRestoreOrigin, TuiConversationRestoreTarget};
 
 #[derive(Parser)]
-#[command(name = "warp-tui")]
+#[command(name = "warp")]
 struct TuiArgs {
     /// Resume an Oz/Warp conversation by server token.
     #[arg(long)]
@@ -71,11 +71,12 @@ pub fn run() -> Result<()> {
         args.api_key,
         Box::new(move |ctx| init(resume_token, exit_summary_for_app, ctx)),
     );
-    if result.is_ok() {
-        if let Some(token) = exit_summary.token() {
-            let token = token.as_str();
-            println!("To continue this conversation, run: warp-tui --resume {token}");
-        }
+    if result.is_ok()
+        && let Some(token) = exit_summary.token()
+    {
+        let token = token.as_str();
+        println!("To continue this conversation, run:");
+        println!("warp --resume {token}");
     }
     result
 }

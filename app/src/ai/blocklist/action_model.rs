@@ -24,21 +24,21 @@ use std::sync::Arc;
 
 use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use chrono::Local;
+pub use execute::{
+    AskUserQuestionExecutor, EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent,
+    EditResolvedEvent, EditStats, NewConversationDecision, PromptSuggestionExecutor,
+    ReadFileContextResult, RequestFileEditsExecutor, RequestFileEditsFormatKind,
+    RequestFileEditsTelemetryEvent, RunAgentsExecutor, RunAgentsExecutorEvent,
+    RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest, StartAgentRequestId,
+    read_local_file_context,
+};
 pub(crate) use execute::{
-    apply_edits, coerce_integer_args, FileReadResult, MalformedFinalLineProxyEvent,
+    FileReadResult, MalformedFinalLineProxyEvent, apply_edits, coerce_integer_args,
 };
 #[cfg(test)]
 pub(crate) use execute::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
-pub use execute::{
-    read_local_file_context, AskUserQuestionExecutor, EditAcceptAndContinueClickedEvent,
-    EditAcceptClickedEvent, EditResolvedEvent, EditStats, NewConversationDecision,
-    PromptSuggestionExecutor, ReadFileContextResult, RequestFileEditsExecutor,
-    RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent, RunAgentsExecutor,
-    RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
-    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
-    StartAgentRequest, StartAgentRequestId,
-};
-use futures::future::{join_all, BoxFuture};
+use futures::future::{BoxFuture, join_all};
 use itertools::Itertools;
 use parking_lot::FairMutex;
 use preprocess::{PendingPreprocessedActions, PreprocessId};
@@ -50,7 +50,7 @@ use self::execute::{
     RunningActionPhase, TryExecuteResult,
 };
 #[cfg(not(target_family = "wasm"))]
-use self::recording_finalize::{finalize_recording_for_conversation, FinalizeReason};
+use self::recording_finalize::{FinalizeReason, finalize_recording_for_conversation};
 use super::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{
@@ -62,10 +62,10 @@ use crate::ai::agent::{
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+use crate::terminal::TerminalModel;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::ModelEventDispatcher;
-use crate::terminal::TerminalModel;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 /// The status of an action from an AI output.
 #[derive(Clone, Debug)]
@@ -478,15 +478,15 @@ impl BlocklistAIActionModel {
                 return;
             };
 
-            if let Some(current_phase) = self.action_execution_phase(conversation_id) {
-                if !self.can_start_action_in_current_phase(
+            if let Some(current_phase) = self.action_execution_phase(conversation_id)
+                && !self.can_start_action_in_current_phase(
                     &front_action,
                     conversation_id,
                     current_phase,
                     ctx,
-                ) {
-                    return;
-                }
+                )
+            {
+                return;
             }
 
             let Some(result) =
@@ -507,12 +507,11 @@ impl BlocklistAIActionModel {
     }
 
     fn sort_finished_results(&mut self, conversation_id: AIConversationId) {
-        if let Some(action_order) = self.action_order.get(&conversation_id) {
-            if let Some(finished_results) = self.finished_action_results.get_mut(&conversation_id) {
-                finished_results.sort_by_key(|result| {
-                    action_order.get(&result.id).copied().unwrap_or(usize::MAX)
-                });
-            }
+        if let Some(action_order) = self.action_order.get(&conversation_id)
+            && let Some(finished_results) = self.finished_action_results.get_mut(&conversation_id)
+        {
+            finished_results
+                .sort_by_key(|result| action_order.get(&result.id).copied().unwrap_or(usize::MAX));
         }
     }
 
@@ -528,7 +527,7 @@ impl BlocklistAIActionModel {
     pub fn get_pending_actions_for_conversation(
         &self,
         conversation_id: &AIConversationId,
-    ) -> impl Iterator<Item = &AIAgentAction> {
+    ) -> impl Iterator<Item = &AIAgentAction> + use<'_> {
         self.pending_actions
             .get(conversation_id)
             .into_iter()
@@ -1015,10 +1014,10 @@ impl BlocklistAIActionModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let action_id = action_result.id.clone();
-        if let Some(queue) = self.pending_actions.get_mut(&conversation_id) {
-            if let Some(idx) = queue.iter().position(|a| a.id == action_id) {
-                queue.remove(idx);
-            }
+        if let Some(queue) = self.pending_actions.get_mut(&conversation_id)
+            && let Some(idx) = queue.iter().position(|a| a.id == action_id)
+        {
+            queue.remove(idx);
         }
 
         // For shared session viewers, take in any document action results
@@ -1059,10 +1058,9 @@ impl BlocklistAIActionModel {
             if let Some((idx, _)) = pending_actions_for_conversation
                 .iter()
                 .find_position(|action| action.id == *action_id)
+                && let Some(action) = pending_actions_for_conversation.remove(idx)
             {
-                if let Some(action) = pending_actions_for_conversation.remove(idx) {
-                    self.cancel_pending_action(conversation_id, action, Some(reason), ctx);
-                }
+                self.cancel_pending_action(conversation_id, action, Some(reason), ctx);
             }
         }
     }
@@ -1249,16 +1247,14 @@ impl BlocklistAIActionModel {
             if let Some(action) = pending_actions_for_conversation
                 .iter_mut()
                 .find(|action| action.id == *action_id)
-            {
-                if let AIAgentActionType::RequestCommandOutput {
+                && let AIAgentActionType::RequestCommandOutput {
                     command: original_command,
                     ..
                 } = &mut action.action
-                {
-                    *original_command = command;
-                    found_conversation_id = Some(*conversation_id);
-                    break;
-                }
+            {
+                *original_command = command;
+                found_conversation_id = Some(*conversation_id);
+                break;
             }
         }
 

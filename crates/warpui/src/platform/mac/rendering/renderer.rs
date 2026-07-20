@@ -5,7 +5,7 @@ use objc2_metal::MTLDevice;
 use warpui_core::rendering::{
     GPUBackend, GPUDeviceInfo, GPUDeviceType, GPUPowerPreference, OnGPUDeviceSelected,
 };
-use warpui_core::{fonts, Scene};
+use warpui_core::{Scene, fonts};
 
 use crate::platform::mac::rendering::is_integrated_gpu;
 use crate::platform::mac::window::WindowState;

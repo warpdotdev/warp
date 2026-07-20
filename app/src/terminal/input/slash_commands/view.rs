@@ -9,8 +9,8 @@ use crate::terminal::input::buffer_model::InputBufferModel;
 use crate::terminal::input::inline_menu::{InlineMenuEvent, InlineMenuPositioner, InlineMenuView};
 use crate::terminal::input::slash_command_model::{SlashCommandEntryState, SlashCommandModel};
 use crate::terminal::input::slash_commands::{
-    build_slash_command_mixer, slash_command_query, AcceptSlashCommandOrSavedPrompt,
-    GuiSlashCommandDataSource, GuiZeroStateDataSource, SlashCommandMixer, UpdatedActiveCommands,
+    AcceptSlashCommandOrSavedPrompt, GuiSlashCommandDataSource, GuiZeroStateDataSource,
+    SlashCommandMixer, UpdatedActiveCommands, build_slash_command_mixer, slash_command_query,
 };
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,

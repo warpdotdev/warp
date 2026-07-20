@@ -10,13 +10,13 @@ use markdown_parser::{
     FormattedTextLine, Hyperlink,
 };
 use unicode_width::UnicodeWidthStr;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     Modifier, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiParentElement, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
     TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::elements::{CrossAxisAlignment, ListNumbering};
-use warpui_core::AppContext;
 
 use crate::tui_builder::TuiUiBuilder;
 mod table;
@@ -220,10 +220,10 @@ fn finish_link(
     link: Option<(String, String)>,
     style: TuiStyle,
 ) {
-    if let Some((url, display)) = link {
-        if url != display {
-            push_span(spans, format!(" ({url})"), style);
-        }
+    if let Some((url, display)) = link
+        && url != display
+    {
+        push_span(spans, format!(" ({url})"), style);
     }
 }
 
@@ -262,11 +262,11 @@ fn push_span(spans: &mut Vec<(String, TuiStyle)>, text: String, style: TuiStyle)
     if text.is_empty() {
         return;
     }
-    if let Some((previous, previous_style)) = spans.last_mut() {
-        if *previous_style == style {
-            previous.push_str(&text);
-            return;
-        }
+    if let Some((previous, previous_style)) = spans.last_mut()
+        && *previous_style == style
+    {
+        previous.push_str(&text);
+        return;
     }
     spans.push((text, style));
 }

@@ -18,9 +18,9 @@ use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientPr
 use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, AskUserQuestionPermission, WriteToPtyPermission,
 };
-use crate::ai::mcp::mcp_provider_from_file_path;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::ai::mcp::mcp_provider_from_file_path;
 use crate::settings::{
     AISettings, AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate,
 };
@@ -152,8 +152,10 @@ impl BlocklistAIPermissions {
                 .private_user_preferences()
                 .remove_value("AgentModeAutoReadFiles")
             {
-                report_error!(anyhow::Error::new(e)
-                    .context("Failed to remove old AgentModeAutoReadFiles user pref"));
+                report_error!(
+                    anyhow::Error::new(e)
+                        .context("Failed to remove old AgentModeAutoReadFiles user pref")
+                );
             }
             if can_read_files {
                 report_if_error!(AISettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -693,16 +695,15 @@ impl BlocklistAIPermissions {
         // Check if we've already been given permission to read these files in this conversation.
         if let Some(temp_permissions) =
             conversation_id.and_then(|id| self.temporary_file_permissions.get(id))
-        {
-            if paths.iter().all(|path| {
+            && paths.iter().all(|path| {
                 temp_permissions
                     .iter()
                     .any(|allowed| path.starts_with(allowed))
-            }) {
-                return FileReadPermission::Allowed(
-                    FileReadPermissionAllowedReason::AlreadyReadInConvo,
-                );
-            }
+            })
+        {
+            return FileReadPermission::Allowed(
+                FileReadPermissionAllowedReason::AlreadyReadInConvo,
+            );
         }
 
         match self.get_read_files_setting(ctx, terminal_view_id) {

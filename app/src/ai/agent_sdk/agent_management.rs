@@ -6,20 +6,20 @@ use std::io::Write as _;
 use anyhow::anyhow;
 use comfy_table::Cell;
 use serde::Serialize;
+use warp_cli::SortOrderArg;
 use warp_cli::agent::{
     AgentCreateArgs, AgentDeleteArgs, AgentGetArgs, AgentListArgs, AgentSortByArg, AgentUpdateArgs,
     OutputFormat,
 };
 use warp_cli::json_filter::JsonOutput;
-use warp_cli::SortOrderArg;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::output::TableFormat;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
     AgentResponse, CreateAgentRequest, SecretRef, UpdateAgentRequest,
 };
-use crate::server::server_api::ServerApiProvider;
 
 /// Singleton model that runs async work for named-agent CLI commands.
 struct AgentManagementRunner;

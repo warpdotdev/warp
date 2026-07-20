@@ -3,6 +3,7 @@ use warp_core::features::FeatureFlag;
 use warp_graphql::object_permissions::AccessLevel;
 use warpui::{App, SingletonEntity};
 
+use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
@@ -23,7 +24,6 @@ use crate::settings::PrivacySettings;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::LaunchMode;
 
 fn mock_server_metadata(uid: ServerId) -> ServerMetadata {
     ServerMetadata {

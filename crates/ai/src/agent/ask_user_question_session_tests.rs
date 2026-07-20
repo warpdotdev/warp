@@ -153,7 +153,9 @@ fn submitting_single_select_option_toggles_it_and_schedules_auto_advance() {
         }),
         AskUserQuestionEffect::ScheduleAutoAdvance
     );
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1))
+    );
 }
 
 #[test]
@@ -170,7 +172,9 @@ fn submitting_non_last_multi_select_option_toggles_it_and_schedules_auto_advance
         }),
         AskUserQuestionEffect::ScheduleAutoAdvance
     );
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1))
+    );
 }
 
 #[test]
@@ -207,7 +211,9 @@ fn single_select_non_last_toggle_schedules_auto_advance() {
 
     assert_eq!(effect, AskUserQuestionEffect::ScheduleAutoAdvance);
     assert_eq!(session.current_question_index(), 0);
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1))
+    );
     assert!(matches!(session.phase(), AskUserQuestionPhase::Editing));
 }
 
@@ -222,7 +228,9 @@ fn multi_select_non_last_toggle_does_not_auto_advance() {
 
     assert_eq!(effect, AskUserQuestionEffect::RefreshCurrent);
     assert_eq!(session.current_question_index(), 0);
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1))
+    );
     assert!(matches!(session.phase(), AskUserQuestionPhase::Editing));
 }
 
@@ -240,7 +248,9 @@ fn last_multi_select_toggle_schedules_auto_advance() {
 
     assert_eq!(effect, AskUserQuestionEffect::ScheduleAutoAdvance);
     assert_eq!(session.current_question_index(), 0);
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&0)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&0))
+    );
 }
 
 #[test]
@@ -443,5 +453,7 @@ fn navigating_next_on_last_question_is_a_noop() {
         AskUserQuestionEffect::Noop
     );
     assert!(matches!(session.phase(), AskUserQuestionPhase::Editing));
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&0)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&0))
+    );
 }

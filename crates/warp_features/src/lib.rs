@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use enum_iterator::{cardinality, Sequence};
+use enum_iterator::{Sequence, cardinality};
 #[cfg(feature = "test-util")]
 pub use overrides::{get_overrides, set_overrides};
 
@@ -910,9 +910,11 @@ pub enum FeatureFlag {
     /// eliminating seams between adjacent box-drawing cells in the terminal.
     BoxDrawingGlyphs,
 
-    /// Enables the `oz runner` CRUD commands for managing cloud agent runners
-    /// via the CLI.
-    CloudAgentRunnerCLICommands,
+    /// Enables cloud agent runner selection: the `oz runner` CRUD commands
+    /// for managing runners via the CLI, and the Runner dropdown in the
+    /// orchestration (`run_agents`) confirmation card and plan-card config
+    /// block for choosing a runner when starting remote child agents.
+    CloudAgentRunners,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -985,12 +987,10 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BackgroundComputerUse,
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::JupyterNotebookRendering,
-    FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::GeminiEnterprise,
     FeatureFlag::BoxDrawingGlyphs,
-    FeatureFlag::CloudAgentRunnerCLICommands,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

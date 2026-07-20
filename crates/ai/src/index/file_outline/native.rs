@@ -8,8 +8,8 @@ use futures::channel::oneshot;
 use ignore::gitignore::Gitignore;
 use itertools::Itertools;
 use rayon::prelude::*;
-use repo_metadata::entry::{is_file_parsable, BudgetExceededBehavior, IgnoredPathStrategy};
 use repo_metadata::RepositoryUpdate;
+use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy, is_file_parsable};
 use streaming_iterator::StreamingIterator;
 use syntax_tree::TextSlice;
 use warp_errors::report_error;
@@ -82,8 +82,10 @@ pub async fn build_outline(
         });
 
         if let Err(e) = sender.send(result) {
-            report_error!(anyhow::anyhow!("{e:?}")
-                .context("Could not send result of outline generation to background thread"))
+            report_error!(
+                anyhow::anyhow!("{e:?}")
+                    .context("Could not send result of outline generation to background thread")
+            )
         }
     });
 

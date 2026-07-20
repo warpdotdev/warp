@@ -4,9 +4,9 @@ use warpui::{AppContext, Entity, EntityId, SingletonEntity};
 
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::search::SyncDataSource;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
-use crate::search::SyncDataSource;
 use crate::terminal::input::inline_menu::{InlineMenuAction, InlineMenuType};
 use crate::terminal::input::profiles::search_item::ProfileSearchItem;
 

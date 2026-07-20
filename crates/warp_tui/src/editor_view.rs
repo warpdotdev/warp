@@ -7,8 +7,8 @@
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
-use warpui_core::elements::tui::{TuiElement, TuiHoverable};
 use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{TuiElement, TuiHoverable};
 use warpui_core::{
     AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
     ViewContext,
@@ -16,8 +16,8 @@ use warpui_core::{
 
 use crate::editor_element::{TuiEditorAction, TuiEditorElement};
 use crate::editor_interaction::{
-    apply_editor_action, follow_editor_cursor, TuiEditorBehavior, TuiEditorCommand,
-    TuiEditorInteractionOutcome, TuiEditorState,
+    TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
+    apply_editor_action, follow_editor_cursor,
 };
 
 /// Events emitted when the editor content changes.

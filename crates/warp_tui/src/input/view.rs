@@ -22,6 +22,7 @@
 //! See `specs/tui-input-view/TECH.md` for the full keybinding table.
 
 use std::ops::Range;
+use std::rc::Rc;
 
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
@@ -30,8 +31,8 @@ use warp::tui_export::{
     InputTypeAutoDetectionSource, LLMId, TuiMcpAction,
 };
 use warp_editor::model::CoreEditorModel;
-use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding};
 use warpui_core::{
@@ -41,10 +42,10 @@ use warpui_core::{
 
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::editor_interaction::{
-    apply_editor_action, follow_editor_cursor, TuiEditorBehavior, TuiEditorCommand,
-    TuiEditorInteractionOutcome, TuiEditorState,
+    TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
+    apply_editor_action, follow_editor_cursor,
 };
-use crate::inline_menu::{active_inline_menu, TuiInlineMenu, TuiInlineMenuAccepted};
+use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted, active_inline_menu};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{
@@ -107,6 +108,10 @@ pub fn init(app: &mut AppContext) {
 pub enum TuiInputViewEvent {
     /// The user pressed Enter to submit the current input. Contains the final text.
     Submitted(String),
+    /// The terminal delivered one complete bracketed-paste payload.
+    Pasted(String),
+    /// Backspace was pressed with an empty normal input.
+    BackspaceAtEmptyInput,
     /// The user selected a slash command menu item.
     AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
     /// The user selected a conversation menu item.
@@ -115,6 +120,8 @@ pub enum TuiInputViewEvent {
     AcceptedModel(LLMId),
     /// The user selected an action from the MCP menu.
     AcceptedMcp(TuiMcpAction),
+    /// Shift+Up should move focus from the first visual row to the region above.
+    MoveFocusUp,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -170,6 +177,10 @@ pub struct TuiInputView {
     /// construction always provides this; isolated input tests omit it.
     transcript: Option<ViewHandle<TuiTranscriptView>>,
     keyboard_enhancement_supported: bool,
+    /// Consults the owner live before Shift+Up leaves the first visual row.
+    can_move_focus_up: Rc<dyn Fn(&AppContext) -> bool>,
+    /// Consults the owner live before an inline-menu Enter can accept an item.
+    can_accept_inline_menu: Rc<dyn Fn(&AppContext) -> bool>,
 }
 
 impl Entity for TuiInputView {
@@ -196,6 +207,7 @@ impl TuiInputView {
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
         transcript: ViewHandle<TuiTranscriptView>,
+        can_move_focus_up: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         Self::new_internal(
@@ -204,6 +216,7 @@ impl TuiInputView {
             suggestions_mode,
             inline_menus,
             Some(transcript),
+            can_move_focus_up,
             ctx,
         )
     }
@@ -214,9 +227,18 @@ impl TuiInputView {
         input_mode: ModelHandle<BlocklistAIInputModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
+        can_move_focus_up: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        Self::new_internal(model, input_mode, suggestions_mode, inline_menus, None, ctx)
+        Self::new_internal(
+            model,
+            input_mode,
+            suggestions_mode,
+            inline_menus,
+            None,
+            can_move_focus_up,
+            ctx,
+        )
     }
 
     fn new_internal(
@@ -225,6 +247,7 @@ impl TuiInputView {
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
         transcript: Option<ViewHandle<TuiTranscriptView>>,
+        can_move_focus_up: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
@@ -247,7 +270,17 @@ impl TuiInputView {
             focused: false,
             transcript,
             keyboard_enhancement_supported: false,
+            can_move_focus_up: Rc::new(can_move_focus_up),
+            can_accept_inline_menu: Rc::new(|_| true),
         }
+    }
+
+    pub(crate) fn with_inline_menu_actions_allowed(
+        mut self,
+        can_accept_inline_menu: impl Fn(&AppContext) -> bool + 'static,
+    ) -> Self {
+        self.can_accept_inline_menu = Rc::new(can_accept_inline_menu);
+        self
     }
 
     pub(crate) fn with_keyboard_enhancement_supported(
@@ -351,6 +384,19 @@ impl TuiInputView {
         ctx.notify();
     }
 
+    /// Inserts a paste payload after the parent declines to consume it as
+    /// structured input.
+    pub(crate) fn insert_pasted_text(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        apply_editor_action(
+            &self.model,
+            &TuiEditorAction::PasteText(text.to_owned()),
+            self.editor_behavior,
+            ctx,
+        );
+        self.follow_cursor(ctx);
+        ctx.notify();
+    }
+
     /// Composes the shell-mode input row: the accent-styled `!` affordance in a
     /// two-column gutter (glyph plus one column of right padding), then the
     /// editor filling the remaining width. The gutter is outside the editable
@@ -438,6 +484,10 @@ impl TypedActionView for TuiInputView {
         }
         let outcome = match action {
             TuiInputAction::Editor(editor_action) => {
+                if let TuiEditorAction::PasteText(text) = editor_action {
+                    ctx.emit(TuiInputViewEvent::Pasted(text.clone()));
+                    return;
+                }
                 // A `!` typed at the very start of the input enters shell mode
                 // instead of inserting (matching the GUI's typed-only trigger).
                 if matches!(editor_action, TuiEditorAction::InsertChar('!'))
@@ -463,6 +513,10 @@ impl TypedActionView for TuiInputView {
                 TuiEditorInteractionOutcome::FollowCursor
             }
             TuiInputAction::EditorCommand(command) => {
+                if matches!(*command, TuiEditorCommand::SelectUp) && self.can_focus_above(ctx) {
+                    ctx.emit(TuiInputViewEvent::MoveFocusUp);
+                    return;
+                }
                 // Only open the conversation list from normal agent input; in
                 // `!` shell mode the `!` prefix is not part of `plain_text`, so
                 // an empty shell command would otherwise trip this branch and
@@ -487,6 +541,12 @@ impl TypedActionView for TuiInputView {
                     && self.is_cursor_at_start(ctx)
                 {
                     self.exit_shell_mode(ctx);
+                    TuiEditorInteractionOutcome::FollowCursor
+                } else if matches!(*command, TuiEditorCommand::Backspace)
+                    && self.plain_text(ctx).is_empty()
+                    && self.is_cursor_at_start(ctx)
+                {
+                    ctx.emit(TuiInputViewEvent::BackspaceAtEmptyInput);
                     TuiEditorInteractionOutcome::FollowCursor
                 } else {
                     self.editor_state.apply_command(
@@ -560,6 +620,26 @@ impl TuiInputView {
     /// selection (the position where `!` toggles shell mode).
     fn is_cursor_at_start(&self, ctx: &AppContext) -> bool {
         self.cursor_offset(ctx).as_usize() <= 1 && self.selection_range(ctx).is_none()
+    }
+
+    /// Whether Shift+Up should leave the input instead of extending selection.
+    fn can_focus_above(&self, ctx: &AppContext) -> bool {
+        if !(self.can_move_focus_up)(ctx) || self.selection_range(ctx).is_some() {
+            return false;
+        }
+
+        let model = self.model.as_ref(ctx);
+        let render = model.render_state().as_ref(ctx);
+        let Some(char_cell) = render.char_cell() else {
+            return false;
+        };
+
+        let cursor_offset = CharOffset::from(self.cursor_offset(ctx).as_usize().saturating_sub(1));
+        let hidden = char_cell.hidden_line_ranges(ctx);
+        char_cell
+            .display_lattice(&hidden)
+            .offset_to_display_point(cursor_offset)
+            .is_some_and(|point| point.row == 0)
     }
 
     // ── Scroll ─────────────────────────────────────────────────────────────
@@ -639,6 +719,13 @@ impl TuiInputView {
         let Some(inline_menu) = self.active_inline_menu(ctx) else {
             return false;
         };
+        if matches!(action, TuiInputAction::Submit) && !(self.can_accept_inline_menu)(ctx) {
+            // The session can render a disabled editor while the shell is still
+            // bootstrapping. Consume Enter without accepting a hidden menu item;
+            // otherwise the accepted-menu event bypasses the session's normal
+            // submission guard and can execute or clear the draft.
+            return true;
+        }
 
         match action {
             TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp) => {

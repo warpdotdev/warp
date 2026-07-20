@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use ::http::header::CONTENT_LENGTH;
 use ai::AIClient;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use auth::AuthClient;
 use block::BlockClient;
 use channel_versions::ChannelVersions;
@@ -38,7 +38,7 @@ use team::TeamClient;
 use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent;
-use warp_errors::{register_error, report_error, AnyhowErrorExt, ErrorExt};
+use warp_errors::{AnyhowErrorExt, ErrorExt, register_error, report_error};
 use warp_managed_secrets::client::ManagedSecretsClient;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
@@ -62,7 +62,7 @@ use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::{settings_view, ChannelState};
+use crate::{ChannelState, settings_view};
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
@@ -683,12 +683,11 @@ impl ServerApi {
         let response_text = response.text().await.unwrap_or_default();
 
         // Check for AT_CAPACITY error code header.
-        if is_at_capacity {
-            if let Ok(capacity_error) =
+        if is_at_capacity
+            && let Ok(capacity_error) =
                 serde_json::from_str::<CloudAgentCapacityError>(&response_text)
-            {
-                return capacity_error.into();
-            }
+        {
+            return capacity_error.into();
         }
         if status == StatusCode::TOO_MANY_REQUESTS && is_out_of_credits {
             let user_display_message = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
@@ -868,8 +867,10 @@ impl ServerApi {
 
                 let response = request.send().await;
                 if let Err(err) = response {
-                    report_error!(anyhow::Error::new(err)
-                        .context("Failed to send POST request to /client/login"));
+                    report_error!(
+                        anyhow::Error::new(err)
+                            .context("Failed to send POST request to /client/login")
+                    );
                 }
             }
             Err(err) => {
@@ -1344,7 +1345,6 @@ impl ServerApiProvider {
         self.server_api.clone()
     }
 
-    #[cfg_attr(target_family = "wasm", expect(dead_code))]
     pub fn get_factory_client(&self) -> Arc<dyn FactoryClient> {
         self.server_api.clone()
     }

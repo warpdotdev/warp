@@ -6,7 +6,10 @@ use warp::tui_export::{
 };
 use warp_core::command::ExitCode;
 
-use super::{tool_call_label, CommandBlockState, ResolvedCommandBlock};
+use super::{
+    CommandBlockState, ResolvedCommandBlock, ToolCallDisplayState, tool_call_display_state,
+    tool_call_label,
+};
 
 /// Builds a `Finished` status wrapping the given result.
 fn finished(result: AIAgentActionResultType) -> AIActionStatus {
@@ -41,6 +44,26 @@ fn command_action(command: &str) -> AIAgentAction {
         },
         requires_result: true,
     }
+}
+
+#[test]
+fn tool_call_statuses_map_to_tool_call_display_states() {
+    assert_eq!(
+        tool_call_display_state(None, true, None),
+        ToolCallDisplayState::Constructing
+    );
+    assert_eq!(
+        tool_call_display_state(None, false, None),
+        ToolCallDisplayState::Pending
+    );
+    assert_eq!(
+        tool_call_display_state(Some(&AIActionStatus::Blocked), false, None),
+        ToolCallDisplayState::Blocked
+    );
+    assert_eq!(
+        tool_call_display_state(Some(&AIActionStatus::RunningAsync), false, None),
+        ToolCallDisplayState::Running
+    );
 }
 
 /// One end-to-end pass over a tool call's lifecycle: the label text must
