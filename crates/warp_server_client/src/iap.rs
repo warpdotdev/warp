@@ -778,7 +778,8 @@ mod cache {
     const CACHE_SKEW: Duration = Duration::from_secs(30);
 
     fn cache_path() -> std::path::PathBuf {
-        warp_core::paths::state_dir()
+        warp_core::paths::warp_home_config_dir()
+            .unwrap_or_else(warp_core::paths::state_dir)
             .join("staging")
             .join("iap_cache.jwt")
     }
