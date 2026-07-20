@@ -110,21 +110,49 @@ fn command_editing_saves_text_without_executing() {
         let action = command_action("action-1", "echo original");
         let view = add_shell_view(
             &mut app,
-            action,
+            action.clone(),
             Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
         );
+        let (action_model, conversation_id, prompt) = app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            (
+                view.action_model.clone(),
+                view.conversation_id,
+                view.permission_prompt.clone(),
+            )
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, conversation_id, ctx);
+        });
 
+        prompt.update(&mut app, |prompt, ctx| {
+            prompt.handle_action(
+                &crate::tui_permission_prompt::TuiPermissionPromptAction::MoveUp,
+                ctx,
+            );
+        });
+        app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            assert!(view.command_editor.as_ref(ctx).is_focused());
+            assert_eq!(
+                view.permission_prompt.as_ref(ctx).highlighted_index(ctx),
+                None
+            );
+        });
         view.update(&mut app, |view, ctx| {
-            view.begin_command_edit(ctx);
             view.command_editor.update(ctx, |editor, ctx| {
-                editor.set_text("echo edited\necho second", ctx);
+                editor.set_text("echo edited\necho second", ctx)
             });
-            view.save_command_edit(ctx);
+            view.handle_action(&TuiShellCommandViewAction::SaveCommandEdit, ctx);
         });
 
         app.read(|ctx| {
             let view = view.as_ref(ctx);
-            assert!(!view.editing_command);
+            assert!(!view.command_editor.as_ref(ctx).is_focused());
+            assert_eq!(
+                view.permission_prompt.as_ref(ctx).highlighted_index(ctx),
+                Some(0)
+            );
             assert_eq!(
                 view.command_editor.as_ref(ctx).text(ctx),
                 "echo edited\necho second"

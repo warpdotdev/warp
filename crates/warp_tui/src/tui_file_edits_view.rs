@@ -216,7 +216,7 @@ impl TuiFileEditsView {
         let prompt_action_id = action_id.clone();
         let prompt_action_model = action_model.clone();
         let permission_prompt = ctx.add_typed_action_tui_view(move |ctx| {
-            TuiPermissionPrompt::new(prompt_action_model, prompt_action_id, false, ctx)
+            TuiPermissionPrompt::new(prompt_action_model, prompt_action_id, None, ctx)
         });
         ctx.subscribe_to_view(&permission_prompt, |view, _, event, ctx| match event {
             TuiPermissionPromptEvent::AcceptRequested => view.accept(ctx),
@@ -231,7 +231,6 @@ impl TuiFileEditsView {
                 view.invalidate_layout(ctx);
             }
             TuiPermissionPromptEvent::LayoutChanged => view.invalidate_layout(ctx),
-            TuiPermissionPromptEvent::EditBodyRequested => {}
         });
 
         Self {
@@ -605,7 +604,7 @@ impl TuiView for TuiFileEditsView {
         render_permission_card(
             &self.permission_prompt,
             "Is it OK if I make these file edits?",
-            content,
+            Some(content),
             app,
         )
     }

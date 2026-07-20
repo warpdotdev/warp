@@ -17,9 +17,7 @@ use warp::tui_export::{
 };
 use warpui_core::r#async::Timer;
 use warpui_core::elements::MouseStateHandle;
-use warpui_core::elements::tui::{
-    Modifier, TuiChildView, TuiElement, TuiFlex, TuiParentElement, TuiText, tui_collapsible,
-};
+use warpui_core::elements::tui::{Modifier, TuiChildView, TuiElement, TuiFlex, tui_collapsible};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
 use warpui_core::{
@@ -121,9 +119,7 @@ pub(super) struct TuiShellCommandView {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     command_editor: ViewHandle<TuiEditorView>,
     permission_prompt: ViewHandle<TuiPermissionPrompt>,
-    editing_command: bool,
     command_was_edited: bool,
-    command_error: bool,
     state: ShellCommandViewState,
     command_running: Cell<bool>,
     header_mouse_state: MouseStateHandle,
@@ -159,26 +155,27 @@ impl TuiShellCommandView {
         ));
         let command = Self::action_command(&action).to_owned();
         let command_editor = ctx.add_typed_action_tui_view(|ctx| TuiEditorView::multiline(4, ctx));
-        command_editor.update(ctx, |editor, ctx| {
-            editor.set_text(command, ctx);
-            editor.set_editable(false, ctx);
-        });
+        command_editor.update(ctx, |editor, ctx| editor.set_text(command, ctx));
         let prompt_action_id = action.id.clone();
         let prompt_action_model = action_model.clone();
+        let prompt_command_editor = command_editor.clone();
         let permission_prompt = ctx.add_typed_action_tui_view(move |ctx| {
-            TuiPermissionPrompt::new(prompt_action_model, prompt_action_id, true, ctx)
+            TuiPermissionPrompt::new(
+                prompt_action_model,
+                prompt_action_id,
+                Some(prompt_command_editor),
+                ctx,
+            )
         });
         ctx.subscribe_to_view(&command_editor, |view, _, event, ctx| {
             let TuiEditorViewEvent::Changed(_) = event;
-            if view.editing_command {
-                view.command_was_edited = true;
-                view.command_error = false;
-                view.invalidate_layout(ctx);
-            }
+            view.command_was_edited = true;
+            view.permission_prompt
+                .update(ctx, |prompt, ctx| prompt.set_body_error(None, ctx));
+            view.invalidate_layout(ctx);
         });
         ctx.subscribe_to_view(&permission_prompt, |view, _, event, ctx| match event {
             TuiPermissionPromptEvent::AcceptRequested => view.accept(ctx),
-            TuiPermissionPromptEvent::EditBodyRequested => view.begin_command_edit(ctx),
             TuiPermissionPromptEvent::ReplacementGuidanceSubmitted(text) => {
                 ctx.emit(TuiShellCommandViewEvent::ReplacementGuidanceSubmitted(
                     text.clone(),
@@ -199,9 +196,7 @@ impl TuiShellCommandView {
             terminal_model,
             command_editor,
             permission_prompt,
-            editing_command: false,
             command_was_edited: false,
-            command_error: false,
             state: ShellCommandViewState::new_collapsed(),
             command_running: Cell::new(false),
             header_mouse_state: MouseStateHandle::default(),
@@ -216,7 +211,7 @@ impl TuiShellCommandView {
         output_streaming: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !self.command_was_edited && !self.editing_command {
+        if !self.command_was_edited && !self.command_editor.as_ref(ctx).is_focused() {
             let command = Self::action_command(&action).to_owned();
             self.command_editor
                 .update(ctx, |editor, ctx| editor.set_text(command, ctx));
@@ -242,23 +237,10 @@ impl TuiShellCommandView {
         }
     }
 
-    fn begin_command_edit(&mut self, ctx: &mut ViewContext<Self>) {
-        self.editing_command = true;
-        self.command_error = false;
-        self.command_editor.update(ctx, |editor, ctx| {
-            editor.set_editable(true, ctx);
-            ctx.focus_self();
-        });
-        self.invalidate_layout(ctx);
-    }
-
-    fn save_command_edit(&mut self, ctx: &mut ViewContext<Self>) {
-        if !self.editing_command {
+    fn save_command_edit(&self, ctx: &mut ViewContext<Self>) {
+        if !self.command_editor.as_ref(ctx).is_focused() {
             return;
         }
-        self.editing_command = false;
-        self.command_editor
-            .update(ctx, |editor, ctx| editor.set_editable(false, ctx));
         self.permission_prompt
             .update(ctx, |prompt, ctx| prompt.restore_options_focus(ctx));
         self.invalidate_layout(ctx);
@@ -267,7 +249,9 @@ impl TuiShellCommandView {
     fn accept(&mut self, ctx: &mut ViewContext<Self>) {
         let command = self.command_editor.as_ref(ctx).text(ctx);
         if command.trim().is_empty() {
-            self.command_error = true;
+            self.permission_prompt.update(ctx, |prompt, ctx| {
+                prompt.set_body_error(Some("Enter a command to continue.".to_owned()), ctx);
+            });
             self.invalidate_layout(ctx);
             return;
         }
@@ -295,19 +279,10 @@ impl TuiShellCommandView {
     }
 
     fn render_blocked(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        let builder = TuiUiBuilder::from_app(app);
-        let mut body = TuiFlex::column().child(TuiChildView::new(&self.command_editor).finish());
-        if self.command_error {
-            body.add_child(
-                TuiText::new("Enter a command to continue.")
-                    .with_style(builder.error_text_style())
-                    .finish(),
-            );
-        }
         render_permission_card(
             &self.permission_prompt,
             "Is it OK if I run this command and read the output?",
-            body.finish(),
+            None,
             app,
         )
     }
@@ -427,7 +402,7 @@ impl TuiView for TuiShellCommandView {
     }
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
-        let mut ids = vec![self.command_editor.id(), self.permission_prompt.id()];
+        let mut ids = vec![self.permission_prompt.id()];
         ids.extend(self.cli_subagent_view.iter().map(|view| view.id()));
         ids
     }
@@ -439,7 +414,7 @@ impl TuiView for TuiShellCommandView {
             .as_ref(app)
             .get_action_status(&self.action.id)
             .is_some_and(|status| status.is_blocked());
-        if blocked && self.editing_command {
+        if blocked && self.command_editor.as_ref(app).is_focused() {
             context.set.insert(SHELL_COMMAND_EDITING);
         }
         context

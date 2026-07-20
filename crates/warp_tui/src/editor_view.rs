@@ -39,7 +39,6 @@ pub(crate) struct TuiEditorView {
     model: ModelHandle<CodeEditorModel>,
     editor_state: TuiEditorState,
     editor_behavior: TuiEditorBehavior,
-    editable: bool,
     focused: bool,
     mouse_state: MouseStateHandle,
 }
@@ -60,7 +59,6 @@ impl TuiEditorView {
             model,
             editor_state: TuiEditorState::default(),
             editor_behavior: TuiEditorBehavior::single_line(),
-            editable: true,
             focused: false,
             mouse_state: MouseStateHandle::default(),
         }
@@ -89,12 +87,6 @@ impl TuiEditorView {
         self.focused
     }
 
-    /// Enables or disables editing and pointer focus for this field.
-    pub(crate) fn set_editable(&mut self, editable: bool, ctx: &mut ViewContext<Self>) {
-        self.editable = editable;
-        ctx.notify();
-    }
-
     /// Replaces editor content without emitting `Changed`.
     pub(crate) fn set_text(&mut self, text: impl Into<String>, ctx: &mut ViewContext<Self>) {
         let text = text.into();
@@ -110,13 +102,9 @@ impl TuiEditorView {
 
     /// Renders the shared editor configured as a one-row field.
     fn render_editor(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let editor = TuiEditorElement::new(&self.model, ctx).with_view_focused(self.focused);
-        let editor = if self.editable {
-            editor.editable()
-        } else {
-            editor
-        };
-        editor
+        TuiEditorElement::new(&self.model, ctx)
+            .with_view_focused(self.focused)
+            .editable()
             .with_viewport_rows(self.editor_behavior.viewport_rows())
             .on_action(|action, event_ctx| {
                 event_ctx.dispatch_typed_action(TuiEditorViewAction::Editor(action));
@@ -164,15 +152,11 @@ impl TuiView for TuiEditorView {
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let editor = self.render_editor(app);
-        if self.editable {
-            TuiHoverable::new(self.mouse_state.clone(), editor)
-                .on_click(|event_ctx, _| {
-                    event_ctx.dispatch_typed_action(TuiEditorViewAction::FocusRequested);
-                })
-                .finish()
-        } else {
-            editor
-        }
+        TuiHoverable::new(self.mouse_state.clone(), editor)
+            .on_click(|event_ctx, _| {
+                event_ctx.dispatch_typed_action(TuiEditorViewAction::FocusRequested);
+            })
+            .finish()
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
@@ -194,9 +178,6 @@ impl TypedActionView for TuiEditorView {
     type Action = TuiEditorViewAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
-        if !self.editable {
-            return;
-        }
         let outcome = match action {
             TuiEditorViewAction::FocusRequested => {
                 ctx.focus_self();

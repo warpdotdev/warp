@@ -253,6 +253,10 @@ struct SelectorInteractionState {
 pub(crate) struct TuiOptionSelector {
     page: OptionSelectorPage,
     interaction: SelectorInteractionState,
+    /// Optional host-owned editor rendered above the options.
+    leading_editor: Option<ViewHandle<TuiEditorView>>,
+    /// Validation copy rendered directly below the host-owned editor.
+    leading_editor_error: Option<String>,
     search_field: Option<ViewHandle<TuiEditorView>>,
     custom_text: CustomTextState,
     /// Selected question option ids, independent of the keyboard highlight.
@@ -285,6 +289,8 @@ impl TuiOptionSelector {
         Self {
             page: OptionSelectorPage::default(),
             interaction: SelectorInteractionState::default(),
+            leading_editor: None,
+            leading_editor_error: None,
             search_field: None,
             custom_text: CustomTextState::new(custom_text_editor),
             selected_ids: HashSet::new(),
@@ -314,11 +320,59 @@ impl TuiOptionSelector {
         ctx.emit(TuiOptionSelectorEvent::LayoutInvalidated);
         ctx.notify();
     }
+
+    /// Installs a host-owned editor above the option list.
+    pub(crate) fn set_leading_editor(
+        &mut self,
+        editor: ViewHandle<TuiEditorView>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.leading_editor = Some(editor);
+        self.invalidate_layout(ctx);
+    }
+    /// Updates validation copy shown below the host-owned editor.
+    pub(crate) fn set_leading_editor_error(
+        &mut self,
+        error: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.leading_editor_error == error {
+            return;
+        }
+        self.leading_editor_error = error;
+        self.invalidate_layout(ctx);
+    }
+
     /// Whether the optional search editor currently owns focus.
     fn search_field_is_focused(&self, ctx: &AppContext) -> bool {
         self.search_field
             .as_ref()
             .is_some_and(|field| field.as_ref(ctx).is_focused())
+    }
+
+    /// Whether the host-owned leading editor currently owns focus.
+    fn leading_editor_is_focused(&self, ctx: &AppContext) -> bool {
+        self.leading_editor
+            .as_ref()
+            .is_some_and(|editor| editor.as_ref(ctx).is_focused())
+    }
+
+    /// The editor that participates in top-of-list focus cycling.
+    fn top_editor(&self) -> Option<&ViewHandle<TuiEditorView>> {
+        self.leading_editor.as_ref().or_else(|| {
+            self.page
+                .searchable
+                .then_some(self.search_field.as_ref())
+                .flatten()
+        })
+    }
+
+    /// Moves focus from the option list to its top editor.
+    pub(crate) fn focus_leading_editor(&self, ctx: &mut ViewContext<Self>) {
+        if let Some(editor) = self.top_editor() {
+            ctx.focus(editor);
+            ctx.notify();
+        }
     }
 
     /// Resets all transient interaction state for the newly installed page.
@@ -367,15 +421,11 @@ impl TuiOptionSelector {
     }
 
     /// The highlighted item index, including a trailing custom-text entry.
+    #[cfg(test)]
     pub(crate) fn highlighted_index(&self) -> Option<usize> {
         (!self.custom_text.is_editing())
             .then(|| self.interaction.selection.selected_index())
             .flatten()
-    }
-
-    /// Whether the custom-text editor currently owns the interaction.
-    pub(crate) fn is_editing_custom_text(&self) -> bool {
-        self.custom_text.is_editing()
     }
 
     /// Moves the option highlight upward.
@@ -386,12 +436,6 @@ impl TuiOptionSelector {
     /// Moves the option highlight downward.
     pub(crate) fn move_down(&mut self, ctx: &mut ViewContext<Self>) {
         self.move_selection(true, ctx);
-    }
-
-    /// Clears the visible option highlight while a host-owned editor is active.
-    pub(crate) fn clear_highlight(&mut self, ctx: &mut ViewContext<Self>) {
-        self.interaction.selection.clear();
-        ctx.notify();
     }
 
     /// Restores the first option as the active highlight.
@@ -673,7 +717,7 @@ impl TuiOptionSelector {
             return;
         }
         let items_len = self.items().len();
-        if self.search_field_is_focused(ctx) {
+        if self.search_field_is_focused(ctx) || self.leading_editor_is_focused(ctx) {
             if items_len > 0 {
                 let target = if forward { 0 } else { items_len - 1 };
                 self.interaction
@@ -685,18 +729,16 @@ impl TuiOptionSelector {
             ctx.notify();
             return;
         }
-        let move_to_search = self.page.searchable
+        let move_to_editor = self.top_editor().is_some()
             && match (forward, self.interaction.selection.selected_index()) {
                 (false, None | Some(0)) => true,
                 (true, Some(index)) => index + 1 >= items_len,
                 (true, None) | (false, Some(_)) => false,
             };
-        if move_to_search {
+        if move_to_editor {
             self.interaction.selection.clear();
             self.interaction.scroll_offset = 0;
-            if let Some(search_field) = self.search_field.as_ref() {
-                ctx.focus(search_field);
-            }
+            self.focus_leading_editor(ctx);
             ctx.notify();
             return;
         }
@@ -1094,7 +1136,17 @@ impl TuiView for TuiOptionSelector {
         if let Some(header) = &self.page.header {
             content.add_child(Self::render_header(header, &builder));
         }
-        if let Some(search_field) = self
+        if let Some(leading_editor) = self.leading_editor.as_ref() {
+            content.add_child(TuiChildView::new(leading_editor).finish());
+            if let Some(error) = self.leading_editor_error.as_ref() {
+                content.add_child(
+                    TuiText::new(error.clone())
+                        .with_style(builder.error_text_style())
+                        .finish(),
+                );
+            }
+            content.add_child(TuiText::new(" ").finish());
+        } else if let Some(search_field) = self
             .page
             .searchable
             .then_some(self.search_field.as_ref())
@@ -1119,6 +1171,7 @@ impl TuiView for TuiOptionSelector {
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
         let mut ids = vec![self.custom_text.editor.id()];
+        ids.extend(self.leading_editor.iter().map(ViewHandle::id));
         if self.page.searchable {
             ids.extend(self.search_field.iter().map(ViewHandle::id));
         }
@@ -1131,9 +1184,13 @@ impl TuiView for TuiOptionSelector {
             FocusContext::DescendentFocused(view_id) => {
                 self.focused = false;
                 if self
-                    .search_field
+                    .leading_editor
                     .as_ref()
-                    .is_some_and(|search_field| *view_id == search_field.id())
+                    .is_some_and(|editor| *view_id == editor.id())
+                    || self
+                        .search_field
+                        .as_ref()
+                        .is_some_and(|search_field| *view_id == search_field.id())
                 {
                     self.interaction.selection.clear();
                 }
