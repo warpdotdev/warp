@@ -1096,7 +1096,7 @@ impl TuiTerminalSessionView {
                 view.update_process_input_focus(ctx);
                 ctx.notify();
             }
-            ModelEvent::BootstrapPrecmdDone => {
+            ModelEvent::VisibleBootstrapBlock | ModelEvent::BootstrapPrecmdDone => {
                 view.update_process_input_focus(ctx);
                 ctx.notify();
             }

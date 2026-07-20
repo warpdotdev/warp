@@ -52,19 +52,25 @@ fn shell_startup_routes_input_by_bootstrap_stage() {
     model.block_list_mut().reinit_shell();
     assert_eq!(tui_input_target(&model), TuiInputTarget::Disabled);
     assert_eq!(
-        tui_input_target_for_state(false, true, false, false),
+        tui_input_target_for_state(false, true, false, false, false),
+        TuiInputTarget::Disabled,
+        "silent startup-script execution should keep the bootstrap editor visible",
+    );
+    assert_eq!(
+        tui_input_target_for_state(false, true, true, false, false),
         TuiInputTarget::Pty,
+        "visible startup-script output should accept interactive PTY input",
     );
 }
 
 #[test]
 fn submit_policy_blocks_bootstrap_but_allows_ready_prompt() {
     assert!(
-        !tui_input_target_for_state(false, false, false, false).agent_editor_owns_input(),
+        !tui_input_target_for_state(false, false, false, false, false).agent_editor_owns_input(),
         "bootstrap submission must remain disabled"
     );
     assert!(
-        tui_input_target_for_state(false, false, true, false).agent_editor_owns_input(),
+        tui_input_target_for_state(false, false, false, true, false).agent_editor_owns_input(),
         "the normal prompt must accept submission"
     );
 }
