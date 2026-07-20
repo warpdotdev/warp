@@ -24,16 +24,17 @@ use warp::tui_export::{
     ConversationFileExport, ConversationSelection, ConversationSelectionHandle,
     ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
     GitRepoStatusModel, GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent,
-    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, ModelEvent, ParsedSlashCommandInput, PtyIntent,
-    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
-    ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
-    SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
-    TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiMcpAction,
-    TuiMcpManager, TuiSlashCommand, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
-    TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
-    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
-    export_conversation_markdown, prepare_conversation_block_restoration,
-    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, ModelEvent, ParsedSlashCommandInput,
+    PersistenceWriter, PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
+    ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
+    SlashCommandDataSource as _, SlashCommandSelectionBehavior, StartAgentExecutorEvent,
+    StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface, TerminalSurfaceInit,
+    TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommand, TuiSlashCommandDataSource,
+    TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, UserTakeOverReason,
+    WAKEUP_THROTTLE_PERIOD, block_context_from_terminal_model, build_slash_command_mixer,
+    detect_possible_git_repo, export_conversation_markdown, maybe_build_ai_query_upsert_event,
+    prepare_conversation_block_restoration, record_saved_prompt_accepted,
+    record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::features::FeatureFlag;
@@ -1802,6 +1803,22 @@ impl TuiTerminalSessionView {
             .is_some_and(|id| id != self.terminal_surface_id)
         {
             return;
+        }
+        if let Some(persistence_event) =
+            maybe_build_ai_query_upsert_event(event, self.terminal_surface_id, false, ctx)
+            && let Some(model_event_sender) = PersistenceWriter::handle(ctx).as_ref(ctx).sender()
+        {
+            let _ = ctx.spawn(
+                async move { model_event_sender.send(persistence_event) },
+                |_, result, _| {
+                    if let Err(error) = result {
+                        report_error!(
+                            anyhow::Error::new(error)
+                                .context("Error sending TUI upsert AI query event")
+                        );
+                    }
+                },
+            );
         }
         if matches!(
             event,
