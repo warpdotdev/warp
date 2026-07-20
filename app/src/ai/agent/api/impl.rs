@@ -101,9 +101,8 @@ pub async fn generate_multi_agent_output(
             supports_bundled_skills: FeatureFlag::BundledSkills.is_enabled(),
             supports_research_agent: params.research_agent_enabled,
             supports_orchestration_v2: supports_orchestration_v2(params.orchestration_enabled),
-            supports_orchestration_runners: supports_orchestration_runners(
-                params.orchestration_enabled,
-            ),
+            supports_orchestration_runners: params.orchestration_enabled
+                && FeatureFlag::CloudAgentRunners.is_enabled(),
             supports_background_computer_use: FeatureFlag::BackgroundComputerUse.is_enabled()
                 && computer_use::background_supported(),
             custom_model_providers: params.custom_model_providers,
@@ -201,19 +200,6 @@ fn api_keys_with_warp_credit_fallback_setting(
 
 fn supports_orchestration_v2(orchestration_enabled: bool) -> bool {
     orchestration_enabled
-}
-
-/// Reports whether the client advertises support for selecting and propagating
-/// a remote `runner_id` for orchestrated child agents (the
-/// `orchestration_runners` MAA feature-support capability). The server omits
-/// runner-discovery guidance and never emits a `runner_id` on `run_agents` /
-/// `create_orchestration_config` when this is false. Mirrors the
-/// `supports_orchestration_v2(orchestration_enabled)` gating style: a client
-/// with orchestration off never advertises runner support, so the server never
-/// sees `supports_orchestration_runners=true` without
-/// `supports_orchestration_v2=true`.
-fn supports_orchestration_runners(orchestration_enabled: bool) -> bool {
-    orchestration_enabled && FeatureFlag::CloudAgentRunners.is_enabled()
 }
 
 fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
