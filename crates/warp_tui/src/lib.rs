@@ -41,7 +41,7 @@ mod option_selector;
 mod orchestrated_agent_identity_styling;
 mod orchestration_block;
 mod orchestration_model;
-mod orchestration_tabs;
+mod orchestration_tab_bar;
 mod platform;
 mod resume;
 mod session_registry;

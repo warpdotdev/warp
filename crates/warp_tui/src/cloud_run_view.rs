@@ -20,7 +20,7 @@ use crate::exit_confirmation::{CTRL_C_EXIT_WINDOW, ExitConfirmation};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::link::TuiLink;
 use crate::orchestration_model::{TuiOrchestrationModel, TuiOrchestrationSnapshot};
-use crate::orchestration_tabs::{
+use crate::orchestration_tab_bar::{
     ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_bar_config,
     render_cloud_orchestration_tab_footer,
 };

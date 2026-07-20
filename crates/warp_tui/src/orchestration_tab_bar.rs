@@ -1,3 +1,8 @@
+//! Shared orchestration tab-bar presentation for terminal and cloud-run sessions.
+//!
+//! Semantic topology, selection, and paging intent remain in
+//! [`crate::orchestration_model`]; this module translates that state into the
+//! generic [`crate::tab_bar`] configuration and session-specific footer elements.
 use std::collections::HashMap;
 
 use warp::tui_export::{AIConversationId, ConversationStatus};

@@ -66,7 +66,7 @@ Add a per-session `TuiCloudRunState` model containing:
 Do not duplicate ongoing `ConversationStatus`; after run-ID assignment the view reads the authoritative status from `BlocklistAIHistoryModel`.
 Add `TuiCloudRunView` in `crates/warp_tui/src/cloud_run_view.rs`. It owns only `TuiCloudRunState`, the reusable link, orchestration tab bar, tab-focus state, and read-only exit confirmation. Its display-state derivation maps startup state plus history status into the centered callout and primary link.
 
-Move shared orchestration-tab configuration and footer presentation into `crates/warp_tui/src/orchestration_tabs.rs` so terminal and cloud views preserve identical ordering, paging, status glyphs, identity styling, and focused-tab treatment without sharing terminal state.
+Move shared orchestration-tab configuration and footer presentation into `crates/warp_tui/src/orchestration_tab_bar.rs` so terminal and cloud views preserve identical ordering, paging, status glyphs, identity styling, and focused-tab treatment without sharing terminal state.
 
 Give `TuiCloudRunView` its own typed actions and keymap context. `Shift+Up` focuses its orchestration tab bar, Enter opens the current primary URL, and tab navigation switches through `TuiSessions`. The unfocused footer reuses `Shift + ↑ sub-agents`; the focused cloud-tab footer omits `Shift+Down` because the cloud body has no input target.
 

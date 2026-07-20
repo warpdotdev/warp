@@ -27,7 +27,9 @@ use crate::keybindings::{
 };
 use crate::orchestrated_agent_identity_styling::AgentIdentity;
 use crate::orchestration_model::TuiOrchestrationModel;
-use crate::orchestration_tabs::{ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_icon};
+use crate::orchestration_tab_bar::{
+    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_icon,
+};
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::terminal_block::{block_content_rows, should_render_terminal_block};
