@@ -92,8 +92,9 @@ use crate::code::editor_management::CodeSource;
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::notebooks::NotebookId;
 use crate::persistence::block_list::{
-    get_all_restored_blocks, process_ai_queries_for_nld_history_match,
-    process_ai_queries_for_uparrow_prompt, read_recent_ai_queries,
+    filter_synthetic_child_agent_prompts, get_all_restored_blocks,
+    process_ai_queries_for_nld_history_match, process_ai_queries_for_uparrow_prompt,
+    read_recent_ai_queries,
 };
 use crate::persistence::model::{
     CODE_REVIEW_PANE_KIND, GET_STARTED_PANE_KIND, NewPersistedObjectAction, NewTeamSettings,
@@ -2858,11 +2859,20 @@ fn read_sqlite_data(
 
     let time_of_next_force_object_refresh = read_time_of_next_force_object_refresh(conn)?;
 
+    // Load conversation metadata before prompt history so legacy synthetic
+    // child-agent bootstrap prompts can be identified from their child
+    // conversation summaries.
+    let (multi_agent_conversations, conversation_summary_backfills) =
+        read_agent_conversation_metadata(conn)?;
+
     // Seed up-arrow prompt history and (optionally) NLD prompt-history matching from a single
     // SQLite read, deriving both from the same in-memory query vector instead of reading twice.
     // TODO: Once up-arrow prompt history supports pagination, drop the 100-row up-arrow cap and
     // serve both up-arrow and NLD matching from one consolidated query list.
-    let recent_ai_queries = read_recent_ai_queries(conn)?;
+    let recent_ai_queries = filter_synthetic_child_agent_prompts(
+        read_recent_ai_queries(conn)?,
+        &multi_agent_conversations,
+    );
     let nld_prompts = if FeatureFlag::NldPromptHistoryMatch.is_enabled() {
         process_ai_queries_for_nld_history_match(&recent_ai_queries)
     } else {
@@ -2872,10 +2882,6 @@ fn read_sqlite_data(
 
     let codebase_indices = get_all_codebase_index_metadata(conn)?;
     let workspace_language_servers = get_all_workspace_language_servers_by_workspace(conn)?;
-    // Load conversation metadata only; task payloads are hydrated lazily
-    // per-conversation via `read_agent_conversation_by_id`.
-    let (multi_agent_conversations, conversation_summary_backfills) =
-        read_agent_conversation_metadata(conn)?;
     let projects = get_all_projects(conn)?;
     let project_rules = get_all_project_rules(conn)?;
     let ignored_suggestions = get_all_ignored_suggestions(conn)?;

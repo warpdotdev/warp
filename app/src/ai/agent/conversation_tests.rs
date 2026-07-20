@@ -293,6 +293,63 @@ fn custom_endpoint_usage_metadata(
 }
 
 #[test]
+fn synthetic_orchestrator_prompt_is_only_the_first_child_exchange() {
+    let messages = vec![
+        user_query_message("message-1", "request-1", "internal child prompt"),
+        user_query_message("message-2", "request-2", "user follow-up"),
+    ];
+    let child = AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![api::Task {
+            id: "root-task".to_string(),
+            messages: messages.clone(),
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        Some(AgentConversationData {
+            server_conversation_token: None,
+            conversation_usage_metadata: None,
+            reverted_action_ids: None,
+            forked_from_server_conversation_token: None,
+            artifacts_json: None,
+            parent_agent_id: Some("parent-run-id".to_string()),
+            agent_name: Some("child".to_string()),
+            orchestration_harness_type: None,
+            parent_conversation_id: None,
+            is_remote_child: false,
+            root_task_is_optimistic: None,
+            run_id: None,
+            autoexecute_override: None,
+            last_event_sequence: None,
+            pinned: false,
+        }),
+    )
+    .unwrap();
+    let child_exchange_ids: Vec<_> = child
+        .root_task_exchanges()
+        .map(|exchange| exchange.id)
+        .collect();
+
+    assert!(
+        child.is_synthetic_orchestrator_prompt_exchange(child_exchange_ids[0]),
+        "the run_agents bootstrap prompt should be treated as synthetic",
+    );
+    assert!(
+        !child.is_synthetic_orchestrator_prompt_exchange(child_exchange_ids[1]),
+        "a later user follow-up in the child should remain eligible for history",
+    );
+
+    let regular = restored_conversation_with_messages(messages);
+    let first_regular_exchange_id = regular.root_task_exchanges().next().unwrap().id;
+    assert!(
+        !regular.is_synthetic_orchestrator_prompt_exchange(first_regular_exchange_id),
+        "the first prompt of a regular conversation is user-entered",
+    );
+}
+
+#[test]
 fn latest_user_query_returns_latest_non_empty_user_query() {
     let conversation =
         restored_conversation_with_queries(&["write unit tests", "fix the failing test"]);

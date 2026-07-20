@@ -1,6 +1,6 @@
 //! Manages how we write to and read from our SQLite database for our AI features.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
@@ -9,7 +9,7 @@ use diesel::result::Error;
 use diesel::sqlite::SqliteConnection;
 use itertools::Itertools;
 
-use super::model::Block;
+use super::model::{AgentConversation, AgentConversationData, AgentConversationSummary, Block};
 use super::{model, schema};
 use crate::ai::blocklist::{PersistedAIInput, PersistedAIInputType, SerializedBlockListItem};
 use crate::app_state::PaneUuid;
@@ -111,6 +111,59 @@ pub(super) fn read_recent_ai_queries(
         .filter_map(|ai_query| PersistedAIInput::try_from(ai_query).ok())
         .rev()
         .collect_vec())
+}
+
+/// Removes legacy child-agent bootstrap prompts from a startup query snapshot.
+///
+/// Older clients persisted the synthetic prompt supplied by `run_agents` as
+/// ordinary prompt history. Child conversation summaries retain that initial
+/// prompt, so remove the child's earliest persisted query when it matches
+/// while preserving later, user-entered follow-ups.
+pub(super) fn filter_synthetic_child_agent_prompts(
+    mut recent_ai_queries: Vec<PersistedAIInput>,
+    conversations: &[AgentConversation],
+) -> Vec<PersistedAIInput> {
+    let initial_prompt_by_child: HashMap<String, String> = conversations
+        .iter()
+        .filter_map(|conversation| {
+            let conversation_data = serde_json::from_str::<AgentConversationData>(
+                &conversation.conversation.conversation_data,
+            )
+            .ok()?;
+            if conversation_data.parent_conversation_id.is_none()
+                && conversation_data.parent_agent_id.is_none()
+            {
+                return None;
+            }
+            let summary = conversation
+                .conversation
+                .summary
+                .as_deref()
+                .and_then(|summary| {
+                    serde_json::from_str::<AgentConversationSummary>(summary).ok()
+                })?;
+            Some((
+                conversation.conversation.conversation_id.clone(),
+                summary.initial_query,
+            ))
+        })
+        .collect();
+
+    let mut inspected_children = HashSet::new();
+    recent_ai_queries.retain(|query| {
+        let conversation_id = query.conversation_id.to_string();
+        let Some(initial_prompt) = initial_prompt_by_child.get(&conversation_id) else {
+            return true;
+        };
+        if !inspected_children.insert(conversation_id) {
+            return true;
+        }
+        let matches_initial_prompt = query.inputs.iter().any(|input| match input {
+            PersistedAIInputType::Query { text, .. } => text == initial_prompt,
+        });
+        !matches_initial_prompt
+    });
+    recent_ai_queries
 }
 
 /// Selects the up-arrow prompt-history queries from `recent_ai_queries` (ordered oldest-first):

@@ -11,13 +11,16 @@ use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl};
 use diesel_migrations::MigrationHarness;
 
 use super::{
-    process_ai_queries_for_nld_history_match, process_ai_queries_for_uparrow_prompt,
-    read_recent_ai_queries, upsert_ai_query_with_limit,
+    filter_synthetic_child_agent_prompts, process_ai_queries_for_nld_history_match,
+    process_ai_queries_for_uparrow_prompt, read_recent_ai_queries, upsert_ai_query_with_limit,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentExchangeId, AIAgentInput, UserQueryMode};
 use crate::ai::blocklist::{AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType};
 use crate::ai::llms::LLMId;
+use crate::persistence::model::{
+    AgentConversation, AgentConversationData, AgentConversationRecord, AgentConversationSummary,
+};
 
 /// Builds an in-memory SQLite database with all migrations applied.
 fn test_connection() -> SqliteConnection {
@@ -54,6 +57,16 @@ fn with_start_ts(query: Arc<PersistedAIInput>, start_ts: DateTime<Local>) -> Arc
         start_ts,
         ..(*query).clone()
     })
+}
+
+fn with_conversation_id(
+    query: Arc<PersistedAIInput>,
+    conversation_id: AIConversationId,
+) -> PersistedAIInput {
+    PersistedAIInput {
+        conversation_id,
+        ..(*query).clone()
+    }
 }
 
 fn ai_query_count(conn: &mut SqliteConnection) -> i64 {
@@ -234,6 +247,84 @@ fn process_ai_queries_for_uparrow_prompt_keeps_all_when_under_cap() {
 
     let texts: Vec<&str> = kept.iter().map(first_query_text).collect();
     assert_eq!(texts, vec!["q0", "q1", "q2"]);
+}
+
+#[test]
+fn filter_synthetic_child_agent_prompts_keeps_genuine_followups() {
+    let child_id = AIConversationId::new();
+    let child_without_legacy_prompt_id = AIConversationId::new();
+    let regular_id = AIConversationId::new();
+    let parent_id = AIConversationId::new();
+    let now = Local::now();
+    let child_conversation = |conversation_id: AIConversationId, initial_query: &str| {
+        let conversation_data = AgentConversationData {
+            server_conversation_token: None,
+            conversation_usage_metadata: None,
+            reverted_action_ids: None,
+            forked_from_server_conversation_token: None,
+            artifacts_json: None,
+            parent_agent_id: None,
+            agent_name: Some("child".to_string()),
+            orchestration_harness_type: None,
+            parent_conversation_id: Some(parent_id.to_string()),
+            is_remote_child: false,
+            root_task_is_optimistic: None,
+            run_id: None,
+            autoexecute_override: None,
+            last_event_sequence: None,
+            pinned: false,
+        };
+        let summary = AgentConversationSummary {
+            initial_query: initial_query.to_string(),
+            title: initial_query.to_string(),
+            initial_working_directory: None,
+            is_restorable: true,
+            is_unlisted_auto_code_diff: false,
+        };
+        AgentConversation {
+            conversation: AgentConversationRecord {
+                id: 0,
+                conversation_id: conversation_id.to_string(),
+                conversation_data: serde_json::to_string(&conversation_data).unwrap(),
+                last_modified_at: now.naive_utc(),
+                summary: Some(serde_json::to_string(&summary).unwrap()),
+            },
+            tasks: vec![],
+        }
+    };
+    let conversations = vec![
+        child_conversation(child_id, "internal run_agents prompt"),
+        child_conversation(
+            child_without_legacy_prompt_id,
+            "bootstrap prompt that was never persisted",
+        ),
+    ];
+    let queries = vec![
+        with_conversation_id(make_query("regular prompt"), regular_id),
+        with_conversation_id(make_query("internal run_agents prompt"), child_id),
+        with_conversation_id(make_query("user follow-up"), child_id),
+        with_conversation_id(
+            make_query("only user follow-up"),
+            child_without_legacy_prompt_id,
+        ),
+        with_conversation_id(
+            make_query("bootstrap prompt that was never persisted"),
+            child_without_legacy_prompt_id,
+        ),
+    ];
+
+    let filtered = filter_synthetic_child_agent_prompts(queries, &conversations);
+    let texts: Vec<&str> = filtered.iter().map(first_query_text).collect();
+
+    assert_eq!(
+        texts,
+        vec![
+            "regular prompt",
+            "user follow-up",
+            "only user follow-up",
+            "bootstrap prompt that was never persisted"
+        ]
+    );
 }
 
 #[test]

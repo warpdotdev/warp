@@ -2171,6 +2171,15 @@ fn handle_ai_history_event(
                 return;
             }
 
+            // The initial query of a child agent conversation comes from the
+            // orchestrator's run_agents call, not from the user's input. Keep
+            // it in the child transcript, but do not persist it as up-arrow
+            // prompt history. Genuine user follow-ups in the child remain
+            // eligible for persistence.
+            if conversation.is_synthetic_orchestrator_prompt_exchange(*exchange_id) {
+                return;
+            }
+
             // Do not persist AI queries from shared ambient agent sessions that we've viewed,
             // as these were sent as part of an ambient agent run and shouldn't polute the up arrow history.
             if is_shared_ambient_agent_session {
