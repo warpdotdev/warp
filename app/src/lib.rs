@@ -188,7 +188,6 @@ use crate::ai::aws_credentials::AwsCredentialRefresher as _;
 use crate::ai::geap_credentials::GeapCredentialRefresher as _;
 use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
-use crate::view_components::DismissibleToast;
 pub mod workflows;
 pub mod workspace;
 
@@ -235,7 +234,7 @@ use warp_managed_secrets::ManagedSecretManager;
 use warp_server_client::iap::{IapManager, IapManagerEvent, IapState, ManagedIapMint};
 use warp_server_client::network_logging::NetworkLogModel;
 use warpui::integration::TestDriver;
-use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
+use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
 use warpui::platform::TerminationMode;
 use warpui::platform::app::{ApproveTerminateResult, TerminationRequestSource};
 use warpui::windowing::state::ApplicationStage;
@@ -2239,28 +2238,40 @@ pub(crate) fn initialize_app(
         });
         IapManager::new(iap_state, path_resolver, managed_iap_mint, ctx)
     });
-    // Subscribe to IAP manager events to show toasts when refresh fails.
+    // Subscribe to IAP manager events to show a modal when refresh fails.
     ctx.subscribe_to_model(&IapManager::handle(ctx), |_, e, ctx| {
-        match e {
-            IapManagerEvent::RefreshFailed {
-                message,
-                is_first_failure_of_streak,
-            } if *is_first_failure_of_streak => {
-                let window_id = ctx
-                    .windows()
-                    .active_window()
-                    .or_else(|| ctx.windows().ordered_window_ids().first().copied());
-                let Some(window_id) = window_id else {
-                    return;
-                };
-                let toast: DismissibleToast<WorkspaceAction> =
-                    DismissibleToast::error(format!("IAP credential refresh failed: {message}"));
-                ToastStack::handle(ctx).update(ctx, |stack, ctx| {
-                    stack.add_ephemeral_toast(toast, window_id, ctx);
+        let IapManagerEvent::RefreshFailed {
+            message,
+            is_first_failure_of_streak,
+        } = e
+        else {
+            return;
+        };
+        if !*is_first_failure_of_streak {
+            return;
+        }
+        let dialog = AlertDialogWithCallbacks::for_app(
+            "IAP credential refresh failed",
+            format!("{message}\n\nHave you tried running `gcloud auth login`?"),
+            vec![ModalButton::for_app("Dismiss", |_| {})],
+            |_| {},
+        );
+        if cfg!(all(not(target_family = "wasm"), target_os = "macos")) {
+            ctx.show_native_platform_modal(dialog);
+        } else {
+            let window_id = ctx
+                .windows()
+                .active_window()
+                .or_else(|| ctx.windows().ordered_window_ids().first().copied());
+            if let Some(window_id) = window_id
+                && let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+                && let Some(handle) = workspaces.first().cloned()
+            {
+                handle.update(ctx, |view, ctx| {
+                    view.show_native_modal(dialog, ctx);
                 });
             }
-            _ => {}
-        };
+        }
     });
 
     // Add a singleton model that holds the current prompt configuration.
