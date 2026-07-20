@@ -376,6 +376,30 @@ fn assert_pending_status_for_object(app: &mut App, uid: &ObjectUid, status: bool
     });
 }
 
+/// Polls `trashed_ts.is_some()` for `uid` until it settles to `is_trashed` or a generous deadline
+/// elapses, instead of asserting immediately after a fixed sleep. This is more robust under
+/// contended/parallel test runs, where the wall-clock time for the trash-object retries to
+/// exhaust (and the resulting untrash to apply) can exceed a fixed budget even though the retry
+/// backoff itself is short.
+async fn wait_for_trashed_status_for_object(app: &mut App, uid: &ObjectUid, is_trashed: bool) {
+    for _ in 0..300 {
+        let trashed = CloudModel::handle(app).read(app, |cloud_model, _| {
+            cloud_model
+                .get_by_uid(uid)
+                .map(|object| object.metadata().trashed_ts.is_some())
+        });
+        match trashed {
+            Some(trashed) if trashed == is_trashed => return,
+            Some(_) => {}
+            None => panic!("object should have been in cloud model, but wasn't"),
+        }
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+    }
+
+    // Timed out: fall through to the normal assertion helper for a clear failure message.
+    assert_trashed_status_for_object(app, uid, is_trashed);
+}
+
 fn assert_errored_status_for_object(app: &mut App, uid: &ObjectUid, is_errored: bool) {
     CloudModel::handle(app).update(app, |cloud_model, _| {
         if let Some(object) = cloud_model.get_mut_by_uid(uid) {
@@ -2574,8 +2598,10 @@ fn test_metadata_after_trash_item_failure() {
             })
             .await;
 
-        // await long enough that all the trash object retries are exhausted
-        warpui::r#async::Timer::after(Duration::from_secs(10)).await;
+        // Poll until the trash object retries are exhausted and the optimistic update is
+        // undone, rather than sleeping for a fixed duration long enough to cover the worst-case
+        // retry backoff (~3.5s) plus margin.
+        wait_for_trashed_status_for_object(&mut app, &sync_id.uid(), false).await;
 
         assert_trashed_status_for_object(&mut app, &sync_id.uid(), false);
         assert_pending_status_for_object(&mut app, &sync_id.uid(), false);
