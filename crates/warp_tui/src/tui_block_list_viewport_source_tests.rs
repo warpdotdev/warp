@@ -674,7 +674,8 @@ fn reasoning_agent_block_source(
                     .block_list_mut()
                     .mark_rich_content_dirty(view_id);
             }
-            TuiAIBlockEvent::BlockingStateChanged => {}
+            TuiAIBlockEvent::BlockingStateChanged
+            | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
         });
     });
     {
@@ -850,7 +851,8 @@ fn updating_agent_block_source(
                     .block_list_mut()
                     .mark_rich_content_dirty(view_id);
             }
-            TuiAIBlockEvent::BlockingStateChanged => {}
+            TuiAIBlockEvent::BlockingStateChanged
+            | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
         });
     });
     terminal_model.lock().block_list_mut().append_rich_content(

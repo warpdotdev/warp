@@ -366,6 +366,34 @@ impl TuiOptionSelector {
             .flatten()
     }
 
+    /// The highlighted item index, including a trailing custom-text entry.
+    pub(crate) fn highlighted_index(&self) -> Option<usize> {
+        (!self.custom_text.is_editing())
+            .then(|| self.interaction.selection.selected_index())
+            .flatten()
+    }
+
+    /// Whether the custom-text editor currently owns the interaction.
+    pub(crate) fn is_editing_custom_text(&self) -> bool {
+        self.custom_text.is_editing()
+    }
+
+    /// Moves the option highlight upward.
+    pub(crate) fn move_up(&mut self, ctx: &mut ViewContext<Self>) {
+        self.move_selection(false, ctx);
+    }
+
+    /// Moves the option highlight downward.
+    pub(crate) fn move_down(&mut self, ctx: &mut ViewContext<Self>) {
+        self.move_selection(true, ctx);
+    }
+
+    /// Clears the visible option highlight while a host-owned editor is active.
+    pub(crate) fn clear_highlight(&mut self, ctx: &mut ViewContext<Self>) {
+        self.interaction.selection.clear();
+        ctx.notify();
+    }
+
     /// The current inline Other buffer, trimmed for questionnaire transitions.
     pub(crate) fn active_custom_text(&self, ctx: &AppContext) -> Option<String> {
         self.custom_text.is_editing().then(|| {
@@ -1212,22 +1240,22 @@ impl TuiElement for SelectorInputElement {
                     return false;
                 }
                 match keystroke.key.as_str() {
-                    "enter" | "numpadenter" => {
+                    "enter" | "numpadenter" if self.list_focused => {
                         event_ctx.dispatch_typed_action(TuiOptionSelectorAction::ConfirmSelected);
                         true
                     }
-                    "escape" => {
+                    "escape" if self.list_focused => {
                         // Escape fallback for hosts without their own
                         // Escape keymap binding; the embedding card's
                         // `escape` binding normally consumes the key first.
                         event_ctx.dispatch_typed_action(TuiOptionSelectorAction::HandleEscape);
                         true
                     }
-                    "up" => {
+                    "up" if self.list_focused => {
                         event_ctx.dispatch_typed_action(TuiOptionSelectorAction::MoveUp);
                         true
                     }
-                    "down" => {
+                    "down" if self.list_focused => {
                         event_ctx.dispatch_typed_action(TuiOptionSelectorAction::MoveDown);
                         true
                     }

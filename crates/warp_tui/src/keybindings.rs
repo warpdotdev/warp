@@ -85,6 +85,7 @@ pub(crate) fn init(app: &mut AppContext) {
     );
     crate::orchestration_block::init(app);
     crate::tui_ask_question_view::init(app);
+    crate::tui_permission_prompt::init(app);
 
     register_binding_validators(app);
 }

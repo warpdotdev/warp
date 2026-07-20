@@ -54,6 +54,7 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
+use crate::agent_block::TuiBlockingChild;
 use crate::alt_screen_view::AltScreenElement;
 use crate::attachment_bar::{
     FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
@@ -78,7 +79,6 @@ use crate::keybindings::{
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::orchestrated_agent_identity_styling::assign_agent_identity_indices;
-use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::orchestration_model::{TuiOrchestrationModel, TuiOrchestrationSnapshot};
 use crate::platform::reveal_path_in_file_manager;
 use crate::resume::TuiExitSummaryHandle;
@@ -505,12 +505,21 @@ impl TuiTerminalSessionView {
         self.focus_current_owner_if_active(ctx);
     }
 
+    fn focus_blocking_child(blocker: TuiBlockingChild, ctx: &mut ViewContext<Self>) {
+        match blocker {
+            TuiBlockingChild::Permission(view) => {
+                view.update(ctx, |view, ctx| view.focus(ctx));
+            }
+            TuiBlockingChild::Orchestration(view) => ctx.focus(&view),
+        }
+    }
+
     fn focus_current_owner(&mut self, ctx: &mut ViewContext<Self>) {
         match self.input_target() {
             TuiInputTarget::Disabled => {
                 if let Some(blocker) = self.active_blocking_child(ctx) {
                     self.orchestration_tabs_focused = false;
-                    ctx.focus(&blocker);
+                    Self::focus_blocking_child(blocker, ctx);
                 } else if self.orchestration_tabs_focused {
                     ctx.focus_self();
                 } else {
@@ -524,7 +533,7 @@ impl TuiTerminalSessionView {
             TuiInputTarget::AgentEditor => {
                 if let Some(blocker) = self.active_blocking_child(ctx) {
                     self.orchestration_tabs_focused = false;
-                    ctx.focus(&blocker);
+                    Self::focus_blocking_child(blocker, ctx);
                 } else if self.orchestration_tabs_focused {
                     ctx.focus_self();
                 } else {
@@ -1042,6 +1051,19 @@ impl TuiTerminalSessionView {
             TuiTranscriptViewEvent::BlockingStateChanged => {
                 view.sync_blocker_focus(ctx);
             }
+            TuiTranscriptViewEvent::PermissionReplacementGuidanceSubmitted {
+                conversation_id,
+                text,
+            } => {
+                view.ai_controller.update(ctx, |controller, ctx| {
+                    controller.send_user_query_in_conversation(
+                        text.clone(),
+                        *conversation_id,
+                        None,
+                        ctx,
+                    );
+                });
+            }
         });
 
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
@@ -1555,7 +1577,7 @@ impl TuiTerminalSessionView {
     }
 
     /// The active front-of-queue blocking interaction, if any.
-    fn active_blocking_child(&self, ctx: &AppContext) -> Option<ViewHandle<TuiOrchestrationBlock>> {
+    fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
         self.transcript.as_ref(ctx).active_blocking_child(ctx)
     }
 
@@ -1580,7 +1602,7 @@ impl TuiTerminalSessionView {
     /// draft/cursor/selection are untouched.
     fn sync_blocker_focus(&mut self, ctx: &mut ViewContext<Self>) {
         let blocker = self.active_blocking_child(ctx);
-        let blocker_view_id = blocker.as_ref().map(ViewHandle::id);
+        let blocker_view_id = blocker.as_ref().map(TuiBlockingChild::id);
         if blocker_view_id != self.active_blocker_view_id {
             self.active_blocker_view_id = blocker_view_id;
             self.focus_current_owner_if_active(ctx);

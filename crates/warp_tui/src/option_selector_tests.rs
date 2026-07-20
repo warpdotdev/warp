@@ -112,6 +112,21 @@ fn set_page(app: &mut App, selector: &ViewHandle<TuiOptionSelector>, snapshot: O
         selector.set_page(page(snapshot, false), ctx);
     });
 }
+
+#[test]
+fn unfocused_selector_ignores_navigation_and_confirmation_keys() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        set_page(&mut app, &selector, snapshot(&["a", "b"], Some("a")));
+        let other = app.update(|ctx| ctx.add_tui_view(selector.window_id(ctx), |_| TestHostView));
+        other.update(&mut app, |_, ctx| ctx.focus_self());
+        assert!(!selector.read(&app, |selector, _| selector.focused));
+
+        for key in ["up", "down", "enter", "numpadenter", "escape"] {
+            assert!(!dispatch(&app, &selector, &key_down(key)), "{key}");
+        }
+    });
+}
 #[test]
 fn search_editor_is_created_only_for_searchable_pages() {
     App::test((), |mut app| async move {

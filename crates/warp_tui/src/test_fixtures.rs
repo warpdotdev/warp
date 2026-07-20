@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    ActiveSession, BlocklistAIActionModel, BlocklistAIHistoryModel, GetRelevantFilesController,
-    ModelEventDispatcher, Sessions, TerminalManagerTrait, TerminalModel, TerminalSurfaceInit,
+    ActiveSession, Appearance, BlocklistAIActionModel, BlocklistAIHistoryModel,
+    GetRelevantFilesController, ModelEventDispatcher, Sessions, TerminalManagerTrait,
+    TerminalModel, TerminalSurfaceInit,
 };
 use warp_core::semantic_selection::SemanticSelection;
 use warpui::{AddSingletonModel, App, EntityId, ModelHandle};
@@ -69,6 +70,9 @@ pub(crate) fn add_test_action_model_and_events(
     ModelHandle<BlocklistAIActionModel>,
     ModelHandle<ModelEventDispatcher>,
 ) {
+    if !app.read(|ctx| ctx.has_singleton_model::<Appearance>()) {
+        app.add_singleton_model(|_| Appearance::mock());
+    }
     add_test_semantic_selection(app);
     // Read as a singleton by the action model's executors.
     app.add_singleton_model(|_| BlocklistAIHistoryModel::default());

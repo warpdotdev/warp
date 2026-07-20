@@ -304,8 +304,23 @@ impl TuiUiBuilder {
 
     /// Accent-tinted surface behind an interactive ask-question card.
     pub(crate) fn question_surface_background(&self) -> Color {
+        self.permission_surface_background()
+    }
+
+    /// Accent-tinted body background for standard permission cards.
+    pub(crate) fn permission_surface_background(&self) -> Color {
         let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
         cell_color(self.base_background().blend(&accent.with_opacity(10)))
+    }
+
+    /// Stronger accent tint for standard permission-card title rows.
+    pub(crate) fn permission_header_background(&self) -> Color {
+        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        cell_color(
+            self.base_background()
+                .blend(&accent.with_opacity(10))
+                .blend(&accent.with_opacity(10)),
+        )
     }
 
     /// Collapsible-header style while the pointer hovers it.

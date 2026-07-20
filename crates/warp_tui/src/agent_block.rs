@@ -35,6 +35,7 @@ use warpui_core::{
 
 use super::tui_ask_question_view::{TuiAskQuestionView, TuiAskQuestionViewEvent};
 use super::tui_file_edits_view::{TuiFileEditsView, TuiFileEditsViewEvent};
+use super::tui_generic_tool_call_view::{TuiGenericToolCallView, TuiGenericToolCallViewEvent};
 use super::tui_shell_command_view::{TuiShellCommandView, TuiShellCommandViewEvent};
 use crate::agent_block_sections::{
     render_completed_todos_section, render_fallback_tool_call_section, render_input_section,
@@ -49,12 +50,31 @@ use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeB
 use crate::tui_markdown::{
     TuiMarkdownBlockHooks, TuiMarkdownPalette, render_formatted_table, render_formatted_text,
 };
+use crate::tui_permission_prompt::TuiPermissionPrompt;
 use crate::tui_plan_view::{TuiPlanView, TuiPlanViewEvent};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct TuiCodeBlockKey {
     message_id: MessageId,
     section_index: usize,
+}
+
+/// The focused child view for the front-of-queue blocking interaction.
+pub(super) enum TuiBlockingChild {
+    /// A standard Yes/No/Other permission request.
+    Permission(ViewHandle<TuiPermissionPrompt>),
+    /// The specialized orchestration configuration request.
+    Orchestration(ViewHandle<TuiOrchestrationBlock>),
+}
+
+impl TuiBlockingChild {
+    /// Returns the view identity used to detect blocker focus transitions.
+    pub(super) fn id(&self) -> EntityId {
+        match self {
+            Self::Permission(view) => view.id(),
+            Self::Orchestration(view) => view.id(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -165,6 +185,7 @@ impl CollapsibleSectionStates {
 enum TuiToolCallView {
     AskQuestion(ViewHandle<TuiAskQuestionView>),
     FileEdits(ViewHandle<TuiFileEditsView>),
+    Generic(ViewHandle<TuiGenericToolCallView>),
     Plan(ViewHandle<TuiPlanView>),
     ShellCommand(ViewHandle<TuiShellCommandView>),
     OrchestrationBlock(ViewHandle<TuiOrchestrationBlock>),
@@ -176,6 +197,7 @@ impl TuiToolCallView {
         match self {
             Self::AskQuestion(view) => view.id(),
             Self::FileEdits(view) => view.id(),
+            Self::Generic(view) => view.id(),
             Self::Plan(view) => view.id(),
             Self::ShellCommand(view) => view.id(),
             Self::OrchestrationBlock(view) => view.id(),
@@ -187,6 +209,7 @@ impl TuiToolCallView {
         match self {
             Self::AskQuestion(view) => TuiChildView::new(view),
             Self::FileEdits(view) => TuiChildView::new(view),
+            Self::Generic(view) => TuiChildView::new(view),
             Self::Plan(view) => TuiChildView::new(view),
             Self::ShellCommand(view) => TuiChildView::new(view),
             Self::OrchestrationBlock(view) => TuiChildView::new(view),
@@ -201,6 +224,11 @@ pub(super) enum TuiAIBlockEvent {
     /// A blocking child's focus/blocking state may have changed; the session
     /// surface re-derives the active blocker (input replacement).
     BlockingStateChanged,
+    /// Replacement guidance submitted from a tool permission request.
+    ReplacementGuidanceSubmitted {
+        conversation_id: AIConversationId,
+        text: String,
+    },
 }
 
 /// User interactions handled by the owning agent block.
@@ -282,8 +310,14 @@ impl TuiAIBlock {
 
         ctx.subscribe_to_model(
             &action_model,
-            |me, _, event: &BlocklistAIActionEvent, ctx| {
+            |me, action_model, event: &BlocklistAIActionEvent, ctx| {
                 if me.renders_action(event.action_id()) {
+                    if matches!(
+                        event,
+                        BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+                    ) {
+                        me.sync_action_views(&action_model, ctx);
+                    }
                     me.invalidate_action(event.action_id(), ctx);
                 }
             },
@@ -335,6 +369,7 @@ impl TuiAIBlock {
         let output_streaming = status.is_streaming();
         let mut ask_question_actions = Vec::new();
         let mut file_edit_action_ids = Vec::new();
+        let mut generic_actions = Vec::new();
         let mut plan_actions = Vec::new();
         let mut shell_command_actions = Vec::new();
         let mut run_agents_actions = Vec::new();
@@ -364,6 +399,12 @@ impl TuiAIBlock {
                     shell_command_actions.push(action.clone());
                 } else if matches!(&action.action, AIAgentActionType::RunAgents(_)) {
                     run_agents_actions.push(action.clone());
+                } else if action_model
+                    .as_ref(ctx)
+                    .get_action_status(&action.id)
+                    .is_some_and(|status| status.is_blocked())
+                {
+                    generic_actions.push(action.clone());
                 }
             }
         }
@@ -375,6 +416,7 @@ impl TuiAIBlock {
                 }
                 Some(
                     TuiToolCallView::FileEdits(_)
+                    | TuiToolCallView::Generic(_)
                     | TuiToolCallView::Plan(_)
                     | TuiToolCallView::ShellCommand(_)
                     | TuiToolCallView::OrchestrationBlock(_),
@@ -401,6 +443,45 @@ impl TuiAIBlock {
             });
             self.action_views
                 .insert(action_id, TuiToolCallView::AskQuestion(view));
+            ctx.notify();
+        }
+        // Generic tool calls remain stateless until the shared action model
+        // reports that one is the front-of-queue blocked action. Retain a view
+        // only then so it can own the interactive permission prompt.
+        for action in generic_actions {
+            if let Some(TuiToolCallView::Generic(view)) = self.action_views.get(&action.id) {
+                view.update(ctx, |view, ctx| {
+                    view.update_action(action, output_streaming, ctx);
+                });
+                continue;
+            }
+            let action_id = action.id.clone();
+            let action_model = action_model.clone();
+            let conversation_id = self.conversation_id;
+            let view = ctx.add_tui_view(|ctx| {
+                TuiGenericToolCallView::new(
+                    action,
+                    output_streaming,
+                    action_model,
+                    conversation_id,
+                    ctx,
+                )
+            });
+            ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
+                TuiGenericToolCallViewEvent::BlockingStateChanged => {
+                    ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
+                    me.invalidate_layout(ctx);
+                }
+                TuiGenericToolCallViewEvent::LayoutChanged => me.invalidate_layout(ctx),
+                TuiGenericToolCallViewEvent::ReplacementGuidanceSubmitted(text) => {
+                    ctx.emit(TuiAIBlockEvent::ReplacementGuidanceSubmitted {
+                        conversation_id: me.conversation_id,
+                        text: text.clone(),
+                    });
+                }
+            });
+            self.action_views
+                .insert(action_id, TuiToolCallView::Generic(view));
             ctx.notify();
         }
         for action_id in file_edit_action_ids {
@@ -546,10 +627,7 @@ impl TuiAIBlock {
     /// by one of this block's child views, and that view is still awaiting
     /// confirmation. Deriving from the action queue (not transcript order)
     /// keeps semantics identical to the GUI's `focus_subview_if_necessary`.
-    pub(super) fn active_blocking_child(
-        &self,
-        ctx: &AppContext,
-    ) -> Option<ViewHandle<TuiOrchestrationBlock>> {
+    pub(super) fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
         let action_model = self.action_model.as_ref(ctx);
         let pending = action_model.get_pending_action(ctx)?;
         let action_id = pending.id.clone();
@@ -566,7 +644,11 @@ impl TuiAIBlock {
             TuiToolCallView::OrchestrationBlock(view) => view
                 .as_ref(ctx)
                 .is_awaiting_confirmation(ctx)
-                .then(|| view.clone()),
+                .then(|| TuiBlockingChild::Orchestration(view.clone())),
+            TuiToolCallView::Generic(view) => view
+                .as_ref(ctx)
+                .active_permission_prompt(ctx)
+                .map(TuiBlockingChild::Permission),
             // These tool views render inline and never replace the input.
             TuiToolCallView::AskQuestion(_)
             | TuiToolCallView::FileEdits(_)
@@ -771,6 +853,7 @@ impl TuiAIBlock {
             || self.action_views.values().any(|view| match view {
                 TuiToolCallView::AskQuestion(_)
                 | TuiToolCallView::FileEdits(_)
+                | TuiToolCallView::Generic(_)
                 | TuiToolCallView::Plan(_)
                 | TuiToolCallView::OrchestrationBlock(_) => false,
                 TuiToolCallView::ShellCommand(view) => {
@@ -915,8 +998,17 @@ impl TuiAIBlock {
                 self.render_rich_text_section(section, false, app)
             }
             TuiAIBlockSection::ToolCall(action) => {
-                if self.action_views.contains_key(&action.id) {
-                    return None;
+                if let Some(view) = self.action_views.get(&action.id) {
+                    match view {
+                        TuiToolCallView::Generic(view)
+                            if view.as_ref(app).active_permission_prompt(app).is_none() => {}
+                        TuiToolCallView::AskQuestion(_)
+                        | TuiToolCallView::FileEdits(_)
+                        | TuiToolCallView::Generic(_)
+                        | TuiToolCallView::Plan(_)
+                        | TuiToolCallView::ShellCommand(_)
+                        | TuiToolCallView::OrchestrationBlock(_) => return None,
+                    }
                 }
                 let status = self.action_model.as_ref(app).get_action_status(&action.id);
                 render_fallback_tool_call_section(
@@ -1213,6 +1305,18 @@ impl TuiAIBlock {
                 // other tool call stays a pure render fn.
                 TuiAIBlockSection::ToolCall(action) => match self.action_views.get(&action.id) {
                     Some(TuiToolCallView::Plan(view)) if !view.as_ref(app).renders_rich_body() => {
+                        let status = self.action_model.as_ref(app).get_action_status(&action.id);
+                        render_fallback_tool_call_section(
+                            action,
+                            status.as_ref(),
+                            output_streaming,
+                            None,
+                            app,
+                        )
+                    }
+                    Some(TuiToolCallView::Generic(view))
+                        if view.as_ref(app).active_permission_prompt(app).is_none() =>
+                    {
                         let status = self.action_model.as_ref(app).get_action_status(&action.id);
                         render_fallback_tool_call_section(
                             action,

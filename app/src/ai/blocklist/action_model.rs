@@ -954,6 +954,25 @@ impl BlocklistAIActionModel {
         });
     }
 
+    /// Installs a front-of-queue confirmation action without preprocessing.
+    #[cfg(any(test, feature = "test-util"))]
+    pub(crate) fn queue_confirmation_action(
+        &mut self,
+        action: AIAgentAction,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let action_id = action.id.clone();
+        self.pending_actions
+            .entry(conversation_id)
+            .or_default()
+            .push_back(action);
+        ctx.emit(BlocklistAIActionEvent::QueuedAction(action_id.clone()));
+        ctx.emit(BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(
+            action_id,
+        ));
+    }
+
     fn handle_preprocess_actions_results(
         &mut self,
         conversation_id: AIConversationId,

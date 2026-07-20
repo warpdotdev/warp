@@ -22,8 +22,7 @@ use warpui_core::{
     ViewContext, ViewHandle,
 };
 
-use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
-use super::orchestration_block::TuiOrchestrationBlock;
+use super::agent_block::{TuiAIBlock, TuiAIBlockEvent, TuiBlockingChild};
 use super::terminal_block::{block_content_rows, should_render_terminal_block};
 use super::tui_block_list_viewport_source::{
     AgentBlockRegistry, CLISubagentBlockRegistry, TuiBlockListViewportSource,
@@ -61,6 +60,10 @@ pub(super) enum TuiTranscriptViewEvent {
     /// An agent block's blocking child changed state; the session surface
     /// re-derives the active blocker (input replacement).
     BlockingStateChanged,
+    PermissionReplacementGuidanceSubmitted {
+        conversation_id: AIConversationId,
+        text: String,
+    },
 }
 
 /// Selection actions originating from the transcript's element tree.
@@ -416,6 +419,17 @@ impl TuiTranscriptView {
                 ctx.emit(TuiTranscriptViewEvent::BlockingStateChanged);
                 ctx.notify();
             }
+            TuiAIBlockEvent::ReplacementGuidanceSubmitted {
+                conversation_id,
+                text,
+            } => {
+                ctx.emit(
+                    TuiTranscriptViewEvent::PermissionReplacementGuidanceSubmitted {
+                        conversation_id: *conversation_id,
+                        text: text.clone(),
+                    },
+                );
+            }
         });
         self.agent_blocks.borrow_mut().insert(view_id, view);
         let item = RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false);
@@ -585,10 +599,7 @@ impl TuiTranscriptView {
     /// The front-of-queue blocking interaction across this transcript's
     /// agent blocks, if any. A pure query over the shared action queue; the
     /// session surface derives input visibility and focus from it.
-    pub(super) fn active_blocking_child(
-        &self,
-        ctx: &AppContext,
-    ) -> Option<ViewHandle<TuiOrchestrationBlock>> {
+    pub(super) fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
         self.agent_blocks
             .borrow()
             .values()

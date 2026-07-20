@@ -3,15 +3,19 @@
 use ai::api_keys::ApiKeyManager;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
-use warpui::SingletonEntity as _;
+use warpui::{ModelContext, SingletonEntity as _};
 
 use crate::LaunchMode;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::AIAgentAction;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions, QueuedQueryModel};
+use crate::ai::blocklist::{
+    BlocklistAIActionModel, BlocklistAIHistoryModel, BlocklistAIPermissions, QueuedQueryModel,
+};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -30,6 +34,16 @@ use crate::settings::{AISettings, init_and_register_user_preferences};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::user_config::WarpConfig;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+
+/// Queues an action as the active confirmation request for a TUI view test.
+pub fn queue_tui_permission_action(
+    action_model: &mut BlocklistAIActionModel,
+    action: AIAgentAction,
+    conversation_id: AIConversationId,
+    ctx: &mut ModelContext<BlocklistAIActionModel>,
+) {
+    action_model.queue_confirmation_action(action, conversation_id, ctx);
+}
 
 /// Registers the app models required to construct full TUI session views in tests.
 ///

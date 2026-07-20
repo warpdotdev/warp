@@ -322,7 +322,7 @@ fn tui_restoration_wins_over_deferred_replacement() {
 }
 
 #[test]
-fn tui_new_conversation_preserves_pending_autoexecute_override() {
+fn tui_new_conversations_respect_the_active_execution_profile() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
@@ -344,7 +344,7 @@ fn tui_new_conversation_preserves_pending_autoexecute_override() {
 
         history.read(&app, |history, _| {
             assert!(
-                history
+                !history
                     .conversation(&conversation_id)
                     .expect("conversation should exist")
                     .autoexecute_any_action()

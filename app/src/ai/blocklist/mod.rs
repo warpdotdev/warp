@@ -46,7 +46,9 @@ pub(crate) use action_model::recording_finalize::{
 };
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg(feature = "tui")]
-pub use action_model::{AskUserQuestionExecutor, RequestFileEditsExecutor};
+pub use action_model::{
+    AskUserQuestionExecutor, NewConversationDecision, RequestFileEditsExecutor,
+};
 pub use action_model::{
     BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
