@@ -1,6 +1,6 @@
 use std::borrow::Cow;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
@@ -9,11 +9,11 @@ use wgpu::util::BufferInitDescriptor;
 use wgpu::{BindGroupLayout, ColorTargetState, Device, RenderPass, RenderPipeline};
 
 use super::util::create_buffer_init;
+use crate::Scene;
 use crate::rendering::get_best_dash_gap;
 use crate::rendering::wgpu::shader_types::BorderWidth;
 use crate::rendering::wgpu::{resources, shader_types};
 use crate::scene::Layer;
-use crate::Scene;
 
 pub(super) struct Pipeline {
     render_pipeline: RenderPipeline,

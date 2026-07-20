@@ -32,13 +32,14 @@ pub fn initialize_settings_for_tests_with_mode(
     use crate::settings::app_icon::AppIconSettings;
     use crate::settings::manager::SettingsManager;
     use crate::settings::{
-        init_and_register_user_preferences, AISettings, AccessibilitySettings,
-        AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
-        CloudPreferencesSettings, CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings,
-        GPUSettings, InputModeSettings, InputSettings, LocalControlSettings,
-        NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
-        SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
+        AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
+        BlockVisibilitySettings, ChangelogSettings, CloudPreferencesSettings, CodeSettings,
+        DebugSettings, EmacsBindingsSettings, FontSettings, GPUSettings, InputModeSettings,
+        InputSettings, LocalControlSettings, NativePreferenceSettings, PaneSettings,
+        SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
+        VimBannerSettings, init_and_register_user_preferences,
     };
+    use crate::terminal::BlockListSettings;
     use crate::terminal::general_settings::GeneralSettings;
     use crate::terminal::keys_settings::KeysSettings;
     use crate::terminal::ligature_settings::LigatureSettings;
@@ -47,7 +48,6 @@ pub fn initialize_settings_for_tests_with_mode(
     use crate::terminal::settings::TerminalSettings;
     use crate::terminal::shared_session::settings::SharedSessionSettings;
     use crate::terminal::warpify::settings::WarpifySettings;
-    use crate::terminal::BlockListSettings;
     use crate::undo_close::UndoCloseSettings;
     use crate::user_config::WarpConfig;
     use crate::window_settings::WindowSettings;

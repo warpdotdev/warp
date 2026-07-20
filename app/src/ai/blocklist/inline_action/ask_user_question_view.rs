@@ -8,18 +8,18 @@ use ai::agent::{
     AskUserQuestionSession, QuestionDraft,
 };
 use itertools::Itertools;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
     Border, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Fill, Flex, FormattedTextElement, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, ParentElement, Point, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, Fill, Flex, FormattedTextElement,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Point, Radius, Stack, Text,
 };
 use warpui::event::DispatchedEvent;
 use warpui::geometry::vector::Vector2F;
 use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::components::Coords;
 use warpui::units::Pixels;
 use warpui::{
@@ -28,10 +28,12 @@ use warpui::{
     View, ViewContext, ViewHandle,
 };
 
+use crate::Appearance;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::icons::yellow_stop_icon;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{AIAgentActionId, AIAgentActionResult, AIAgentActionResultType};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::action_model::{
     AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel,
 };
@@ -40,18 +42,17 @@ use crate::ai::blocklist::block::number_shortcut_buttons::{
     self, NumberShortcutButtonBuilder, NumberShortcutButtons, NumberShortcutButtonsConfig,
 };
 use crate::ai::blocklist::block::view_impl::{
-    render_autonomy_dropdown_setting_speedbump_footer, CONTENT_HORIZONTAL_PADDING,
-    CONTENT_ITEM_VERTICAL_MARGIN,
+    CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
+    render_autonomy_dropdown_setting_speedbump_footer,
 };
 use crate::ai::blocklist::inline_action::inline_action_header::{
-    ExpandedConfig, HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
-    INLINE_ACTION_HORIZONTAL_PADDING,
+    ExpandedConfig, HeaderConfig, INLINE_ACTION_HEADER_VERTICAL_PADDING,
+    INLINE_ACTION_HORIZONTAL_PADDING, InteractionMode,
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::CTRL_C_KEYSTROKE;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::AskUserQuestionPermission;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::terminal::input::message_bar::common::{
     render_standard_message, standard_message_bar_height, styles,
 };
@@ -63,7 +64,6 @@ use crate::view_components::action_button::{
 };
 use crate::view_components::compactible_action_button::CompactibleActionButton;
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
-use crate::Appearance;
 
 const ASK_USER_QUESTION_ACTIVE: &str = "AskUserQuestionActive";
 
@@ -506,14 +506,14 @@ impl AskUserQuestionView {
             return None;
         }
 
-        if draft.is_some_and(|draft| draft.is_other_input_active) {
-            if let Some(input) = other_text_input {
-                return Some(number_shortcut_buttons::inline_input_shortcut_button(
-                    number,
-                    input.clone(),
-                    MouseStateHandle::default(),
-                ));
-            }
+        if draft.is_some_and(|draft| draft.is_other_input_active)
+            && let Some(input) = other_text_input
+        {
+            return Some(number_shortcut_buttons::inline_input_shortcut_button(
+                number,
+                input.clone(),
+                MouseStateHandle::default(),
+            ));
         }
 
         let accepted_text = draft
@@ -1390,8 +1390,8 @@ pub(crate) fn render_text_with_markdown_support(
     text_color: pathfinder_color::ColorU,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    if let Ok(formatted_text) = markdown_parser::parse_markdown(text) {
-        FormattedTextElement::new(
+    match markdown_parser::parse_markdown(text) {
+        Ok(formatted_text) => FormattedTextElement::new(
             formatted_text,
             font_size,
             appearance.ui_font_family(),
@@ -1400,12 +1400,11 @@ pub(crate) fn render_text_with_markdown_support(
             Default::default(),
         )
         .with_line_height_ratio(DEFAULT_UI_LINE_HEIGHT_RATIO)
-        .finish()
-    } else {
-        Text::new(text.to_string(), appearance.ui_font_family(), font_size)
+        .finish(),
+        _ => Text::new(text.to_string(), appearance.ui_font_family(), font_size)
             .soft_wrap(true)
             .with_color(text_color)
-            .finish()
+            .finish(),
     }
 }
 

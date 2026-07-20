@@ -8,8 +8,8 @@ use warpui::{App, EntityId};
 use super::{BlockSelector, ShellCommandExecutor};
 use crate::terminal::event::{BlockMetadataReceivedEvent, BlockWorkingDirectoryUpdatedEvent};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
-use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::Sessions;
+use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::{BlockIndex, TerminalModel};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 

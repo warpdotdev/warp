@@ -23,8 +23,8 @@ use warpui_core::fonts::{Cache, FamilyId, Weight};
 use warpui_core::presenter::ChildView;
 use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
 use warpui_core::{
-    platform, AddWindowOptions, AppContext, AssetProvider, Element, Entity, SingletonEntity as _,
-    TypedActionView, View, ViewContext, ViewHandle,
+    AddWindowOptions, AppContext, AssetProvider, Element, Entity, SingletonEntity as _,
+    TypedActionView, View, ViewContext, ViewHandle, platform,
 };
 
 #[derive(Clone, Copy, RustEmbed)]
@@ -268,10 +268,10 @@ impl View for OnboardingMainView {
     }
 
     fn on_focus(&mut self, focus_ctx: &warpui_core::FocusContext, ctx: &mut ViewContext<Self>) {
-        if let OnboardingMainState::Onboarding(view) = &self.state {
-            if focus_ctx.is_self_focused() {
-                ctx.focus(view);
-            }
+        if let OnboardingMainState::Onboarding(view) = &self.state
+            && focus_ctx.is_self_focused()
+        {
+            ctx.focus(view);
         }
     }
 }

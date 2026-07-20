@@ -485,20 +485,20 @@ impl VimHandler for CodeEditorView {
 
         let word_under_cursor = self.model.as_ref(ctx).word_under_cursor_for_search(ctx);
 
-        if let Some(word) = word_under_cursor {
-            if !word.trim().is_empty() {
-                find_bar.update(ctx, |find_bar, ctx| {
-                    find_bar.set_find_query(ctx, &word);
-                    find_bar.set_open(true);
-                    // Disable the find input; the search is already defined.
-                    find_bar.set_find_input_editable(ctx, false);
-                });
+        if let Some(word) = word_under_cursor
+            && !word.trim().is_empty()
+        {
+            find_bar.update(ctx, |find_bar, ctx| {
+                find_bar.set_find_query(ctx, &word);
+                find_bar.set_open(true);
+                // Disable the find input; the search is already defined.
+                find_bar.set_find_input_editable(ctx, false);
+            });
 
-                self.searcher
-                    .update(ctx, |searcher, _| searcher.set_auto_select(true));
-                self.run_find(&word, ctx);
-                ctx.notify();
-            }
+            self.searcher
+                .update(ctx, |searcher, _| searcher.set_auto_select(true));
+            self.run_find(&word, ctx);
+            ctx.notify();
         }
     }
 

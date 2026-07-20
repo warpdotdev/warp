@@ -10,17 +10,17 @@ use super::{
     InlineItem, SlashCommandDataSource, SlashCommandDataSourceState, UpdatedActiveCommands,
 };
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
+use crate::search::SyncDataSource;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
-use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
 use crate::search::slash_command_menu::static_commands::Availability;
-use crate::search::SyncDataSource;
+use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
+use crate::terminal::TerminalModel;
 use crate::terminal::input::slash_commands::{
-    slash_command_is_supported_in_tui, AcceptSlashCommandOrSavedPrompt,
+    AcceptSlashCommandOrSavedPrompt, slash_command_is_supported_in_tui,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::view::resolve_ai_query_routing;
-use crate::terminal::TerminalModel;
 
 pub struct TuiDataSourceArgs {
     pub active_session: ModelHandle<ActiveSession>,

@@ -1,17 +1,17 @@
 use std::cell::Cell;
 
 use onboarding::components::feature_optout_dialog::{
-    render_feature_optout_dialog, FeatureOptOutDialog,
+    FeatureOptOutDialog, render_feature_optout_dialog,
 };
 use onboarding::slides::{layout, slide_content};
 use onboarding::{OnboardingIntention, WARP_DRIVE_FEATURES};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::actions::StandardAction;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
@@ -33,7 +33,7 @@ use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::auth_view_modal::AuthRedirectPayload;
 use crate::auth::auth_view_shared_helpers::{
-    render_privacy_settings_toggles, PrivacySettingsActions, PrivacySettingsHandles,
+    PrivacySettingsActions, PrivacySettingsHandles, render_privacy_settings_toggles,
 };
 use crate::auth::login_failure_notification::{self, LoginFailureReason};
 use crate::editor::{EditorView, SingleLineEditorOptions, TextColors, TextOptions};
@@ -1056,28 +1056,31 @@ impl View for LoginSlideView {
         let mut stack = Stack::new();
 
         // Background (same as onboarding parent)
-        if let Some(img) = theme.background_image() {
-            stack.add_child(
-                Shrinkable::new(
-                    1.,
-                    Image::new(img.source(), CacheOption::Original)
-                        .cover()
+        match theme.background_image() {
+            Some(img) => {
+                stack.add_child(
+                    Shrinkable::new(
+                        1.,
+                        Image::new(img.source(), CacheOption::Original)
+                            .cover()
+                            .finish(),
+                    )
+                    .finish(),
+                );
+                let overlay_opacity = (100u8).saturating_sub(img.opacity);
+                stack.add_child(
+                    warpui::elements::Rect::new()
+                        .with_background(theme.background().with_opacity(overlay_opacity))
                         .finish(),
-                )
-                .finish(),
-            );
-            let overlay_opacity = (100u8).saturating_sub(img.opacity);
-            stack.add_child(
-                warpui::elements::Rect::new()
-                    .with_background(theme.background().with_opacity(overlay_opacity))
-                    .finish(),
-            );
-        } else {
-            stack.add_child(
-                Container::new(warpui::elements::Empty::new().finish())
-                    .with_background(theme.background())
-                    .finish(),
-            );
+                );
+            }
+            _ => {
+                stack.add_child(
+                    Container::new(warpui::elements::Empty::new().finish())
+                        .with_background(theme.background())
+                        .finish(),
+                );
+            }
         }
 
         // Two-column slide layout

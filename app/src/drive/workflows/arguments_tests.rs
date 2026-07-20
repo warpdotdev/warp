@@ -47,18 +47,18 @@ fn test_arguments_state_from_string() {
         );
 
         // Mutate data in current arguments state object
-        if let Some(change_index) = args_state.word_index_to_arg_index_map.get(&2) {
-            if let Some(change_arg) = args_state.arguments.get_mut(*change_index) {
-                change_arg.description = Some("new desc".to_string());
-                change_arg.default_value = Some("default value".to_string());
-            }
+        if let Some(change_index) = args_state.word_index_to_arg_index_map.get(&2)
+            && let Some(change_arg) = args_state.arguments.get_mut(*change_index)
+        {
+            change_arg.description = Some("new desc".to_string());
+            change_arg.default_value = Some("default value".to_string());
         }
 
-        if let Some(change_index) = args_state.word_index_to_arg_index_map.get(&3) {
-            if let Some(change_arg) = args_state.arguments.get_mut(*change_index) {
-                change_arg.description = Some("another desc".to_string());
-                change_arg.default_value = Some("change default value".to_string());
-            }
+        if let Some(change_index) = args_state.word_index_to_arg_index_map.get(&3)
+            && let Some(change_arg) = args_state.arguments.get_mut(*change_index)
+        {
+            change_arg.description = Some("another desc".to_string());
+            change_arg.default_value = Some("change default value".to_string());
         }
 
         // Edits that don't change number of words retain data
@@ -190,18 +190,18 @@ fn test_arguments_state_from_string_multicursor() {
         );
 
         // Mutate data in current arguments state object
-        if let Some(change_index) = args_state.word_index_to_arg_index_map.get(&2) {
-            if let Some(change_arg) = args_state.arguments.get_mut(*change_index) {
-                change_arg.description = Some("new desc".to_string());
-                change_arg.default_value = Some("default value".to_string());
-            }
+        if let Some(change_index) = args_state.word_index_to_arg_index_map.get(&2)
+            && let Some(change_arg) = args_state.arguments.get_mut(*change_index)
+        {
+            change_arg.description = Some("new desc".to_string());
+            change_arg.default_value = Some("default value".to_string());
         }
 
-        if let Some(change_index) = args_state.word_index_to_arg_index_map.get(&3) {
-            if let Some(change_arg) = args_state.arguments.get_mut(*change_index) {
-                change_arg.description = Some("another desc".to_string());
-                change_arg.default_value = Some("change default value".to_string());
-            }
+        if let Some(change_index) = args_state.word_index_to_arg_index_map.get(&3)
+            && let Some(change_arg) = args_state.arguments.get_mut(*change_index)
+        {
+            change_arg.description = Some("another desc".to_string());
+            change_arg.default_value = Some("change default value".to_string());
         }
 
         // "on|e two{{thre|e}} {{f|our}}"
@@ -247,14 +247,12 @@ fn test_arguments_state_from_string_multicursor() {
         if let Some(change_index) = multicursor_insert_args_state
             .word_index_to_arg_index_map
             .get(&2)
-        {
-            if let Some(change_arg) = multicursor_insert_args_state
+            && let Some(change_arg) = multicursor_insert_args_state
                 .arguments
                 .get_mut(*change_index)
-            {
-                change_arg.description = Some("test desc".to_string());
-                change_arg.default_value = Some("with dvalue".to_string());
-            }
+        {
+            change_arg.description = Some("test desc".to_string());
+            change_arg.default_value = Some("with dvalue".to_string());
         }
 
         // "on|yee |two{{thereye}} {{fyou|r}}e"

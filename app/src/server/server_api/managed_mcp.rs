@@ -1,7 +1,7 @@
 // We don't resolve managed MCPs from agent run CLI flows on WASM, so this code is unused there.
 #![cfg_attr(target_family = "wasm", expect(dead_code))]
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cynic::MutationBuilder;
 #[cfg(test)]

@@ -29,7 +29,7 @@ fn root_projects_only_the_focused_retained_session_view() {
         let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
         root.update(&mut app, |_, ctx| {
             ctx.subscribe_to_model(&sessions, |_, _, event, ctx| match event {
-                TuiSessionsEvent::SessionAdded(_) => {}
+                TuiSessionsEvent::SessionRemoved(_) => ctx.notify(),
                 TuiSessionsEvent::FocusChanged(_) => ctx.notify(),
             });
         });
@@ -39,8 +39,8 @@ fn root_projects_only_the_focused_retained_session_view() {
 
         let (first, first_manager) = add_test_terminal_session(&mut app, window_id);
         let first_view_id = first.id();
-        let first_id = app.update_model(&sessions, |sessions, ctx| {
-            sessions.add_session(first, first_manager, true, ctx)
+        let first_id = app.update(|ctx| {
+            TuiSessions::register_session(&sessions, first, first_manager, true, ctx)
         });
         app.read(|ctx| {
             assert!(root.as_ref(ctx).child_view_ids(ctx).is_empty());
@@ -54,8 +54,8 @@ fn root_projects_only_the_focused_retained_session_view() {
         let (second, second_manager) = add_test_terminal_session(&mut app, window_id);
         let second_view_id = second.id();
 
-        let second_id = app.update_model(&sessions, |sessions, ctx| {
-            sessions.add_session(second, second_manager, false, ctx)
+        let second_id = app.update(|ctx| {
+            TuiSessions::register_session(&sessions, second, second_manager, false, ctx)
         });
         app.read(|ctx| {
             assert_eq!(root.as_ref(ctx).child_view_ids(ctx), vec![first_view_id]);

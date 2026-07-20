@@ -3,7 +3,7 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{TermMode, TerminalModel};
 use warp_terminal::model::escape_sequences::{
-    ModeProvider, BRACKETED_PASTE_END, BRACKETED_PASTE_START,
+    BRACKETED_PASTE_END, BRACKETED_PASTE_START, ModeProvider,
 };
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
@@ -15,8 +15,8 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext};
 
 use super::{
-    mouse_event_to_pty_bytes, paste_bytes, pty_bytes_for_event, MouseReportPolicy,
-    TuiTerminalContentElement,
+    MouseReportPolicy, TuiTerminalContentElement, mouse_event_to_pty_bytes, paste_bytes,
+    pty_bytes_for_event,
 };
 
 /// Builds retained screen bounds anchored at `(x, y)`.

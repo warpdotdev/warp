@@ -11,17 +11,17 @@ use warp::tui_export::{
     OptionSourceStatus,
 };
 use warpui::SingletonEntity;
+use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::tui::{
     Modifier, TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
-use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
-use crate::keybindings::{is_tui_owned_binding, TUI_BINDING_GROUP};
+use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
 use crate::option_selector::{OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent};
 use crate::tui_builder::TuiUiBuilder;
 

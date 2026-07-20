@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use pathfinder_geometry::rect::RectF;
 use wgpu::util::BufferInitDescriptor;
@@ -11,6 +11,7 @@ use wgpu::{
 };
 
 use super::util::create_buffer_init;
+use crate::Scene;
 use crate::fonts::SubpixelAlignment;
 use crate::rendering::atlas::TextureId;
 use crate::rendering::wgpu::renderer::WGPUContext;
@@ -18,7 +19,6 @@ use crate::rendering::wgpu::texture_with_bind_group::TextureWithBindGroup;
 use crate::rendering::wgpu::{resources, shader_types};
 use crate::rendering::{GlyphCache, GlyphConfig};
 use crate::scene::{GlyphFade, Layer};
-use crate::Scene;
 
 pub(super) struct Pipeline {
     glyph_cache: GlyphCache<TextureWithBindGroup>,

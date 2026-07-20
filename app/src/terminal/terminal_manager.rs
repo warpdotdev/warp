@@ -12,14 +12,14 @@ use super::model::block::BlockSize;
 use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
-use super::view::{create_size_info_for_blocklist, WARP_PROMPT_HEIGHT_LINES};
-use super::{color, BlockPadding, ShellLaunchState, SizeInfo, TerminalModel};
-use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
+use super::view::{WARP_PROMPT_HEIGHT_LINES, create_size_info_for_blocklist};
+use super::{BlockPadding, ShellLaunchState, SizeInfo, TerminalModel, color};
+use crate::PrivacySettings;
 use crate::ai::blocklist::SerializedBlockListItem;
+use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::appearance::Appearance;
 use crate::pane_group::pane::DetachType;
 use crate::settings::{BlockVisibilitySettings, DebugSettings, InputModeSettings};
-use crate::PrivacySettings;
 
 pub trait TerminalManager: Any {
     /// Returns the backing terminal model.

@@ -1,4 +1,4 @@
-use super::{extract_captured_path, PATH_CAPTURE_END, PATH_CAPTURE_START};
+use super::{PATH_CAPTURE_END, PATH_CAPTURE_START, extract_captured_path};
 
 #[test]
 fn extracts_clean_path() {

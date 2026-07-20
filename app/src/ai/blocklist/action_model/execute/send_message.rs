@@ -3,10 +3,10 @@ use std::time::Duration;
 
 #[cfg(not(target_family = "wasm"))]
 use anyhow::anyhow;
+use futures::FutureExt;
 use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use futures::future::Either;
-use futures::FutureExt;
 use warp_core::send_telemetry_from_ctx;
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::Timer;
@@ -24,8 +24,8 @@ use crate::ai::blocklist::telemetry::{
     TeamAgentCommunicationFailureReason, TeamAgentCommunicationKind,
     TeamAgentCommunicationTransport, TeamAgentOrchestrationVersion,
 };
-use crate::server::server_api::ai::{SendAgentMessageRequest, SendAgentMessageResponse};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{SendAgentMessageRequest, SendAgentMessageResponse};
 
 #[cfg(not(target_family = "wasm"))]
 const SEND_AGENT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(15);

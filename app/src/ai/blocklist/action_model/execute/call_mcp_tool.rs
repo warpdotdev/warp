@@ -1,5 +1,5 @@
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use itertools::Itertools;
 #[cfg(not(target_family = "wasm"))]
@@ -12,12 +12,13 @@ use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessA
 use crate::terminal::model::session::active_session::ActiveSession;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
+    TelemetryEvent,
     ai::{
         agent::{AIAgentAction, AIAgentActionResultType, CallMCPToolResult},
-        blocklist::{action_model::AIAgentActionType, BlocklistAIPermissions},
+        blocklist::{BlocklistAIPermissions, action_model::AIAgentActionType},
         mcp::TemplatableMCPServerManager,
     },
-    send_telemetry_from_app_ctx, TelemetryEvent,
+    send_telemetry_from_app_ctx,
 };
 
 pub struct CallMCPToolExecutor {
@@ -77,7 +78,7 @@ impl CallMCPToolExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         #[cfg(target_family = "wasm")]
         {
             ActionExecution::<()>::InvalidAction
@@ -224,10 +225,10 @@ fn coerce_number_to_int(n: &mut serde_json::Number) {
 /// multiple `oneOf`/`anyOf`/`allOf` branches: coercion is a no-op on values
 /// the schema does not match.
 fn coerce_value_against_schema(value: &mut serde_json::Value, schema: &serde_json::Value) {
-    if schema_declares_integer(schema) {
-        if let serde_json::Value::Number(n) = value {
-            coerce_number_to_int(n);
-        }
+    if schema_declares_integer(schema)
+        && let serde_json::Value::Number(n) = value
+    {
+        coerce_number_to_int(n);
     }
 
     // Visit every combinator key independently — a schema may declare more than
@@ -255,10 +256,10 @@ fn coerce_value_against_schema(value: &mut serde_json::Value, schema: &serde_jso
             for (k, v) in map.iter_mut() {
                 if let Some(prop_schema) = properties.and_then(|p| p.get(k)) {
                     coerce_value_against_schema(v, prop_schema);
-                } else if let Some(extra_schema) = additional {
-                    if extra_schema.is_object() {
-                        coerce_value_against_schema(v, extra_schema);
-                    }
+                } else if let Some(extra_schema) = additional
+                    && extra_schema.is_object()
+                {
+                    coerce_value_against_schema(v, extra_schema);
                 }
             }
         }

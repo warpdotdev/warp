@@ -1,12 +1,12 @@
 use std::time::Duration;
 
 use warp::appearance::Appearance;
+use warpui_core::App;
 use warpui_core::elements::shimmer_math::ShimmerConfig;
 use warpui_core::elements::tui::{Color, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::App;
 
-use super::{render_warping_indicator, SPINNER_TIMELINE};
+use super::{SPINNER_TIMELINE, render_warping_indicator};
 use crate::tui_builder::TuiUiBuilder;
 
 #[test]

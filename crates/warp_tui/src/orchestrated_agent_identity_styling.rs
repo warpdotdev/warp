@@ -5,8 +5,8 @@
 
 use pathfinder_color::ColorU;
 use warp_core::ui::theme::{Fill as ThemeFill, TerminalColors};
-use warpui_core::elements::tui::TuiStyle;
 use warpui_core::elements::Fill as CoreFill;
+use warpui_core::elements::tui::TuiStyle;
 
 /// Glyphs paired with themed colors to form deterministic agent identities.
 const AGENT_IDENTITY_GLYPHS: [&str; 7] = ["⊹", "⟡", "✶", "◊", "⊛", "*", "✠"];
@@ -16,6 +16,15 @@ const AGENT_IDENTITY_GLYPHS: [&str; 7] = ["⊹", "⟡", "✶", "◊", "⊛", "*"
 pub(crate) struct AgentIdentity {
     pub(crate) glyph: &'static str,
     pub(crate) style: TuiStyle,
+}
+
+impl Default for AgentIdentity {
+    fn default() -> Self {
+        Self {
+            glyph: "⟡",
+            style: TuiStyle::default(),
+        }
+    }
 }
 
 /// Builds the identity palette from the seven color roles in the design:

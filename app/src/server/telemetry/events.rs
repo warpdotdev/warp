@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use session_sharing_protocol::common::{ParticipantId, Role, SessionId as SharedSessionId};
 use session_sharing_protocol::sharer::{SessionEndedReason, SessionSourceType};
 use strum_macros::{EnumDiscriminants, EnumIter};
@@ -48,15 +48,16 @@ use crate::notebooks::{NotebookId, NotebookLocation};
 use crate::palette::PaletteMode;
 use crate::pane_group::PaneDragDropLocation;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
-use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::search::QueryFilter;
+use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::server::block::DisplaySetting;
 use crate::server::ids::{ObjectUid, ServerId};
+use crate::settings::AgentModeCodingPermissionsType;
 use crate::settings::import::config::ParsedTerminalSetting;
 use crate::settings::import::model::TerminalType;
-use crate::settings::AgentModeCodingPermissionsType;
 use crate::settings_view::TeamsInviteOption;
 use crate::tab::TabTelemetryAction;
+use crate::terminal::ShareBlockType;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentRichInputCloseReason};
 use crate::terminal::input::TelemetryInputSuggestionsMode;
@@ -73,15 +74,14 @@ use crate::terminal::view::{
     BlockEntity, BlockSelectionDetails, NotificationsDiscoveryBannerAction,
     NotificationsErrorBannerAction, NotificationsTrigger, PromptPart,
 };
-use crate::terminal::ShareBlockType;
 use crate::tips::WelcomeTipFeature;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::settings::EditorLayout;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
 use crate::workflows::{WorkflowId, WorkflowSelectionSource, WorkflowSource};
-use crate::workspace::tab_settings::{TabCloseButtonPosition, WorkspaceDecorationVisibility};
 use crate::workspace::TabMovement;
+use crate::workspace::tab_settings::{TabCloseButtonPosition, WorkspaceDecorationVisibility};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BootstrappingInfo {
@@ -6793,9 +6793,13 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::OpenedSharingDialog => {
                 "Opened the sharing settings dialog for a session or Warp Drive object"
             }
-			Self::ToggleGlobalAI => "Toggled global AI enablement.",
-			Self::SuperGrokSubscriptionConnectInitiated => "User clicked Connect SuperGrok subscription; OAuth connection attempt initiated.",
-            Self::SuperGrokSubscriptionConnectFinished => "SuperGrok subscription OAuth connection flow finished (success or failure).",
+            Self::ToggleGlobalAI => "Toggled global AI enablement.",
+            Self::SuperGrokSubscriptionConnectInitiated => {
+                "User clicked Connect SuperGrok subscription; OAuth connection attempt initiated."
+            }
+            Self::SuperGrokSubscriptionConnectFinished => {
+                "SuperGrok subscription OAuth connection flow finished (success or failure)."
+            }
             Self::ToggleActiveAI => "Toggled active AI enablement.",
             Self::ToggleLigatureRendering => "Toggled ligature rendering",
             Self::WorkflowAliasAdded => "Added an alias to a Warp Drive workflow",
@@ -6977,9 +6981,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::CLIAgentPluginOperationSucceeded { .. } => {
                 "Auto plugin install or update completed successfully"
             }
-            Self::CLIAgentPluginOperationFailed { .. } => {
-                "Auto plugin install or update failed"
-            }
+            Self::CLIAgentPluginOperationFailed { .. } => "Auto plugin install or update failed",
             Self::CLIAgentPluginDetected { .. } => {
                 "A CLI agent plugin was detected via a SessionStart event"
             }
@@ -7028,9 +7030,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteServerDisconnection => {
                 "An established remote server connection was dropped"
             }
-            Self::RemoteServerClientRequestError => {
-                "A client request to the remote server failed"
-            }
+            Self::RemoteServerClientRequestError => "A client request to the remote server failed",
             Self::RemoteServerMessageDecodingError => {
                 "A server message could not be decoded (no parseable request_id)"
             }
@@ -7051,13 +7051,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteCodebaseAutoIndexRequested => {
                 "Remote codebase auto-indexing requested one or more repositories"
             }
-            Self::QueuedPromptEdited => {
-                "User committed a non-empty edit to a queued prompt row"
-            }
+            Self::QueuedPromptEdited => "User committed a non-empty edit to a queued prompt row",
             Self::QueuedPromptDeleted => "User deleted a queued prompt row",
-            Self::QueuedPromptReordered => {
-                "User reordered a queued prompt row via drag-and-drop"
-            }
+            Self::QueuedPromptReordered => "User reordered a queued prompt row via drag-and-drop",
             Self::QueuedPromptPanelCollapseToggled => {
                 "User toggled the queued prompts panel collapse state"
             }

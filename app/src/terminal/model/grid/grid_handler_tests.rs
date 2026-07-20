@@ -1740,9 +1740,11 @@ fn test_input_overwriting_wide_char_spacer_resets_wide_char() {
     grid.input('x');
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
     assert_eq!(grid.grid_storage()[VisibleRow(0)][1].c, 'x');
 }
 
@@ -1758,9 +1760,11 @@ fn test_input_overwriting_wide_char_resets_spacer() {
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
     assert_eq!(grid.grid_storage()[VisibleRow(0)][0].c, 'y');
-    assert!(!grid.grid_storage()[VisibleRow(0)][1]
-        .flags
-        .contains(Flags::WIDE_CHAR_SPACER));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
 }
 
 #[test]
@@ -1774,9 +1778,11 @@ fn test_erase_chars_at_wide_char_spacer_boundary() {
     grid.erase_chars(1);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
 }
 
 #[test]
@@ -1806,9 +1812,11 @@ fn test_delete_chars_at_wide_char_spacer_boundary() {
     grid.delete_chars(1);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
 }
 
 #[test]
@@ -1822,9 +1830,11 @@ fn test_insert_blank_at_wide_char_spacer_boundary() {
     grid.insert_blank(1);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
 }
 
 #[test]
@@ -1838,9 +1848,11 @@ fn test_clear_line_right_at_wide_char_spacer() {
     grid.clear_line(ansi::LineClearMode::Right);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
 }
 
 #[test]
@@ -1857,9 +1869,11 @@ fn test_clear_line_left_at_wide_char() {
     grid.clear_line(ansi::LineClearMode::Left);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][3]
-        .flags
-        .contains(Flags::WIDE_CHAR_SPACER));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][3]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
 }
 
 #[test]
@@ -1873,9 +1887,11 @@ fn test_clear_screen_below_at_wide_char_spacer() {
     grid.clear_screen(ansi::ClearMode::Below);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
 }
 
 #[test]
@@ -1892,9 +1908,11 @@ fn test_clear_screen_above_at_wide_char() {
     grid.clear_screen(ansi::ClearMode::Above);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][3]
-        .flags
-        .contains(Flags::WIDE_CHAR_SPACER));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][3]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
 }
 
 fn assert_visible_grid_blank(grid: &GridHandler) {
@@ -2492,12 +2510,16 @@ fn test_full_grid_clear_shrink_cols_does_not_orphan_wide_char_at_boundary() {
     }
     grid.grid_storage_mut()[VisibleRow(0)][new_cols - 1].bg = Color::Named(NamedColor::Red);
 
-    assert!(grid.grid_storage()[VisibleRow(0)][new_cols - 1]
-        .flags
-        .contains(Flags::WIDE_CHAR));
-    assert!(grid.grid_storage()[VisibleRow(0)][new_cols]
-        .flags
-        .contains(Flags::WIDE_CHAR_SPACER));
+    assert!(
+        grid.grid_storage()[VisibleRow(0)][new_cols - 1]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
+    assert!(
+        grid.grid_storage()[VisibleRow(0)][new_cols]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
 
     grid.enable_full_grid_clear_behavior();
     grid.resize(SizeInfo::new_without_font_metrics(num_rows, new_cols));

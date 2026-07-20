@@ -1,6 +1,6 @@
 use super::{
-    input_detection_decision, parsed_result_is_applicable, should_reset_input_to_agent,
-    InputDetectionDecision,
+    InputDetectionDecision, input_detection_decision, parsed_result_is_applicable,
+    should_reset_input_to_agent,
 };
 
 // These tests exercise only synchronous TUI coordinator decisions; they never invoke the NLD
@@ -37,6 +37,18 @@ fn empty_input_resets_to_agent() {
     assert_eq!(
         input_detection_decision("  \n", None, 0, false),
         InputDetectionDecision::ResetToAgent
+    );
+}
+
+#[test]
+fn unrecognized_slash_prefix_is_parsed_as_possible_shell_input() {
+    assert_eq!(
+        input_detection_decision("/usr/bin/env", None, 0, false),
+        InputDetectionDecision::Parse
+    );
+    assert_eq!(
+        input_detection_decision("/usr/bin/env", Some(1), 12, true),
+        InputDetectionDecision::Classify
     );
 }
 

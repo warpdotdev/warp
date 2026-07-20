@@ -5,12 +5,12 @@ use warp_terminal::model::grid::cell;
 
 use super::*;
 use crate::features::FeatureFlag;
+use crate::terminal::SizeInfo;
 use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::{Point, VisiblePoint, VisibleRow};
 use crate::terminal::model::secrets::ObfuscateSecrets;
-use crate::terminal::SizeInfo;
 
 // Scroll up moves lines upward.
 #[test]
@@ -1264,17 +1264,21 @@ fn test_shrink_cols_reflow_preserves_split_wide_char_as_wrapped_content() {
     grid.resize(true, 2, 5, false);
 
     let retained_boundary = &grid[VisibleRow(0)][4];
-    assert!(retained_boundary
-        .flags
-        .contains(Flags::LEADING_WIDE_CHAR_SPACER));
+    assert!(
+        retained_boundary
+            .flags
+            .contains(Flags::LEADING_WIDE_CHAR_SPACER)
+    );
     assert!(!retained_boundary.flags.contains(Flags::WIDE_CHAR));
 
     let wrapped_wide_char = &grid[VisibleRow(1)][0];
     assert_eq!(wrapped_wide_char.c, 'Ｗ');
     assert!(wrapped_wide_char.flags.contains(Flags::WIDE_CHAR));
-    assert!(grid[VisibleRow(1)][1]
-        .flags
-        .contains(Flags::WIDE_CHAR_SPACER));
+    assert!(
+        grid[VisibleRow(1)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
 }
 
 fn cell(c: char) -> Cell {

@@ -13,6 +13,40 @@ fn renders_a_single_short_line() {
         vec!["hello     "],
     );
 }
+#[test]
+fn ellipsis_stays_inside_the_assigned_width() {
+    assert_eq!(
+        render_to_lines(
+            TuiText::new("infrastructure").truncate_with_ellipsis(),
+            TuiSize::new(8, 1),
+        ),
+        vec!["infra..."],
+    );
+    assert_eq!(
+        render_to_lines(
+            TuiText::new("abcdef").truncate_with_ellipsis(),
+            TuiSize::new(2, 1),
+        ),
+        vec![".."],
+    );
+}
+
+#[test]
+fn ellipsis_preserves_graphemes_and_span_style() {
+    let yellow = Style::default().fg(Color::Yellow);
+    let buffer = render_to_frame(
+        TuiText::from_spans([
+            ("e\u{301}cl".to_owned(), yellow),
+            ("air".to_owned(), Style::default()),
+        ])
+        .truncate_with_ellipsis(),
+        TuiSize::new(5, 1),
+    )
+    .buffer;
+
+    assert_eq!(buffer.to_lines(), vec!["e\u{301}c..."]);
+    assert_eq!(buffer[(2, 0)].fg, Color::Yellow);
+}
 
 #[test]
 fn layout_reports_content_width_and_row_count() {

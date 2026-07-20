@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use testing::{assert_rows_equal, ToRows as _};
+use testing::{ToRows as _, assert_rows_equal};
 
 use super::*;
 use crate::model::char_or_str::CharOrStr;

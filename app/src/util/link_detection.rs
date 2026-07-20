@@ -3,17 +3,17 @@ use std::ops::Range;
 
 use string_offset::ByteOffset;
 use urlocator::{UrlLocation, UrlLocator};
+use warpui::Action;
 use warpui::elements::{MouseStateHandle, PartialClickableElement};
 use warpui::platform::Cursor;
 use warpui::text::char_slice;
-use warpui::Action;
 
 use crate::ai::agent::{AIAgentActionType, AIAgentOutput, AIAgentTextSection, ReadFilesRequest};
-use crate::ai::blocklist::block::view_impl::output::LinkActionConstructors;
 use crate::ai::blocklist::block::TextLocation;
+use crate::ai::blocklist::block::view_impl::output::LinkActionConstructors;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::links::should_directly_open_link;
 use crate::terminal::model::grid::grid_handler::{is_file_link_separator, is_url_link_separator};
-use crate::terminal::ShellLaunchData;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -339,7 +339,7 @@ fn compute_valid_file_path(
     files_and_folders_in_working_directory: &HashSet<PathBuf>,
     shell_launch_data: Option<&crate::terminal::ShellLaunchData>,
 ) -> Option<DetectedLinkType> {
-    use crate::util::file::{absolute_path_if_valid, ShellPathType};
+    use crate::util::file::{ShellPathType, absolute_path_if_valid};
     // Scan for line and column number in the current word (left + right).
     let cleaned_path = CleanPathResult::with_line_and_column_number(expanded_path);
 
@@ -458,8 +458,8 @@ pub(crate) fn get_word_range_at_offset(
     word_boundary_policy: Option<WordBoundariesPolicy>,
 ) -> Option<Range<CharOffset>> {
     use warp_editor::content::buffer::{ToBufferCharOffset, ToBufferPoint};
-    use warpui::text::words::is_default_word_boundary;
     use warpui::text::TextBuffer;
+    use warpui::text::words::is_default_word_boundary;
 
     let word_boundary_policy = word_boundary_policy.unwrap_or(WordBoundariesPolicy::Default);
     let mut word_found_at: Option<CharOffset> = None;

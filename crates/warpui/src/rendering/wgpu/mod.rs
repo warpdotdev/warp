@@ -6,7 +6,7 @@ mod texture_with_bind_group;
 use std::sync::{Arc, LazyLock, Mutex};
 
 pub use renderer::Renderer;
-pub use resources::{adapter_has_rendering_offset_bug, Resources};
+pub use resources::{Resources, adapter_has_rendering_offset_bug};
 use wgpu::wgt::WgpuHasDisplayHandle;
 
 use crate::platform::GraphicsBackend;
@@ -79,8 +79,8 @@ pub fn init_wgpu_instance(display_handle: Box<dyn WgpuHasDisplayHandle>) {
         instance_lock_guard.get_or_insert_with(|| {
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             {
-                use crate::windowing::winit::app::WINDOWING_SYSTEM;
                 use crate::windowing::WindowingSystem;
+                use crate::windowing::winit::app::WINDOWING_SYSTEM;
                 // If the user hasn't enabled (and is making use of) native Wayland
                 // support, due to the fact that we force use of X11 in
                 // ui/src/windowing/winit/app.rs, we need to make sure wgpu doesn't
@@ -93,13 +93,15 @@ pub fn init_wgpu_instance(display_handle: Box<dyn WgpuHasDisplayHandle>) {
                     || std::env::var_os("WAYLAND_DISPLAY").is_none()
                 {
                     let old_wayland_display = std::env::var_os("WAYLAND_DISPLAY");
-                    std::env::set_var("WAYLAND_DISPLAY", "");
+                    unsafe {
+                        std::env::set_var("WAYLAND_DISPLAY", "");
+                    }
                     let instance = create_instance();
                     match old_wayland_display {
-                        Some(wayland_display) => {
+                        Some(wayland_display) => unsafe {
                             std::env::set_var("WAYLAND_DISPLAY", wayland_display)
-                        }
-                        None => std::env::remove_var("WAYLAND_DISPLAY"),
+                        },
+                        None => unsafe { std::env::remove_var("WAYLAND_DISPLAY") },
                     };
                     return instance;
                 }
@@ -181,7 +183,9 @@ pub async fn print_wgpu_adapters(
         } else {
             format!(" ({})", info.driver_info)
         };
-        println!("{device_type:?}: {device_name}\n\tBackend: {backend:?}\n\tDriver: {driver}{driver_info}");
+        println!(
+            "{device_type:?}: {device_name}\n\tBackend: {backend:?}\n\tDriver: {driver}{driver_info}"
+        );
     }
 }
 

@@ -1,10 +1,15 @@
 [package]
 name = "warpui"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 authors.workspace = true
 publish.workspace = true
 license = "MIT"
+
+[[test]]
+name = "headless_main_thread"
+path = "tests/headless_main_thread.rs"
+harness = false
 
 [features]
 # Enabling this feature works around a bug in Metal frame capture by loading
@@ -62,6 +67,7 @@ asset_cache.workspace = true
 env_logger.workspace = true
 futures-timer = "3.0.2"
 image = { workspace = true, default-features = false, features = ["png"] }
+libtest-mimic.workspace = true
 rust-embed.workspace = true
 warpui = { workspace = true, features = ["test-util"] }
 warpui_core = { workspace = true, features = ["test-util"] }
@@ -99,6 +105,7 @@ objc2-app-kit = { workspace = true, features = [
     "objc2-quartz-core",
 ] }
 objc2-av-foundation = { workspace = true, features = ["AVCaptureDevice", "AVMediaFormat"] }
+objc2-core-foundation.workspace = true
 objc2-foundation = { workspace = true, features = [
     "NSArray",
     "NSData",

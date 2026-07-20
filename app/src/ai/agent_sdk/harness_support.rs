@@ -4,12 +4,12 @@
 //! - [`ping`] — fetches the current run by task ID and prints its info.
 //! - [`report_artifact`] — reports an artifact (e.g. a PR) back to the Oz platform.
 use anyhow::Result;
+use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::harness_support::{
     FinishTaskArgs, HarnessSupportArgs, HarnessSupportCommand, NotifyUserArgs, ReportArtifactArgs,
     ReportArtifactCommand, ReportShutdownArgs, TaskStatus,
 };
-use warp_cli::GlobalOptions;
 use warp_core::features::FeatureFlag;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelHandle, SingletonEntity};

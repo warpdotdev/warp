@@ -19,14 +19,14 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use super::AuthStateProvider;
 use super::auth_manager::AuthManager;
 use super::auth_view_modal::AuthViewVariant;
 use super::auth_view_shared_helpers::{
-    action_button_color_and_variant, render_offline_info_overlay_body, render_overlay,
-    render_privacy_settings_overlay_body, render_square_logo, PrivacySettingsActions,
-    PrivacySettingsHandles,
+    PrivacySettingsActions, PrivacySettingsHandles, action_button_color_and_variant,
+    render_offline_info_overlay_body, render_overlay, render_privacy_settings_overlay_body,
+    render_square_logo,
 };
-use super::AuthStateProvider;
 use crate::appearance::Appearance;
 use crate::auth::auth_view_shared_helpers::render_offline_contents;
 use crate::editor::{
@@ -604,7 +604,7 @@ impl AuthViewBody {
         };
 
         let text = match self.variant {
-            AuthViewVariant::RequireLoginCloseable  => {
+            AuthViewVariant::RequireLoginCloseable => {
                 "In order to use Warp’s AI features or collaborate with others, please create an account."
             }
             AuthViewVariant::HitDriveObjectLimitCloseable => {
@@ -806,13 +806,10 @@ impl AuthViewBody {
 
         let mut contents = vec![logo, header, hint];
 
-        let auth_token = Container::new(
-            if let Some(auth_token_input) = self.render_auth_token_input(appearance) {
-                auth_token_input
-            } else {
-                self.render_auth_token_suggest(ui_builder)
-            },
-        )
+        let auth_token = Container::new(match self.render_auth_token_input(appearance) {
+            Some(auth_token_input) => auth_token_input,
+            _ => self.render_auth_token_suggest(ui_builder),
+        })
         .with_margin_top(AUTH_MODAL_GAP)
         .finish();
 

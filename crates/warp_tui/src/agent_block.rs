@@ -19,15 +19,15 @@ use warp::tui_export::{
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIBlockModel,
     AIConversationId, BlockId, BlocklistAIActionEvent, BlocklistAIActionModel,
     BlocklistAIHistoryModel, CancellationReason, MessageId, ModelEvent, ModelEventDispatcher,
-    SummarizationType, TerminalModel, TodoOperation, TodoStatus,
+    ReceivedMessageDisplay, SummarizationType, TerminalModel, TodoOperation, TodoStatus,
 };
 use warpui::SingletonEntity;
+use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiContainer, TuiElement,
     TuiFlex, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiRect,
     TuiScreenPosition, TuiSelectionSpan, TuiSize, TuiText,
 };
-use warpui_core::elements::MouseStateHandle;
 use warpui_core::{
     AppContext, Entity, EntityId, EntityIdMap, ModelHandle, TuiView, TypedActionView, ViewContext,
     ViewHandle,
@@ -40,13 +40,14 @@ use crate::agent_block_sections::{
     render_completed_todos_section, render_fallback_tool_call_section, render_input_section,
     render_summarization_section, render_thinking_section, render_todo_list_section,
 };
+use crate::agent_message::render_agent_message;
 use crate::orchestration_block::{TuiOrchestrationBlock, TuiOrchestrationBlockEvent};
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::TuiCLISubagentView;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
 use crate::tui_markdown::{
-    render_formatted_table, render_formatted_text, TuiMarkdownBlockHooks, TuiMarkdownPalette,
+    TuiMarkdownBlockHooks, TuiMarkdownPalette, render_formatted_table, render_formatted_text,
 };
 use crate::tui_plan_view::{TuiPlanView, TuiPlanViewEvent};
 
@@ -99,6 +100,8 @@ enum TuiAIBlockSection {
     CompletedTodos {
         completed: Vec<AIAgentTodo>,
     },
+    /// A message delivered by another agent in the orchestration.
+    AgentMessage(ReceivedMessageDisplay),
 }
 
 /// Per-message UI state for collapsible sections (thinking blocks,
@@ -296,12 +299,11 @@ impl TuiAIBlock {
                 return;
             };
             if me.renders_action(&action_id) {
-                if should_schedule_auto_expand {
-                    if let Some(TuiToolCallView::ShellCommand(view)) =
+                if should_schedule_auto_expand
+                    && let Some(TuiToolCallView::ShellCommand(view)) =
                         me.action_views.get(&action_id)
-                    {
-                        view.update(ctx, |view, ctx| view.schedule_auto_expand(ctx));
-                    }
+                {
+                    view.update(ctx, |view, ctx| view.schedule_auto_expand(ctx));
                 }
                 me.invalidate_action(&action_id, ctx);
             }
@@ -713,7 +715,8 @@ impl TuiAIBlock {
     fn latest_exposed_plan(&self, ctx: &AppContext) -> Option<ViewHandle<TuiPlanView>> {
         let status = self.block_model.status(ctx);
         let output = status.output_to_render()?;
-        let plan = output.get().messages.iter().rev().find_map(|message| {
+
+        output.get().messages.iter().rev().find_map(|message| {
             let AIAgentOutputMessageType::Action(action) = &message.message else {
                 return None;
             };
@@ -721,8 +724,7 @@ impl TuiAIBlock {
                 return None;
             };
             view.as_ref(ctx).renders_rich_body().then(|| view.clone())
-        });
-        plan
+        })
     }
     pub(super) fn has_exposed_plan(&self, ctx: &AppContext) -> bool {
         self.latest_exposed_plan(ctx).is_some()
@@ -970,6 +972,7 @@ impl TuiAIBlock {
                     app,
                 )
             }
+            TuiAIBlockSection::AgentMessage(_) => return None,
         })
     }
     fn rich_text_sections(message_id: &MessageId, text: &AIAgentText) -> Vec<TuiRichTextSection> {
@@ -1027,7 +1030,10 @@ impl TuiAIBlock {
                         );
                     }
                     AIAgentOutputMessageType::Action(action) => {
-                        sections.push(TuiAIBlockSection::ToolCall(Box::new(action.clone())));
+                        // WaitForEvents renders nothing, matching the GUI.
+                        if !matches!(action.action, AIAgentActionType::WaitForEvents { .. }) {
+                            sections.push(TuiAIBlockSection::ToolCall(Box::new(action.clone())));
+                        }
                     }
                     AIAgentOutputMessageType::Reasoning {
                         text,
@@ -1079,6 +1085,14 @@ impl TuiAIBlock {
                         TodoOperation::UpdateTodos { .. }
                         | TodoOperation::MarkAsCompleted { .. } => {}
                     },
+                    AIAgentOutputMessageType::MessagesReceivedFromAgents { messages } => {
+                        for received in messages {
+                            sections.push(TuiAIBlockSection::AgentMessage(received.clone()));
+                        }
+                    }
+                    // Event IDs contain no display detail. The sender's live
+                    // conversation status is shown on rich message rows.
+                    AIAgentOutputMessageType::EventsFromAgents { .. } => {}
                     // Other message kinds are not rendered by the TUI transcript yet.
                     AIAgentOutputMessageType::Summarization { .. }
                     | AIAgentOutputMessageType::Subagent(_)
@@ -1087,9 +1101,7 @@ impl TuiAIBlock {
                     | AIAgentOutputMessageType::CommentsAddressed { .. }
                     | AIAgentOutputMessageType::DebugOutput { .. }
                     | AIAgentOutputMessageType::ArtifactCreated(_)
-                    | AIAgentOutputMessageType::SkillInvoked(_)
-                    | AIAgentOutputMessageType::MessagesReceivedFromAgents { .. }
-                    | AIAgentOutputMessageType::EventsFromAgents { .. } => {}
+                    | AIAgentOutputMessageType::SkillInvoked(_) => {}
                 }
             }
         }
@@ -1180,8 +1192,16 @@ impl TuiAIBlock {
     /// Builds this block's generic TUI element tree.
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let output_streaming = self.block_model.status(app).is_streaming();
-        let mut column = TuiFlex::column();
+
+        // Keep the view registered so a streaming exchange can gain visible
+        // sections later, but do not reserve inter-block padding while every
+        // message in this exchange is intentionally hidden.
         let sections = self.sections(app);
+        if sections.is_empty() {
+            return TuiFlex::column().finish();
+        }
+
+        let mut column = TuiFlex::column();
         let last_index = sections.len().saturating_sub(1);
         for (index, section) in sections.iter().enumerate() {
             let element = match section {
@@ -1264,6 +1284,12 @@ impl TuiAIBlock {
                         app,
                     )
                 }
+                TuiAIBlockSection::AgentMessage(message) => render_agent_message(
+                    &self.collapsible_states,
+                    message,
+                    self.conversation_id,
+                    app,
+                ),
             };
 
             // One row of bottom padding separates sections; the last section
@@ -1309,8 +1335,8 @@ fn last_row_content_width(element: &mut Box<dyn TuiElement>, width: u16, height:
 }
 
 /// The copy-able logical text for a section, or `None` for section kinds with no
-/// clean logical form (tool calls, reasoning, summaries, todo lists), which fall
-/// back to per-row grid text.
+/// clean logical form (tool calls, reasoning, summaries, todo lists, or agent
+/// messages), which fall back to per-row grid text.
 fn section_logical_text(section: &TuiAIBlockSection) -> Option<String> {
     match section {
         TuiAIBlockSection::Input(text) => Some(text.clone()),
@@ -1327,7 +1353,8 @@ fn section_logical_text(section: &TuiAIBlockSection) -> Option<String> {
         | TuiAIBlockSection::Thinking { .. }
         | TuiAIBlockSection::Summarization { .. }
         | TuiAIBlockSection::TodoList { .. }
-        | TuiAIBlockSection::CompletedTodos { .. } => None,
+        | TuiAIBlockSection::CompletedTodos { .. }
+        | TuiAIBlockSection::AgentMessage(_) => None,
     }
 }
 

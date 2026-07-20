@@ -14,9 +14,9 @@ use crate::terminal::color::Colors;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::block::BlockSize;
 use crate::terminal::model::grid::{Dimensions, GridStorage};
-use crate::terminal::model::{ansi, ObfuscateSecrets};
+use crate::terminal::model::{ObfuscateSecrets, ansi};
 use crate::terminal::shell::{ShellName, ShellType};
-use crate::terminal::{color, BlockPadding, ShellLaunchState, SizeInfo, TerminalModel};
+use crate::terminal::{BlockPadding, ShellLaunchState, SizeInfo, TerminalModel, color};
 
 macro_rules! ref_tests {
     ($($name:ident)*) => {

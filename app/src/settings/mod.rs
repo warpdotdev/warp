@@ -127,7 +127,7 @@ use lazy_static::lazy_static;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
