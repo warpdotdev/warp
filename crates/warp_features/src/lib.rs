@@ -915,6 +915,11 @@ pub enum FeatureFlag {
     /// orchestration (`run_agents`) confirmation card and plan-card config
     /// block for choosing a runner when starting remote child agents.
     CloudAgentRunners,
+
+    /// Gates the `warp terminal share` CLI command surface (pre-parse
+    /// rejection + `--help` hiding). The runtime `CreatingSharedSessions`
+    /// flag continues to gate whether sharing actually succeeds.
+    TerminalShareCommand,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -993,6 +998,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GeminiEnterprise,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::CloudAgentRunners,
+    FeatureFlag::TerminalShareCommand,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

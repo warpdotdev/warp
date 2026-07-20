@@ -1220,6 +1220,38 @@ fn artifact_help_hides_upload_but_keeps_download_visible() {
 }
 
 #[test]
+fn terminal_subcommand_gated_on_feature_flag() {
+    warp_core::features::mark_initialized();
+
+    // Disabled (default): the `terminal` subcommand is hidden from help.
+    FeatureFlag::TerminalShareCommand.set_enabled(false);
+    let mut command = Args::clap_command();
+    command.build();
+    let terminal = command
+        .find_subcommand("terminal")
+        .expect("terminal subcommand should exist");
+    assert!(
+        terminal.is_hide_set(),
+        "terminal should be hidden when TerminalShareCommand is disabled"
+    );
+
+    // Enabled: the `terminal` subcommand is surfaced in help.
+    FeatureFlag::TerminalShareCommand.set_enabled(true);
+    let mut command = Args::clap_command();
+    command.build();
+    let terminal = command
+        .find_subcommand("terminal")
+        .expect("terminal subcommand should exist");
+    assert!(
+        !terminal.is_hide_set(),
+        "terminal should be visible when TerminalShareCommand is enabled"
+    );
+
+    // Restore the default so this test doesn't leak global flag state.
+    FeatureFlag::TerminalShareCommand.set_enabled(false);
+}
+
+#[test]
 fn raw_command_keeps_message_visible_before_runtime_help_customization() {
     let mut command = <Args as clap::CommandFactory>::command();
     command.build();

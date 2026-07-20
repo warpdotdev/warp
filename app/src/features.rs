@@ -509,6 +509,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OscHyperlinks,
         #[cfg(feature = "terminal_lifecycle_recovery")]
         FeatureFlag::TerminalLifecycleRecovery,
+        #[cfg(feature = "terminal_share_command")]
+        FeatureFlag::TerminalShareCommand,
     ]);
 
     flags

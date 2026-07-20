@@ -32,6 +32,7 @@ use warp_cli::schedule::ScheduleSubcommand;
 use warp_cli::secret::SecretCommand;
 use warp_cli::share::ShareRequest;
 use warp_cli::task::{MessageCommand, TaskCommand};
+use warp_cli::terminal::TerminalCommand;
 use warp_cli::{CliCommand, GlobalOptions, OZ_HARNESS_ENV};
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
@@ -107,6 +108,7 @@ mod schedule;
 mod secret;
 pub(crate) mod setup_observability;
 mod telemetry;
+mod terminal;
 #[cfg(test)]
 mod test_support;
 mod text_layout;
@@ -220,6 +222,12 @@ fn dispatch_command(
                 return Err(anyhow::anyhow!("invalid value 'runner'"));
             }
             runner::run(ctx, global_options, runner_cmd)
+        }
+        CliCommand::Terminal(terminal_cmd) => {
+            if !FeatureFlag::TerminalShareCommand.is_enabled() {
+                return Err(anyhow::anyhow!("invalid value 'terminal'"));
+            }
+            terminal::run(ctx, global_options, terminal_cmd)
         }
     }
 }
@@ -1558,6 +1566,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Artifact(_) => true,
         CliCommand::ApiKey(_) => true,
         CliCommand::Runner(_) => true,
+        CliCommand::Terminal(_) => true,
     }
 }
 
@@ -1856,6 +1865,9 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             RunnerCommand::Create(_) => CliTelemetryEvent::RunnerCreate,
             RunnerCommand::Update(_) => CliTelemetryEvent::RunnerUpdate,
             RunnerCommand::Delete(_) => CliTelemetryEvent::RunnerDelete,
+        },
+        CliCommand::Terminal(terminal_cmd) => match terminal_cmd {
+            TerminalCommand::Share(_) => CliTelemetryEvent::TerminalShare,
         },
     }
 }
