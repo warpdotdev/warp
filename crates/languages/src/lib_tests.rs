@@ -1,8 +1,103 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::{SUPPORTED_LANGUAGES, language_by_filename, language_by_local_filename, load_language};
+use crate::{
+    SUPPORTED_LANGUAGES, language_by_filename, language_by_local_filename, language_by_name,
+    load_language,
+};
+
+const FILENAME_GOLDEN_CASES: &[(&str, &str)] = &[
+    (".bashrc", "shell"),
+    (".bash_profile", "shell"),
+    (".zshrc", "shell"),
+    (".zsh_profile", "shell"),
+    (".zprofile", "shell"),
+    ("BUILD", "starlark"),
+    ("WORKSPACE", "starlark"),
+    ("Dockerfile", "dockerfile"),
+    ("Containerfile", "dockerfile"),
+    ("dockerfile", "dockerfile"),
+    ("containerfile", "dockerfile"),
+    ("Dockerfile.dev", "dockerfile"),
+    ("Containerfile.release", "dockerfile"),
+    ("Dockerfile.rs", "dockerfile"),
+    ("Containerfile.ts", "dockerfile"),
+];
+
+const EXTENSION_GOLDEN_CASES: &[(&[&str], &str)] = &[
+    (&["rs"], "rust"),
+    (&["go"], "golang"),
+    (&["yml", "yaml"], "yaml"),
+    (&["py", "py3", "pyw", "pyi"], "python"),
+    (&["js", "cjs", "mjs"], "javascript"),
+    (&["jsx"], "jsx"),
+    (&["tsx"], "tsx"),
+    (&["ts", "cts", "mts"], "typescript"),
+    (&["java", "groovy", "gvy", "gy", "gsh"], "java"),
+    (
+        &["cpp", "cxx", "cc", "h", "hh", "hpp", "hxx", "H", "h++"],
+        "cpp",
+    ),
+    (&["sh", "zsh", "bash", "command"], "shell"),
+    (&["cs"], "csharp"),
+    (&["html", "htm"], "html"),
+    (&["css"], "css"),
+    (&["c"], "c"),
+    (&["json"], "json"),
+    (&["jq"], "jq"),
+    (&["tf", "hcl", "tfvars"], "hcl"),
+    (&["lua"], "lua"),
+    (&["nix"], "nix"),
+    (&["rb"], "ruby"),
+    (&["php", "phtml"], "php"),
+    (&["toml"], "toml"),
+    (&["swift"], "swift"),
+    (&["kt", "kts"], "kotlin"),
+    (&["scala", "sbt", "sc"], "scala"),
+    (&["ps1", "pwsh"], "powershell"),
+    (&["ex", "exs"], "elixir"),
+    (&["sql"], "sql"),
+    (&["bzl", "bazel"], "starlark"),
+    (&["m", "mm"], "objective-c"),
+    (&["xml"], "xml"),
+    (&["vue"], "vue"),
+    (&["dockerfile"], "dockerfile"),
+    (&["md", "markdown"], "markdown"),
+];
+
+#[test]
+fn filename_and_extension_registry_preserves_all_existing_mappings() {
+    for &(filename, expected_grammar) in FILENAME_GOLDEN_CASES {
+        assert_filename_uses_grammar(filename, expected_grammar);
+    }
+
+    for &(extensions, expected_grammar) in EXTENSION_GOLDEN_CASES {
+        for extension in extensions {
+            assert_filename_uses_grammar(&format!("fixture.{extension}"), expected_grammar);
+        }
+    }
+}
+
+#[test]
+fn lsp_only_extension_does_not_expand_editor_support() {
+    assert!(language_by_local_filename(Path::new("fixture.C")).is_none());
+}
+
+fn assert_filename_uses_grammar(filename: &str, expected_grammar: &str) {
+    let actual = language_by_local_filename(Path::new(filename))
+        .unwrap_or_else(|| panic!("expected {filename} to resolve to {expected_grammar}"));
+    let expected = language_by_name(expected_grammar)
+        .unwrap_or_else(|| panic!("expected {expected_grammar} grammar to load"));
+
+    assert!(
+        Arc::ptr_eq(&actual, &expected),
+        "{filename} resolved to {} instead of {}",
+        actual.display_name(),
+        expected.display_name()
+    );
+}
 
 /// Validate that every supported language can be loaded successfully.
 /// This catches invalid node types, syntax errors, and other issues in .scm query files

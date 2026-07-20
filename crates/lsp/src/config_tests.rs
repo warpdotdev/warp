@@ -2,7 +2,72 @@ use std::path::PathBuf;
 
 use lsp_types::Uri;
 
-use crate::config::{lsp_uri_to_path, path_to_lsp_uri};
+use crate::config::{LanguageId, lsp_uri_to_path, path_to_lsp_uri};
+
+const LANGUAGE_ID_GOLDEN_CASES: &[(LanguageId, &str)] = &[
+    (LanguageId::Rust, "rust"),
+    (LanguageId::Go, "go"),
+    (LanguageId::Python, "python"),
+    (LanguageId::TypeScript, "typescript"),
+    (LanguageId::TypeScriptReact, "typescriptreact"),
+    (LanguageId::JavaScript, "javascript"),
+    (LanguageId::JavaScriptReact, "javascriptreact"),
+    (LanguageId::C, "c"),
+    (LanguageId::Cpp, "cpp"),
+];
+
+const PATH_GOLDEN_CASES: &[(&[&str], LanguageId)] = &[
+    (&["rs"], LanguageId::Rust),
+    (&["go"], LanguageId::Go),
+    (&["py"], LanguageId::Python),
+    (&["ts"], LanguageId::TypeScript),
+    (&["tsx"], LanguageId::TypeScriptReact),
+    (&["js", "mjs", "cjs"], LanguageId::JavaScript),
+    (&["jsx"], LanguageId::JavaScriptReact),
+    (&["c", "C"], LanguageId::C),
+    (
+        &["cc", "cpp", "cxx", "h", "H", "hh", "hpp", "hxx"],
+        LanguageId::Cpp,
+    ),
+];
+
+#[test]
+fn registry_preserves_all_builtin_language_identifiers() {
+    for &(language_id, expected) in LANGUAGE_ID_GOLDEN_CASES {
+        assert_eq!(language_id.lsp_language_identifier(), expected);
+    }
+}
+
+#[test]
+fn registry_preserves_all_builtin_path_mappings() {
+    for &(extensions, expected) in PATH_GOLDEN_CASES {
+        for extension in extensions {
+            let path = PathBuf::from(format!("fixture.{extension}"));
+            assert_eq!(LanguageId::from_path(&path), Some(expected), "{extension}");
+        }
+    }
+}
+
+#[test]
+fn filename_matches_without_builtin_facet_do_not_mask_extension_dispatch() {
+    for (filename, expected) in [
+        ("Dockerfile.rs", LanguageId::Rust),
+        ("Containerfile.ts", LanguageId::TypeScript),
+    ] {
+        assert_eq!(
+            LanguageId::from_path(&PathBuf::from(filename)),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn registry_language_ids_do_not_expand_builtin_server_dispatch() {
+    for extension in ["py3", "pyw", "pyi", "cts", "mts", "h++"] {
+        let path = PathBuf::from(format!("fixture.{extension}"));
+        assert_eq!(LanguageId::from_path(&path), None, "{extension}");
+    }
+}
 
 // Unix-specific tests use Unix paths
 #[cfg(not(windows))]
