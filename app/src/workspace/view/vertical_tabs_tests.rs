@@ -16,10 +16,10 @@ use super::{
     summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
     terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
-    vtab_diff_stats_text, AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons,
-    TerminalAgentText, TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
-    VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
-    VerticalTabsSummaryPrimaryLabel,
+    vtab_diff_stats_text, AgentTabTextPreference, IgnoredInEq, SummaryPaneKind,
+    SummaryPaneKindIcons, TerminalAgentText, TerminalPrimaryLineData, TerminalPrimaryLineFont,
+    VerticalTabsDetailTarget, VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry,
+    VerticalTabsSummaryData, VerticalTabsSummaryPrimaryLabel,
 };
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::context_chips::display_chip::GitLineChanges;
@@ -42,6 +42,21 @@ fn pane_id() -> PaneId {
 fn code_summary_kind(title: &str) -> SummaryPaneKind {
     SummaryPaneKind::Code {
         title: title.to_string(),
+    }
+}
+
+fn cli_agent_kind(agent: CLIAgent, is_ambient: bool) -> SummaryPaneKind {
+    SummaryPaneKind::CLIAgent {
+        agent,
+        status: IgnoredInEq(None),
+        is_ambient,
+    }
+}
+
+fn oz_agent_kind(is_ambient: bool) -> SummaryPaneKind {
+    SummaryPaneKind::OzAgent {
+        status: IgnoredInEq(None),
+        is_ambient,
     }
 }
 
@@ -96,22 +111,13 @@ fn summary_pane_kind_icons_distinguish_agent_terminals_from_plain_terminals() {
             (EntityId::from_usize(10), SummaryPaneKind::Terminal),
             (
                 EntityId::from_usize(20),
-                SummaryPaneKind::CLIAgent {
-                    agent: CLIAgent::Claude,
-                    is_ambient: false,
-                },
+                cli_agent_kind(CLIAgent::Claude, false),
             ),
-            (
-                EntityId::from_usize(30),
-                SummaryPaneKind::OzAgent { is_ambient: false },
-            ),
+            (EntityId::from_usize(30), oz_agent_kind(false)),
         ]),
         Some(SummaryPaneKindIcons::Pair {
             primary: SummaryPaneKind::Terminal,
-            secondary: SummaryPaneKind::CLIAgent {
-                agent: CLIAgent::Claude,
-                is_ambient: false,
-            },
+            secondary: cli_agent_kind(CLIAgent::Claude, false),
         })
     );
 }
@@ -124,29 +130,41 @@ fn summary_pane_kind_icons_distinguish_ambient_claude_from_local_claude() {
         select_summary_pane_kind_icons([
             (
                 EntityId::from_usize(10),
-                SummaryPaneKind::CLIAgent {
-                    agent: CLIAgent::Claude,
-                    is_ambient: false,
-                },
+                cli_agent_kind(CLIAgent::Claude, false),
             ),
             (
                 EntityId::from_usize(20),
-                SummaryPaneKind::CLIAgent {
-                    agent: CLIAgent::Claude,
-                    is_ambient: true,
-                },
+                cli_agent_kind(CLIAgent::Claude, true),
             ),
         ]),
         Some(SummaryPaneKindIcons::Pair {
-            primary: SummaryPaneKind::CLIAgent {
-                agent: CLIAgent::Claude,
-                is_ambient: false,
-            },
-            secondary: SummaryPaneKind::CLIAgent {
-                agent: CLIAgent::Claude,
-                is_ambient: true,
-            },
+            primary: cli_agent_kind(CLIAgent::Claude, false),
+            secondary: cli_agent_kind(CLIAgent::Claude, true),
         })
+    );
+}
+
+#[test]
+fn summary_pane_kind_icons_ignore_agent_status_when_deduping() {
+    // Regression (#9868): two Claude sessions with different live statuses are still the same
+    // icon *kind*, so they must collapse to a single icon rather than rendering as a pair.
+    // Status rides along for the badge overlay but must not affect dedup/pairing.
+    let running = SummaryPaneKind::CLIAgent {
+        agent: CLIAgent::Claude,
+        status: IgnoredInEq(Some(ConversationStatus::InProgress)),
+        is_ambient: false,
+    };
+    let done = SummaryPaneKind::CLIAgent {
+        agent: CLIAgent::Claude,
+        status: IgnoredInEq(Some(ConversationStatus::Success)),
+        is_ambient: false,
+    };
+    assert_eq!(
+        select_summary_pane_kind_icons([
+            (EntityId::from_usize(10), running.clone()),
+            (EntityId::from_usize(20), done),
+        ]),
+        Some(SummaryPaneKindIcons::Single(running)),
     );
 }
 
