@@ -41,10 +41,11 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 use winit::raw_window_handle::HasDisplayHandle as _;
 
                 if let Ok(display_handle) = event_loop.display_handle()
-                    && let Ok(system) = windowing::System::try_from(display_handle.as_raw()) {
-                        println!("Windowing system: {system:?}");
-                        windowing_system = Some(system);
-                    }
+                    && let Ok(system) = windowing::System::try_from(display_handle.as_raw())
+                {
+                    println!("Windowing system: {system:?}");
+                    windowing_system = Some(system);
+                }
 
                 if let Some(name) = windowing::winit::get_os_window_manager_name() {
                     println!("Window manager name: {}", name.trim_end());

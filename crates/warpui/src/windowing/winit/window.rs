@@ -236,10 +236,11 @@ impl platform::WindowManager for WindowManager {
         // Finally, go back and focus the last active window to make sure it ends up having the
         // focus.
         if let Some(window_id) = last_active_window
-            && let Some(window) = self.windows.get(&window_id) {
-                window.focus();
-                next_active_window = Some(window_id);
-            }
+            && let Some(window) = self.windows.get(&window_id)
+        {
+            window.focus();
+            next_active_window = Some(window_id);
+        }
 
         if let Some(window_id) = next_active_window {
             self.window_ordering.lock().move_to_front(window_id);
@@ -441,9 +442,10 @@ impl platform::WindowManager for WindowManager {
         // was moved to the front on creation and must stay there so that
         // `cross_window_attach_target` can find it at index 0.
         if !window_ordering.has_positioned_no_focus_window()
-            && let Some(active_window_id) = self.active_window_id() {
-                window_ordering.move_to_front(active_window_id);
-            }
+            && let Some(active_window_id) = self.active_window_id()
+        {
+            window_ordering.move_to_front(active_window_id);
+        }
         window_ordering.front_to_back_window_ids.clone()
     }
 

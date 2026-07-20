@@ -110,9 +110,9 @@ impl Renderer {
         if let Some(callback) = capture_callback
             && let Err(err) =
                 capture_surface_texture(device, queue, resources, &surface_texture, callback)
-            {
-                log::warn!("Frame capture failed: {err}");
-            }
+        {
+            log::warn!("Frame capture failed: {err}");
+        }
 
         if let Some(callback) = pre_present_callback {
             callback();

@@ -93,12 +93,14 @@ pub fn init_wgpu_instance(display_handle: Box<dyn WgpuHasDisplayHandle>) {
                     || std::env::var_os("WAYLAND_DISPLAY").is_none()
                 {
                     let old_wayland_display = std::env::var_os("WAYLAND_DISPLAY");
-                    unsafe { std::env::set_var("WAYLAND_DISPLAY", ""); }
+                    unsafe {
+                        std::env::set_var("WAYLAND_DISPLAY", "");
+                    }
                     let instance = create_instance();
                     match old_wayland_display {
-                        Some(wayland_display) => {
-                            unsafe { std::env::set_var("WAYLAND_DISPLAY", wayland_display) }
-                        }
+                        Some(wayland_display) => unsafe {
+                            std::env::set_var("WAYLAND_DISPLAY", wayland_display)
+                        },
                         None => unsafe { std::env::remove_var("WAYLAND_DISPLAY") },
                     };
                     return instance;

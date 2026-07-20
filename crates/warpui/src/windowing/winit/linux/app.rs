@@ -138,15 +138,16 @@ fn get_x11_extension_info_map() -> std::collections::HashMap<u8, X11ExtensionInf
     extensions.names.iter().for_each(|name| {
         if let Ok(cookie) = xcb.query_extension(&name.name)
             && let Ok(result) = cookie.reply()
-                && let Ok(name) = String::from_utf8(name.name.clone()) {
-                    extension_map.insert(
-                        result.major_opcode,
-                        X11ExtensionInfo {
-                            name,
-                            first_error: result.first_error,
-                        },
-                    );
-                }
+            && let Ok(name) = String::from_utf8(name.name.clone())
+        {
+            extension_map.insert(
+                result.major_opcode,
+                X11ExtensionInfo {
+                    name,
+                    first_error: result.first_error,
+                },
+            );
+        }
     });
 
     extension_map

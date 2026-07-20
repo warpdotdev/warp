@@ -671,9 +671,10 @@ impl TextLayoutSystem {
 
             // A glyph_id of 0 implies that no glyph was found for this character.
             if glyph.glyph_id == 0
-                && let Some(ch) = Self::char_for_glyph(&glyph, text) {
-                    chars_with_missing_glyphs.push(ch);
-                }
+                && let Some(ch) = Self::char_for_glyph(&glyph, text)
+            {
+                chars_with_missing_glyphs.push(ch);
+            }
 
             run_builder.push_glyph(glyph, |id| {
                 *self

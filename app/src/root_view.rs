@@ -3202,28 +3202,27 @@ impl RootView {
         // Check that the released key matches the configured voice input toggle key.
         let ai_settings = AISettings::as_ref(ctx);
         if let Some(configured_key_code) = ai_settings.voice_input_toggle_key.value().to_key_code()
-            && configured_key_code == *key_code {
-                let voice_input = VoiceInput::handle(ctx);
-                // Check if we're actively listening and it was started from a key press.
-                if let VoiceInputState::Listening { enabled_from, .. } =
-                    voice_input.as_ref(ctx).state()
-                    && matches!(
-                        enabled_from,
-                        VoiceInputToggledFrom::Key {
-                            state: KeyState::Pressed
-                        }
-                    ) {
-                        log::debug!("Voice input key release detected: {key_code:?}");
-                        // Stop listening and proceed to transcription (don't abort).
-                        voice_input.update(ctx, |voice_input, ctx| {
-                            if let Err(e) = voice_input.stop_listening(ctx) {
-                                report_error!(
-                                    e.context("Failed to stop voice input on key release")
-                                );
-                            }
-                        });
+            && configured_key_code == *key_code
+        {
+            let voice_input = VoiceInput::handle(ctx);
+            // Check if we're actively listening and it was started from a key press.
+            if let VoiceInputState::Listening { enabled_from, .. } = voice_input.as_ref(ctx).state()
+                && matches!(
+                    enabled_from,
+                    VoiceInputToggledFrom::Key {
+                        state: KeyState::Pressed
                     }
+                )
+            {
+                log::debug!("Voice input key release detected: {key_code:?}");
+                // Stop listening and proceed to transcription (don't abort).
+                voice_input.update(ctx, |voice_input, ctx| {
+                    if let Err(e) = voice_input.stop_listening(ctx) {
+                        report_error!(e.context("Failed to stop voice input on key release"));
+                    }
+                });
             }
+        }
         true
     }
 

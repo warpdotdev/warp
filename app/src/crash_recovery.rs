@@ -191,27 +191,28 @@ impl CrashRecovery {
         // a child recovery process that uses the given crash recovery
         // mechanism.
         if launch_mode.crash_recovery_enabled()
-            && let Some(recovery_mechanism) = choose_crash_recovery_mechanism(user_preferences) {
-                let child_process = match spawn_recovery_process(recovery_mechanism) {
-                    Ok(child_process) => child_process,
-                    Err(err) => {
-                        report_error!(
-                            anyhow::Error::new(err)
-                                .context("Failed to spawn crash recovery child process")
-                        );
-                        return Self {
-                            child_process: Default::default(),
-                            should_notify_user_about_crash,
-                        };
-                    }
-                };
+            && let Some(recovery_mechanism) = choose_crash_recovery_mechanism(user_preferences)
+        {
+            let child_process = match spawn_recovery_process(recovery_mechanism) {
+                Ok(child_process) => child_process,
+                Err(err) => {
+                    report_error!(
+                        anyhow::Error::new(err)
+                            .context("Failed to spawn crash recovery child process")
+                    );
+                    return Self {
+                        child_process: Default::default(),
+                        should_notify_user_about_crash,
+                    };
+                }
+            };
 
-                *IS_CRASH_RECOVERY_PROCESS_RUNNING.write() = true;
-                return Self {
-                    child_process: RefCell::new(Some(CrashRecoveryProcess::new(child_process))),
-                    should_notify_user_about_crash,
-                };
-            }
+            *IS_CRASH_RECOVERY_PROCESS_RUNNING.write() = true;
+            return Self {
+                child_process: RefCell::new(Some(CrashRecoveryProcess::new(child_process))),
+                should_notify_user_about_crash,
+            };
+        }
 
         Self {
             child_process: Default::default(),
