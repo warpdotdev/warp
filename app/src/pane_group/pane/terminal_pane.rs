@@ -1031,9 +1031,10 @@ fn handle_terminal_view_event(
                         ctx.emit(pane_group::Event::ActiveSessionChanged);
                     }
                     None => {
-                        report_error!(
-                            "Could not find uuid for terminal id",
-                            extra: { "terminal_pane_id" => ?terminal_pane_id }
+                        // The pane can be closed between a block completing and
+                        // this handler running; nothing to persist in that case.
+                        log::warn!(
+                            "Could not find uuid for terminal id: terminal_pane_id={terminal_pane_id:?}"
                         );
                     }
                 };
@@ -1993,12 +1994,12 @@ fn launch_remote_child(
                 "Failed to resolve child agent skills: {}",
                 unresolved_references.join(", ")
             );
-            report_error!(
-                "Failed to resolve StartAgentV2 skill references for remote child",
-                extra: {
-                    "conversation_id" => ?conversation_id,
-                    "unresolved_references" => %unresolved_references.join(", ")
-                }
+            // Unresolved skill references are typically caused by invalid caller
+            // input and are surfaced to the user below, so this isn't a Sentry-
+            // worthy engineering issue.
+            log::warn!(
+                "Failed to resolve StartAgentV2 skill references for remote child: conversation_id={conversation_id:?}, unresolved_references={}",
+                unresolved_references.join(", ")
             );
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                 history_model.update_conversation_status_with_error(

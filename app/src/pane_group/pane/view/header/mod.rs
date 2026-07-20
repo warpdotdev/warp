@@ -5,7 +5,6 @@ use pathfinder_geometry::vector::{Vector2F, vec2f};
 use sharing::SharedPaneContent;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
-use warp_errors::report_error;
 use warpui::elements::{
     AcceptedByDropTarget, Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Flex, Hoverable,
@@ -962,9 +961,10 @@ impl<P: BackingView> TypedActionView for PaneHeader<P> {
                             });
                         }
                     } else {
-                        report_error!(
-                            "Attempting to move to pane that does not exist",
-                            extra: { "target_id" => ?target_id }
+                        // The drop target pane can legitimately disappear mid-drag
+                        // (e.g. closed concurrently); the move is a no-op here.
+                        log::warn!(
+                            "Attempting to move to pane that does not exist: target_id={target_id:?}"
                         );
                     }
                 }

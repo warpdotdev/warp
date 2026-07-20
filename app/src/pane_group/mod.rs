@@ -2949,7 +2949,9 @@ impl PaneGroup {
 
                 let Some(terminal_view) = self.terminal_view_from_pane_id(*terminal_pane_id, ctx)
                 else {
-                    report_error!("Tried to grant role for non existent terminal pane");
+                    // The pane can be closed while its role-change modal is open;
+                    // this is a benign UI race, not an engineering issue.
+                    log::warn!("Tried to grant role for non existent terminal pane");
                     return;
                 };
 
@@ -4322,11 +4324,11 @@ impl PaneGroup {
                 let pane = data.as_pane();
                 pane.detach(self, DetachType::Moved, ctx);
             }
-            None => report_error!("Could not find data for pane", extra: { "pane_id" => ?pane_id }),
+            None => log::warn!("Could not find data for pane: pane_id={pane_id:?}"),
         };
 
         if !self.panes.remove(*pane_id) {
-            report_error!("Pane not found");
+            log::warn!("Pane not found");
         }
 
         let pane_content = self.pane_contents.remove(pane_id);
@@ -4822,7 +4824,7 @@ impl PaneGroup {
             // We should only remove the session id from the tree after we queried
             // and got the previous session id.
             if !self.panes.remove(pane_id) {
-                report_error!("Pane not found");
+                log::warn!("Pane not found");
             }
 
             // Mirror cleanup_closed_pane's transitive-share map cleanup so
@@ -5008,10 +5010,9 @@ impl PaneGroup {
         let success = self.replace_pane(file_pane_id, code_pane, false, ctx);
 
         if !success {
-            report_error!(
-                "Failed to replace file pane with code pane",
-                extra: { "file_pane_id" => ?file_pane_id }
-            );
+            // replace_pane already reports the underlying failure; avoid a
+            // duplicate Sentry event here.
+            log::warn!("Failed to replace file pane with code pane: file_pane_id={file_pane_id:?}");
         }
     }
 
@@ -5040,10 +5041,9 @@ impl PaneGroup {
         let success = self.replace_pane(code_pane_id, file_pane, false, ctx);
 
         if !success {
-            report_error!(
-                "Failed to replace code pane with file pane",
-                extra: { "code_pane_id" => ?code_pane_id }
-            );
+            // replace_pane already reports the underlying failure; avoid a
+            // duplicate Sentry event here.
+            log::warn!("Failed to replace code pane with file pane: code_pane_id={code_pane_id:?}");
         }
     }
 
@@ -5507,7 +5507,7 @@ impl PaneGroup {
         self.clear_hidden_closed_panes(ctx);
 
         if !self.panes.remove(id) {
-            report_error!("Pane not found when attempting to move");
+            log::warn!("Pane not found when attempting to move");
             return;
         }
 
@@ -7559,7 +7559,7 @@ impl PaneGroup {
                 let pane = data.as_pane();
                 pane.detach(self, DetachType::Closed, ctx);
             }
-            None => report_error!("Could not find data for pane", extra: { "pane_id" => ?pane_id }),
+            None => log::warn!("Could not find data for pane: pane_id={pane_id:?}"),
         };
     }
 

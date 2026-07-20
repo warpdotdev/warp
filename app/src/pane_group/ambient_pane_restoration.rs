@@ -1,6 +1,5 @@
 use session_sharing_protocol::common::SessionId;
 use uuid::Uuid;
-use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext, ViewHandle};
 
 use crate::ai::agent::api::ServerConversationToken;
@@ -188,7 +187,7 @@ impl PaneGroup {
             } else if let Some(pane_id) =
                 group.find_pane_id_for_terminal_view(target_view.id(), ctx)
             {
-                report_error!(
+                log::warn!(
                     "Failed to restore ambient agent pane, replacing with new cloud conversation"
                 );
                 group.replace_pane_with_new_cloud_conversation(pane_id, ctx);

@@ -269,7 +269,9 @@ impl PaneData {
 
         // Remove the pane from the tree
         if !self.remove(id) {
-            report_error!("Pane not found");
+            // Moving a pane that's no longer in the tree (e.g. closed
+            // concurrently) is a no-op, not an engineering issue.
+            log::warn!("Pane not found");
             return false;
         }
 
@@ -298,7 +300,7 @@ impl PaneData {
         {
             self.hidden_panes.remove(pos);
         } else {
-            report_error!("Attempted to show pane for the job but couldn't find it.")
+            log::warn!("Attempted to show pane for the job but couldn't find it.")
         }
     }
 
@@ -316,7 +318,7 @@ impl PaneData {
         {
             self.hidden_panes.remove(pos);
         } else {
-            report_error!("Attempted to show child agent pane but couldn't find it.")
+            log::warn!("Attempted to show child agent pane but couldn't find it.")
         }
     }
 
