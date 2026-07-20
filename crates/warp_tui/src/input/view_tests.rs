@@ -747,13 +747,9 @@ fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
         assert_eq!(*requests.borrow(), 1);
 
         app.update(|ctx| {
-            dispatch(
-                &view,
-                ctx,
-                &[TuiInputAction::Editor(TuiEditorAction::PasteText(
-                    "first\nsecond".to_string(),
-                ))],
-            );
+            view.update(ctx, |view, ctx| {
+                view.insert_pasted_text("first\nsecond", ctx);
+            });
             dispatch(
                 &view,
                 ctx,

@@ -1,3 +1,4 @@
+mod image_processing;
 mod model;
 mod view;
 
