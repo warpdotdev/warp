@@ -2,17 +2,13 @@ use std::any::Any;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use async_broadcast::InactiveReceiver;
 use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
-use warpui::{AppContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, SingletonEntity};
 
-use super::color::List as ColorList;
 use super::event_listener::ChannelEventListener;
 use super::model::block::BlockSize;
-use super::model::session::Sessions;
-use super::model_events::ModelEventDispatcher;
 use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
@@ -45,44 +41,6 @@ pub trait TerminalManager: Any {
 
 impl warpui::Entity for Box<dyn TerminalManager> {
     type Event = ();
-}
-
-/// Shared inputs needed to construct a terminal surface.
-pub struct TerminalSurfaceInit {
-    pub wakeups_rx: async_channel::Receiver<()>,
-    pub model_events: ModelHandle<ModelEventDispatcher>,
-    pub model: Arc<FairMutex<TerminalModel>>,
-    pub sessions: ModelHandle<Sessions>,
-    pub size_info: SizeInfo,
-    pub colors: ColorList,
-    pub inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
-}
-
-impl TerminalSurfaceInit {
-    /// Creates mock terminal surface inputs without spawning a PTY.
-    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
-    pub fn new_for_test(ctx: &mut AppContext) -> Self {
-        let (_wakeups_tx, wakeups_rx) = async_channel::unbounded();
-        let (_events_tx, events_rx) = async_channel::unbounded();
-        let (pty_reads_tx, pty_reads_rx) =
-            async_broadcast::broadcast(super::PTY_READS_BROADCAST_CHANNEL_SIZE);
-        drop(pty_reads_tx);
-        let sessions = ctx.add_model(|_| Sessions::new_for_test());
-        let model_events =
-            ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
-        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
-        let colors = model.lock().colors();
-        let size_info = model.lock().block_list().size().to_owned();
-        Self {
-            wakeups_rx,
-            model_events,
-            model,
-            sessions,
-            size_info,
-            colors,
-            inactive_pty_reads_rx: pty_reads_rx.deactivate(),
-        }
-    }
 }
 
 /// Spacing baked into block heights: the per-block padding, the height

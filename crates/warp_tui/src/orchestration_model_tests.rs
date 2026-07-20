@@ -12,9 +12,9 @@ use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
 
 use super::TuiOrchestrationModel;
 use crate::cloud_run::TuiCloudRunStartup;
+use crate::cloud_run_view::{TuiCloudRunAction, TuiCloudRunView};
 use crate::root_view::RootTuiView;
-use crate::session_registry::{TuiSessionId, TuiSessions};
-use crate::terminal_session_view::TuiTerminalSessionAction;
+use crate::session_registry::{TuiSessionId, TuiSessionView, TuiSessions};
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 
 struct OrchestrationFixture {
@@ -126,6 +126,23 @@ fn add_remote_child_session(
         })
     });
     (conversation_id, surface_id, cloud_run_state)
+}
+
+fn cloud_view(
+    surface_id: warpui::EntityId,
+    ctx: &warpui::AppContext,
+) -> warpui::ViewHandle<TuiCloudRunView> {
+    let session_id = TuiSessions::as_ref(ctx)
+        .session_id_for_surface(surface_id)
+        .expect("cloud session is retained");
+    match TuiSessions::as_ref(ctx)
+        .session(session_id)
+        .expect("cloud session is registered")
+        .view()
+    {
+        TuiSessionView::Cloud(view) => view.clone(),
+        TuiSessionView::Terminal(_) => panic!("expected a lightweight cloud session"),
+    }
 }
 
 /// Registers a session with a live active conversation.
@@ -466,14 +483,7 @@ fn remote_child_session_is_navigable_and_projects_lifecycle() {
                 cloud_run_state.as_ref(ctx).conversation_id(),
                 Some(conversation_id)
             );
-            let session_id = TuiSessions::as_ref(ctx)
-                .session_id_for_surface(surface_id)
-                .unwrap();
-            let view = TuiSessions::as_ref(ctx)
-                .session(session_id)
-                .unwrap()
-                .view()
-                .clone();
+            let view = cloud_view(surface_id, ctx);
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 view.as_ref(ctx).render(ctx),
@@ -497,28 +507,14 @@ fn remote_child_session_is_navigable_and_projects_lifecycle() {
             );
         });
         app.update(|ctx| {
-            let session_id = TuiSessions::as_ref(ctx)
-                .session_id_for_surface(surface_id)
-                .unwrap();
-            let view = TuiSessions::as_ref(ctx)
-                .session(session_id)
-                .unwrap()
-                .view()
-                .clone();
+            let view = cloud_view(surface_id, ctx);
             view.update(ctx, |view, ctx| {
                 view.refresh_orchestration_tab_state(ctx);
-                view.handle_action(&TuiTerminalSessionAction::FocusOrchestrationTabs, ctx);
+                view.handle_action(&TuiCloudRunAction::FocusOrchestrationTabs, ctx);
             });
         });
         app.read(|ctx| {
-            let session_id = TuiSessions::as_ref(ctx)
-                .session_id_for_surface(surface_id)
-                .unwrap();
-            let view = TuiSessions::as_ref(ctx)
-                .session(session_id)
-                .unwrap()
-                .view()
-                .clone();
+            let view = cloud_view(surface_id, ctx);
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 view.as_ref(ctx).render(ctx),

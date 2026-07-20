@@ -17,9 +17,8 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView, WindowInvalidation};
 
 use super::{
-    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, TuiTerminalSessionEvent, export_file_success_message,
-    log_bundle_success_message, orchestration_tab_icon, raw_prompt_if_not_blank,
-    render_left_footer_hint,
+    TuiTerminalSessionEvent, export_file_success_message, log_bundle_success_message,
+    raw_prompt_if_not_blank, render_left_footer_hint,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::keybindings::{
@@ -28,6 +27,7 @@ use crate::keybindings::{
 };
 use crate::orchestrated_agent_identity_styling::AgentIdentity;
 use crate::orchestration_model::TuiOrchestrationModel;
+use crate::orchestration_tabs::{ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_icon};
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::terminal_block::{block_content_rows, should_render_terminal_block};

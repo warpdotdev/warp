@@ -356,7 +356,6 @@ impl TuiOrchestrationModel {
         );
         let RemoteChildSession {
             session_id,
-            session_view: _,
             cloud_run_state,
         } = child;
         let surface_id = session_id.surface_id();
@@ -402,9 +401,6 @@ impl TuiOrchestrationModel {
         });
         child.cloud_run_state.update(ctx, |state, ctx| {
             state.set_conversation_id(conversation_id, ctx);
-        });
-        child.session_view.update(ctx, |view, ctx| {
-            view.initialize_orchestrated_child_conversation(conversation_id, ctx);
         });
         self.child_session_by_conversation
             .insert(conversation_id, child.session_id);

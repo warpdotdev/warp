@@ -46,41 +46,36 @@ Extract the launch-error interpretation needed by both frontends into shared dat
 
 The GUI maps these shared values into its existing `Status` and events without changing control flow. The TUI uses the same values in its cloud-session display state. Do not introduce a shared launch coordinator or duplicate `StartAgentExecutor` outcome state.
 
-### 2. Add a minimal deferred TUI cloud terminal manager
-Add `initialize_tui_cloud_viewer_terminal` beside the GUI shared-session viewer terminal manager and re-export it through `tui_export`; it reuses the same PTY-less `TerminalModel`, wakeup/model-event channels, `Sessions`, `ModelEventDispatcher`, terminal colors/size, and inactive PTY-read receiver. Add `crates/warp_tui/src/cloud_terminal_manager.rs` with `TuiCloudTerminalManager`, implementing `TerminalManagerTrait`; it retains the terminal model and inactive receiver while the session view retains the surface's model handles.
+### 2. Retain lightweight cloud-run sessions without terminal machinery
+Generalize `TuiSessions` so each retained entry contains one of:
+- A `TuiTerminalSessionView` and the `TerminalManagerTrait` that keeps its PTY alive.
+- A `TuiCloudRunView` with no terminal manager.
 
-The TUI manager owns no local PTY, network transport, session-sharing connection API, polling loop, or speculative connected-state enum.
+The concrete view entity ID remains the `TuiSessionId` and the history surface ID for both variants. `TuiSessionView` centralizes the small cross-variant operations required by the registry and root view: resolve the window and entity IDs, activate the focused view, refresh orchestration tabs, and preserve tab focus while switching sessions.
 
-`TerminalSurfaceInit` lives in `app/src/terminal/terminal_manager.rs:51`, not under `terminal::local_tty`, because both native local terminals and PTY-less shared-session viewers construct the same frontend-neutral surface inputs. The local TTY adapter, shared-session viewer, and `tui_export` import it from that shared module. This keeps the WASM viewer build independent of the `local_tty` feature while preserving the same model, event, session, color, size, and inactive-receiver ownership.
+Add `create_cloud_run_session` beside `create_local_terminal_session` in `crates/warp_tui/src/session_registry.rs`. It creates an unfocused `TuiCloudRunView`, registers it without a manager, and returns the stable session ID used to create the remote child conversation.
 
-**GUI prior art:** This deliberately mirrors the GUI's `shared_session::viewer::TerminalManager::new_deferred` construction and lifetime model: create the real terminal model, event plumbing, view, and concrete type-erased manager before a remote session exists, then retain their identities for an eventual in-place attachment. It does not reuse the GUI manager implementation because that implementation constructs `TerminalView` and owns GUI-specific network, orchestration polling, `ActiveAgentViewsModel`, permission, and session-attachment behavior.
+Do not create a `TerminalModel`, terminal `Sessions`, `ModelEventDispatcher`, PTY-read broadcast channel, resize/wakeup streams, transcript, input model, AI controller, menus, or local/shared terminal manager for a read-only cloud-run session. Future shared-session viewing may replace this variant with a terminal-backed cloud view when that capability is implemented; v0 does not preallocate an unused transport surface.
 
-Add `create_cloud_terminal_session` beside `create_local_terminal_session` in `crates/warp_tui/src/session_registry.rs`. It creates `TuiCloudTerminalManager`, constructs an unfocused `TuiTerminalSessionView` from its `TerminalSurfaceInit`, and registers the view plus type-erased manager with `TuiSessions`. The resulting view ID remains the `TuiSessionId` and terminal surface ID for the session's lifetime.
-
-The manager is intentionally the valid deferred initial state of a future cloud viewer, not a fake local terminal. Future session-sharing work may add transport to the same concrete manager without replacing the view, manager, conversation, or session identity.
-
-### 3. Add cloud session state and centralize session-mode branching
+### 3. Add cloud run state and a dedicated view
 Add a per-session `TuiCloudRunState` model containing:
 - Child conversation ID.
 - Shared startup display state (`Dispatching`, `Blocked`, `Failed`, or `Spawned`).
 - Optional task ID, run ID, and deterministic Oz run URL.
 
 Do not duplicate ongoing `ConversationStatus`; after run-ID assignment the view reads the authoritative status from `BlocklistAIHistoryModel`.
+Add `TuiCloudRunView` in `crates/warp_tui/src/cloud_run_view.rs`. It owns only `TuiCloudRunState`, the reusable link, orchestration tab bar, tab-focus state, and read-only exit confirmation. Its display-state derivation maps startup state plus history status into the centered callout and primary link.
 
-Add `TuiTerminalSessionMode::{Local, Cloud(ModelHandle<TuiCloudRunState>)}` to `TuiTerminalSessionView` and a `new_cloud` constructor. Keep all cloud branching behind narrow helpers:
-- `cloud_session_display_state` derives the current callout from startup state plus history status.
-- `render` returns the cloud session before constructing normal transcript/input/footer content.
-- `child_view_ids`, activation/focus, keymap context, and PTY event routing treat an unattached cloud session as self-focused and non-interactive.
-- A cloud-session keymap flag scopes `Shift+Up` directly to the existing tab-focus action because the hidden input view cannot emit `FocusAboveRequested`, and scopes Enter to opening the current primary URL regardless of whether the body or tabs own focus. The unfocused footer reuses `Shift + ↑ sub-agents`; the focused cloud-tab footer reuses the regular navigation copy but omits ineffective `Shift+Down`.
+Move shared orchestration-tab configuration and footer presentation into `crates/warp_tui/src/orchestration_tabs.rs` so terminal and cloud views preserve identical ordering, paging, status glyphs, identity styling, and focused-tab treatment without sharing terminal state.
 
-Keep cloud-session construction, display-state derivation, rendering, primary-link resolution, and read-only interrupt handling together in `crates/warp_tui/src/terminal_session_view/cloud_session.rs`; the parent session view retains shared mode selection, keybindings, and orchestration-tab coordination.
+Give `TuiCloudRunView` its own typed actions and keymap context. `Shift+Up` focuses its orchestration tab bar, Enter opens the current primary URL, and tab navigation switches through `TuiSessions`. The unfocused footer reuses `Shift + ↑ sub-agents`; the focused cloud-tab footer omits `Shift+Down` because the cloud body has no input target.
 
-Do not add cloud checks throughout transcript, input, menus, footer, or shell-command handlers. No printable input or PTY intent is emitted from cloud session mode.
+Keep `TuiTerminalSessionView` terminal-only. No printable input or PTY intent can originate from `TuiCloudRunView`.
 
 ### 4. Create remote sessions in `TuiSessions` and own launch lifecycle in `TuiOrchestrationModel`
 Replace the Remote failure arm in `dispatch_create_agent` with a split TUI-owned launch flow:
 1. Call the shared preparer. A preparation failure is surfaced through the existing failed-child contract rather than timing out.
-2. Emit `CreateRemoteChildSession`; `TuiSessions` eagerly creates an unfocused deferred cloud terminal session and `TuiCloudRunState::Dispatching`, returning only the retained `RemoteChildSession` resources.
+2. Emit `CreateRemoteChildSession`; `TuiSessions` eagerly creates an unfocused lightweight cloud-run session and `TuiCloudRunState::Dispatching`, returning only the retained session ID and state model.
 3. `TuiOrchestrationModel::register_remote_child_session` creates the child conversation on that session's surface, marks it remote, sets it active for the surface, and calls `record_new_conversation_request_complete` using the existing GUI ordering.
 4. Record the conversation/session mapping before dispatch so `CleanupFailedChildLaunch` can remove terminal pre-run failures.
 5. Call `AIClient::spawn_agent` directly. Do not use `spawn_task`: v0 needs the returned task/run IDs and deterministic Oz URL, not a joinable shared-session signal.
@@ -113,9 +108,9 @@ Add `crates/warp_tui/src/link.rs` with a reusable `TuiLink` presentation helper:
 - Uses `TuiHoverable` for footprint-correct click handling.
 - Accepts an `on_open` callback; it contains no cloud-specific URL construction or copy.
 
-The cloud session view uses a typed `OpenCloudRunUrl(String)` action for both link clicks and Enter while the read-only cloud session is focused. The view action calls `ctx.open_url`; the element itself does not mutate application state. The same element renders the Oz run URL and GitHub authentication URL.
+The cloud run view uses a typed `OpenUrl(String)` action for both link clicks and Enter while the read-only cloud session is focused. The view action calls `ctx.open_url`; the element itself does not mutate application state. The same element renders the Oz run URL and GitHub authentication URL.
 
-Keep keyboard ownership in `TuiTerminalSessionView`, not the element: Enter is active only for a focused cloud session with a primary link. Visible URL text remains available to the host terminal's normal selection/copy behavior.
+Keep keyboard ownership in `TuiCloudRunView`, not the element: Enter is active only for a focused cloud session with a primary link. Visible URL text remains available to the host terminal's normal selection/copy behavior.
 
 ### 7. Exports and cleanup
 Re-export only the least-visible shared APIs needed by `warp_tui` through `app/src/tui_export.rs`: the prepared launch types/helper, startup blocker/failure values, spawn response/request types if not already exported, and the owner-side lifecycle event.
@@ -128,7 +123,7 @@ Both frontends consume the remote configuration, request preparer, spawn request
 flowchart LR
     A["RunAgentsExecutor<br/>StartAgentRequest::Remote"] --> B["TuiOrchestrationModel"]
     B --> C["prepare_remote_child_launch"]
-    B --> D["Deferred TUI cloud session<br/>PTY-less TerminalModel"]
+    B --> D["Lightweight TUI cloud session<br/>status + link view"]
     D --> E["Remote child conversation<br/>marked remote"]
     C --> F["AIClient::spawn_agent"]
     F -->|success| G["Assign task/run IDs<br/>build Oz URL"]
@@ -146,14 +141,15 @@ flowchart LR
 - Error-classification tests cover GitHub-auth blockers and their callback URL, capacity failures, quota messages, and fallback failures.
 - The GUI and TUI both compile against `prepare_remote_child_launch` and `classify_cloud_agent_startup_error`; GUI launch ordering and `AmbientAgentViewModel` ownership remain unchanged.
 
-### Deferred manager and cloud session view
-- `crates/warp_tui/src/orchestration_model_tests.rs:429` exercises deferred cloud-session construction through `TuiSessions`, including the centered dispatching state, cloud footer, retained navigation, and lifecycle projection.
+### Lightweight cloud session view
+- `crates/warp_tui/src/orchestration_model_tests.rs` exercises lightweight cloud-session construction through `TuiSessions`, including the centered dispatching state, cloud footer, retained navigation, and lifecycle projection.
+- `crates/warp_tui/src/cloud_run_view_tests.rs` verifies the standalone view's dispatching and GitHub-auth-blocked callouts, including the actionable authentication URL, without constructing terminal state.
 - `crates/warp_tui/src/link_tests.rs:9` verifies the reusable link's default underlined rendering.
-- `TuiCloudTerminalManager`, blocked/failed/spawned callouts, narrow-width wrapping, resize recentering, theme variants, hover/click behavior, Enter-to-open behavior, and suppression of normal terminal content are implemented but do not currently have dedicated unit or render-to-lines coverage.
+- Failed/spawned callouts, narrow-width wrapping, resize recentering, theme variants, hover/click behavior, and Enter-to-open behavior do not currently have dedicated render-to-lines or action coverage.
 
 ### Orchestration launch and lifecycle
 - `crates/warp_tui/src/orchestration_model_tests.rs` covers local-harness failure, GitHub-auth blocker retention, orchestration snapshots and paging, a retained remote child moving from dispatching to a projected success status, and local failed-launch cleanup.
-- The remote lifecycle fixture exercises `WatchedRunStatusChanged` through the TUI subscriber at `crates/warp_tui/src/orchestration_model.rs:477`. There is no dedicated streamer-level test for the event's cursor/dedup path, and no dedicated coverage for mismatched/stale events, mixed local/remote concurrency, successful spawn response assignment, or retained error/cancelled states.
+- The remote lifecycle fixture exercises `WatchedRunStatusChanged` through the TUI subscriber in `crates/warp_tui/src/orchestration_model.rs`. There is no dedicated streamer-level test for the event's cursor/dedup path, and no dedicated coverage for mismatched/stale events, mixed local/remote concurrency, successful spawn response assignment, or retained error/cancelled states.
 
 ### Build and lint validation
 Run:
@@ -163,7 +159,7 @@ Run:
 - `cargo clippy --target wasm32-unknown-unknown --profile release-wasm-debug_assertions --no-deps`
 - `git diff --check`
 
-The WASM check is required because shared-session viewer code compiles without the native `local_tty` feature. The shared placement of `TerminalSurfaceInit` and native-only import gates preserve that target boundary.
+The WASM check remains required for the shared app changes. The TUI cloud path does not alter shared-session viewer construction or move `TerminalSurfaceInit` out of `terminal::local_tty`.
 
 ### Live verification
 Use `tui-verify-change` with `./script/run-tui`:
@@ -181,14 +177,14 @@ Run focused behavioral validation:
 Before submission, run `./script/presubmit` in addition to the focused and target-specific checks above.
 
 ## Parallelization
-Do not split implementation across child agents. Shared launch preparation must preserve the GUI contract while TUI session creation, the deferred manager, history linkage, lifecycle projection, and cloud-session rendering share ordering and identity invariants. The reusable link element is independent but small; integrating it sequentially avoids worktree/stack coordination overhead. Long-running focused test groups may run concurrently after implementation.
+Do not split implementation across child agents. Shared launch preparation must preserve the GUI contract while TUI session creation, heterogeneous registry behavior, history linkage, lifecycle projection, and cloud-session rendering share ordering and identity invariants. The reusable link element is independent but small; integrating it sequentially avoids worktree/stack coordination overhead. Long-running focused test groups may run concurrently after implementation.
 
 ## Risks and mitigations
 - **GUI behavior drift during extraction:** keep `AmbientAgentViewModel` and `launch_remote_child` ordering intact; move only normalized request construction and error interpretation, with parity tests over every mapped field and error kind.
-- **Cloud session behaves like a local terminal:** use a PTY-less cloud-viewer `TerminalModel`, centralize the render/focus/child-view early return, and assert no PTY intent can originate before a future viewer attaches.
+- **Cloud session accidentally acquires terminal behavior:** keep it in the `TuiSessionView::Cloud` variant with no manager or terminal model, and scope all actions to `TuiCloudRunView`.
 - **Lifecycle status clobbers GUI state:** emit an owner-side event but perform history projection only in `TuiOrchestrationModel`, after validating remote-child identity and parent linkage.
 - **Duplicate status sources:** startup presentation ends at run-ID assignment; ongoing status comes only from history. Do not poll task state or store a second ongoing status in `TuiCloudRunState`.
 - **Failed-launch cleanup removes a blocker:** preserve existing executor semantics—`Blocked` produces a failed outcome without cleanup; only terminal `Error`/`Cancelled` pre-run states remove the optimistic session.
 - **Stale run events target a reused surface:** resolve through history's run-ID index and revalidate parent, remote-child flag, and retained surface before updating.
-- **Terminal-model deadlock:** keep lock scopes short, never acquire another terminal-model lock from within a locked call path, and use existing constructor/access patterns.
-- **Future session viewing requires replacement:** retain the same cloud manager, terminal model, view, session ID, and conversation surface. Future network transport is additive to `TuiCloudTerminalManager`.
+- **Heterogeneous session drift:** keep cross-variant focus, tab refresh, and window lookup behind `TuiSessionView`; terminal-only events remain wired only by `register_session`.
+- **Future session viewing requires a terminal-backed variant:** add or replace the cloud session variant when shared viewing is implemented and transfer the conversation surface if in-place upgrade is required. Do not preallocate unused terminal infrastructure in v0.

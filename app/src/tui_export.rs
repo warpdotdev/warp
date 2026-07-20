@@ -165,7 +165,8 @@ pub use crate::terminal::input::slash_commands::{
     slash_command_selection_behavior,
 };
 pub use crate::terminal::local_tty::{
-    TerminalManager as LocalTtyTerminalManager, TerminalManagerInit, TerminalSurfaceResult,
+    TerminalManager as LocalTtyTerminalManager, TerminalManagerInit, TerminalSurfaceInit,
+    TerminalSurfaceResult,
 };
 pub use crate::terminal::model::block::{
     AgentInteractionMetadata, Block, BlockId, TranscriptScope,
@@ -182,9 +183,7 @@ pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveS
 pub use crate::terminal::model::terminal_model::BlockIndex;
 pub use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
-#[cfg(feature = "tui")]
-pub use crate::terminal::shared_session::viewer::terminal_manager::initialize_tui_cloud_viewer_terminal;
-pub use crate::terminal::terminal_manager::{BlockSpacing, TerminalSurfaceInit};
+pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};
 pub use crate::terminal::{
