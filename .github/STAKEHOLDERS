@@ -133,6 +133,7 @@
 /app/src/terminal/cli_agent.rs @zachbai @harryalbert
 /app/src/terminal/cli_agent_tests.rs @zachbai @harryalbert
 /app/src/terminal/cli_agent_sessions/ @zachbai @harryalbert
+/app/src/terminal/cli_agent_sessions/plugin_manager/ @seemeroland @Advait-M
 /app/src/terminal/input/rewind/ @alokedesai
 /app/src/workspace/rewind_confirmation_dialog.rs @alokedesai
 /app/src/platform/mac/ @alokedesai
@@ -224,6 +225,10 @@
 /crates/isolation_platform/ @bnavetta @ianhodge
 /crates/managed_secrets/ @bnavetta @ianhodge
 /crates/warp_web_event_bus/ @bnavetta @ianhodge
+
+# Local child harness setup and launch (local Claude Code / Codex / Gemini harness management)
+/app/src/ai/local_harness_setup.rs @seemeroland @bnavetta
+/app/src/pane_group/pane/local_harness_launch.rs @seemeroland @Advait-M
 
 # Command signatures v2
 /command-signatures-v2/ @zachbai
