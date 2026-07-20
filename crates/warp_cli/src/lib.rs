@@ -39,6 +39,7 @@ pub mod schedule;
 pub mod secret;
 pub mod share;
 pub mod task;
+pub mod terminal;
 pub const OZ_RUN_ID_ENV: &str = "OZ_RUN_ID";
 pub const OZ_PARENT_RUN_ID_ENV: &str = "OZ_PARENT_RUN_ID";
 pub const OZ_CLI_ENV: &str = "OZ_CLI";
@@ -283,6 +284,15 @@ impl Args {
                     }
                 }
 
+                if !FeatureFlag::TerminalShareCommand.is_enabled() {
+                    let args: Vec<String> = env::args().collect();
+                    if args.len() > 1 && args[1] == "terminal" {
+                        eprintln!("error: unrecognized subcommand 'terminal'\n");
+                        eprintln!("For more information, try '--help'");
+                        std::process::exit(2);
+                    }
+                }
+
                 let command = Self::clap_command();
 
                 command.try_get_matches()
@@ -405,6 +415,11 @@ impl Args {
         // Hide the runner subcommand from help text.
         if !FeatureFlag::CloudAgentRunners.is_enabled() {
             command = command.mut_subcommand("runner", |c| c.hide(true));
+        }
+
+        // Hide the terminal subcommand from help text.
+        if !FeatureFlag::TerminalShareCommand.is_enabled() {
+            command = command.mut_subcommand("terminal", |c| c.hide(true));
         }
 
         // Wire up `--version` / `-V` using the same version metadata used elsewhere in the
@@ -607,6 +622,10 @@ pub enum CliCommand {
     /// Manage cloud agent runners.
     #[command(subcommand)]
     Runner(crate::runner::RunnerCommand),
+
+    /// Start and share headless terminal sessions.
+    #[command(subcommand)]
+    Terminal(crate::terminal::TerminalCommand),
 }
 
 impl CliCommand {
@@ -632,6 +651,7 @@ impl CliCommand {
             CliCommand::MemoryStore(command) => command.as_str_for_tracing(),
             CliCommand::Memory(command) => command.as_str_for_tracing(),
             CliCommand::Runner(command) => command.as_str_for_tracing(),
+            CliCommand::Terminal(command) => command.as_str_for_tracing(),
         }
     }
 }

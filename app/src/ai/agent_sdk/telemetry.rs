@@ -157,6 +157,8 @@ pub(super) enum CliTelemetryEvent {
     RunnerUpdate,
     /// Executing `warp runner delete`
     RunnerDelete,
+    /// Executing `warp terminal share`
+    TerminalShare,
 }
 
 impl TelemetryEvent for CliTelemetryEvent {
@@ -255,6 +257,7 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::RunnerCreate => None,
             CliTelemetryEvent::RunnerUpdate => None,
             CliTelemetryEvent::RunnerDelete => None,
+            CliTelemetryEvent::TerminalShare => None,
         }
     }
 
@@ -381,6 +384,7 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::RunnerCreate => "CLI.Execute.Runner.Create",
             CliTelemetryEventDiscriminants::RunnerUpdate => "CLI.Execute.Runner.Update",
             CliTelemetryEventDiscriminants::RunnerDelete => "CLI.Execute.Runner.Delete",
+            CliTelemetryEventDiscriminants::TerminalShare => "CLI.Execute.Terminal.Share",
         }
     }
 
@@ -545,6 +549,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::RunnerCreate => "Created a runner from the Warp CLI",
             CliTelemetryEventDiscriminants::RunnerUpdate => "Updated a runner from the Warp CLI",
             CliTelemetryEventDiscriminants::RunnerDelete => "Deleted a runner from the Warp CLI",
+            CliTelemetryEventDiscriminants::TerminalShare => {
+                "Started a shared terminal session from the Warp CLI"
+            }
         }
     }
 
