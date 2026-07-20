@@ -1445,7 +1445,16 @@ fn parse_vertical_align<'a>(
             // renders as plain text. `backtrack_styles` still ensures a fragment exists to hold
             // this tag's own literal open tag position.
         });
-        process_emphasis(state, Some(start_index));
+
+        // Do NOT run `process_emphasis` here: the whole span must render as verbatim source, so
+        // Markdown emphasis inside it (`*a*`, `**b**`, `~~c~~`, `<sub>`/`<u>` overlaps, …) must
+        // stay literal. `process_emphasis` would interpret those delimiters and strip their marker
+        // text, so `<sub>*a<sup>b</sup>c*</sub>` would lose its literal `*` (issue #14029). Each
+        // in-span delimiter already pushed its literal marker text as a fragment at parse time, so
+        // dropping the delimiters from the stack without processing them leaves that text in place
+        // as plain source. Drop everything opened after this tag (`start_index + 1..`) before
+        // removing this tag's own delimiter below.
+        state.delimiters.truncate(start_index + 1);
 
         // Push this tag's own literal closing text; the opening node is left as-is (not removed),
         // so both tags plus everything in between remain as plain text.

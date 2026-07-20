@@ -2143,6 +2143,46 @@ fn test_parse_nested_vertical_align_opposite_direction_bails_whole_span_to_liter
 }
 
 #[test]
+fn test_parse_nested_vertical_align_bail_preserves_literal_emphasis_markers() {
+    // Issue #14029: a bailed nested sub/sup span must render as VERBATIM source, so Markdown
+    // emphasis markers (`*`, `_`, `~`) inside it stay literal. The pre-fix bail path still ran
+    // `process_emphasis`, so `<sub>*a<sup>b</sup>c*</sub>` had its `*…*` interpreted and stripped
+    // (or turned into an italic run) instead of preserved as source text.
+    assert_eq!(
+        parse_all("<sub>*a<sup>b</sup>c*</sub>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sub>*a<sup>b</sup>c*</sub>"
+        )]
+    );
+
+    // Bold (`**`) markers inside a bailed span must likewise survive verbatim.
+    assert_eq!(
+        parse_all("<sup>**a**<sub>b</sub></sup>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sup>**a**<sub>b</sub></sup>"
+        )]
+    );
+
+    // Strikethrough (`~~`) markers inside a bailed span must survive verbatim.
+    assert_eq!(
+        parse_all("<sub>~~a~~<sub>b</sub></sub>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sub>~~a~~<sub>b</sub></sub>"
+        )]
+    );
+
+    // Dropping the in-span delimiters must not corrupt emphasis parsing AFTER the bailed span:
+    // trailing `*italic*` still renders italic.
+    assert_eq!(
+        parse_all("<sub>a<sup>b</sup>c</sub> *italic*", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("<sub>a<sup>b</sup>c</sub> "),
+            FormattedTextFragment::italic("italic"),
+        ]
+    );
+}
+
+#[test]
 fn test_parse_malformed_overlapping_vertical_align_bails_whole_span_to_literal() {
     // Issue #14029: a malformed *overlap* like `<sub>a<sup>b</sub>c</sup>` has the inner `<sup>`
     // opener sitting AFTER the `<sub>` opener on the delimiter stack and still active when `</sub>`
