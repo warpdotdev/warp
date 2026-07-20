@@ -268,11 +268,10 @@ impl View for OnboardingMainView {
     }
 
     fn on_focus(&mut self, focus_ctx: &warpui_core::FocusContext, ctx: &mut ViewContext<Self>) {
-        if let OnboardingMainState::Onboarding(view) = &self.state {
-            if focus_ctx.is_self_focused() {
+        if let OnboardingMainState::Onboarding(view) = &self.state
+            && focus_ctx.is_self_focused() {
                 ctx.focus(view);
             }
-        }
     }
 }
 

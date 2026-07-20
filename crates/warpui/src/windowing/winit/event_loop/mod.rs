@@ -910,13 +910,12 @@ impl EventLoop {
                     size.height = MIN_WINDOW_SIZE.height;
                     request_new_size = true;
                 }
-                if request_new_size {
-                    if let Err(err) =
+                if request_new_size
+                    && let Err(err) =
                         inner_size_writer.request_inner_size(size.to_physical(scale_factor))
                     {
                         log::warn!("unable to correct window size: {err:#}");
                     }
-                }
             }
             Event::WindowEvent { window_id, event } => self.handle_window_event(window_id, event),
             Event::LoopExiting => {
@@ -1085,11 +1084,10 @@ impl EventLoop {
 
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
                 let result = window_callbacks.dispatch_event(event);
-                if !result.handled && !cmd_pressed {
-                    if let Some(chars) = chars {
+                if !result.handled && !cmd_pressed
+                    && let Some(chars) = chars {
                         window_callbacks.dispatch_event(TypedCharacters { chars });
                     }
-                }
             }
             ConvertedEvent::WindowMoved { new_position } => {
                 let window = downcast_window(window.as_ref());
@@ -1281,14 +1279,12 @@ impl EventLoop {
                 // the appropriate Warp-side event (ModifierKeyChanged).
                 if let (None, keyboard::PhysicalKey::Code(keycode)) =
                     (&event.text, &event.physical_key)
-                {
-                    if let Ok(mapped_keycode) = try_from_winit_keycode(keycode) {
+                    && let Ok(mapped_keycode) = try_from_winit_keycode(keycode) {
                         return Some(ConvertedEvent::ModifierKeyChanged {
                             key_code: mapped_keycode,
                             state: event.state,
                         });
                     }
-                }
 
                 let event_text = event.text.as_ref().map(|text| text.to_string());
                 let event_state = event.state;
@@ -1485,15 +1481,14 @@ impl EventLoop {
 
         // Drop the renderer before we actually clean up the window, to ensure
         // that the window outlives the `wgpu` surface that references it.
-        if let Some(WindowState { window_id, .. }) = window_state {
-            if let Some(window) = self
+        if let Some(WindowState { window_id, .. }) = window_state
+            && let Some(window) = self
                 .ui_app
                 .read(|ctx| ctx.windows().platform_window(window_id))
             {
                 downcast_window(window.as_ref())
                     .drop_renderer(Box::new(window_target.owned_display_handle()));
             }
-        }
 
         self.callbacks.window_will_close(window_id)
     }
@@ -1591,17 +1586,16 @@ impl EventLoop {
         let winit_window = downcast_window(window.as_ref());
         // There is some state on the [`winit::window::Window`] that needs to be kept
         // in sync with the cursor position in order for drag-resizing windows to work.
-        if let crate::Event::MouseMoved { .. } = event {
-            if !winit_window.is_decorated() {
+        if let crate::Event::MouseMoved { .. } = event
+            && !winit_window.is_decorated() {
                 winit_window.update_drag_resize_state(window_state.last_cursor_position);
             }
-        }
 
         // Check if we should start a window drag-resize. If so, do that instead of
         // passing the event into warpui. Skip for touch events as drag_resize_window
         // doesn't work properly with touch input on Windows.
-        if let crate::event::Event::LeftMouseDown { .. } = event {
-            if !winit_window.is_decorated()
+        if let crate::event::Event::LeftMouseDown { .. } = event
+            && !winit_window.is_decorated()
                 && winit_window.try_drag_resize()
                 && window_state.last_touch_purpose.is_none()
             {
@@ -1612,7 +1606,6 @@ impl EventLoop {
                 window_state.current_mouse_button_pressed = None;
                 return;
             }
-        }
         let dispatch_result = self
             .callbacks
             .for_window(winit_window)
@@ -1620,8 +1613,8 @@ impl EventLoop {
 
         // If the app didn't handle the event, warpui might still want to do something
         // with it if it's a click within the "titlebar region" at the top.
-        if !dispatch_result.handled {
-            if let crate::event::Event::LeftMouseDown {
+        if !dispatch_result.handled
+            && let crate::event::Event::LeftMouseDown {
                 click_count,
                 position,
                 ..
@@ -1648,7 +1641,6 @@ impl EventLoop {
                     }
                 }
             }
-        }
 
         // On mobile WASM, update soft keyboard state based on touch/click events.
         // This must happen synchronously within the touch event handler (user gesture context)

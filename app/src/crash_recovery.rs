@@ -190,8 +190,8 @@ impl CrashRecovery {
         // If we want automated recovery from a crash in this process, spawn a
         // a child recovery process that uses the given crash recovery
         // mechanism.
-        if launch_mode.crash_recovery_enabled() {
-            if let Some(recovery_mechanism) = choose_crash_recovery_mechanism(user_preferences) {
+        if launch_mode.crash_recovery_enabled()
+            && let Some(recovery_mechanism) = choose_crash_recovery_mechanism(user_preferences) {
                 let child_process = match spawn_recovery_process(recovery_mechanism) {
                     Ok(child_process) => child_process,
                     Err(err) => {
@@ -212,7 +212,6 @@ impl CrashRecovery {
                     should_notify_user_about_crash,
                 };
             }
-        }
 
         Self {
             child_process: Default::default(),

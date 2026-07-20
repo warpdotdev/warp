@@ -3055,14 +3055,13 @@ impl BlockListElement {
     ) -> bool {
         use crate::terminal::view::TerminalAction;
 
-        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code {
-            if *key_code == voice_input_toggle_key_code {
+        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code
+            && *key_code == voice_input_toggle_key_code {
                 ctx.dispatch_typed_action(TerminalAction::ToggleCLIAgentVoiceInput(
                     voice_input::VoiceInputToggledFrom::Key { state: *state },
                 ));
                 return true;
             }
-        }
         false
     }
 

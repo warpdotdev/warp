@@ -3202,14 +3202,12 @@ impl RootView {
         // Check that the released key matches the configured voice input toggle key.
         let ai_settings = AISettings::as_ref(ctx);
         if let Some(configured_key_code) = ai_settings.voice_input_toggle_key.value().to_key_code()
-        {
-            if configured_key_code == *key_code {
+            && configured_key_code == *key_code {
                 let voice_input = VoiceInput::handle(ctx);
                 // Check if we're actively listening and it was started from a key press.
                 if let VoiceInputState::Listening { enabled_from, .. } =
                     voice_input.as_ref(ctx).state()
-                {
-                    if matches!(
+                    && matches!(
                         enabled_from,
                         VoiceInputToggledFrom::Key {
                             state: KeyState::Pressed
@@ -3225,9 +3223,7 @@ impl RootView {
                             }
                         });
                     }
-                }
             }
-        }
         true
     }
 

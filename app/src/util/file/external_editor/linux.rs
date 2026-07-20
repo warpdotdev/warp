@@ -211,11 +211,10 @@ impl EditorMetadata {
                 // the future
                 //
                 // See https://github.com/rust-lang/rust/issues/92750
-                if let Ok(absolute) = file_path.canonicalize() {
-                    if let Ok(file_url) = url::Url::from_file_path(absolute) {
+                if let Ok(absolute) = file_path.canonicalize()
+                    && let Ok(file_url) = url::Url::from_file_path(absolute) {
                         args.push(file_url.as_str().to_string());
                     }
-                }
             }
             // Localized application name.
             'c' => {
@@ -332,8 +331,8 @@ pub fn open_file_path_with_line_and_col(
 ) {
     if full_path.is_file() {
         let with_editor = with_editor.or_else(|| get_app_for_file_from_mime(full_path));
-        if let Some(editor) = with_editor {
-            if let Some(mut command) = editor.command(full_path, line_column_number) {
+        if let Some(editor) = with_editor
+            && let Some(mut command) = editor.command(full_path, line_column_number) {
                 if let Err(err) = command.spawn() {
                     report_error!(
                         anyhow::Error::new(err).context("Error launching editor"),
@@ -342,7 +341,6 @@ pub fn open_file_path_with_line_and_col(
                 }
                 return;
             }
-        }
     }
 
     ctx.open_file_path(full_path);

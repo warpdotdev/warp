@@ -16,13 +16,13 @@ use cfg_if::cfg_if;
 // configures the profiling behavior.
 cfg_if! {
     if #[cfg(feature = "jemalloc_auto_heap_profiling")] {
-        #[cfg_attr(target_vendor = "apple", export_name = "_rjem_malloc_conf")]
-        #[cfg_attr(not(target_vendor = "apple"), export_name = "malloc_conf")]
+        #[cfg_attr(target_vendor = "apple", unsafe(export_name = "_rjem_malloc_conf"))]
+        #[cfg_attr(not(target_vendor = "apple"), unsafe(export_name = "malloc_conf"))]
         pub static MALLOC_CONF: &[u8] =
             b"prof:true,prof_active:true,lg_prof_interval:29,lg_prof_sample:21,prof_prefix:/tmp/jeprof\0";
     } else if #[cfg(feature = "jemalloc_pprof")] {
-        #[cfg_attr(target_vendor = "apple", export_name = "_rjem_malloc_conf")]
-        #[cfg_attr(not(target_vendor = "apple"), export_name = "malloc_conf")]
+        #[cfg_attr(target_vendor = "apple", unsafe(export_name = "_rjem_malloc_conf"))]
+        #[cfg_attr(not(target_vendor = "apple"), unsafe(export_name = "malloc_conf"))]
         pub static MALLOC_CONF: &[u8] =
             b"prof:true,prof_active:true,lg_prof_sample:21\0";
     }

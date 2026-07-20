@@ -452,13 +452,12 @@ impl EditorElement {
         state: &KeyState,
         ctx: &mut EventContext,
     ) {
-        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code {
-            if *key_code == voice_input_toggle_key_code {
+        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code
+            && *key_code == voice_input_toggle_key_code {
                 ctx.dispatch_typed_action(EditorAction::ToggleVoiceInput(
                     voice_input::VoiceInputToggledFrom::Key { state: *state },
                 ));
             }
-        }
     }
 
     fn mouse_moved(

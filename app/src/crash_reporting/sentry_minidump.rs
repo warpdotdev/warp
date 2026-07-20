@@ -150,7 +150,7 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
             &self,
             result: Result<minidumper::MinidumpBinary, minidumper::Error>,
         ) -> minidumper::LoopAction {
-            if let Err(ref err) = &result {
+            if let Err(err) = &result {
                 log::warn!("Unable to create minidump file: {err:#}");
             }
 
