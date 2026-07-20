@@ -2143,6 +2143,39 @@ fn test_parse_nested_vertical_align_opposite_direction_bails_whole_span_to_liter
 }
 
 #[test]
+fn test_parse_malformed_overlapping_vertical_align_bails_whole_span_to_literal() {
+    // Issue #14029: a malformed *overlap* like `<sub>a<sup>b</sub>c</sup>` has the inner `<sup>`
+    // opener sitting AFTER the `<sub>` opener on the delimiter stack and still active when `</sub>`
+    // closes. The pre-fix nesting check only scanned delimiters *before* the matched opener, so it
+    // missed the active inner delimiter inside the span and took the styled path — rendering a
+    // plausible-but-wrong formula. An active sub/sup delimiter anywhere inside the span must bail
+    // the whole construct to literal, just like well-formed nesting does.
+    assert_eq!(
+        parse_all("<sub>a<sup>b</sub>c</sup>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sub>a<sup>b</sub>c</sup>"
+        )]
+    );
+
+    // Opposite ordering of the same overlap: `<sup>a<sub>b</sup>c</sub>`.
+    assert_eq!(
+        parse_all("<sup>a<sub>b</sup>c</sub>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sup>a<sub>b</sup>c</sub>"
+        )]
+    );
+
+    // Same-direction overlap: `<sub>a<sub>b</sub>c</sub>` — the inner `<sub>` is still active at
+    // the first `</sub>` close.
+    assert_eq!(
+        parse_all("<sub>a<sub>b</sub>c</sub>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sub>a<sub>b</sub>c</sub>"
+        )]
+    );
+}
+
+#[test]
 fn test_parse_subscript_ignores_attributes() {
     // Invariant 9: only the `<sub>`/`<sup>` tag semantics carry meaning; any attributes
     // (`class`, `style`, `id`, …) are parsed and discarded, matching how other inline HTML

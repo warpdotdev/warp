@@ -1403,8 +1403,8 @@ fn parse_vertical_align<'a>(
     let start_node = start.node_index;
     let start_poisoned = start.vertical_align_poisoned;
 
-    // Nesting check: is there still an active vertical-align delimiter (Sub or Sup) earlier on
-    // the stack? If so, this tag opened inside an already-open outer vertical-align span, so this
+    // Nesting check (outer): is there still an active vertical-align delimiter (Sub or Sup) earlier
+    // on the stack? If so, this tag opened inside an already-open outer vertical-align span, so this
     // close must bail to literal and poison that outer delimiter.
     let outer_active_vertical_align =
         state.delimiters[..start_index]
@@ -1417,11 +1417,24 @@ fn parse_vertical_align<'a>(
                     )
             });
 
+    // Nesting check (inner overlap): is there still an active vertical-align delimiter INSIDE this
+    // span, i.e. after the matched opener? A malformed overlap like `<sub>a<sup>b</sub>c</sup>`
+    // leaves the inner `<sup>` opener active when `</sub>` closes; the outer scan above misses it
+    // because it only looks before `start_index`. Such an unresolved inner vertical-align tag means
+    // this span is not a clean single tag, so it must bail to literal like well-formed nesting does.
+    let inner_active_vertical_align = state.delimiters[start_index + 1..].iter().any(|delimiter| {
+        delimiter.active
+            && matches!(
+                delimiter.kind,
+                DelimiterKind::SubStart | DelimiterKind::SupStart
+            )
+    });
+
     if let Some(outer_index) = outer_active_vertical_align {
         state.delimiters[outer_index].vertical_align_poisoned = true;
     }
 
-    if start_poisoned || outer_active_vertical_align.is_some() {
+    if start_poisoned || outer_active_vertical_align.is_some() || inner_active_vertical_align {
         // Bail this span to literal: don't apply `align`, and leave this tag's own opening
         // placeholder node (already literal `<sub>`/`<sup>` text since push time) in place rather
         // than removing it. If this delimiter was itself poisoned (an inner nested tag already
