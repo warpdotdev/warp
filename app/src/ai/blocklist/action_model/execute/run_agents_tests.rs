@@ -85,6 +85,7 @@ fn persist_plan_config_with_harness(
                     execution_mode: OrchestrationExecutionMode::Remote {
                         environment_id: "env-1".to_string(),
                         worker_host: "warp".to_string(),
+                        runner_id: String::new(),
                     },
                 },
                 status,
@@ -231,6 +232,7 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
                 computer_use_enabled: false,
+                runner_id: String::new(),
             },
             agent_run_configs: vec![RunAgentsAgentRunConfig {
                 name: "child".to_string(),

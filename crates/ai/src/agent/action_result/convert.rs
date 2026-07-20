@@ -1362,12 +1362,13 @@ impl From<RunAgentsLaunchedExecutionMode>
                 environment_id,
                 worker_host,
                 computer_use_enabled,
+                runner_id,
             } => api::run_agents_result::launched::ResolvedExecutionMode::Remote(
                 api::run_agents::Remote {
                     environment_id,
                     worker_host,
                     computer_use_enabled,
-                    runner_id: Default::default(),
+                    runner_id,
                 },
             ),
         }

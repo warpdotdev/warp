@@ -312,6 +312,7 @@ fn remote_children_fail_cleanly() {
                 harness_type: "oz".to_string(),
                 title: "Researcher".to_string(),
                 auth_secret_name: None,
+                runner_id: String::new(),
                 agent_identity_uid: None,
             },
         );

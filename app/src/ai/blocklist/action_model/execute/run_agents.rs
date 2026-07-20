@@ -344,10 +344,12 @@ impl RunAgentsExecutor {
                         environment_id,
                         worker_host,
                         computer_use_enabled,
+                        runner_id,
                     } => RunAgentsLaunchedExecutionMode::Remote {
                         environment_id: environment_id.clone(),
                         worker_host: worker_host.clone(),
                         computer_use_enabled: *computer_use_enabled,
+                        runner_id: runner_id.clone(),
                     },
                 };
                 let result = RunAgentsResult::Launched {
@@ -714,6 +716,7 @@ pub fn run_agents_to_start_agent_mode(
             environment_id,
             worker_host,
             computer_use_enabled,
+            runner_id,
         } => {
             // OpenCode is unsupported on Remote.
             if run_harness_type.eq_ignore_ascii_case("opencode") {
@@ -732,6 +735,7 @@ pub fn run_agents_to_start_agent_mode(
                 auth_secret_name: run_auth_secret_name
                     .map(str::to_string)
                     .filter(|s| !s.trim().is_empty()),
+                runner_id: runner_id.clone(),
                 agent_identity_uid: Some(cfg.agent_identity_uid.clone())
                     .filter(|s| !s.trim().is_empty()),
             })

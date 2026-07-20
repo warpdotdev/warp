@@ -1629,6 +1629,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                             environment_id: remote.environment_id.clone(),
                             worker_host: remote.worker_host.clone(),
                             computer_use_enabled: remote.computer_use_enabled,
+                            runner_id: remote.runner_id.clone(),
                         },
                         Some(api::run_agents_result::launched::ResolvedExecutionMode::Local(_))
                         | None => RunAgentsLaunchedExecutionMode::Local,

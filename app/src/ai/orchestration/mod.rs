@@ -29,8 +29,8 @@ pub use providers::{
 pub use snapshots::location_snapshot;
 pub(crate) use snapshots::AUTH_SECRET_INHERIT_LABEL;
 pub use snapshots::{
-    api_key_snapshot, environment_snapshot, harness_snapshot, host_snapshot, model_snapshot,
-    OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus,
+    api_key_snapshot, build_runner_snapshot, environment_snapshot, harness_snapshot, host_snapshot,
+    model_snapshot, OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus,
 };
 pub use validation::{
     accept_disabled_reason_with_auth, empty_env_recommendation_message,

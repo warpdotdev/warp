@@ -216,7 +216,7 @@ fn dispatch_command(
             api_key::run(ctx, global_options, api_key_cmd)
         }
         CliCommand::Runner(runner_cmd) => {
-            if !FeatureFlag::CloudAgentRunnerCLICommands.is_enabled() {
+            if !FeatureFlag::CloudAgentRunners.is_enabled() {
                 return Err(anyhow::anyhow!("invalid value 'runner'"));
             }
             runner::run(ctx, global_options, runner_cmd)

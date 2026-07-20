@@ -61,6 +61,7 @@ fn remote(environment_id: &str, worker_host: &str) -> RunAgentsExecutionMode {
         environment_id: environment_id.to_string(),
         worker_host: worker_host.to_string(),
         computer_use_enabled: true,
+        runner_id: String::new(),
     }
 }
 
@@ -137,6 +138,7 @@ fn edit_state_is_overridden_by_an_approved_config() {
         execution_mode: OrchestrationExecutionMode::Remote {
             environment_id: "env-2".to_string(),
             worker_host: "warp".to_string(),
+            runner_id: String::new(),
         },
     };
     let state = TuiOrchestrationBlock::config_state_from_request(
@@ -204,6 +206,7 @@ fn build_request_carries_card_fields_and_edited_run_wide_state() {
             environment_id: "env-9".to_string(),
             worker_host: "self-hosted".to_string(),
             computer_use_enabled: true,
+            runner_id: String::new(),
         },
     );
     assert_eq!(built.harness_auth_secret_name.as_deref(), Some("codex-key"));

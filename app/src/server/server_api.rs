@@ -1344,7 +1344,6 @@ impl ServerApiProvider {
         self.server_api.clone()
     }
 
-    #[cfg_attr(target_family = "wasm", expect(dead_code))]
     pub fn get_factory_client(&self) -> Arc<dyn FactoryClient> {
         self.server_api.clone()
     }
