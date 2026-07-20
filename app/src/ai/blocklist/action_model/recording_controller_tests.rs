@@ -139,9 +139,11 @@ fn begin_and_commit_record_finish_offset_and_labels() {
     // `begin_action_group` reserves a pending group and returns the capture
     // start instant; `commit_action_group` records the finish offset measured
     // after the action sequence (here 500 ms) returns.
-    assert!(controller
-        .begin_action_group(owner, vec!["ctrl+a".to_string()])
-        .is_some());
+    assert!(
+        controller
+            .begin_action_group(owner, vec!["ctrl+a".to_string()])
+            .is_some()
+    );
     controller.commit_action_group(owner, Duration::from_millis(500));
 
     let FinalizationClaim::Claimed { recording, .. } =
@@ -232,14 +234,18 @@ fn begin_and_commit_are_scoped_to_the_owning_conversation() {
     let other = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
-    assert!(controller
-        .begin_action_group(owner, vec!["owner".to_string()])
-        .is_some());
+    assert!(
+        controller
+            .begin_action_group(owner, vec!["owner".to_string()])
+            .is_some()
+    );
     // Another conversation cannot begin (returns None) and cannot commit; the
     // owner's pending group is untouched.
-    assert!(controller
-        .begin_action_group(other, vec!["other".to_string()])
-        .is_none());
+    assert!(
+        controller
+            .begin_action_group(other, vec!["other".to_string()])
+            .is_none()
+    );
     controller.commit_action_group(other, Duration::from_millis(999));
     controller.commit_action_group(owner, Duration::from_millis(300));
 
@@ -261,9 +267,11 @@ fn commit_after_finalization_is_noop() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
-    assert!(controller
-        .begin_action_group(owner, vec!["a".to_string()])
-        .is_some());
+    assert!(
+        controller
+            .begin_action_group(owner, vec!["a".to_string()])
+            .is_some()
+    );
     // The recording is finalized while the action is in flight; the pending
     // group leaves with the claimed recording.
     let FinalizationClaim::Claimed { recording, .. } =
