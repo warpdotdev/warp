@@ -59,6 +59,31 @@ fn test_trims_powershell_specifics() {
     );
 }
 
+#[test]
+fn test_ssh_wrapper_reexecs_configured_login_shell() {
+    for path in [
+        "bundled/bootstrap/bash_body.sh",
+        "bundled/bootstrap/fish.sh",
+        "bundled/bootstrap/zsh_body.sh",
+    ] {
+        let script = crate::ASSETS
+            .get(path)
+            .unwrap_or_else(|_| panic!("failed to retrieve {path} from assets"));
+        let script = decode_script(&script);
+
+        assert!(
+            script.contains(r#"exec -a bash "'$SHELL'" --rcfile"#),
+            "{path} must use the configured bash path"
+        );
+        assert!(
+            script.contains(r#"exec -l "'$SHELL'" -g"#),
+            "{path} must use the configured zsh path"
+        );
+        assert!(!script.contains("exec -a bash bash --rcfile"));
+        assert!(!script.contains("exec -l zsh -g"));
+    }
+}
+
 fn decode_script(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).expect("should not fail to decode")
 }
