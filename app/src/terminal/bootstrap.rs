@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use std::borrow::Cow;
 
 use itertools::Itertools;
@@ -20,7 +21,16 @@ lazy_static! {
     /// A memoized cache of the fully-interpolated bootstrap script for each
     /// shell.  We store the full version here as an optimization so that we
     /// don't have to regenerate it every time we spawn a shell.
-    static ref BOOTSTRAP_CACHE: MemoMap<ShellType, Vec<u8>> = Default::default();
+    ///
+    /// The key includes the concrete `AssetProvider`'s `TypeId` alongside the
+    /// `ShellType`: `script_for_shell` is memoized process-wide, so without
+    /// the provider identity in the key, the first caller to populate a given
+    /// `ShellType` entry (e.g. production code using `crate::ASSETS`) would
+    /// "win" that entry for the rest of the process, causing any other
+    /// `AssetProvider` for the same shell (e.g. a test fixture) to
+    /// incorrectly receive the first provider's cached script instead of its
+    /// own.
+    static ref BOOTSTRAP_CACHE: MemoMap<(ShellType, TypeId), Vec<u8>> = Default::default();
 }
 
 /// This can sometimes appear in the beginning of files. If it gets written into the PTY, it causes
@@ -126,8 +136,9 @@ pub fn script_for_shell(shell_type: ShellType, assets: &dyn AssetProvider) -> Co
         ShellType::PowerShell => "pwsh.ps1",
     };
 
+    let cache_key = (shell_type, assets.type_id());
     BOOTSTRAP_CACHE
-        .get_or_insert(&shell_type, || {
+        .get_or_insert(&cache_key, || {
             let file_path = format!("bundled/bootstrap/{file}");
             let bootstrap = assets
                 .get(&file_path)
