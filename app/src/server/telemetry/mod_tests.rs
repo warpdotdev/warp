@@ -1,11 +1,22 @@
 use rudder_message::Track;
+use serial_test::serial;
 use virtual_fs::VirtualFS;
 
 use super::*;
 
 // Tests that events with UGC are not persisted to desk.
+//
+// `warpui::telemetry`'s event queue is a process-global, append-only cache
+// (1024-cap deque). Other tests that emit telemetry (e.g. `ExperimentTriggered`
+// from `experiments::mod.rs`) leave events queued for the rest of the process,
+// so this test must clear the queue before recording its own events, and must
+// run `#[serial]` so a concurrently-running event emitter can't repopulate it
+// mid-test.
 #[test]
+#[serial]
 fn test_persist_events_doesnt_include_ugc_events() {
+    clear_event_queue();
+
     let telemetry_api = TelemetryApi::new();
 
     VirtualFS::test(
