@@ -173,15 +173,15 @@ impl RecordingController {
         conversation_id: AIConversationId,
         labels: Vec<String>,
     ) -> Option<Instant> {
-        if let RecordingState::Active(recording) = &mut self.state {
-            if recording.conversation_id == conversation_id {
-                let start_offset = recording.started_at.elapsed();
-                recording.pending_group = Some(PendingActionGroup {
-                    start_offset,
-                    labels,
-                });
-                return Some(recording.started_at);
-            }
+        if let RecordingState::Active(recording) = &mut self.state
+            && recording.conversation_id == conversation_id
+        {
+            let start_offset = recording.started_at.elapsed();
+            recording.pending_group = Some(PendingActionGroup {
+                start_offset,
+                labels,
+            });
+            return Some(recording.started_at);
         }
         None
     }
@@ -201,17 +201,16 @@ impl RecordingController {
         conversation_id: AIConversationId,
         finish_offset: Duration,
     ) {
-        if let RecordingState::Active(recording) = &mut self.state {
-            if recording.conversation_id == conversation_id {
-                if let Some(pending) = recording.pending_group.take() {
-                    let finish_offset = finish_offset.max(pending.start_offset);
-                    recording.actions.push(computer_use::ActionLogEntry {
-                        offset: pending.start_offset,
-                        finish_offset,
-                        labels: pending.labels,
-                    });
-                }
-            }
+        if let RecordingState::Active(recording) = &mut self.state
+            && recording.conversation_id == conversation_id
+            && let Some(pending) = recording.pending_group.take()
+        {
+            let finish_offset = finish_offset.max(pending.start_offset);
+            recording.actions.push(computer_use::ActionLogEntry {
+                offset: pending.start_offset,
+                finish_offset,
+                labels: pending.labels,
+            });
         }
     }
 
@@ -220,10 +219,10 @@ impl RecordingController {
     /// for this conversation.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn discard_action_group(&mut self, conversation_id: AIConversationId) {
-        if let RecordingState::Active(recording) = &mut self.state {
-            if recording.conversation_id == conversation_id {
-                recording.pending_group = None;
-            }
+        if let RecordingState::Active(recording) = &mut self.state
+            && recording.conversation_id == conversation_id
+        {
+            recording.pending_group = None;
         }
     }
 
