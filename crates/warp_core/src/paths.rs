@@ -43,6 +43,7 @@ fn base_warp_config_dir_name() -> String {
         Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
     }
 }
+
 /// Returns the home-relative Warp config directory name for the current channel and data profile.
 ///
 /// This preserves the historical `.warp*` directory shape while still isolating dev, local,
@@ -109,6 +110,28 @@ pub fn data_dir() -> PathBuf {
     }
 }
 
+/// Returns the GUI application ID for the current channel.
+///
+/// Most TUI channel binaries use the same application ID as the GUI. The OSS
+/// TUI is the exception: it uses `WarpTui`, while the corresponding GUI uses
+/// `WarpOss`.
+#[cfg(any(not(target_os = "macos"), test))]
+fn gui_app_id_for_channel(channel: Channel, current_app_id: AppId) -> AppId {
+    match channel {
+        Channel::Oss => AppId::new("dev", "warp", "WarpOss"),
+        Channel::Stable
+        | Channel::Preview
+        | Channel::Dev
+        | Channel::Integration
+        | Channel::Local => current_app_id,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn gui_app_id() -> AppId {
+    gui_app_id_for_channel(ChannelState::channel(), ChannelState::app_id())
+}
+
 /// Returns the path to the directory where non-portable configuration files
 /// should be stored.
 pub fn config_local_dir() -> PathBuf {
@@ -123,6 +146,43 @@ pub fn config_local_dir() -> PathBuf {
                 .unwrap_or_default()
         }
     }
+}
+
+/// Resolves the GUI's non-portable configuration directory from any frontend.
+///
+/// This differs from [`config_local_dir`] when the active process uses a
+/// frontend-specific application ID, as the OSS TUI does on Linux and Windows.
+/// On macOS, development data profiles do not have an unambiguous corresponding
+/// GUI `.warp*` directory, so this fails closed instead of selecting a source
+/// profile implicitly.
+pub fn gui_config_local_dir() -> Option<PathBuf> {
+    cfg_if! {
+        if #[cfg(target_os = "macos")] {
+            if ChannelState::data_profile().is_some() {
+                return None;
+            }
+            dirs::home_dir().map(|home_dir| home_dir.join(macos_config_dir_name()))
+        } else {
+            project_dirs_for_app_id(
+                gui_app_id(),
+                ChannelState::data_profile().as_deref(),
+            )
+            .map(|dirs| dirs.config_local_dir().to_owned())
+        }
+    }
+}
+
+/// Resolves the GUI's global file-based MCP configuration from any frontend.
+///
+/// As with [`gui_config_local_dir`], macOS development data profiles fail
+/// closed because the matching GUI source profile is ambiguous.
+pub fn gui_mcp_config_file_path() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    if ChannelState::data_profile().is_some() {
+        return None;
+    }
+
+    warp_home_mcp_config_file_path()
 }
 
 /// Returns the macOS config directory name for the TUI front-end (`warp-tui`)
