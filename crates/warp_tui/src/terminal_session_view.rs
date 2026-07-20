@@ -2906,14 +2906,12 @@ impl TuiView for TuiTerminalSessionView {
             && (input_target.agent_editor_owns_input()
                 || matches!(input_target, TuiInputTarget::Disabled))
         {
-            if input_target.agent_editor_owns_input() {
-                if let Some(menu) = inline_menu {
-                    content = content.child(
-                        TuiConstrainedBox::new(menu)
-                            .with_max_rows(MAX_INLINE_MENU_ROWS)
-                            .finish(),
-                    );
-                }
+            if let (true, Some(menu)) = (input_target.agent_editor_owns_input(), inline_menu) {
+                content = content.child(
+                    TuiConstrainedBox::new(menu)
+                        .with_max_rows(MAX_INLINE_MENU_ROWS)
+                        .finish(),
+                );
             }
             let border_style = if self.is_shell_mode(ctx) {
                 builder.shell_mode_accent_style()
