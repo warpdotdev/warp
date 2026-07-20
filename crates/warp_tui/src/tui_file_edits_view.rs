@@ -14,9 +14,10 @@
 //! element. It never walks diff hunks, computes hidden ranges, or builds
 //! rows. Multi-file edits nest the per-file sections, indented, under one
 //! collapsible summary header (`✓ Edited 3 files +a −r ▾`); single-file edits
-//! render the file section alone. When the storage was never seeded (failed
-//! or cancelled actions, or actions that resolved before this view existed),
-//! the view falls back to a one-line label from the action's recorded result.
+//! render the file section alone. Blocked edits use the in-progress `Editing`
+//! verb while awaiting approval. When the storage was never seeded (failed or
+//! cancelled actions, or actions that resolved before this view existed), the
+//! view falls back to a one-line label from the action's recorded result.
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -433,15 +434,17 @@ impl TuiFileEditsView {
         builder: &TuiUiBuilder,
         app: &AppContext,
     ) -> Box<dyn TuiElement> {
+        let state = self.display_state(app);
         let last_index = self.sections.len() - 1;
         let mut column = TuiFlex::column();
         for (index, section) in self.sections.iter().enumerate() {
             let line_stats = section.line_stats(app);
             // Zero-change (and not-yet-computed) diffs have no body to toggle.
             let has_body = line_stats.is_some_and(|stats| stats != (0, 0));
+            let label = file_edit_header_label(state, section.verb, &section.name);
             let file_section = self.render_section(
                 SectionKey::File(index),
-                &format!("{} {}", section.verb, section.name),
+                &label,
                 line_stats,
                 builder,
                 app,
@@ -501,6 +504,19 @@ fn deltas_for(diff_type: &DiffType) -> Vec<DiffDelta> {
         DiffType::Create { delta } | DiffType::Delete { delta } => vec![delta.clone()],
         DiffType::Update { deltas, .. } => deltas.clone(),
     }
+}
+
+fn file_edit_header_label(
+    state: ToolCallDisplayState,
+    completed_verb: &str,
+    subject: &str,
+) -> String {
+    let verb = if state == ToolCallDisplayState::Blocked {
+        "Editing"
+    } else {
+        completed_verb
+    };
+    format!("{verb} {subject}")
 }
 
 /// The header verb and display name for a diff: file names only (no
@@ -615,7 +631,11 @@ impl TuiFileEditsView {
 
         self.render_section(
             SectionKey::Summary,
-            &format!("Edited {} files", self.sections.len()),
+            &file_edit_header_label(
+                self.display_state(app),
+                "Edited",
+                &format!("{} files", self.sections.len()),
+            ),
             self.aggregate_stats(app),
             &builder,
             app,
