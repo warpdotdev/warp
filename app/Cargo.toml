@@ -697,6 +697,8 @@ default = [
     "remote_code_review",
     "git_operations_in_code_review",
     "terminal_lifecycle_recovery",
+    "cloud_runners",
+    "cloud_agent_runners",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -947,6 +949,7 @@ integration_command = []
 artifact_command = []
 cloud_environments = []
 cloud_runners = []
+cloud_agent_runners = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
