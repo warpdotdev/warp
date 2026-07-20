@@ -8,24 +8,24 @@ use std::sync::{Arc, Mutex};
 use languages::language_by_local_filename;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent as _;
+use warp_core::ui::Icon as WarpIcon;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as WarpThemeFill, WarpTheme};
-use warp_core::ui::Icon as WarpIcon;
 use warpui::elements::{
-    resizable_state_handle, Border, ChildAnchor, Clipped, ClippedScrollStateHandle,
-    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DispatchEventResult, DragAxis, DragBarSide, Draggable, DropShadow, DropTarget, Element, Empty,
-    EventHandler, Expanded, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
-    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
-    ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
-    Shrinkable, Stack, Text,
+    Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, DragAxis, DragBarSide,
+    Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded, Fill as ElementFill,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding,
+    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Resizable, ResizableStateHandle, SavePosition,
+    ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text,
+    resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -41,21 +41,21 @@ use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::conversation_status_ui::render_status_element;
 use crate::appearance::Appearance;
-use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::code::editor::{add_color, remove_color};
 use crate::code::icon_from_file_path;
 use crate::context_chips::display_chip::GitLineChanges;
 use crate::context_chips::github_pr_display_text_from_url;
-use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::drive::DriveObjectType;
+use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::editor::EditorView;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{
     CodePane, NotebookPane, PaneGroup, PaneId, TabBarHoverIndex, TerminalPane, WorkflowPane,
 };
 use crate::safe_triangle::SafeTriangle;
-use crate::tab::{tab_position_id, SelectedTabColor, TabData};
+use crate::tab::{SelectedTabColor, TabData, tab_position_id};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::TerminalViewState;
@@ -63,7 +63,7 @@ use crate::terminal::{CLIAgent, TerminalView};
 use crate::themes::theme::Fill as ThemeFill;
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::buttons::combo_inner_button;
-use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
+use crate::ui_components::icon_with_status::{IconWithStatusVariant, render_icon_with_status};
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::util::bindings::keybinding_name_to_display_string;
 use crate::util::color::Opacity;
@@ -82,7 +82,7 @@ use crate::workspace::{
     PaneViewLocator, TabBarLocation, TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget,
     VerticalTabsPaneDropTargetData, Workspace,
 };
-use crate::{send_telemetry_from_app_ctx, FeatureFlag};
+use crate::{FeatureFlag, send_telemetry_from_app_ctx};
 
 const PANEL_WIDTH: f32 = 248.;
 const MIN_PANEL_WIDTH: f32 = 200.;
@@ -3307,26 +3307,24 @@ fn resolve_icon_with_status_variant(
         TypedPane::Terminal(terminal_pane) => {
             let terminal_view = terminal_pane.terminal_view(app);
             let terminal_view = terminal_view.as_ref(app);
-            match terminal_view_agent_icon_variant(terminal_view, app) { Some(variant) => {
-                variant
-            } _ => {
-                // Plain terminal: use foreground color per design spec
-                IconWithStatusVariant::Neutral {
-                    icon: WarpIcon::Terminal,
-                    icon_color: main_text,
+            match terminal_view_agent_icon_variant(terminal_view, app) {
+                Some(variant) => variant,
+                _ => {
+                    // Plain terminal: use foreground color per design spec
+                    IconWithStatusVariant::Neutral {
+                        icon: WarpIcon::Terminal,
+                        icon_color: main_text,
+                    }
                 }
-            }}
+            }
         }
-        TypedPane::Code(_) => {
-            match icon_from_file_path(title, appearance) { Some(icon_element) => {
-                IconWithStatusVariant::NeutralElement { icon_element }
-            } _ => {
-                IconWithStatusVariant::Neutral {
-                    icon: WarpIcon::Code2,
-                    icon_color: sub_text,
-                }
-            }}
-        }
+        TypedPane::Code(_) => match icon_from_file_path(title, appearance) {
+            Some(icon_element) => IconWithStatusVariant::NeutralElement { icon_element },
+            _ => IconWithStatusVariant::Neutral {
+                icon: WarpIcon::Code2,
+                icon_color: sub_text,
+            },
+        },
         // Settings and environment management use the foreground color per design spec
         TypedPane::Settings | TypedPane::EnvironmentManagement => IconWithStatusVariant::Neutral {
             icon: typed.icon(),
@@ -4647,53 +4645,60 @@ fn render_summary_tab_item(
         ClipConfig::end(),
         appearance,
         app,
-    ) { Some(title_override) => {
-        title_region.add_child(title_override);
-    } _ => if summary.primary_labels.is_empty() {
-        title_region.add_child(render_text_line(
-            &props.title,
-            main_text_color,
-            ClipConfig::end(),
-            appearance,
-        ));
-    } else {
-        let visible_labels: Vec<&VerticalTabsSummaryPrimaryLabel> = summary
-            .primary_labels
-            .iter()
-            .take(MAX_VISIBLE_PRIMARY_LABELS)
-            .collect();
-        let reserve_prefix_slot = visible_labels.iter().any(|label| label.status.is_some());
-
-        for (idx, label) in visible_labels.iter().enumerate() {
-            let line = render_summary_primary_label_line(
-                label,
-                reserve_prefix_slot,
-                main_text_color,
-                appearance,
-            );
-            title_region.add_child(if idx == 0 {
-                line
-            } else {
-                Container::new(line)
-                    .with_margin_top(INTRA_REGION_GAP)
-                    .finish()
-            });
+    ) {
+        Some(title_override) => {
+            title_region.add_child(title_override);
         }
-
-        let hidden_label_count =
-            summary_overflow_count(summary.primary_labels.len(), MAX_VISIBLE_PRIMARY_LABELS);
-        if hidden_label_count > 0 {
-            title_region.add_child(
-                Container::new(render_summary_overflow_line(
-                    hidden_label_count,
-                    sub_text_color,
+        _ => {
+            if summary.primary_labels.is_empty() {
+                title_region.add_child(render_text_line(
+                    &props.title,
+                    main_text_color,
+                    ClipConfig::end(),
                     appearance,
-                ))
-                .with_margin_top(INTRA_REGION_GAP)
-                .finish(),
-            );
+                ));
+            } else {
+                let visible_labels: Vec<&VerticalTabsSummaryPrimaryLabel> = summary
+                    .primary_labels
+                    .iter()
+                    .take(MAX_VISIBLE_PRIMARY_LABELS)
+                    .collect();
+                let reserve_prefix_slot = visible_labels.iter().any(|label| label.status.is_some());
+
+                for (idx, label) in visible_labels.iter().enumerate() {
+                    let line = render_summary_primary_label_line(
+                        label,
+                        reserve_prefix_slot,
+                        main_text_color,
+                        appearance,
+                    );
+                    title_region.add_child(if idx == 0 {
+                        line
+                    } else {
+                        Container::new(line)
+                            .with_margin_top(INTRA_REGION_GAP)
+                            .finish()
+                    });
+                }
+
+                let hidden_label_count = summary_overflow_count(
+                    summary.primary_labels.len(),
+                    MAX_VISIBLE_PRIMARY_LABELS,
+                );
+                if hidden_label_count > 0 {
+                    title_region.add_child(
+                        Container::new(render_summary_overflow_line(
+                            hidden_label_count,
+                            sub_text_color,
+                            appearance,
+                        ))
+                        .with_margin_top(INTRA_REGION_GAP)
+                        .finish(),
+                    );
+                }
+            }
         }
-    }}
+    }
     let title_region = title_region.finish();
     if summary.has_unread_activity {
         text_col.add_child(
@@ -5123,22 +5128,27 @@ fn render_summary_branch_line(
         entry.pull_request_label.as_ref(),
         entry.pull_request_url.as_ref(),
         pr_badge_mouse_state,
-    ) { (Some(pull_request_label), Some(pull_request_url), Some(mouse_state)) => {
-        right_badges.add_child(render_terminal_pull_request_badge(
-            pull_request_label.clone(),
-            pull_request_url.clone(),
-            pr_chip_entrypoint,
-            mouse_state,
-            appearance,
-        ));
-        has_right_badges = true;
-    } _ => if let Some(pull_request_label) = &entry.pull_request_label {
-        right_badges.add_child(render_passive_terminal_pull_request_badge(
-            pull_request_label,
-            appearance,
-        ));
-        has_right_badges = true;
-    }}
+    ) {
+        (Some(pull_request_label), Some(pull_request_url), Some(mouse_state)) => {
+            right_badges.add_child(render_terminal_pull_request_badge(
+                pull_request_label.clone(),
+                pull_request_url.clone(),
+                pr_chip_entrypoint,
+                mouse_state,
+                appearance,
+            ));
+            has_right_badges = true;
+        }
+        _ => {
+            if let Some(pull_request_label) = &entry.pull_request_label {
+                right_badges.add_child(render_passive_terminal_pull_request_badge(
+                    pull_request_label,
+                    appearance,
+                ));
+                has_right_badges = true;
+            }
+        }
+    }
     if has_right_badges {
         row.add_child(
             Container::new(right_badges.finish())
@@ -5532,35 +5542,43 @@ fn compute_tab_group_color_mode(
     let per_pane: HashMap<PaneId, Option<AnsiColorIdentifier>> = visible_pane_ids
         .iter()
         .map(|&pane_id| {
-            let color = match pane_group.terminal_view_from_pane_id(pane_id, app) { Some(tv) => {
-                // Terminal pane: determine color from CWD.
-                tv.as_ref(app)
-                    .canonical_session_pwd_if_local(app)
-                    .and_then(|cwd| {
-                        dir_colors
-                            .color_for_directory(cwd.as_path())
-                            .and_then(|c| c.ansi_color())
-                    })
-            } _ => { match pane_group.code_view_from_pane_id(pane_id, app) { Some(code_view) => {
-                // Code pane: determine color from the open file path using longest-prefix
-                // matching against configured directories, so e.g. warp-internal/code.rs
-                // inherits the color assigned to warp-internal.
-                code_view
-                    .as_ref(app)
-                    .local_path(app)
-                    .as_deref()
-                    // TODO(andy): avoid canonicalizing on a render code path
-                    .and_then(|file_path| dunce::canonicalize(file_path).ok())
-                    .and_then(|file_path| {
-                        dir_colors
-                            .color_for_directory(&file_path)
-                            .and_then(|c| c.ansi_color())
-                    })
-            } _ => {
-                // Other non-terminal panes (notebook, workflow, etc.): fall back to the
-                // cached directory color from the tab's last active terminal.
-                tab.default_directory_color
-            }}}};
+            let color = match pane_group.terminal_view_from_pane_id(pane_id, app) {
+                Some(tv) => {
+                    // Terminal pane: determine color from CWD.
+                    tv.as_ref(app)
+                        .canonical_session_pwd_if_local(app)
+                        .and_then(|cwd| {
+                            dir_colors
+                                .color_for_directory(cwd.as_path())
+                                .and_then(|c| c.ansi_color())
+                        })
+                }
+                _ => {
+                    match pane_group.code_view_from_pane_id(pane_id, app) {
+                        Some(code_view) => {
+                            // Code pane: determine color from the open file path using longest-prefix
+                            // matching against configured directories, so e.g. warp-internal/code.rs
+                            // inherits the color assigned to warp-internal.
+                            code_view
+                                .as_ref(app)
+                                .local_path(app)
+                                .as_deref()
+                                // TODO(andy): avoid canonicalizing on a render code path
+                                .and_then(|file_path| dunce::canonicalize(file_path).ok())
+                                .and_then(|file_path| {
+                                    dir_colors
+                                        .color_for_directory(&file_path)
+                                        .and_then(|c| c.ansi_color())
+                                })
+                        }
+                        _ => {
+                            // Other non-terminal panes (notebook, workflow, etc.): fall back to the
+                            // cached directory color from the tab's last active terminal.
+                            tab.default_directory_color
+                        }
+                    }
+                }
+            };
             (pane_id, color)
         })
         .collect();

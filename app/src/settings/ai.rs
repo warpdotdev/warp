@@ -16,15 +16,15 @@ use regex::Regex;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use settings::{
-    define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
+    RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud, define_settings_group,
 };
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_errors::report_if_error;
-use warpui::platform::keyboard::KeyCode;
 use warpui::platform::OperatingSystem;
+use warpui::platform::keyboard::KeyCode;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
 use crate::ai::request_usage_model::RequestLimitInfo;
@@ -2006,9 +2006,10 @@ impl AISettings {
             }
         }
 
-        report_if_error!(self
-            .ai_request_quota_info
-            .set_value(AIRequestQuotaInfo { cycle_history }, ctx));
+        report_if_error!(
+            self.ai_request_quota_info
+                .set_value(AIRequestQuotaInfo { cycle_history }, ctx)
+        );
     }
 
     /// Updates the quota info based on the latest RequestLimitInfo.
@@ -2054,9 +2055,10 @@ impl AISettings {
             cycle_history.push(new_cycle);
         }
 
-        report_if_error!(self
-            .ai_request_quota_info
-            .set_value(AIRequestQuotaInfo { cycle_history }, ctx));
+        report_if_error!(
+            self.ai_request_quota_info
+                .set_value(AIRequestQuotaInfo { cycle_history }, ctx)
+        );
     }
 
     pub fn is_command_denylist_editable(&self, app: &AppContext) -> bool {
@@ -2157,9 +2159,10 @@ impl AISettings {
             }
         };
 
-        report_if_error!(self
-            .voice_input_toggle_key
-            .set_value(voice_input_toggle_key, ctx));
+        report_if_error!(
+            self.voice_input_toggle_key
+                .set_value(voice_input_toggle_key, ctx)
+        );
 
         report_if_error!(self.explicitly_interacted_with_voice.set_value(true, ctx));
 
@@ -2185,9 +2188,10 @@ impl AISettings {
 
         let mut map = self.cli_agent_footer_enabled_commands.value().0.clone();
         map.insert(command.to_string(), String::new());
-        report_if_error!(self
-            .cli_agent_footer_enabled_commands
-            .set_value(ToolbarCommandMap::new(map), ctx));
+        report_if_error!(
+            self.cli_agent_footer_enabled_commands
+                .set_value(ToolbarCommandMap::new(map), ctx)
+        );
     }
 
     pub fn remove_cli_agent_footer_enabled_command(
@@ -2198,9 +2202,10 @@ impl AISettings {
         let command = command.trim();
         let mut map = self.cli_agent_footer_enabled_commands.value().0.clone();
         map.shift_remove(command);
-        report_if_error!(self
-            .cli_agent_footer_enabled_commands
-            .set_value(ToolbarCommandMap::new(map), ctx));
+        report_if_error!(
+            self.cli_agent_footer_enabled_commands
+                .set_value(ToolbarCommandMap::new(map), ctx)
+        );
     }
 
     pub fn set_cli_agent_for_command(
@@ -2215,9 +2220,10 @@ impl AISettings {
         }
         let value = agent.map(|a| a.to_serialized_name()).unwrap_or_default();
         map.insert(pattern.to_string(), value);
-        report_if_error!(self
-            .cli_agent_footer_enabled_commands
-            .set_value(ToolbarCommandMap::new(map), ctx));
+        report_if_error!(
+            self.cli_agent_footer_enabled_commands
+                .set_value(ToolbarCommandMap::new(map), ctx)
+        );
     }
 
     /// Whether the feature-intro popover with the given id key has been seen.
@@ -2273,9 +2279,10 @@ impl AISettings {
     ) {
         let mut map = self.plugin_update_chip_dismissed_for_version_map.clone();
         map.insert(key.to_owned(), version);
-        report_if_error!(self
-            .plugin_update_chip_dismissed_for_version_map
-            .set_value(map, ctx));
+        report_if_error!(
+            self.plugin_update_chip_dismissed_for_version_map
+                .set_value(map, ctx)
+        );
     }
 }
 

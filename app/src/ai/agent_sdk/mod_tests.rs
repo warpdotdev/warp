@@ -1,10 +1,10 @@
 use serde_json::json;
+use warp_cli::CliCommand;
 use warp_cli::agent::Harness;
 use warp_cli::artifact::{
     ArtifactCommand, DownloadArtifactArgs, GetArtifactArgs, UploadArtifactArgs,
 };
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
-use warp_cli::CliCommand;
 use warp_core::telemetry::TelemetryEvent;
 
 use super::{command_requires_auth, command_to_telemetry_event, reconcile_task_harness};

@@ -2,7 +2,7 @@ use itertools::Itertools;
 use string_offset::CharOffset;
 use warp_editor::render::model::BlockItem;
 use warpui::integration::{AssertionCallback, AssertionOutcome, AssertionWithDataCallback};
-use warpui::{async_assert, async_assert_eq, App, ViewHandle};
+use warpui::{App, ViewHandle, async_assert, async_assert_eq};
 
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::CloudModel;

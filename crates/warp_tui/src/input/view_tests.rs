@@ -31,8 +31,8 @@ use warpui_core::{
 };
 
 use super::{
-    input_keymap_context, TuiInputAction, TuiInputView, TuiInputViewEvent,
-    INPUT_HANDLES_ESCAPE_FLAG,
+    INPUT_HANDLES_ESCAPE_FLAG, TuiInputAction, TuiInputView, TuiInputViewEvent,
+    input_keymap_context,
 };
 use crate::editor_element::{TuiEditorAction, TuiEditorElement};
 use crate::editor_interaction::TuiEditorCommand;
@@ -89,22 +89,28 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
     let closed = input_keymap_context(false, false, false);
     assert!(closed.set.contains("TuiInputView"));
     assert!(!closed.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
-    assert!(!closed
-        .set
-        .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG));
-    assert!(!closed
-        .set
-        .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG));
+    assert!(
+        !closed
+            .set
+            .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG)
+    );
+    assert!(
+        !closed
+            .set
+            .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)
+    );
 
     let open = input_keymap_context(true, true, true);
     assert!(open.set.contains("TuiInputView"));
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
-    assert!(open
-        .set
-        .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG));
-    assert!(open
-        .set
-        .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG));
+    assert!(
+        open.set
+            .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG)
+    );
+    assert!(
+        open.set
+            .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)
+    );
 }
 
 fn add_suggestions_mode(
@@ -571,11 +577,12 @@ fn escape_dismisses_menu_and_closed_menu_submit_falls_through() {
 
         app.update(|ctx| {
             assert!(!menu_model.as_ref(ctx).is_open(ctx));
-            assert!(view
-                .as_ref(ctx)
-                .keymap_context(ctx)
-                .set
-                .contains(INPUT_HANDLES_ESCAPE_FLAG));
+            assert!(
+                view.as_ref(ctx)
+                    .keymap_context(ctx)
+                    .set
+                    .contains(INPUT_HANDLES_ESCAPE_FLAG)
+            );
             type_str(&view, ctx, "prompt");
             dispatch(&view, ctx, &[TuiInputAction::Submit]);
         });
@@ -845,9 +852,11 @@ fn move_left_on_empty_buffer_opens_conversation_menu() {
                 4,
             );
             assert_eq!(lines[0].trim(), "Conversations");
-            assert!(lines
-                .iter()
-                .any(|line| line.trim() == "No conversations found"));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.trim() == "No conversations found")
+            );
             assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
         });
     });
@@ -1716,7 +1725,7 @@ fn wheel_scrolls_viewport_without_moving_cursor() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_lines(&view, ctx, 10); // 10 rows > 6-row viewport
-                                        // Typing leaves the cursor at the end, scrolled to the bottom.
+            // Typing leaves the cursor at the end, scrolled to the bottom.
             assert_eq!(scroll_offset(&view, ctx), 4);
             let cursor_before = view.as_ref(ctx).cursor_offset(ctx);
 

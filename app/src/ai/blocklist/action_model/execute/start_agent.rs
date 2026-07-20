@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use shell_words::split as split_shell_words;
 use warp_cli::agent::Harness;
 use warp_errors::report_error;

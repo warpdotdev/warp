@@ -21,12 +21,12 @@ pub struct OnboardingKeybindings {
     pub return_to_terminal_mode: String,
 }
 
+use crate::OnboardingIntention;
 use crate::callout::model::{
     AgentModalityCalloutState, FinalState, OnboardingCalloutModel, OnboardingCalloutModelEvent,
     OnboardingCalloutState, OnboardingQuery, UniversalInputCalloutState,
 };
 use crate::components::onboarding_callout::{self, Button, StepStatus};
-use crate::OnboardingIntention;
 
 /// Options for rendering a callout.
 struct CalloutOptions {

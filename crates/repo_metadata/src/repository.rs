@@ -10,20 +10,20 @@ use futures::future::ready;
 #[cfg(feature = "local_fs")]
 use ignore::gitignore::Gitignore;
 use warp_util::standardized_path::StandardizedPath;
-use warpui_core::r#async::{BoxFuture, SpawnedFutureHandle};
 #[cfg(feature = "local_fs")]
 use warpui_core::SingletonEntity;
+use warpui_core::r#async::{BoxFuture, SpawnedFutureHandle};
 use warpui_core::{Entity, ModelContext, ModelHandle};
 
 #[cfg(feature = "local_fs")]
 use crate::watcher::DirectoryWatcher;
 use crate::watcher::TaskQueue;
+use crate::{RepoMetadataError, RepositoryUpdate};
 #[cfg(feature = "local_fs")]
 use crate::{
     entry::{matches_gitignores, should_ignore_git_path},
     gitignores_for_directory,
 };
-use crate::{RepoMetadataError, RepositoryUpdate};
 
 /// Trait for entities that want to subscribe to repository file changes.
 pub trait RepositorySubscriber: Send + Sync {

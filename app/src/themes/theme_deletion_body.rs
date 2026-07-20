@@ -15,7 +15,7 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 
 use crate::appearance::Appearance;
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings::{active_theme_kind, ThemeSettings};
+use crate::settings::{ThemeSettings, active_theme_kind};
 use crate::themes::theme::{ThemeKind, WarpTheme};
 use crate::user_config::util::from_yaml;
 use crate::{send_telemetry_from_ctx, user_config};
@@ -81,12 +81,17 @@ impl ThemeDeletionBody {
                     if let Some(image) = theme_from_yaml.background_image() {
                         // Only delete the image if it is in the ./warp/themes directory.
                         // We don't want to delete images from other parts of the user's filesystem.
-                        match image.source() { AssetSource::LocalFile { path, .. } => {
-                            let image_path_in_themes_dir = dir.join(path.as_str());
-                            let _ = remove_file(image_path_in_themes_dir);
-                        } _ => {
-                            log::warn!("Attempted to delete a custom theme image with an unexpected image source");
-                        }}
+                        match image.source() {
+                            AssetSource::LocalFile { path, .. } => {
+                                let image_path_in_themes_dir = dir.join(path.as_str());
+                                let _ = remove_file(image_path_in_themes_dir);
+                            }
+                            _ => {
+                                log::warn!(
+                                    "Attempted to delete a custom theme image with an unexpected image source"
+                                );
+                            }
+                        }
                     }
 
                     // Even if image can't be deleted, delete the theme .yaml file

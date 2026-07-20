@@ -5,7 +5,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use image::codecs::gif::GifDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::imageops::FilterType;

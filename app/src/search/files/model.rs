@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fuzzy_match::{
-    contains_wildcards, match_indices_case_insensitive, match_wildcard_pattern_case_insensitive,
-    FuzzyMatchResult,
+    FuzzyMatchResult, contains_wildcards, match_indices_case_insensitive,
+    match_wildcard_pattern_case_insensitive,
 };
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 

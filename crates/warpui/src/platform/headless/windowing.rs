@@ -6,11 +6,11 @@ use std::sync::mpsc;
 use anyhow::Result;
 
 use super::event_loop::AppEvent;
+use crate::WindowId;
 use crate::geometry::rect::RectF;
-use crate::geometry::vector::{vec2f, Vector2F};
+use crate::geometry::vector::{Vector2F, vec2f};
 use crate::platform::{self, WindowOptions};
 use crate::windowing::WindowCallbacks;
-use crate::WindowId;
 
 pub struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,

@@ -15,8 +15,8 @@ use async_channel::Sender;
 #[cfg(feature = "local_tty")]
 use command_executor::remote_server_executor::RemoteServerCommandExecutor;
 pub use command_executor::*;
-use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use instant::Instant;
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
@@ -26,10 +26,10 @@ use version_compare::Version;
 use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
-use warp_errors::{register_error, ErrorExt};
+use warp_errors::{ErrorExt, register_error};
 use warp_util::path::{
-    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
-    ShellFamily,
+    ShellFamily, convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path,
+    msys2_exe_to_root,
 };
 use warpui::platform::OperatingSystem;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -1930,7 +1930,9 @@ pub mod testing {
                 .set(external_commands_with_values(commands))
                 .is_err()
             {
-                log::warn!("Ignored call to set_external_commands, as external commands had already been set!");
+                log::warn!(
+                    "Ignored call to set_external_commands, as external commands had already been set!"
+                );
             };
         }
 

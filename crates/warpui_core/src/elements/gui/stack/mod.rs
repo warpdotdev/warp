@@ -37,7 +37,7 @@ use log::warn;
 pub use offset_positioning::*;
 use overlay::Overlay;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use positioned::*;
 pub use save_position::*;
 
@@ -45,10 +45,10 @@ use super::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext, Point,
     SelectableElement, Selection, SelectionFragment, SizeConstraint,
 };
+use crate::ClipBounds;
 use crate::event::DispatchedEvent;
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{IsRect, SelectionDirection, SelectionType};
-use crate::ClipBounds;
 
 #[derive(Clone, Copy, Default)]
 pub enum EventDispatchMode {

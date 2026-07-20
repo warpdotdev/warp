@@ -8,10 +8,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use instant::Instant;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 
-use super::elements::Axis;
 use super::Event;
+use super::elements::Axis;
 use crate::assets::asset_cache::AssetHandle;
 use crate::elements::{DropTargetPosition, Point, Selection};
 use crate::event::DispatchedEvent;
@@ -21,8 +21,8 @@ use crate::scene::{Scene, ZIndex};
 use crate::text_layout::LayoutCache;
 use crate::zoom::Scale;
 use crate::{
-    fonts, Action, AppContext, ClipBounds, EntityId, EntityIdMap, EntityIdSet, TaskId, View,
-    ViewHandle, WindowId, WindowInvalidation,
+    Action, AppContext, ClipBounds, EntityId, EntityIdMap, EntityIdSet, TaskId, View, ViewHandle,
+    WindowId, WindowInvalidation, fonts,
 };
 
 pub struct Presenter {

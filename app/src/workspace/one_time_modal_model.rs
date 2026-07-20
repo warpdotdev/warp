@@ -8,7 +8,7 @@ use warp_util::sync::Condition;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 
 use super::hoa_onboarding;
-use super::view::feature_intro_modal::{FeatureIntroId, FEATURE_INTROS};
+use super::view::feature_intro_modal::{FEATURE_INTROS, FeatureIntroId};
 use super::view::free_ai_removal_modal::{
     FreeAiRemovalModalTelemetryEvent, FreeAiRemovalModalVariant,
 };

@@ -6,11 +6,11 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Poll};
+use std::task::{Poll, ready};
 use std::time::Duration;
 
-use futures::stream::BoxStream;
 use futures::Stream;
+use futures::stream::BoxStream;
 use rmcp::model::ServerJsonRpcMessage;
 use sse_stream::{Error as SseError, Sse};
 

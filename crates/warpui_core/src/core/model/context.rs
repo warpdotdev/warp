@@ -4,14 +4,14 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use anyhow::Result;
-use futures::stream::{AbortHandle, Abortable};
 use futures::FutureExt;
+use futures::stream::{AbortHandle, Abortable};
 use thiserror::Error;
 use warp_errors::report_error;
 
 use crate::accessibility::AccessibilityContent;
+use crate::r#async::{SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream, Timer, executor};
 use crate::core::{Observation, Subscription, SubscriptionKey, TaskCallback};
-use crate::r#async::{executor, SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream, Timer};
 use crate::windowing::WindowManager;
 use crate::{
     AppContext, Effect, Entity, EntityId, GetSingletonModelHandle, ModelAsRef, ModelHandle,

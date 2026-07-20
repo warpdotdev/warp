@@ -6,8 +6,8 @@ use std::time::Duration;
 use cloud_object_models::JsonSerializer;
 use lazy_static::lazy_static;
 use settings::{Setting as _, SyncToCloud};
-use warp_core::execution_mode::AppExecutionMode;
 use warp_core::r#async::debounce;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::settings::ChangeEventReason;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::report_if_error;
@@ -15,9 +15,9 @@ use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 
+use super::PrivacySettings;
 use super::cloud_preferences::{CloudPreferencesSettings, CloudPreferencesSettingsChangedEvent};
 use super::manager::SettingsEvent;
-use super::PrivacySettings;
 use crate::auth::auth_state::AuthState;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -700,7 +700,9 @@ impl CloudPreferencesSyncer {
                 && !settings_manager.sync_regardless_of_users_syncing_setting(storage_key)
             {
                 // Skip syncing if settings sync is disabled and this particular cloud pref is not always synced.
-                log::debug!("Not syncing cloud preference with storage key {storage_key} because settings sync is disabled for it");
+                log::debug!(
+                    "Not syncing cloud preference with storage key {storage_key} because settings sync is disabled for it"
+                );
                 continue;
             }
 
@@ -717,7 +719,9 @@ impl CloudPreferencesSyncer {
                 .unwrap_or(false);
             if !is_current_value_syncable {
                 // Don't sync this preference if the current value is not syncable.
-                log::debug!("Not syncing cloud preference with storage key {storage_key} because the current value is not syncable");
+                log::debug!(
+                    "Not syncing cloud preference with storage key {storage_key} because the current value is not syncable"
+                );
                 continue;
             }
 

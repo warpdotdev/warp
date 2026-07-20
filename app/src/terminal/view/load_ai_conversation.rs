@@ -14,8 +14,8 @@ use warp_multi_agent_api as api;
 use warpui::units::IntoPixels;
 use warpui::{EntityId, ModelHandle, SingletonEntity, ViewContext};
 
-use super::blocklist_filter::exchanges_for_blocklist;
 use super::DEFAULT_AI_BLOCK_HEIGHT;
+use super::blocklist_filter::exchanges_for_blocklist;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionResultType, AIAgentActionType, AIAgentExchange, AIAgentExchangeId,

@@ -25,10 +25,10 @@ use warpui_core::keymap::{
 };
 use warpui_core::{Action, AppContext, TuiView};
 
-use crate::editor_interaction::{editor_binding_specs, TuiEditorBindingTarget, TuiEditorCommand};
+use crate::editor_interaction::{TuiEditorBindingTarget, TuiEditorCommand, editor_binding_specs};
 use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
-use crate::input::view::TuiInputAction;
 use crate::input::TuiInputView;
+use crate::input::view::TuiInputAction;
 use crate::option_selector::TuiOptionSelector;
 use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::root_view::RootTuiView;

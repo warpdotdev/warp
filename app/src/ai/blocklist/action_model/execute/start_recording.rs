@@ -1,8 +1,8 @@
 use std::time::SystemTime;
 
 use ai::agent::action_result::{AIAgentActionResultType, RecordingStarted, StartRecordingResult};
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warpui::{Entity, ModelContext, SingletonEntity};

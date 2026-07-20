@@ -6,16 +6,16 @@ use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use vec1::vec1;
 use warp_core::ui::color::blend::Blend;
+use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors::{
     accent_overlay_2, accent_overlay_3, neutral_1, neutral_3, neutral_4, neutral_6, text_main,
     text_sub,
 };
-use warp_core::ui::theme::Fill;
 use warp_editor::model::CoreEditorModel;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::resizable::{
-    resizable_state_handle, DragBarSide, Resizable, ResizableStateHandle,
+    DragBarSide, Resizable, ResizableStateHandle, resizable_state_handle,
 };
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
@@ -384,47 +384,52 @@ impl CommentListView {
         for comment in comments {
             let id = comment.id;
 
-            let entry = match self.comments_by_id.shift_remove(&id) { Some(mut existing) => {
-                existing
-                    .card
-                    .update_source(comment, self.repo_path.as_ref(), ctx);
-                existing
-            } _ => {
-                let card = CommentViewCard::new(
-                    comment,
-                    false, /* always_use_static_diff */
-                    false, /* disable_scrolling */
-                    Some(Pixels::new(DEFAULT_COMMENT_MAX_WIDTH)),
-                    self.repo_path.as_ref(),
-                    ctx,
-                );
-
-                ctx.subscribe_to_view(
-                    card.comment_editor(),
-                    Self::handle_comment_editor_selection_events,
-                );
-                if let Some(diff_editor) = card.static_diff_editor() {
-                    ctx.subscribe_to_view(
-                        diff_editor,
-                        Self::handle_static_diff_editor_selection_events,
+            let entry = match self.comments_by_id.shift_remove(&id) {
+                Some(mut existing) => {
+                    existing
+                        .card
+                        .update_source(comment, self.repo_path.as_ref(), ctx);
+                    existing
+                }
+                _ => {
+                    let card = CommentViewCard::new(
+                        comment,
+                        false, /* always_use_static_diff */
+                        false, /* disable_scrolling */
+                        Some(Pixels::new(DEFAULT_COMMENT_MAX_WIDTH)),
+                        self.repo_path.as_ref(),
+                        ctx,
                     );
-                }
 
-                let comment_id = id;
-                let action_button = ActionButton::new("", NakedTheme)
-                    .with_icon(Icon::DotsVertical)
-                    .with_size(ButtonSize::Small)
-                    .on_click(move |ctx| {
-                        ctx.dispatch_typed_action(CommentListAction::ShowOverflow { comment_id })
-                    });
-                let action_button = ctx.add_view(|_| action_button);
+                    ctx.subscribe_to_view(
+                        card.comment_editor(),
+                        Self::handle_comment_editor_selection_events,
+                    );
+                    if let Some(diff_editor) = card.static_diff_editor() {
+                        ctx.subscribe_to_view(
+                            diff_editor,
+                            Self::handle_static_diff_editor_selection_events,
+                        );
+                    }
 
-                CommentDisplayState {
-                    card,
-                    icon_button: action_button,
-                    mouse_state: Default::default(),
+                    let comment_id = id;
+                    let action_button = ActionButton::new("", NakedTheme)
+                        .with_icon(Icon::DotsVertical)
+                        .with_size(ButtonSize::Small)
+                        .on_click(move |ctx| {
+                            ctx.dispatch_typed_action(CommentListAction::ShowOverflow {
+                                comment_id,
+                            })
+                        });
+                    let action_button = ctx.add_view(|_| action_button);
+
+                    CommentDisplayState {
+                        card,
+                        icon_button: action_button,
+                        mouse_state: Default::default(),
+                    }
                 }
-            }};
+            };
 
             new_comments_by_id.insert(id, entry);
         }
@@ -1042,10 +1047,12 @@ impl CommentListView {
         html_url: Option<&str>,
         appearance: &Appearance,
     ) -> Vec<MenuItem<CommentListAction>> {
-        let mut items = vec![MenuItemFields::new("Copy text")
-            .with_icon(Icon::Copy)
-            .with_on_select_action(CommentListAction::CopyCommentText)
-            .into_item()];
+        let mut items = vec![
+            MenuItemFields::new("Copy text")
+                .with_icon(Icon::Copy)
+                .with_on_select_action(CommentListAction::CopyCommentText)
+                .into_item(),
+        ];
 
         let mut edit_item = MenuItemFields::new("Edit")
             .with_icon(Icon::Pencil)

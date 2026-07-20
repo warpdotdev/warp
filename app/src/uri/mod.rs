@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use itertools::Itertools;
 use session_sharing_protocol::common::SessionId;
 use url::Url;
@@ -30,13 +30,13 @@ use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
 use crate::root_view::{
-    open_new_window_get_handles, open_new_with_workspace_source, NewWorkspaceSource,
-    OpenLaunchConfigArg,
+    NewWorkspaceSource, OpenLaunchConfigArg, open_new_window_get_handles,
+    open_new_with_workspace_source,
 };
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
 use crate::settings_view::{
-    settings_widget_deeplink_target, OpenTeamsSettingsModalArgs, SettingsSection,
+    OpenTeamsSettingsModalArgs, SettingsSection, settings_widget_deeplink_target,
 };
 use crate::tab_configs::TabConfig;
 use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
@@ -48,12 +48,12 @@ use crate::view_components::DismissibleToast;
 use crate::workspace::auto_handoff::trigger_auto_handoff_to_cloud;
 use crate::workspace::util::PaneViewLocator;
 use crate::workspace::{
-    active_terminal_in_window, AutoCloudHandoffTrigger, ToastStack, Workspace, WorkspaceAction,
-    WorkspaceRegistry,
+    AutoCloudHandoffTrigger, ToastStack, Workspace, WorkspaceAction, WorkspaceRegistry,
+    active_terminal_in_window,
 };
 use crate::{
-    quake_mode_window_id, quake_mode_window_is_open, safe_info, send_telemetry_from_app_ctx,
-    ChannelState, OpenPath,
+    ChannelState, OpenPath, quake_mode_window_id, quake_mode_window_is_open, safe_info,
+    send_telemetry_from_app_ctx,
 };
 
 const DESKTOP_REDIRECT_URI_PATH: &str = "/desktop_redirect";
@@ -1019,14 +1019,19 @@ impl Action {
                     return;
                 };
 
-                match workspaces.pop() { Some(workspace) => {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace
-                            .handle_action(&WorkspaceAction::OpenRepository { path: None }, ctx);
-                    });
-                } _ => {
-                    log::warn!("no workspace views in window {window_id} for open repo action");
-                }}
+                match workspaces.pop() {
+                    Some(workspace) => {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace.handle_action(
+                                &WorkspaceAction::OpenRepository { path: None },
+                                ctx,
+                            );
+                        });
+                    }
+                    _ => {
+                        log::warn!("no workspace views in window {window_id} for open repo action");
+                    }
+                }
             }
             Action::CloudAgentSetup => {
                 let window_id =
@@ -1044,15 +1049,19 @@ impl Action {
                     return;
                 };
 
-                match workspaces.pop() { Some(workspace) => {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace.handle_action(&WorkspaceAction::OpenCloudAgentSetupGuide, ctx);
-                    });
-                } _ => {
-                    log::warn!(
-                        "no workspace views in window {window_id} for cloud agent setup action"
-                    );
-                }}
+                match workspaces.pop() {
+                    Some(workspace) => {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace
+                                .handle_action(&WorkspaceAction::OpenCloudAgentSetupGuide, ctx);
+                        });
+                    }
+                    _ => {
+                        log::warn!(
+                            "no workspace views in window {window_id} for cloud agent setup action"
+                        );
+                    }
+                }
             }
             Action::NewCloudAgentConversation => {
                 let Some(window_id) = primary_window_id else {
@@ -1067,15 +1076,18 @@ impl Action {
                     return;
                 };
 
-                match workspaces.pop() { Some(workspace) => {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace.handle_action(&WorkspaceAction::AddAmbientAgentTab, ctx);
-                    });
-                } _ => {
-                    log::warn!(
-                        "no workspace views in window {window_id} for new cloud agent conversation action"
-                    );
-                }}
+                match workspaces.pop() {
+                    Some(workspace) => {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace.handle_action(&WorkspaceAction::AddAmbientAgentTab, ctx);
+                        });
+                    }
+                    _ => {
+                        log::warn!(
+                            "no workspace views in window {window_id} for new cloud agent conversation action"
+                        );
+                    }
+                }
             }
             Action::NewAgentConversation => {
                 let window_id =
@@ -1353,7 +1365,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
         #[cfg(feature = "local_fs")]
         {
             use crate::code::editor_management::CodeSource;
-            use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+            use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
             use crate::util::file::external_editor::EditorSettings;
             use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 
@@ -1440,7 +1452,7 @@ fn open_file_editor(
     #[cfg(feature = "local_fs")]
     {
         use crate::code::editor_management::CodeSource;
-        use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+        use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
         use crate::util::file::external_editor::EditorSettings;
         use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 

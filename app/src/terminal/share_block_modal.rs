@@ -4,23 +4,23 @@ use std::sync::Arc;
 use anyhow::Result;
 use parking_lot::FairMutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use serde::Serialize;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warp_errors::report_error;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::browser::escape_html_attribute;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    try_rect_with_z, Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Dismiss, Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    ParentElement, Point, Radius, SavePosition, ScrollData, ScrollStateHandle, Scrollable,
-    ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text,
+    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element,
+    Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Point, Radius,
+    SavePosition, ScrollData, ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth,
+    Shrinkable, Stack, Text, try_rect_with_z,
 };
 use warpui::event::{DispatchedEvent, ModifiersState};
 use warpui::fonts::{FamilyId, Properties, Style, Weight};
 use warpui::keymap::FixedBinding;
-use warpui::r#async::SpawnedFutureHandle;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::radio_buttons::{
@@ -48,12 +48,12 @@ use crate::settings::{
     AISettings, EnforceMinimumContrast, FontSettings, FontSettingsChangedEvent, PrivacySettings,
 };
 use crate::settings_view::SettingsSection;
-use crate::terminal::grid_renderer::{self};
-use crate::terminal::ligature_settings::{should_use_ligature_rendering, LigatureSettings};
-use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::TerminalModel;
+use crate::terminal::grid_renderer::{self};
+use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
+use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::themes::theme::WarpTheme;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::CustomAction;

@@ -1,17 +1,17 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle};
 
-use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::Owner;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::env_vars::view::env_var_collection::EnvVarCollectionView;
 use crate::pane_group::{EnvVarCollectionPane, PaneContent};
 use crate::server::cloud_objects::update_manager::{
     ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };
 use crate::server::ids::SyncId;
-use crate::{safe_warn, PaneViewLocator, WindowId};
+use crate::{PaneViewLocator, WindowId, safe_warn};
 
 pub struct EnvVarCollectionManager {
     panes_by_hashed_id: HashMap<String, EnvVarCollectionPaneData>,

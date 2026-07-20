@@ -106,8 +106,8 @@ impl CrashRecoveryProcess {
                     .expect("sequence of renders map cannot be empty")
             );
             report_error!(
-                    "Failed to render a frame {NUM_DRAW_ERRORS_BEFORE_EXITING} times in a row; exiting..."
-                );
+                "Failed to render a frame {NUM_DRAW_ERRORS_BEFORE_EXITING} times in a row; exiting..."
+            );
 
             // Uninitialize sentry (ensuring any remaining events get flushed) before hard exiting.
             #[cfg(feature = "crash_reporting")]
@@ -154,7 +154,9 @@ impl CrashRecoveryProcess {
             // crash recovery child process and collect its exit status.
             self.kill();
 
-            log::info!("Successfully drew {NUM_SUCCESSFUL_DRAW_FRAMES_PER_WINDOW} frames; killing crash recovery child process");
+            log::info!(
+                "Successfully drew {NUM_SUCCESSFUL_DRAW_FRAMES_PER_WINDOW} frames; killing crash recovery child process"
+            );
         }
     }
 }
@@ -193,8 +195,10 @@ impl CrashRecovery {
                 let child_process = match spawn_recovery_process(recovery_mechanism) {
                     Ok(child_process) => child_process,
                     Err(err) => {
-                        report_error!(anyhow::Error::new(err)
-                            .context("Failed to spawn crash recovery child process"));
+                        report_error!(
+                            anyhow::Error::new(err)
+                                .context("Failed to spawn crash recovery child process")
+                        );
                         return Self {
                             child_process: Default::default(),
                             should_notify_user_about_crash,
@@ -382,7 +386,7 @@ fn spawn_recovery_process(
 #[cfg(windows)]
 fn wait_for_parent_crash(args: &warp_cli::AppArgs) {
     use windows::Win32::Foundation::{GetLastError, WAIT_FAILED, WAIT_OBJECT_0};
-    use windows::Win32::System::Threading::{GetProcessId, WaitForSingleObject, INFINITE};
+    use windows::Win32::System::Threading::{GetProcessId, INFINITE, WaitForSingleObject};
 
     let parent_handle = match args.parent.handle {
         Some(handle) => handle.into_inner(),

@@ -1,4 +1,4 @@
-use std::any::{type_name, TypeId};
+use std::any::{TypeId, type_name};
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;

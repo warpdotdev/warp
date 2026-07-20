@@ -1,8 +1,8 @@
 //! Synchronization utilities.
 
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use event_listener::Event;
 

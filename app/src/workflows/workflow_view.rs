@@ -36,8 +36,8 @@ use warpui::{
 use super::aliases::WorkflowAliases;
 use super::command_parser::WorkflowCommandDisplayData;
 use super::{CloudWorkflowModel, WorkflowSource, WorkflowType, WorkflowViewMode};
-use crate::ai::blocklist::secret_redaction::find_secrets_in_text;
 use crate::ai::AIRequestUsageModel;
+use crate::ai::blocklist::secret_redaction::find_secrets_in_text;
 use crate::appearance::Appearance;
 use crate::auth::auth_state::AuthState;
 use crate::auth::{AuthStateProvider, UserUid};
@@ -76,28 +76,28 @@ use crate::server::cloud_objects::update_manager::{
     UpdateManagerEvent,
 };
 use crate::server::ids::{ClientId, ServerId, SyncId};
-use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::AIClient;
 use crate::server::telemetry::{
     CloudObjectTelemetryMetadata, SharingDialogSource, TelemetryCloudObjectType, TelemetryEvent,
 };
+use crate::settings::AISettings;
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
-use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::ui_components::breadcrumb::{render_breadcrumbs, BreadcrumbState};
+use crate::ui_components::breadcrumb::{BreadcrumbState, render_breadcrumbs};
 use crate::ui_components::buttons::{accent_icon_button, icon_button};
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::ui_components::icons::Icon;
 #[cfg(target_family = "wasm")]
 use crate::uri::web_intent_parser::open_url_on_desktop;
 use crate::util::bindings::CustomAction;
 use crate::view_components::{DismissibleToast, ToastLink, ToastType};
-use crate::workflows::workflow::{Argument, Workflow};
 use crate::workflows::CloudWorkflow;
+use crate::workflows::workflow::{Argument, Workflow};
 use crate::workspace::{ToastStack, WorkspaceAction};
-use crate::{send_telemetry_from_ctx, FeatureFlag, UserWorkspaces};
+use crate::{FeatureFlag, UserWorkspaces, send_telemetry_from_ctx};
 
 mod alias_argument_selector;
 mod alias_bar;
@@ -568,7 +568,9 @@ impl WorkflowView {
                     if let Result::Err(e) =
                         aliases.update_workflow_id(self.workflow_id, server_id.into(), ctx)
                     {
-                        report_error!(e.context("Failed to update aliases after workflow creation"));
+                        report_error!(
+                            e.context("Failed to update aliases after workflow creation")
+                        );
                     }
                 });
 

@@ -1,10 +1,10 @@
 //! Shimmering Warp loading text - renders Warp logo with shimmering text for loading states.
 
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::Element;
 use warpui::elements::shimmering_text::{
     ShimmerConfig, ShimmeringTextElement, ShimmeringTextStateHandle,
 };
-use warpui::elements::Element;
 use warpui::{AppContext, SingletonEntity};
 
 /// Warp icon glyph character

@@ -21,16 +21,17 @@ use warp_multi_agent_api::response_event::stream_finished::{
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
+use super::RequestInput;
 use super::controller::response_stream::ResponseStreamId;
 use super::persistence::{PersistedAIInput, PersistedAIInputType};
-use super::RequestInput;
+use crate::GlobalResourceHandlesProvider;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata, TodoStatus,
     UpdateConversationError,
 };
-use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
 use crate::ai::agent::task::TaskId;
+use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
@@ -40,20 +41,19 @@ use crate::ai::agent::{
 use crate::ai::artifacts::Artifact;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::input_suggestions::HistoryOrder;
-use crate::persistence::model::{AgentConversation, AgentConversationData};
 use crate::persistence::ModelEvent;
+use crate::persistence::model::{AgentConversation, AgentConversationData};
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::blocklist_filter;
 use crate::ui_components::icons::Icon;
-use crate::GlobalResourceHandlesProvider;
 
 mod conversation_loader;
 pub use conversation_loader::{
-    convert_persisted_conversation_to_ai_conversation_with_metadata, load_conversation_from_server,
     CLIAgentConversation, CloudConversationData,
+    convert_persisted_conversation_to_ai_conversation_with_metadata, load_conversation_from_server,
 };
 use warp_errors::report_error;
 
@@ -2010,10 +2010,19 @@ impl BlocklistAIHistoryModel {
                 {
                     log::warn!("Failed to mark exchange as cancelled: {e}");
                 }
-            } else { match conversation.mark_request_cancelled(stream_id, terminal_surface_id, reason, ctx)
-            { Err(e) => {
-                log::warn!("Failed to mark exchange as cancelled: {e}");
-            } _ => {}}}
+            } else {
+                match conversation.mark_request_cancelled(
+                    stream_id,
+                    terminal_surface_id,
+                    reason,
+                    ctx,
+                ) {
+                    Err(e) => {
+                        log::warn!("Failed to mark exchange as cancelled: {e}");
+                    }
+                    _ => {}
+                }
+            }
         }
         AIDocumentModel::handle(ctx).update(ctx, |model, ctx| {
             model.clear_streaming_documents_for_conversation(&conversation_id, ctx);
@@ -2116,14 +2125,18 @@ impl BlocklistAIHistoryModel {
                     if let Err(e) = sender.send(ModelEvent::DeleteAIConversation {
                         conversation_id: conversation_id_string.clone(),
                     }) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Error sending DeleteAIConversation event"));
+                        report_error!(
+                            anyhow::Error::new(e)
+                                .context("Error sending DeleteAIConversation event")
+                        );
                     }
                     if let Err(e) = sender.send(ModelEvent::DeleteMultiAgentConversations {
                         conversation_ids: vec![conversation_id_string],
                     }) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Error sending DeleteMultiAgentConversations event"));
+                        report_error!(
+                            anyhow::Error::new(e)
+                                .context("Error sending DeleteMultiAgentConversations event")
+                        );
                     }
                 }
             },

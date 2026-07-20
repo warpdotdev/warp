@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, Once};
 use itertools::Itertools;
 use markdown_parser::{Action, FormattedText, FormattedTextFragment, FormattedTextLine, Hyperlink};
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use string_offset::{ByteOffset, CharOffset};
 use vec1::vec1;
 use warp_errors::report_error;
@@ -17,8 +17,8 @@ use warp_errors::report_error;
 use super::{Highlight, ListNumbering, Selection};
 use crate::elements::{
     Axis, ClickableCharRange, CornerRadius, Fill, HighlightedRange, HoverableCharRange,
-    MouseStateHandle, PartialClickableElement, Point, Radius, SecretRange, SelectableElement,
-    SelectionFragment, SmartSelectFn, ZIndex, SELECTED_HIGHLIGHT_COLOR,
+    MouseStateHandle, PartialClickableElement, Point, Radius, SELECTED_HIGHLIGHT_COLOR,
+    SecretRange, SelectableElement, SelectionFragment, SmartSelectFn, ZIndex,
 };
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::fonts::{FamilyId, Properties, Style, Weight};
@@ -26,11 +26,11 @@ use crate::geometry::rect::RectF;
 use crate::platform::{Cursor, LineStyle};
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{
-    char_slice, count_chars_up_to_byte, BlockHeaderSize, IsRect, SelectionDirection, SelectionType,
-    TextBuffer,
+    BlockHeaderSize, IsRect, SelectionDirection, SelectionType, TextBuffer, char_slice,
+    count_chars_up_to_byte,
 };
 use crate::text_layout::{
-    ClipConfig, StyleAndFont, TextAlignment, TextFrame, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
+    ClipConfig, DEFAULT_TOP_BOTTOM_RATIO, StyleAndFont, TextAlignment, TextFrame, TextStyle,
 };
 use crate::{
     AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, PaintContext,
@@ -2309,11 +2309,7 @@ impl Element for FormattedTextElement {
     }
 
     fn as_selectable_element(&self) -> Option<&dyn SelectableElement> {
-        if self.is_selectable {
-            Some(self)
-        } else {
-            None
-        }
+        if self.is_selectable { Some(self) } else { None }
     }
 }
 

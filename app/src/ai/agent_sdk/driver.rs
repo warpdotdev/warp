@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
-use anyhow::{anyhow, Context as _};
-use futures::channel::oneshot;
-use futures::future::{self, join_all, Either};
+use anyhow::{Context as _, anyhow};
 use futures::FutureExt as _;
+use futures::channel::oneshot;
+use futures::future::{self, Either, join_all};
 use handlebars::get_arguments;
 use itertools::Itertools as _;
 use oneshot::{Canceled, Receiver};
@@ -28,7 +28,7 @@ use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_info};
-use warp_errors::{register_error, report_error, report_if_error, ErrorExt};
+use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
 use warp_graphql::ai::AgentTaskState;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -42,13 +42,13 @@ use crate::ai::agent::{
     TransientNetworkErrorKind,
 };
 use crate::ai::agent_sdk::driver::harness::{
-    harness_model_env_vars, task_env_vars, HarnessCleanupDisposition, HarnessKind, HarnessRunner,
-    ResumePayload, SavePoint, ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent,
+    HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
+    ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, task_env_vars,
 };
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
-    conversation_output_status_from_conversation, AmbientAgentTaskId, AmbientConversationStatus,
+    AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
 };
 use crate::ai::bedrock_credentials;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
@@ -57,8 +57,8 @@ use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use crate::ai::blocklist::{
-    finalize_recording_for_conversation, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    BlocklistAIPermissions, FinalizeReason,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions, FinalizeReason,
+    finalize_recording_for_conversation,
 };
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, GithubRepo, SourceRepo,
@@ -67,28 +67,28 @@ use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEve
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
-use crate::ai::mcp::parsing::{normalize_mcp_json, resolve_json, ParsedTemplatableMCPServerResult};
+use crate::ai::mcp::parsing::{ParsedTemplatableMCPServerResult, normalize_mcp_json, resolve_json};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::{
     JSONMCPServer, MCPServerState, TemplatableMCPServerInstallation, TemplatableMCPServerManager,
     VariableType, VariableValue,
 };
 use crate::ai::skills::{
-    filter_skills_by_spec, read_skills_from_directories, resolve_skill_repos, SkillManager,
-    SkillWatcher,
+    SkillManager, SkillWatcher, filter_skills_by_spec, read_skills_from_directories,
+    resolve_skill_repos,
 };
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::send_telemetry_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
 use crate::server::server_api::harness_support::{
     HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest,
 };
 use crate::server::server_api::managed_mcp::ManagedMcpClient;
-use crate::server::server_api::ServerApiProvider;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
-    plugin_manager_for, CliAgentPluginManager,
+    CliAgentPluginManager, plugin_manager_for,
 };
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
@@ -3406,27 +3406,29 @@ impl AgentDriver {
 
             let document_id_str = document_id.to_string();
 
-            report_if_error!(output::with_stdout_buffered(|buf| {
-                match me.output_format {
-                    OutputFormat::Json | OutputFormat::Ndjson => {
-                        output::json::plan_artifact_created(
-                            &document_id_str,
-                            &notebook_link,
-                            &document.title,
-                            buf,
-                        )
+            report_if_error!(
+                output::with_stdout_buffered(|buf| {
+                    match me.output_format {
+                        OutputFormat::Json | OutputFormat::Ndjson => {
+                            output::json::plan_artifact_created(
+                                &document_id_str,
+                                &notebook_link,
+                                &document.title,
+                                buf,
+                            )
+                        }
+                        OutputFormat::Text | OutputFormat::Pretty => {
+                            output::text::plan_artifact_created(
+                                &document_id_str,
+                                &notebook_link,
+                                &document.title,
+                                buf,
+                            )
+                        }
                     }
-                    OutputFormat::Text | OutputFormat::Pretty => {
-                        output::text::plan_artifact_created(
-                            &document_id_str,
-                            &notebook_link,
-                            &document.title,
-                            buf,
-                        )
-                    }
-                }
-            })
-            .context("Failed to write artifact_created"));
+                })
+                .context("Failed to write artifact_created")
+            );
         });
 
         // Submit the AI query.
@@ -3649,10 +3651,12 @@ impl AgentDriver {
                     let session_id = *session_id;
                     ctx.spawn(
                         async move {
-                            report_if_error!(server_api
-                                .update_agent_task(task_id, None, Some(session_id), None, None)
-                                .await
-                                .context("Error setting ambient agent shared session ID"));
+                            report_if_error!(
+                                server_api
+                                    .update_agent_task(task_id, None, Some(session_id), None, None)
+                                    .await
+                                    .context("Error setting ambient agent shared session ID")
+                            );
                         },
                         |_, _, _| {},
                     );
@@ -3918,11 +3922,13 @@ impl SingletonEntity for AgentDriver {}
 
 /// Write the run ID to stdout using the appropriate output format.
 pub(super) fn write_run_started(run_id: &str, output_format: OutputFormat) {
-    report_if_error!(output::with_stdout_buffered(|buf| match output_format {
-        OutputFormat::Json | OutputFormat::Ndjson => output::json::run_started(run_id, buf),
-        OutputFormat::Text | OutputFormat::Pretty => output::text::run_started(run_id, buf),
-    })
-    .context("Failed to write run ID"));
+    report_if_error!(
+        output::with_stdout_buffered(|buf| match output_format {
+            OutputFormat::Json | OutputFormat::Ndjson => output::json::run_started(run_id, buf),
+            OutputFormat::Text | OutputFormat::Pretty => output::text::run_started(run_id, buf),
+        })
+        .context("Failed to write run ID")
+    );
 }
 
 /// Report a driver-level error to the server for the given task.
@@ -3967,14 +3973,16 @@ fn stamp_parent_agent_id_if_some(
 
 /// Write the session URL to stdout using the appropriate output format
 fn write_session_joined(join_url: &str, output_format: OutputFormat) {
-    report_if_error!(output::with_stdout_buffered(|buf| match output_format {
-        OutputFormat::Json | OutputFormat::Ndjson =>
-            output::json::shared_session_established(join_url, buf),
-        OutputFormat::Text | OutputFormat::Pretty => {
-            output::text::shared_session_established(join_url, buf)
-        }
-    })
-    .context("Failed to write shared session event"));
+    report_if_error!(
+        output::with_stdout_buffered(|buf| match output_format {
+            OutputFormat::Json | OutputFormat::Ndjson =>
+                output::json::shared_session_established(join_url, buf),
+            OutputFormat::Text | OutputFormat::Pretty => {
+                output::text::shared_session_established(join_url, buf)
+            }
+        })
+        .context("Failed to write shared session event")
+    );
 }
 
 #[cfg(test)]

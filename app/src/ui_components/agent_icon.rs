@@ -16,9 +16,9 @@ use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationProvenance, AgentConversationsModel,
     AgentRunDisplayStatus,
 };
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalView;
-use crate::terminal::CLIAgent;
 use crate::ui_components::icon_with_status::IconWithStatusVariant;
 
 /// Returns the agent-icon variant for a live [`TerminalView`], or `None` when the terminal is

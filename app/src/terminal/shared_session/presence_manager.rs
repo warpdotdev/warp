@@ -14,8 +14,8 @@ use session_sharing_protocol::common::{
     PresenceUpdate, Role, RoleRequestId, Selection,
 };
 use warpui::assets::asset_cache::{AssetCache, AssetState};
-use warpui::image_cache::ImageType;
 use warpui::r#async::SpawnedFutureHandle;
+use warpui::image_cache::ImageType;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::auth::UserUid;
@@ -541,7 +541,9 @@ impl PresenceManager {
 
         let Some(participant) = participant else {
             if self.id != update.participant_id {
-                log::warn!("Received shared session participant presence update for participant that doesn't exist");
+                log::warn!(
+                    "Received shared session participant presence update for participant that doesn't exist"
+                );
             }
             return;
         };
@@ -562,7 +564,9 @@ impl PresenceManager {
             self.role = Some(role);
         } else {
             let Some(participant) = self.present_viewers.get_mut(participant_id) else {
-                log::warn!("Received shared session participant role update for participant that doesn't exist");
+                log::warn!(
+                    "Received shared session participant role update for participant that doesn't exist"
+                );
                 return;
             };
             participant.role = Some(role);

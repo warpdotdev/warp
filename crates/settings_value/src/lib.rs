@@ -18,8 +18,8 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use instant::Duration;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 // Re-export the derive macro when available.
 use serde_json::Value;
 #[cfg(feature = "derive")]

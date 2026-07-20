@@ -4,17 +4,18 @@ use warpui::platform::WindowStyle;
 use warpui::{AddSingletonModel, App, SingletonEntity, TypedActionView, ViewHandle};
 
 use super::{DriveIndex, DriveIndexAction};
+use crate::ASSETS;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::actions::ObjectActions;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::{
     CloudObjectSyncStatus, ObjectIdType, ObjectType, Owner, ServerCreationInfo, Space,
 };
-use crate::drive::items::WarpDriveItemId;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::items::WarpDriveItemId;
 use crate::menu::MenuItem;
 use crate::network::NetworkStatus;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
@@ -31,7 +32,6 @@ use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::ASSETS;
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);

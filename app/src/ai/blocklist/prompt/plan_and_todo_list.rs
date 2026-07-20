@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Empty, Fill, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, SavePosition, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    DEFAULT_UI_LINE_HEIGHT_RATIO, Empty, Fill, Flex, Hoverable, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
+    Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;

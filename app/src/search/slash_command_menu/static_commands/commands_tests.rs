@@ -12,12 +12,16 @@ fn command_names_are_unique() {
 }
 #[test]
 fn view_logs_command_is_registered_only_for_tui_mode() {
-    assert!(all_commands(settings::SettingsMode::Tui)
-        .iter()
-        .any(|command| command == &VIEW_LOGS));
-    assert!(!all_commands(settings::SettingsMode::Gui)
-        .iter()
-        .any(|command| command == &VIEW_LOGS));
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command == &VIEW_LOGS)
+    );
+    assert!(
+        !all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .any(|command| command == &VIEW_LOGS)
+    );
 }
 
 #[test]

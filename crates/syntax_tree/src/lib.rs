@@ -9,7 +9,7 @@ use languages::Language;
 use parking_lot::Mutex;
 use queries::highlight_query::HighlightQuery;
 pub use queries::highlight_query::{ColorMap, TextSlice};
-use queries::indent_query::{indentation_delta, IndentDelta};
+use queries::indent_query::{IndentDelta, indentation_delta};
 use rangemap::{RangeMap, RangeSet};
 use string_offset::{ByteOffset, CharOffset};
 use warp_editor::content::buffer::{Buffer, BufferSnapshot};

@@ -22,11 +22,11 @@ use warp_multi_agent_api as api;
 use warp_multi_agent_api::ask_user_question_result::answer_item::Answer as AskUserQuestionAnswer;
 
 use crate::ai::agent::api::convert_from::{
-    convert_user_query_mode, ConversionParams, ConvertAPIMessageToClientOutputMessage,
-    MaybeAIAgentOutputMessage,
+    ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
+    convert_user_query_mode,
 };
 use crate::ai::agent::conversation::{
-    update_todo_list_from_todo_op, AIConversation, AIConversationId, ServerAIConversationMetadata,
+    AIConversation, AIConversationId, ServerAIConversationMetadata, update_todo_list_from_todo_op,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::todos::AIAgentTodoList;
@@ -243,8 +243,8 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
             };
 
             // Convert binary data to base64
-            use base64::engine::general_purpose;
             use base64::Engine;
+            use base64::engine::general_purpose;
             let data = general_purpose::STANDARD.encode(&image.data);
 
             result.push(AIAgentContext::Image(ImageContext {

@@ -18,8 +18,8 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonTooltipPosition;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
-    id, AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle, id,
 };
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -30,9 +30,9 @@ use crate::ai::document::ai_document_model::{
 };
 use crate::ai::document::orchestration_config_block::OrchestrationConfigBlockView;
 use crate::appearance::Appearance;
+use crate::drive::CloudObjectTypeAndId;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::sharing::ShareableObject;
-use crate::drive::CloudObjectTypeAndId;
 use crate::editor::InteractionState;
 use crate::menu::{Menu, MenuItem, MenuItemFields};
 use crate::notebooks::editor::model::NotebooksEditorModel;
@@ -42,10 +42,10 @@ use crate::notebooks::link::{NotebookLinks, SessionSource};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::pane::view::header::components::{
-    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
-    CenteredHeaderEdgeWidth,
+    CenteredHeaderEdgeWidth, render_pane_header_buttons, render_pane_header_title_text,
+    render_three_column_header,
 };
-use crate::pane_group::pane::view::header::{toolbelt_button_position_id, PaneHeaderAction};
+use crate::pane_group::pane::view::header::{PaneHeaderAction, toolbelt_button_position_id};
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::FontSettings;
@@ -54,12 +54,12 @@ use crate::terminal::view::TerminalView;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, NakedTheme, PrimaryTheme, SecondaryTheme, TooltipAlignment,
 };
-use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use crate::{send_telemetry_from_ctx, BlocklistAIHistoryModel};
+use crate::{BlocklistAIHistoryModel, send_telemetry_from_ctx};
 
 pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([EditableBinding::new(
@@ -410,7 +410,9 @@ impl AIDocumentView {
         let save_action = keybinding_name_to_keystroke(SAVE_FILE_BINDING_NAME, ctx)
             .map(|k| k.displayed())
             .unwrap_or("Click".to_string());
-        let tooltip_text = format!("This plan has changes the agent isn't aware of. {save_action} to stop the agent's current task and send the updated plan");
+        let tooltip_text = format!(
+            "This plan has changes the agent isn't aware of. {save_action} to stop the agent's current task and send the updated plan"
+        );
         let update_plan_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("Update Agent", PrimaryTheme)
                 .with_size(ButtonSize::Small)

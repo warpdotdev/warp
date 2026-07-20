@@ -12,9 +12,9 @@ use settings::Setting as _;
 use warpui::{AppContext, ModelContext};
 use warpui::{Entity, SingletonEntity};
 
+use super::ShellLaunchData;
 use super::session_settings::{NewSessionShell, StartupShell};
 use super::shell::ShellType;
-use super::ShellLaunchData;
 #[cfg(feature = "local_tty")]
 use crate::util::path::file_exists_and_is_executable;
 

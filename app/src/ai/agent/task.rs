@@ -14,13 +14,13 @@ use prost_types::FieldMask;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_errors::report_error;
-use warp_multi_agent_api::message::tool_call::subagent::Metadata;
 use warp_multi_agent_api::message::Message;
+use warp_multi_agent_api::message::tool_call::subagent::Metadata;
 use warp_multi_agent_api::{self as api};
 
 use super::api::convert_conversation::convert_tool_call_result_to_input;
 use super::api::{
-    user_inputs_from_messages, ConversionParams, ConvertAPIMessageToClientOutputMessage,
+    ConversionParams, ConvertAPIMessageToClientOutputMessage, user_inputs_from_messages,
 };
 use super::comment::CodeReview;
 use super::conversation::{context_in_exchanges, update_todo_list_from_todo_op};
@@ -29,9 +29,9 @@ use super::{
     AIAgentOutputStatus, MaybeAIAgentOutputMessage, MessageId, MessageToAIAgentOutputMessageError,
     Shared,
 };
+use crate::AIAgentTodoList;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::terminal::model::block::BlockId;
-use crate::AIAgentTodoList;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(String);

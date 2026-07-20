@@ -7,7 +7,7 @@ use std::{cmp, mem};
 use instant::Instant;
 use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use smallvec::SmallVec;
 use vim::vim::{MotionType, VimMode};
 use warp_core::features::FeatureFlag;
@@ -16,18 +16,18 @@ use warp_errors::report_error;
 use warp_util::user_input::UserInput;
 use warpui::elements::{
     AfterLayoutContext, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Element, Event, EventContext, Flex, LayoutContext, PaintContext, ParentElement, Point, Radius,
-    SizeConstraint, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    DEFAULT_UI_LINE_HEIGHT_RATIO, Element, Event, EventContext, Flex, LayoutContext, PaintContext,
+    ParentElement, Point, Radius, SizeConstraint, Text,
 };
 use warpui::event::{DispatchedEvent, KeyState, ModifiersState};
 use warpui::keymap::Keystroke;
 use warpui::platform::keyboard::KeyCode;
 use warpui::text_layout::{
-    self, ComputeBaselinePositionArgs, LayoutCache, DEFAULT_TOP_BOTTOM_RATIO,
+    self, ComputeBaselinePositionArgs, DEFAULT_TOP_BOTTOM_RATIO, LayoutCache,
 };
 use warpui::text_selection_utils::{
-    calculate_tick_width, create_newline_tick_rect, selection_crosses_newline_row_based,
-    NewlineTickParams,
+    NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
+    selection_crosses_newline_row_based,
 };
 use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, SingletonEntity, TaskId, ViewHandle};
@@ -36,15 +36,14 @@ use super::super::soft_wrap::{
     ClampDirection, DisplayPointAndClampDirection, FrameLayouts, SoftWrapPoint, SoftWrapState,
 };
 use super::model::MarkedTextState;
-use super::snapshot::{ViewSnapshot, VOICE_INPUT_ICON_CURSOR_GAP};
+use super::snapshot::{VOICE_INPUT_ICON_CURSOR_GAP, ViewSnapshot};
 use super::{
-    position_id_for_cached_point, position_id_for_cursor, CursorColors, DisplayPoint,
-    DrawableSelection, EditorAction, LocalDrawableSelectionData, ReplicaId, ScrollState,
-    SelectAction,
+    CursorColors, DisplayPoint, DrawableSelection, EditorAction, LocalDrawableSelectionData,
+    ReplicaId, ScrollState, SelectAction, position_id_for_cached_point, position_id_for_cursor,
 };
 use crate::appearance::Appearance;
 use crate::editor::accept_autosuggestion_keybinding_view::{
-    AcceptAutosuggestionKeybinding, AUTOSUGGESTION_HINT_MINIMUM_HEIGHT,
+    AUTOSUGGESTION_HINT_MINIMUM_HEIGHT, AcceptAutosuggestionKeybinding,
 };
 use crate::editor::autosuggestion_ignore_view::AutosuggestionIgnore;
 use crate::editor::position_id_for_first_cursor;
@@ -995,7 +994,9 @@ impl EditorElement {
                     let cursor_row_layout = match layout.frame_layouts.get_line(index) {
                         Some(layout) => layout,
                         None => {
-                            log::warn!("Attempting to access line {index}, but there are fewer lines in the layout.");
+                            log::warn!(
+                                "Attempting to access line {index}, but there are fewer lines in the layout."
+                            );
                             continue;
                         }
                     };

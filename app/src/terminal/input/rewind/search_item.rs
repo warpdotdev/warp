@@ -3,9 +3,9 @@
 
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+use warp_core::ui::Icon;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
 use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, ParentElement, Text,
 };
@@ -19,8 +19,8 @@ use crate::appearance::Appearance;
 use crate::code::editor::{add_color, remove_color};
 use crate::search::{ItemHighlightState, SearchItem};
 use crate::terminal::input::inline_menu::styles::{
-    font_size, icon_color, item_background, menu_background_color, primary_text_color, ICON_MARGIN,
-    ITEM_CORNER_RADIUS, ITEM_HORIZONTAL_PADDING,
+    ICON_MARGIN, ITEM_CORNER_RADIUS, ITEM_HORIZONTAL_PADDING, font_size, icon_color,
+    item_background, menu_background_color, primary_text_color,
 };
 use crate::terminal::input::rewind::data_source::{FileChangesInfo, SelectRewindPoint};
 

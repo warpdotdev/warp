@@ -453,13 +453,17 @@ pub fn write_to_secure_storage<T: Serialize>(
     match serde_json::to_string(credentials) {
         Ok(json) => {
             if let Err(err) = app.secure_storage().write_value(key, &json) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to write MCP credentials to secure storage"));
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Failed to write MCP credentials to secure storage")
+                );
             }
         }
         Err(err) => {
-            report_error!(anyhow::Error::new(err)
-                .context("Failed to serialize MCP credentials for secure storage"));
+            report_error!(
+                anyhow::Error::new(err)
+                    .context("Failed to serialize MCP credentials for secure storage")
+            );
         }
     }
 }

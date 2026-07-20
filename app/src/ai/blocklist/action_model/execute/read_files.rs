@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
-    read_local_file_context, ActionExecution, AnyActionExecution, ExecuteActionInput,
-    PreprocessActionInput,
+    ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput,
+    read_local_file_context,
 };
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadFilesFailedFile,
@@ -14,8 +14,8 @@ use crate::ai::agent::{
 };
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::paths::host_native_absolute_path;
-use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
+use crate::terminal::model::session::active_session::ActiveSession;
 
 pub struct ReadFilesExecutor {
     active_session: ModelHandle<ActiveSession>,

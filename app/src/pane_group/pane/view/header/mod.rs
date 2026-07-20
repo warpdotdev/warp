@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use sharing::SharedPaneContent;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
@@ -19,8 +19,8 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
-use super::header_content::{HeaderContent, HeaderRenderContext, StandardHeaderOptions};
 use super::PaneDropTargetData;
+use super::header_content::{HeaderContent, HeaderRenderContext, StandardHeaderOptions};
 use crate::appearance::Appearance;
 use crate::menu::{Menu, MenuItem};
 use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};

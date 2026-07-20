@@ -30,15 +30,15 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use super::SettingsSection;
 use super::admin_actions::AdminActions;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
 use super::settings_page::{
-    build_sub_header, render_body_item, render_customer_type_badge, render_info_icon,
-    AdditionalInfo, HEADER_PADDING,
+    AdditionalInfo, HEADER_PADDING, build_sub_header, render_body_item, render_customer_type_badge,
+    render_info_icon,
 };
-use super::SettingsSection;
 use crate::ai::AIRequestUsageModel;
 use crate::auth::auth_manager::LoginGatedFeature;
 use crate::auth::auth_state::AuthState;
@@ -54,16 +54,16 @@ use crate::settings_view::settings_page::TOGGLE_BUTTON_RIGHT_PADDING;
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
-use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
+use crate::ui_components::menu_button::{MenuDirection, icon_button_with_context_menu};
 use crate::ui_components::tab_selector::{self, SettingsTab};
-use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::view_components::ToastFlavor;
+use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::workspaces::team::Team;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{CustomerType, Workspace};
-use crate::{send_telemetry_from_ctx, WorkspaceAction};
+use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const HEADER_FONT_SIZE: f32 = 16.;
 const OVERAGE_USAGE_LINK_TEXT: &str = "View details on overage usage";
@@ -79,23 +79,19 @@ const SORT_MENU_ITEM_DISPLAY_NAME_Z_A_LABEL: &str = "Z to A";
 const SORT_MENU_ITEM_REQUEST_USAGE_ASCENDING_LABEL: &str = "Usage ascending";
 const SORT_MENU_ITEM_REQUEST_USAGE_DESCENDING_LABEL: &str = "Usage descending";
 
-const AUTO_RELOAD_EXCEED_LIMIT_WARNING_STRING: &str =
-    "Auto reload is disabled, as the next reload would exceed your monthly spend limit. Increase your limit to use auto reload.";
+const AUTO_RELOAD_EXCEED_LIMIT_WARNING_STRING: &str = "Auto reload is disabled, as the next reload would exceed your monthly spend limit. Increase your limit to use auto reload.";
 const AUTO_RELOAD_DELINQUENT_WARNING_STRING: &str =
     "Restricted due to billing issue. Update your payment method to purchase add-on credits.";
-const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str =
-    "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
+const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
 
 const OVERVIEW_TAB_TEXT: &str = "Overview";
 const USAGE_HISTORY_TAB_TEXT: &str = "Usage History";
 
 const ENTERPRISE_USAGE_CALLOUT_HEADER: &str = "Usage reporting is currently limited";
-const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_PREFIX: &str =
-    "Enterprise credit usage isn't fully available in this view yet. For the most accurate spend tracking, ";
+const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_PREFIX: &str = "Enterprise credit usage isn't fully available in this view yet. For the most accurate spend tracking, ";
 const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_LINK: &str = "visit the admin panel";
 const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_SUFFIX: &str = ".";
-const ENTERPRISE_USAGE_CALLOUT_BODY_NON_ADMIN: &str =
-    "Enterprise credit usage isn't fully available in this view yet. Contact a team admin for detailed usage reporting.";
+const ENTERPRISE_USAGE_CALLOUT_BODY_NON_ADMIN: &str = "Enterprise credit usage isn't fully available in this view yet. Contact a team admin for detailed usage reporting.";
 
 const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =

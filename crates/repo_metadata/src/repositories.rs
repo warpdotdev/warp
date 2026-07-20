@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use futures::future::{ready, Either};
+use futures::future::{Either, ready};
 #[cfg(test)]
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::host_id::HostId;

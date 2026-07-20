@@ -10,9 +10,10 @@ use warp_core::user_preferences::GetUserPreferences;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    initialize_cloud_preferences_syncer, ClientIdProvider, CloudPreferencesSyncer,
-    ForceCloudToMatchLocal, SETTINGS_FILE_LAST_SYNCED_HASH_KEY,
+    ClientIdProvider, CloudPreferencesSyncer, ForceCloudToMatchLocal,
+    SETTINGS_FILE_LAST_SYNCED_HASH_KEY, initialize_cloud_preferences_syncer,
 };
+use crate::ASSETS;
 use crate::auth::auth_state::AuthState;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::{
@@ -23,7 +24,7 @@ use crate::cloud_object::{
 };
 use crate::server::cloud_objects::fake_object_client::FakeObjectClient;
 use crate::server::cloud_objects::test_utils::{
-    create_update_manager_struct, initialize_app, UpdateManagerStruct,
+    UpdateManagerStruct, create_update_manager_struct, initialize_app,
 };
 use crate::server::cloud_objects::update_manager::{InitialLoadResponse, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, ServerIdAndType, SyncId};
@@ -31,7 +32,6 @@ use crate::server::sync_queue::SyncQueue;
 use crate::settings::cloud_preferences::{
     CloudPreferenceModel, CloudPreferencesSettings, Platform,
 };
-use crate::ASSETS;
 
 define_settings_group!(TestSettings, settings: [
     all_platforms_cloud_setting: AllPlatforms {

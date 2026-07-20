@@ -31,7 +31,7 @@ pub use window::*;
 
 use crate::platform::{self, FullscreenState, WindowBounds, WindowStyle};
 use crate::rendering::OnGPUDeviceSelected;
-use crate::{keymap, Element};
+use crate::{Element, keymap};
 
 /// A unique identifier for a display.
 #[derive(Debug, Clone, PartialEq, Eq)]

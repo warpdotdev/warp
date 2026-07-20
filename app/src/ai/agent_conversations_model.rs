@@ -20,15 +20,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
-use warpui::color::ColorU;
 use warpui::r#async::Timer;
+use warpui::color::ColorU;
 use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{
-    duration_with_jitter, AppContext, Entity, EntityId, ModelContext, ModelHandle, RequestState,
-    SingletonEntity, WindowId,
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, RequestState, SingletonEntity,
+    WindowId, duration_with_jitter,
 };
 
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -44,18 +44,18 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::conversation_navigation::ConversationNavigationData;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::retry_strategies::{
-    is_transient_http_error, OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL_RETRY_STRATEGY,
+    OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL_RETRY_STRATEGY, is_transient_http_error,
 };
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::TaskListFilter;
 use crate::server::server_api::presigned_upload::HttpStatusError;
-use crate::server::server_api::ServerApiProvider;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::workspace::{RestoreConversationLayout, WorkspaceAction};

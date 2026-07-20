@@ -1,9 +1,9 @@
-use ui_components::{button, keyboard_shortcut, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button, keyboard_shortcut};
 use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
 use warpui_core::elements::{
     Align, ClippedScrollStateHandle, ConstrainedBox, Container, CrossAxisAlignment, Flex,
     MouseStateHandle, ParentElement, Shrinkable,

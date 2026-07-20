@@ -246,11 +246,12 @@ fn opening_other_keeps_selector_and_shared_session_in_sync() {
 
         app.read(|ctx| {
             let view = view.as_ref(ctx);
-            assert!(view
-                .session
-                .current()
-                .and_then(|current| current.draft)
-                .is_some_and(|draft| draft.is_other_input_active));
+            assert!(
+                view.session
+                    .current()
+                    .and_then(|current| current.draft)
+                    .is_some_and(|draft| draft.is_other_input_active)
+            );
             assert_eq!(view.selector.as_ref(ctx).highlighted_question_index(), None);
         });
     });

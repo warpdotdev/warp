@@ -1,6 +1,7 @@
 use warp::tui_export::{
-    register_tui_session_view_test_singletons, AIConversationId, BlocklistAIHistoryModel, Harness,
-    StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    AIConversationId, BlocklistAIHistoryModel, Harness, StartAgentExecutionMode,
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    register_tui_session_view_test_singletons,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
@@ -158,12 +159,16 @@ fn assert_failed_launch_cleaned_up(
 ) {
     app.read(|ctx| {
         let history = BlocklistAIHistoryModel::as_ref(ctx);
-        assert!(history
-            .child_conversation_ids_of(&parent_conversation_id)
-            .is_empty());
-        assert!(TuiOrchestrationModel::as_ref(ctx)
-            .event_consumers_by_session
-            .is_empty());
+        assert!(
+            history
+                .child_conversation_ids_of(&parent_conversation_id)
+                .is_empty()
+        );
+        assert!(
+            TuiOrchestrationModel::as_ref(ctx)
+                .event_consumers_by_session
+                .is_empty()
+        );
     });
     assert_eq!(
         app.read_model(&fixture.sessions, |sessions, _| sessions.len()),

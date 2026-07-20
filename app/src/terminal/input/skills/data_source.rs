@@ -21,11 +21,11 @@ use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::search::{SearchItem, SyncDataSource};
 use crate::terminal::input::inline_menu::{
-    default_navigation_message_items, styles as inline_styles, InlineMenuAction,
-    InlineMenuMessageArgs, InlineMenuType,
+    InlineMenuAction, InlineMenuMessageArgs, InlineMenuType, default_navigation_message_items,
+    styles as inline_styles,
 };
 use crate::terminal::input::message_bar::{Message, MessageItem};
-use crate::terminal::input::skills::{query_selectable_skills, SelectableSkill};
+use crate::terminal::input::skills::{SelectableSkill, query_selectable_skills};
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 

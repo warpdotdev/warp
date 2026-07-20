@@ -311,7 +311,9 @@ pub fn read_images_from_clipboard(
             match process_clipboard_image(&arboard_image, filename) {
                 Some(image_data) => Some(vec![image_data]),
                 None => {
-                    log::warn!("Failed to process clipboard image: format detection and conversion both failed");
+                    log::warn!(
+                        "Failed to process clipboard image: format detection and conversion both failed"
+                    );
                     None
                 }
             }

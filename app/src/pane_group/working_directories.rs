@@ -945,17 +945,18 @@ impl WorkingDirectoriesModel {
         diff_mode: &DiffMode,
         ctx: &mut ModelContext<Self>,
     ) {
-        match self.get_code_review_view(pane_group_id, repo_path) { Some(code_review_view) => {
-            code_review_view.update(ctx, |code_review_view, ctx| {
+        match self.get_code_review_view(pane_group_id, repo_path) {
+            Some(code_review_view) => code_review_view.update(ctx, |code_review_view, ctx| {
                 code_review_view.set_diff_base(diff_mode.to_owned(), ctx);
                 code_review_view.expand_comment_list(ctx);
-            })
-        } _ => {
-            report_error!(
-                "WorkingDirectoriesModel did not find CodeReviewView for repo path",
-                extra: { "repo_path" => ?repo_path }
-            );
-        }}
+            }),
+            _ => {
+                report_error!(
+                    "WorkingDirectoriesModel did not find CodeReviewView for repo path",
+                    extra: { "repo_path" => ?repo_path }
+                );
+            }
+        }
 
         if let Some(comment_batch) = self.get_or_create_code_review_comments(repo_path, ctx) {
             let comments = comments.to_owned();

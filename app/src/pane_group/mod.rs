@@ -4,15 +4,15 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use markdown_parser::FormattedTextFragment;
 use parking_lot::FairMutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{
     ParticipantId, Role, RoleRequestId, RoleRequestRejectedReason, RoleRequestResponse, SessionId,
@@ -27,9 +27,9 @@ use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
 use warp_errors::report_if_error;
 use warp_terminal::shell::{ShellName, ShellType};
-use warp_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
+use warp_util::path::convert_wsl_to_windows_host_path;
 use warp_util::remote_path::RemotePath;
 use warpui::elements::{
     ChildView, Clipped, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
@@ -51,13 +51,13 @@ use crate::ai::agent_conversations_model::{
 };
 use crate::ai::ai_document_view::AIDocumentView;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
@@ -72,9 +72,9 @@ use crate::app_state::{
     TerminalPaneSnapshot, WorkflowPaneSnapshot,
 };
 use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_view_modal::AuthViewVariant;
-use crate::auth::AuthStateProvider;
 use crate::banner::{Banner, BannerEvent, BannerState, BannerTextContent, DismissalType};
 use crate::channel::{Channel, ChannelState};
 use crate::cloud_object::Space;
@@ -93,16 +93,16 @@ use crate::launch_configs::launch_config::{self, PaneMode, PaneTemplateType};
 use crate::notebooks::file::FileNotebookView;
 use crate::palette::PaletteMode;
 use crate::pane_group::focus_state::PaneGroupFocusEvent;
+use crate::pane_group::pane::ActionOrigin;
 use crate::pane_group::pane::get_started_pane::GetStartedPane;
 #[cfg(not(target_family = "wasm"))]
 use crate::pane_group::pane::terminal_pane::{
     host_terminal_shared_session_source_type, inherit_share_for_local_child,
 };
-use crate::pane_group::pane::ActionOrigin;
 use crate::persistence::ModelEvent;
 use crate::quit_warning::UnsavedStateSummary;
 use crate::resource_center::{
-    mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipsCompleted,
+    Tip, TipAction, TipsCompleted, mark_feature_used_and_write_to_user_defaults,
 };
 #[cfg(target_family = "wasm")]
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -113,8 +113,8 @@ use crate::server::telemetry::{
 };
 use crate::session_management::SessionNavigationData;
 use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
-use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::settings_view::SettingsSection;
+use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 #[cfg(not(target_family = "wasm"))]
@@ -125,7 +125,7 @@ use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedE
 use crate::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
 use crate::terminal::local_tty::{
-    create_terminal_view_surface, terminal_view_restored_blocks, TerminalViewSurfaceConfig,
+    TerminalViewSurfaceConfig, create_terminal_view_surface, terminal_view_restored_blocks,
 };
 use crate::terminal::model::session::Session;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
@@ -158,7 +158,7 @@ use crate::terminal::{
 use crate::undo_close::{UndoCloseStack, UndoCloseStackEvent};
 #[cfg(target_family = "wasm")]
 use crate::uri::browser_url_handler::update_browser_url;
-use crate::util::bindings::{is_binding_pty_compliant, CustomAction};
+use crate::util::bindings::{CustomAction, is_binding_pty_compliant};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
 use crate::view_components::ToastFlavor;
@@ -2459,17 +2459,20 @@ impl PaneGroup {
             pane.notebook_view(ctx).as_ref(ctx).selected_text(ctx)
         } else if let Some(pane) = self.downcast_pane_by_id::<AIDocumentPane>(focused_pane_id) {
             pane.document_view(ctx).as_ref(ctx).selected_text(ctx)
-        } else { match self.terminal_view_from_pane_id(focused_pane_id, ctx) { Some(terminal_view) => {
-            // NOTE: We currently don't have a way to track recency of selection events.
-            // In lieu of this, we prefer selections to the input editor over the terminal view.
-            // TODO(vkodithala): Once we have a way to track recency of selection events, we should use that instead.
-            terminal_view
-                .as_ref(ctx)
-                .selected_text_from_input(ctx)
-                .or_else(|| terminal_view.as_ref(ctx).selected_text(ctx))
-        } _ => {
-            None
-        }}};
+        } else {
+            match self.terminal_view_from_pane_id(focused_pane_id, ctx) {
+                Some(terminal_view) => {
+                    // NOTE: We currently don't have a way to track recency of selection events.
+                    // In lieu of this, we prefer selections to the input editor over the terminal view.
+                    // TODO(vkodithala): Once we have a way to track recency of selection events, we should use that instead.
+                    terminal_view
+                        .as_ref(ctx)
+                        .selected_text_from_input(ctx)
+                        .or_else(|| terminal_view.as_ref(ctx).selected_text(ctx))
+                }
+                _ => None,
+            }
+        };
 
         text.filter(|text: &String| !text.is_empty())
     }
@@ -5169,14 +5172,17 @@ impl PaneGroup {
     fn close_active_pane_with_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
         if self.focused_pane_id(ctx).is_code_pane() {
             // If focused on a CodePane, close its active editor tab (optionally, the entire pane if it only has 1 tab).
-            match self.code_view_from_pane_id(self.focused_pane_id(ctx), ctx) { Some(code_view) => {
-                code_view.update(ctx, |view, ctx| {
-                    let index = view.active_tab_index();
-                    view.handle_action(&CodeViewAction::RemoveTabAtIndex { index }, ctx);
-                });
-            } _ => {
-                self.close_pane_with_confirmation(self.focused_pane_id(ctx), ctx);
-            }}
+            match self.code_view_from_pane_id(self.focused_pane_id(ctx), ctx) {
+                Some(code_view) => {
+                    code_view.update(ctx, |view, ctx| {
+                        let index = view.active_tab_index();
+                        view.handle_action(&CodeViewAction::RemoveTabAtIndex { index }, ctx);
+                    });
+                }
+                _ => {
+                    self.close_pane_with_confirmation(self.focused_pane_id(ctx), ctx);
+                }
+            }
         } else {
             self.close_pane_with_confirmation(self.focused_pane_id(ctx), ctx);
         }
@@ -5789,12 +5795,9 @@ impl PaneGroup {
         let pane_id = self
             .pane_contents
             .keys()
-            .find(|id| {
-                match self.terminal_view_from_pane_id(**id, ctx) { Some(terminal_view) => {
-                    terminal_view_id == terminal_view.id()
-                } _ => {
-                    false
-                }}
+            .find(|id| match self.terminal_view_from_pane_id(**id, ctx) {
+                Some(terminal_view) => terminal_view_id == terminal_view.id(),
+                _ => false,
             })
             .cloned();
 
@@ -5929,9 +5932,11 @@ impl PaneGroup {
                     });
 
                 GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
-                    report_if_error!(general_settings
-                        .user_default_shell_unsupported_banner_state
-                        .set_value(BannerState::Dismissed, ctx));
+                    report_if_error!(
+                        general_settings
+                            .user_default_shell_unsupported_banner_state
+                            .set_value(BannerState::Dismissed, ctx)
+                    );
                 });
             }
             BannerEvent::Action(_) => {
@@ -6108,46 +6113,51 @@ impl PaneGroup {
             .as_ref(ctx)
             .ambient_agent_view_model()
             .cloned()
-        { Some(view_model) => {
-            // Upfront ambient viewer (attach-to-running / restore): the model already
-            // exists at construction, so wire it immediately.
-            crate::terminal::view::ambient_agent::wire_ambient_agent_session_events(
-                &terminal_manager,
-                &view_model,
-                ctx,
-            );
-        } _ => if enable_orchestration_polling {
-            // Link-join viewer: the model is created lazily at `SessionJoined` (see
-            // `TerminalView::begin_viewing_ambient_session`), so wire it once it exists.
-            // Gate on `enable_orchestration_polling` to mirror the `SessionJoined` model-
-            // creation gate, so model-less hidden child viewers don't install a dead
-            // subscription. The weak manager handle avoids keeping a closed pane's manager
-            // and view alive via this dormant subscription.
-            let weak_terminal_manager = terminal_manager.downgrade();
-            ctx.subscribe_to_view(&terminal_view, move |_, terminal_view, event, ctx| {
-                if !matches!(
-                    event,
-                    crate::terminal::view::Event::AmbientAgentViewModelCreated
-                ) {
-                    return;
-                }
-                let Some(terminal_manager) = weak_terminal_manager.upgrade(ctx) else {
-                    return;
-                };
-                let Some(view_model) = terminal_view
-                    .as_ref(ctx)
-                    .ambient_agent_view_model()
-                    .cloned()
-                else {
-                    return;
-                };
+        {
+            Some(view_model) => {
+                // Upfront ambient viewer (attach-to-running / restore): the model already
+                // exists at construction, so wire it immediately.
                 crate::terminal::view::ambient_agent::wire_ambient_agent_session_events(
                     &terminal_manager,
                     &view_model,
                     ctx,
                 );
-            });
-        }}
+            }
+            _ => {
+                if enable_orchestration_polling {
+                    // Link-join viewer: the model is created lazily at `SessionJoined` (see
+                    // `TerminalView::begin_viewing_ambient_session`), so wire it once it exists.
+                    // Gate on `enable_orchestration_polling` to mirror the `SessionJoined` model-
+                    // creation gate, so model-less hidden child viewers don't install a dead
+                    // subscription. The weak manager handle avoids keeping a closed pane's manager
+                    // and view alive via this dormant subscription.
+                    let weak_terminal_manager = terminal_manager.downgrade();
+                    ctx.subscribe_to_view(&terminal_view, move |_, terminal_view, event, ctx| {
+                        if !matches!(
+                            event,
+                            crate::terminal::view::Event::AmbientAgentViewModelCreated
+                        ) {
+                            return;
+                        }
+                        let Some(terminal_manager) = weak_terminal_manager.upgrade(ctx) else {
+                            return;
+                        };
+                        let Some(view_model) = terminal_view
+                            .as_ref(ctx)
+                            .ambient_agent_view_model()
+                            .cloned()
+                        else {
+                            return;
+                        };
+                        crate::terminal::view::ambient_agent::wire_ambient_agent_session_events(
+                            &terminal_manager,
+                            &view_model,
+                            ctx,
+                        );
+                    });
+                }
+            }
+        }
 
         (terminal_view, terminal_manager)
     }
@@ -7973,12 +7983,13 @@ impl TypedActionView for PaneGroup {
         match action {
             Add(direction) => {
                 let chosen_shell = {
-                    match self.active_session_terminal_model(ctx) { Some(model) => {
-                        let model = model.lock();
-                        model.shell_launch_state().available_shell()
-                    } _ => {
-                        None
-                    }}
+                    match self.active_session_terminal_model(ctx) {
+                        Some(model) => {
+                            let model = model.lock();
+                            model.shell_launch_state().available_shell()
+                        }
+                        _ => None,
+                    }
                 };
                 self.add_terminal_pane(*direction, chosen_shell, ctx);
             }

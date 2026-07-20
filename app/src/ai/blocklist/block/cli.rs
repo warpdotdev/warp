@@ -17,21 +17,21 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_errors::report_error;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
-    resizable_state_handle, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
-    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragBarSide, DropShadow, Empty,
-    Expanded, Fill, Flex, FormattedTextElement, Highlight, HighlightedHyperlink, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning,
-    ParentElement, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
+    Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DragBarSide, DropShadow, Empty, Expanded, Fill, Flex,
+    FormattedTextElement, Highlight, HighlightedHyperlink, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
     ResizableStateHandle, SavePosition, SelectableArea, SelectionHandle, Shrinkable,
-    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
+    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text, resizable_state_handle,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::{EditableBinding, Keystroke};
 use warpui::platform::{Cursor, OperatingSystem};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
@@ -41,8 +41,8 @@ use warpui::{
 use super::cli_controller::{CLISubagentController, CLISubagentEvent, UserTakeOverReason};
 use super::model::{AIBlockModel, AIBlockModelHelper, AIBlockModelImpl, AIBlockOutputStatus};
 use super::view_impl::common::{
-    render_debug_footer, render_failed_output, render_informational_footer, render_text_sections,
-    DebugFooterProps, FailedOutputProps, TextSectionsProps,
+    DebugFooterProps, FailedOutputProps, TextSectionsProps, render_debug_footer,
+    render_failed_output, render_informational_footer, render_text_sections,
 };
 use super::view_impl::output::are_all_text_sections_empty;
 use super::{EmbeddedCodeEditorView, SecretRedactionState, TableSectionHandles};
@@ -53,22 +53,22 @@ use crate::ai::agent::{
     AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentPtyWriteMode,
     AIAgentText, AIAgentTextSection, CancellationReason, ProgrammingLanguage, WebSearchStatus,
 };
+use crate::ai::blocklist::block::TextLocation;
 use crate::ai::blocklist::block::view_impl::common::{
-    render_query_text, UserQueryProps, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
-    BLOCKED_ACTION_MESSAGE_FOR_READING_FILES, BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
+    BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB, BLOCKED_ACTION_MESSAGE_FOR_READING_FILES,
+    BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
     BLOCKED_ACTION_MESSAGE_FOR_WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
     LOAD_OUTPUT_MESSAGE_FOR_FILE_GLOB, LOAD_OUTPUT_MESSAGE_FOR_GREP,
     LOAD_OUTPUT_MESSAGE_FOR_READING_FILES, LOAD_OUTPUT_MESSAGE_FOR_SEARCH_CODEBASE,
-    LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH,
+    LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH, UserQueryProps, render_query_text,
 };
-use crate::ai::blocklist::block::TextLocation;
 use crate::ai::blocklist::code_block::CodeSnippetButtonHandles;
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::ai::blocklist::permissions::is_agent_mode_autonomy_allowed;
 use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIPermissions,
 };
-use crate::ai::control_code_parser::{parse_control_codes_from_bytes, ParsedControlCodeOutput};
+use crate::ai::control_code_parser::{ParsedControlCodeOutput, parse_control_codes_from_bytes};
 use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
 };
@@ -85,17 +85,17 @@ use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::{ShellLaunchData, TerminalModel};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use crate::util::link_detection::{detect_links, DetectedLinksState};
+use crate::util::link_detection::{DetectedLinksState, detect_links};
+use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
 use crate::view_components::compactible_action_button::{
-    render_compact_and_regular_button_rows, CompactibleActionButton, RenderCompactibleActionButton,
+    CompactibleActionButton, RenderCompactibleActionButton, render_compact_and_regular_button_rows,
 };
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
-use crate::view_components::DismissibleToast;
 use crate::workspace::WorkspaceAction;
-use crate::{send_telemetry_from_ctx, BlocklistAIHistoryModel, ToastStack};
+use crate::{BlocklistAIHistoryModel, ToastStack, send_telemetry_from_ctx};
 const MENU_WIDTH: f32 = 200.0;
 const MAX_HEIGHT: f32 = 320.0;
 const MIN_RESIZABLE_WIDTH: f32 = 360.0;
@@ -130,8 +130,8 @@ const HAS_PENDING_NON_TRANSFER_CONTROL_ACTION_CONTEXT_KEY: &str =
 const BLOCKED_ACTION_MESSAGE_FOR_TRANSFER_CONTROL: &str = "Agent is asking you to take control.";
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
     use warpui::keymap::FixedBinding;
+    use warpui::keymap::macros::*;
 
     app.register_fixed_bindings([
         FixedBinding::new(

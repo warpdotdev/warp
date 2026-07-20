@@ -7,6 +7,7 @@ use warp_cli::agent::Harness;
 use warp_errors::report_if_error;
 use warpui::{AppContext, SingletonEntity};
 
+use crate::LLMPreferences;
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
@@ -16,7 +17,6 @@ use crate::ai::llms::LLMInfo;
 use crate::ai::orchestration::config_state::AuthSecretSelection;
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::LLMPreferences;
 
 /// Env var override for the workspace default host (developer testing).
 /// Mirrors the single-agent ambient flow.
@@ -292,9 +292,11 @@ pub(crate) fn persist_auth_secret_selection(
             }
         }
         report_if_error!(settings.last_selected_auth_secret.set_value(named_map, ctx));
-        report_if_error!(settings
-            .inherit_auth_secret_harnesses
-            .set_value(inherit_map, ctx));
+        report_if_error!(
+            settings
+                .inherit_auth_secret_harnesses
+                .set_value(inherit_map, ctx)
+        );
     });
 }
 

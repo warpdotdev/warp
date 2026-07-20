@@ -15,8 +15,8 @@ use super::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
-use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::{CloudModelEvent, UpdateSource};
 use crate::cloud_object::{CloudObject as _, GenericStringObjectFormat, JsonObjectType};
@@ -25,7 +25,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ClientId, SyncId};
 use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, CloudModel, LaunchMode, TelemetryEvent};
+use crate::{CloudModel, LaunchMode, TelemetryEvent, send_telemetry_from_ctx};
 
 /// ExecutionProfileId is the identifier that users of the AIExecutionProfilesModel use
 /// to refer back to a specific profile. These are unique across the lifespan of the app.
@@ -1491,7 +1491,9 @@ impl AIExecutionProfilesModel {
         let Some(object) = cloud_model
             .get_object_of_type::<GenericStringObjectId, CloudAIExecutionProfileModel>(&sync_id)
         else {
-            log::warn!("Received ObjectCreated event for AI execution profile but object not found in CloudModel: {sync_id:?}");
+            log::warn!(
+                "Received ObjectCreated event for AI execution profile but object not found in CloudModel: {sync_id:?}"
+            );
             return;
         };
 
@@ -1559,7 +1561,9 @@ impl AIExecutionProfilesModel {
             // If the default profile was deleted, transition back to unsynced state
             let is_default = matches!(&self.default_profile_state, DefaultProfileState::Synced { id } if *id == profile_id);
             if is_default {
-                log::warn!("Default execution profile was deleted from cloud. Transitioning to unsynced state: {sync_id:?}");
+                log::warn!(
+                    "Default execution profile was deleted from cloud. Transitioning to unsynced state: {sync_id:?}"
+                );
                 self.default_profile_state = DefaultProfileState::Unsynced {
                     id: profile_id,
                     profile: AIExecutionProfile {

@@ -5,6 +5,7 @@ use warpui::{AppContext, Entity};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::search::SyncDataSource;
 use crate::search::command_palette::conversations::search::{
     ConversationMatchResult, ConversationSearcher, FuzzyConversationSearcher, MatchedConversation,
 };
@@ -15,7 +16,6 @@ use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::separator_search_item::SeparatorSearchItem;
 use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
-use crate::search::SyncDataSource;
 use crate::workspace::Workspace;
 
 /// Sections for grouping conversations in the command palette.

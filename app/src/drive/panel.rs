@@ -25,10 +25,10 @@ use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::{
     CloudObjectEventEntrypoint, GenericStringObjectFormat, JsonObjectType, Owner, Space,
 };
-use crate::env_vars::manager::EnvVarCollectionSource;
 use crate::env_vars::CloudEnvVarCollection;
-use crate::notebooks::manager::NotebookSource;
+use crate::env_vars::manager::EnvVarCollectionSource;
 use crate::notebooks::CloudNotebook;
+use crate::notebooks::manager::NotebookSource;
 use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::server::telemetry::SharingDialogSource;

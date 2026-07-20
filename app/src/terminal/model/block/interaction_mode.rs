@@ -1,18 +1,18 @@
 use anyhow::anyhow;
-use warp_terminal::model::grid::Dimensions;
 use warp_terminal::model::Point;
+use warp_terminal::model::grid::Dimensions;
 
 use super::{Block, SerializedAIMetadata};
+use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
-use crate::ai::agent::AIAgentActionId;
 use crate::ai::blocklist::block::cli_controller::{
     LongRunningCommandControlState, UserTakeOverReason,
 };
 use crate::terminal::event::Event;
-use crate::terminal::model::grid::grid_handler::GridHandler;
-use crate::terminal::model::grid::RespectDisplayedOutput;
 use crate::terminal::model::RespectObfuscatedSecrets;
+use crate::terminal::model::grid::RespectDisplayedOutput;
+use crate::terminal::model::grid::grid_handler::GridHandler;
 
 impl Block {
     /// `true` if the command is executing and the user has opened the agent mode input.
@@ -94,7 +94,9 @@ impl Block {
             *task_id = new_task_id;
             Ok(())
         } else {
-            Err(anyhow!("Tried to upgrade CLI subagent task ID for block with no prior CLI subagent task ID."))
+            Err(anyhow!(
+                "Tried to upgrade CLI subagent task ID for block with no prior CLI subagent task ID."
+            ))
         }
     }
 
@@ -298,7 +300,9 @@ impl Block {
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum UpdateInteractionModeError {
-    #[error("Attempted to update interaction mode from agent with requested command to agent-monitored for mismatched conversation IDs.")]
+    #[error(
+        "Attempted to update interaction mode from agent with requested command to agent-monitored for mismatched conversation IDs."
+    )]
     UnexpectedConversationId,
     #[error("Attempted to take over control for user when block was not already agent controlled")]
     InvalidTakeOver,

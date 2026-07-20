@@ -21,8 +21,8 @@ use crate::ui_components::icons;
 use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::view_components::{DropdownItem, FilterableDropdown};
 use crate::workspace::tab_settings::{
-    canonical_directory_key, DirectoryTabColor, DirectoryTabColors, TabSettings,
-    TabSettingsChangedEvent,
+    DirectoryTabColor, DirectoryTabColors, TabSettings, TabSettingsChangedEvent,
+    canonical_directory_key,
 };
 
 const ADD_DIRECTORY_LABEL: &str = "+ Add directory…";

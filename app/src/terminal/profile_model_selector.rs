@@ -8,10 +8,10 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _, ParentOffsetBounds,
-    Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect, SavePosition,
-    Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    DEFAULT_UI_LINE_HEIGHT_RATIO, DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _,
+    ParentOffsetBounds, Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius,
+    Rect, SavePosition, Stack, Text,
 };
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
@@ -26,9 +26,9 @@ const SIDECAR_POSITION_ID: &str = "model_sidecar_panel";
 
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::color::{coloru_with_opacity, Opacity};
-use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::color::{Opacity, coloru_with_opacity};
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 
 use crate::ai::blocklist::prompt::PromptIconButtonTheme;
 use crate::ai::blocklist::{
@@ -46,8 +46,8 @@ use crate::ai::harness_availability::{
     HarnessAvailabilityEvent, HarnessAvailabilityModel, HarnessModelInfo,
 };
 use crate::ai::llms::{
-    byo_key_source_for_model, dedupe_model_display_names, should_show_key_icon_for_model,
     ByoKeySource, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, LLMSpec,
+    byo_key_source_for_model, dedupe_model_display_names, should_show_key_icon_for_model,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::model::generic_string_model::StringModel;
@@ -55,9 +55,9 @@ use crate::context_chips::display_chip::{udi_font_size, udi_icon_size};
 use crate::context_chips::spacing;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::SettingsSection;
+use crate::terminal::TerminalModel;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
-use crate::terminal::TerminalModel;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, SecondaryTheme,

@@ -14,10 +14,10 @@
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
-    home_skills_path, parse_skill, ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, SkillProvider, home_skills_path, parse_skill,
 };
-use command::blocking::Command;
 use command::r#async::Command as AsyncCommand;
+use command::blocking::Command;
 use warp_cli::skill::SkillSpec;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, SingletonEntity as _};

@@ -16,6 +16,7 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
+use crate::TelemetryEvent;
 use crate::ai::agent::SuggestedAgentModeWorkflow;
 use crate::modal::{Modal, ModalEvent};
 use crate::pane_group::PaneEvent;
@@ -24,7 +25,6 @@ use crate::ui_components::blended_colors;
 use crate::workflows::workflow_view::{WorkflowView, WorkflowViewEvent};
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::TelemetryEvent;
 
 const SUGGESTED_PROMPT_MODAL_HEADER: &str = "Prompt";
 

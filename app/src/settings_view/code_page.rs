@@ -2,11 +2,11 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use ai::index::full_source_code_embedding::SyncProgress;
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexFinishedStatus, CodebaseIndexManager, CodebaseIndexManagerEvent,
     CodebaseIndexStatus, CodebaseIndexingError,
 };
-use ai::index::full_source_code_embedding::SyncProgress;
 use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 use ai::workspace::WorkspaceMetadata;
 use lsp::supported_servers::LSPServerType;
@@ -33,20 +33,20 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
-    id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle, id,
 };
 
 #[cfg(feature = "local_fs")]
 use super::features::external_editor::ExternalEditorView;
 use super::settings_page::{
-    build_sub_header, render_body_item, render_separator, Category, MatchData, PageType,
-    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, HEADER_PADDING,
-    TOGGLE_BUTTON_RIGHT_PADDING,
+    Category, HEADER_PADDING, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
+    SettingsWidget, TOGGLE_BUTTON_RIGHT_PADDING, build_sub_header, render_body_item,
+    render_separator,
 };
 use super::{
-    flags, LocalOnlyIconState, SettingsAction, SettingsSection, ToggleSettingActionPair,
-    ToggleState,
+    LocalOnlyIconState, SettingsAction, SettingsSection, ToggleSettingActionPair, ToggleState,
+    flags,
 };
 use crate::ai::persisted_workspace::{
     EnablementState, LspRepoStatus, PersistedWorkspace, PersistedWorkspaceEvent,
@@ -63,14 +63,14 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::view_components::DismissibleToast;
-use crate::workspace::tab_settings::TabSettings;
+use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::workspace::ToastStack;
+use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 const MAIN_SECTION_MARGIN: f32 = 12.;
 const SUB_SECTION_MARGIN: f32 = 8.;
@@ -816,9 +816,11 @@ impl TypedActionView for CodeSettingsPageView {
             }
             CodeSettingsPageAction::ToggleShowCodeReviewDiffStats => {
                 TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .show_code_review_diff_stats
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .show_code_review_diff_stats
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -854,9 +856,11 @@ impl TypedActionView for CodeSettingsPageView {
             }
             CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane => {
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .auto_open_code_review_pane_on_first_agent_change
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .auto_open_code_review_pane_on_first_agent_change
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 send_telemetry_from_ctx!(
                     TelemetryEvent::FeaturesPageAction {

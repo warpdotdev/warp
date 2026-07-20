@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use rand::seq::SliceRandom;
 use rand::Rng;
+use rand::seq::SliceRandom;
 
 /// Desert/southwest-themed words used to generate memorable worktree branch names.
 /// Deduplicated across six categories.

@@ -7,12 +7,12 @@ use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId, TuiMcpAction,
 };
 use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InlineMenuSelection};
+use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::tui::{
     TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiScreenPoint,
     TuiScreenPosition, TuiSize, TuiText,
 };
-use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::{AppContext, ModelHandle};
 
 use crate::conversation_menu::TuiConversationMenuModel;
@@ -23,7 +23,7 @@ use crate::skills_menu::TuiSkillMenuModel;
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_column_layout::{
-    format_tui_first_column, tui_two_column_layout, TuiTwoColumnConstraints, TuiTwoColumnLayout,
+    TuiTwoColumnConstraints, TuiTwoColumnLayout, format_tui_first_column, tui_two_column_layout,
 };
 
 const SLASH_COMMAND_COLUMN_CONSTRAINTS: TuiTwoColumnConstraints = TuiTwoColumnConstraints {

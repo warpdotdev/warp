@@ -20,7 +20,7 @@ use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
 use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
@@ -41,17 +41,17 @@ use warpui::{
 };
 
 use super::common::{
-    render_debug_footer, render_failed_output, render_informational_footer,
-    render_output_status_text, render_scrollable_collapsible_content, render_text_sections,
-    DebugFooterProps, FailedOutputProps, FindContext, TextSectionsProps,
-    STATUS_FOOTER_VERTICAL_PADDING, STATUS_ICON_SIZE_DELTA,
+    DebugFooterProps, FailedOutputProps, FindContext, STATUS_FOOTER_VERTICAL_PADDING,
+    STATUS_ICON_SIZE_DELTA, TextSectionsProps, render_debug_footer, render_failed_output,
+    render_informational_footer, render_output_status_text, render_scrollable_collapsible_content,
+    render_text_sections,
 };
 use super::imported_comments::render_imported_comments;
 use super::todos::{render_completed_todo_items, render_todos};
 use super::{
+    CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN, WithContentItemSpacing,
     add_highlights_to_rich_text, orchestration, render_autonomy_checkbox_setting_speedbump_footer,
-    render_citation_chips, WithContentItemSpacing, CONTENT_HORIZONTAL_PADDING,
-    CONTENT_ITEM_VERTICAL_MARGIN,
+    render_citation_chips,
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
@@ -72,8 +72,8 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::block::model::{AIBlockModel, AIBlockModelHelper, AIBlockOutputStatus};
 use crate::ai::blocklist::block::view_impl::common::{
-    MaybeShimmeringText, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
-    BLOCKED_ACTION_MESSAGE_FOR_READING_FILES, BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
+    BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB, BLOCKED_ACTION_MESSAGE_FOR_READING_FILES,
+    BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE, MaybeShimmeringText,
 };
 use crate::ai::blocklist::block::{
     AIBlock, AIBlockAction, AIBlockStateHandles, ActionButtons, AutonomySettingSpeedbump,
@@ -85,13 +85,13 @@ use crate::ai::blocklist::inline_action::ask_user_question_view::AskUserQuestion
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
 use crate::ai::blocklist::inline_action::create_or_edit_document::CreateOrEditDocumentAction;
 use crate::ai::blocklist::inline_action::inline_action_header::{
-    HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
-    INLINE_ACTION_HORIZONTAL_PADDING,
+    HeaderConfig, INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
+    InteractionMode,
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::{
-    render_requested_action_body_text, render_requested_action_row,
-    render_requested_action_row_for_text, FormattedTextOrElement, RenderableAction,
+    FormattedTextOrElement, RenderableAction, render_requested_action_body_text,
+    render_requested_action_row, render_requested_action_row_for_text,
 };
 use crate::ai::blocklist::inline_action::requested_command::RequestedCommand;
 use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardView;
@@ -106,22 +106,22 @@ use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
 use crate::ai::skills::{
-    icon_override_for_skill_name, render_skill_button, skill_path_from_location, SkillManager,
-    SkillOpenOrigin,
+    SkillManager, SkillOpenOrigin, icon_override_for_skill_name, render_skill_button,
+    skill_path_from_location,
 };
 use crate::appearance::Appearance;
 use crate::code::diff_viewer::DisplayMode;
 use crate::code::editor_management::CodeSource;
 use crate::settings_view::SettingsSection;
+use crate::terminal::ShellLaunchData;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::shared_session::SharedSessionStatus;
-use crate::terminal::ShellLaunchData;
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
-use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::link_detection::{DetectedLinksState, add_link_detection_mouse_interactions};
 use crate::util::time_format::format_elapsed_seconds;
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::ActionButton;

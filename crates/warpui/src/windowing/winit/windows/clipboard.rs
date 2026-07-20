@@ -2,8 +2,8 @@ use std::ops::Not;
 
 use arboard::{self, Clipboard as WindowsClipboardInner};
 
-use crate::clipboard::ClipboardContent;
 use crate::Clipboard;
+use crate::clipboard::ClipboardContent;
 
 pub struct WindowsClipboard {
     inner: WindowsClipboardInner,

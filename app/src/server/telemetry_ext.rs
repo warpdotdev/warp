@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::execution_mode;
 use warpui::telemetry::EventPayload;

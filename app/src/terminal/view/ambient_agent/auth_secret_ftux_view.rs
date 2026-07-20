@@ -1,7 +1,7 @@
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warp_managed_secrets::client::SecretOwner;
 use warpui::elements::{
@@ -17,8 +17,8 @@ use warpui::{
 };
 
 use crate::ai::auth_secret_types::{
-    auth_secret_types_for_harness, build_managed_secret_value, learn_more_url_for_harness,
-    AuthSecretTypeInfo,
+    AuthSecretTypeInfo, auth_secret_types_for_harness, build_managed_secret_value,
+    learn_more_url_for_harness,
 };
 use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
 use crate::ai::harness_display;

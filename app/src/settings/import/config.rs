@@ -8,9 +8,9 @@ use strum_macros::EnumIter;
 use thiserror::Error;
 use warp_core::ui::color::hex_color::HexColorError as UiHexColorError;
 use warp_core::ui::theme::{AnsiColors, WarpTheme};
+use warpui::DisplayIdx;
 use warpui::fonts::FontInfo;
 use warpui::keymap::Keystroke;
-use warpui::DisplayIdx;
 
 use super::alacritty_parser::AlacrittyConfig;
 #[cfg(target_os = "macos")]
@@ -208,11 +208,10 @@ impl Config {
                         |_| dark.clone(),
                     );
 
-                    match (light_written, dark_written) { (Some(light), Some(dark)) => {
-                        Some(ThemeType::LightAndDark { light, dark })
-                    } _ => {
-                        None
-                    }}
+                    match (light_written, dark_written) {
+                        (Some(light), Some(dark)) => Some(ThemeType::LightAndDark { light, dark }),
+                        _ => None,
+                    }
                 }
                 ThemeType::Single(normal) => {
                     let theme_yaml_file_name = format!("{}_theme.yaml", self.terminal_name);

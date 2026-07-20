@@ -31,8 +31,8 @@ use warp::tui_export::{
     InputTypeAutoDetectionSource, LLMId, TuiMcpAction,
 };
 use warp_editor::model::CoreEditorModel;
-use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding};
 use warpui_core::{
@@ -42,10 +42,10 @@ use warpui_core::{
 
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::editor_interaction::{
-    apply_editor_action, follow_editor_cursor, TuiEditorBehavior, TuiEditorCommand,
-    TuiEditorInteractionOutcome, TuiEditorState,
+    TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
+    apply_editor_action, follow_editor_cursor,
 };
-use crate::inline_menu::{active_inline_menu, TuiInlineMenu, TuiInlineMenuAccepted};
+use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted, active_inline_menu};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{

@@ -24,8 +24,8 @@ use crate::ai::cloud_agent_config::CloudAgentConfigModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironmentModel;
 use crate::ai::execution_profiles::CloudAIExecutionProfileModel;
 use crate::ai::facts::CloudAIFactModel;
-use crate::ai::mcp::templatable::CloudTemplatableMCPServerModel;
 use crate::ai::mcp::CloudMCPServerModel;
+use crate::ai::mcp::templatable::CloudTemplatableMCPServerModel;
 use crate::cloud_object::model::actions::{
     ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType,
 };
@@ -37,14 +37,14 @@ use crate::cloud_object::{
     ObjectType, Owner, Revision, RevisionAndLastEditor, ServerCloudObject, ServerCreationInfo,
     UpdateCloudObjectResult,
 };
-use crate::drive::folders::CloudFolderModel;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::folders::CloudFolderModel;
 use crate::env_vars::CloudEnvVarCollectionModel;
 use crate::notebooks::CloudNotebookModel;
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::settings::cloud_preferences::CloudPreferenceModel;
-use crate::workflows::workflow_enum::CloudWorkflowEnumModel;
 use crate::workflows::CloudWorkflowModel;
+use crate::workflows::workflow_enum::CloudWorkflowEnumModel;
 
 lazy_static! {
     static ref DEFAULT_RETRY_OPTION: RetryOption =
@@ -239,11 +239,10 @@ impl QueueItem {
                     // InitiatedBy::User is a safer default option because it will show toasts.
                     // In the future, if System events are common, we may want to save the initiated_by field in Sqlite.
                     InitiatedBy::User,
-                ) { Some(create_object_queue_item) => {
-                    create_object_queue_item
-                } _ => {
-                    object.update_object_queue_item(None)
-                }}
+                ) {
+                    Some(create_object_queue_item) => create_object_queue_item,
+                    _ => object.update_object_queue_item(None),
+                }
             })
             .collect::<Vec<_>>()
     }

@@ -27,18 +27,18 @@ use crate::drive::CloudObjectTypeAndId;
 use crate::features::FeatureFlag;
 use crate::palette::PaletteMode;
 use crate::root_view::OpenLaunchConfigArg;
+use crate::search::QueryFilter;
 use crate::search::action::search_item::MatchedBinding;
 use crate::search::binding_source::{BindingFilterFn, BindingSource};
+use crate::search::command_palette::SelectedItems;
 use crate::search::command_palette::data_sources::DataSourceStore;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::zero_state::{self, Event as ZeroStateEvent, ZeroState};
-use crate::search::command_palette::SelectedItems;
 use crate::search::data_source::QueryResult;
 use crate::search::result_renderer::QueryResultRenderer;
 use crate::search::search_bar::{
     SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering, SelectionUpdate,
 };
-use crate::search::QueryFilter;
 use crate::server::ids::SyncId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
 use crate::session_management::SessionSource;
@@ -46,8 +46,8 @@ use crate::settings::CtrlTabBehavior;
 use crate::terminal::keys_settings::KeysSettings;
 use crate::themes::theme::WarpTheme;
 use crate::view_components::DismissibleToast;
-use crate::workspace::{active_terminal_in_window, ForkedConversationDestination, WorkspaceAction};
-use crate::{send_telemetry_from_ctx, ToastStack};
+use crate::workspace::{ForkedConversationDestination, WorkspaceAction, active_terminal_in_window};
+use crate::{ToastStack, send_telemetry_from_ctx};
 
 lazy_static! {
     /// Set of hardcoded action names that we want to show in the command palette zero state.

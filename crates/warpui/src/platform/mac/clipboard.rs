@@ -6,7 +6,7 @@ use anyhow::Result;
 use cocoa::base::id;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
-use objc2_foundation::{ns_string, NSArray, NSData, NSString};
+use objc2_foundation::{NSArray, NSData, NSString, ns_string};
 use warpui_core::clipboard::{ClipboardContent, ImageData};
 
 unsafe extern "C" {

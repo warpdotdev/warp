@@ -6,8 +6,8 @@ use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, Vi
 
 use crate::tab_configs::PickerStyle;
 use crate::util::git::{
-    detect_current_branch, get_all_branches, get_all_branches_with_known_main,
-    sort_branches_main_first, BranchEntry,
+    BranchEntry, detect_current_branch, get_all_branches, get_all_branches_with_known_main,
+    sort_branches_main_first,
 };
 use crate::view_components::{DropdownItem, FilterableDropdown};
 

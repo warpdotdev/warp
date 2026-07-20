@@ -10,8 +10,8 @@ use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
 use warpui::assets::asset_cache::Asset;
 use warpui::image_cache::{
-    resize_dimensions, CustomHeaderCreationError, CustomImageFormat, CustomImageHeader, FitType,
-    ImageType,
+    CustomHeaderCreationError, CustomImageFormat, CustomImageHeader, FitType, ImageType,
+    resize_dimensions,
 };
 use warpui::util::{parse_i32, parse_u32};
 
@@ -747,7 +747,7 @@ fn read_file(decoded_payload: Vec<u8>, is_temp: bool) -> Result<Vec<u8>, Invalid
         Err(err) => {
             return Err(InvalidKittyPayload::FileError(FileError::FileReadError(
                 err.to_string(),
-            )))
+            )));
         }
     };
 
@@ -807,7 +807,7 @@ fn read_shared_memory(
         Err(err) => {
             return Err(InvalidKittyPayload::ShmError(ShmError::ObjectOpenError(
                 err.to_string(),
-            )))
+            )));
         }
     };
 
@@ -837,7 +837,7 @@ fn read_from_shared_memory_fd(
 ) -> Result<Vec<u8>, InvalidKittyPayload> {
     use std::num::NonZero;
 
-    use nix::sys::mman::{mmap, MapFlags, ProtFlags};
+    use nix::sys::mman::{MapFlags, ProtFlags, mmap};
     use nix::sys::stat::fstat;
 
     let file_size = match fstat(fd) {
@@ -845,7 +845,7 @@ fn read_from_shared_memory_fd(
         Err(err) => {
             return Err(InvalidKittyPayload::ShmError(ShmError::FileStatError(
                 err.to_string(),
-            )))
+            )));
         }
     };
 
@@ -927,7 +927,7 @@ pub fn set_kitty_png_size(mut image: KittyImage) -> Result<KittyImage, KittyPngE
         None => {
             return Err(KittyPngError::InvalidBytes(
                 "Could not retrieve image size from ImageType for Kitty PNG.".to_string(),
-            ))
+            ));
         }
     };
 

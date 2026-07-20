@@ -2,8 +2,8 @@ pub use cloud_object_models::EnvVarSecretCommand;
 use warpui::ViewContext;
 
 use super::env_var_collection::{EnvVarCollectionView, VariableRowIndex};
-use crate::env_vars::active_env_var_collection_data::SavingStatus;
 use crate::env_vars::EnvVarValue;
+use crate::env_vars::active_env_var_collection_data::SavingStatus;
 
 mod command_dialog_view;
 pub(super) use command_dialog_view::{EnvVarCommandDialog, EnvVarCommandDialogEvent};

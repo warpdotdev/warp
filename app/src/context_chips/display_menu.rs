@@ -4,14 +4,15 @@ use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use instant::Instant;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::builder::MIN_FONT_SIZE;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
+use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
 use warpui::color::ColorU;
 use warpui::elements::{
@@ -24,7 +25,6 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
-use warpui::r#async::Timer;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
 use warpui::{
@@ -33,16 +33,16 @@ use warpui::{
 };
 
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, TextOptions,
 };
 use crate::server::ids::{ClientId, HashableId, ServerId, SyncId};
 use crate::ui_components::icons::Icon;
 use crate::view_components::copyable_text_field::{
-    render_copyable_text_field, CopyButtonPlacement, CopyableTextFieldConfig,
-    COPY_FEEDBACK_DURATION,
+    COPY_FEEDBACK_DURATION, CopyButtonPlacement, CopyableTextFieldConfig,
+    render_copyable_text_field,
 };
 
 /// Trait for items that can be displayed in a generic menu

@@ -21,8 +21,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use command::r#async::Command;
 use command::Stdio;
+use command::r#async::Command;
 use futures::future::join_all;
 use tokio::fs as tokio_fs;
 use warp_util::standardized_path::StandardizedPath;

@@ -22,12 +22,12 @@ use simple_logger::SimpleLogger;
 use warp_errors::report_error;
 use warp_util::on_cancel::OnCancelFutureExt;
 
-use crate::config::{lsp_uri_to_path, path_to_lsp_uri, LanguageId};
+use crate::LspServerLogLevel;
+use crate::config::{LanguageId, lsp_uri_to_path, path_to_lsp_uri};
 use crate::types::{
     HoverResult, LspDefinitionLocation, ReferenceLocation, TextDocumentContentChangeEvent,
     TextEdit, WatchedFileChangeEvent,
 };
-use crate::LspServerLogLevel;
 
 /// Tracks the sync state for an open document.
 #[derive(Debug, Clone)]

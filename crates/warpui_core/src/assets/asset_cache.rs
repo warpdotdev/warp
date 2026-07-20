@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use anyhow::{anyhow, Error, Result};
+use anyhow::{Error, Result, anyhow};
 use async_channel::{self, Receiver, Sender};
 use bytes::Bytes;
 use derivative::Derivative;
@@ -16,8 +16,8 @@ use futures::{Future, FutureExt as _};
 use warp_errors::report_error;
 
 use super::AssetProvider;
-use crate::image_cache::ImageCache;
 use crate::r#async::executor;
+use crate::image_cache::ImageCache;
 use crate::{Entity, ModelContext, SingletonEntity};
 
 pub trait FetchAsset: crate::r#async::Spawnable + Future<Output = Result<Bytes>> {}

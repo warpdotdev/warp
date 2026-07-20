@@ -6,8 +6,8 @@
 pub(crate) mod modal_shell;
 
 pub(crate) use modal_shell::{
-    render_chip_editor_modal, render_chip_editor_sections, ChipEditorModalConfig,
-    ChipEditorMouseHandles, ChipEditorSectionsConfig,
+    ChipEditorModalConfig, ChipEditorMouseHandles, ChipEditorSectionsConfig,
+    render_chip_editor_modal, render_chip_editor_sections,
 };
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
@@ -26,7 +26,7 @@ use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::appearance::Appearance;
 use crate::context_chips::display_chip::{chip_container, udi_font_size};
 use crate::context_chips::renderer::{ChipDragState, Renderer as ContextChipRenderer};
-use crate::context_chips::{spacing, ChipAvailability, ContextChipKind};
+use crate::context_chips::{ChipAvailability, ContextChipKind, spacing};
 use crate::ui_components::icons;
 
 const USED_CHIPS_POSITION_ID: &str = "chip_cfg_used";

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
-use alias::{expand_command_aliases, AliasExpansionResult};
+use alias::{AliasExpansionResult, expand_command_aliases};
 use async_recursion::async_recursion;
 use imp::*;
 use itertools::Itertools;
@@ -17,13 +17,13 @@ use smol_str::SmolStr;
 use warp_command_signatures::IconType;
 use warp_core::ui::theme::AnsiColorIdentifier;
 
+use super::EngineFileType;
 use super::coalesce::coalesce_completion_results;
 use super::context::CompletionContext;
 use super::engine::{self, completion_location};
 use super::matchers::{Match, MatchStrategy, MatchType};
-use super::EngineFileType;
-use crate::completer::describe::OptionCaseSensitivity;
 use crate::completer::TopLevelCommandCaseSensitivity;
+use crate::completer::describe::OptionCaseSensitivity;
 use crate::meta::Span;
 use crate::parsers::classify_command;
 use crate::parsers::simple::parse_for_completions;

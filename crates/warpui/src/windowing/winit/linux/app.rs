@@ -82,7 +82,9 @@ pub fn maybe_register_xlib_error_hook<T>(event_loop: &EventLoop<T>) {
             && extension_info.name == "DRI3"
             && error.minor_code == DRI3_FENCE_FROM_FD_MINOR_OPCODE
         {
-            log::warn!("Ignoring a BadMatch from a DRI3FenceFromFD request. The NVIDIA Performance PRIME profile is likely enabled.");
+            log::warn!(
+                "Ignoring a BadMatch from a DRI3FenceFromFD request. The NVIDIA Performance PRIME profile is likely enabled."
+            );
             *ENCOUNTERED_BAD_MATCH_FROM_DRI3_FENCE_FROM_FD
                 .lock()
                 .unwrap() = true;
@@ -105,9 +107,11 @@ pub fn maybe_register_xlib_error_hook<T>(event_loop: &EventLoop<T>) {
             .expect("Mutex should not be poisoned")
             && extension_info.name == "Present"
         {
-            log::warn!("Ignoring an error from the PRESENT extension after catching a BadMatch from a DRI3FenceFromFD request. Minor opcode: {}; Error code: {}",
+            log::warn!(
+                "Ignoring an error from the PRESENT extension after catching a BadMatch from a DRI3FenceFromFD request. Minor opcode: {}; Error code: {}",
                 error.minor_code,
-                error.error_code);
+                error.error_code
+            );
             return true;
         }
 

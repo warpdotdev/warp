@@ -14,14 +14,14 @@
 use std::rc::Rc;
 
 use warp::tui_export::{
-    persist_host_selection, resolve_auth_secret_selection_for_harness,
-    resolve_default_environment_id, resolve_default_host_slug, should_show_auth_secret_picker,
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AuthSecretSelection,
     BlocklistAIActionEvent, BlocklistAIActionModel, Harness, HarnessAvailabilityEvent,
-    HarnessAvailabilityModel, LLMPreferences, LLMPreferencesEvent, OptionSnapshot,
-    OrchestrationConfig, OrchestrationConfigState, OrchestrationConfigStatus,
+    HarnessAvailabilityModel, LLMPreferences, LLMPreferencesEvent, ORCHESTRATION_WARP_WORKER_HOST,
+    OptionSnapshot, OrchestrationConfig, OrchestrationConfigState, OrchestrationConfigStatus,
     OrchestrationEditState, RunAgentsExecutionMode, RunAgentsExecutor, RunAgentsExecutorEvent,
-    RunAgentsRequest, RunAgentsSpawningSnapshot, ORCHESTRATION_WARP_WORKER_HOST,
+    RunAgentsRequest, RunAgentsSpawningSnapshot, persist_host_selection,
+    resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
+    resolve_default_host_slug, should_show_auth_secret_picker,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::TuiElement;
@@ -34,7 +34,7 @@ mod configuration;
 mod render;
 
 use configuration::{
-    build_request, ConfigPage, ModelOrchestrationBlockController, OrchestrationBlockController,
+    ConfigPage, ModelOrchestrationBlockController, OrchestrationBlockController, build_request,
 };
 
 use crate::keybindings::TUI_BINDING_GROUP;

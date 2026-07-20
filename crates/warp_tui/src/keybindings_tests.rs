@@ -1,6 +1,6 @@
 use warpui_core::App;
 
-use super::{is_tui_owned, TUI_BINDING_GROUP};
+use super::{TUI_BINDING_GROUP, is_tui_owned};
 
 #[test]
 fn tui_ownership_is_by_name_prefix_or_group() {

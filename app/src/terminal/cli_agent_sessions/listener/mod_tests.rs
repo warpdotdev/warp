@@ -1,6 +1,6 @@
 use super::*;
 use crate::terminal::cli_agent_sessions::event::{
-    CLIAgentEventSource, CLIAgentEventType, CLI_AGENT_NOTIFICATION_SENTINEL,
+    CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentEventSource, CLIAgentEventType,
 };
 
 #[test]
@@ -43,9 +43,11 @@ fn codex_ignores_empty_body() {
 #[test]
 fn codex_try_parse_ignores_titled_notifications() {
     let mut handler = CodexSessionHandler;
-    assert!(handler
-        .try_parse(Some("some-title"), "Agent turn complete", false)
-        .is_none());
+    assert!(
+        handler
+            .try_parse(Some("some-title"), "Agent turn complete", false)
+            .is_none()
+    );
 }
 
 #[test]
@@ -69,9 +71,11 @@ fn codex_try_parse_ignores_osc9_when_plugin_already_active() {
 
     assert_eq!(event.event, CLIAgentEventType::PermissionRequest);
     // Once the session is rich, OSC 9 fallback is dropped.
-    assert!(handler
-        .try_parse(None, "Agent turn complete", true)
-        .is_none());
+    assert!(
+        handler
+            .try_parse(None, "Agent turn complete", true)
+            .is_none()
+    );
 }
 
 #[test]
@@ -80,12 +84,16 @@ fn codex_try_parse_ignores_structured_event_without_codex_plugin() {
     let mut handler = CodexSessionHandler;
     let body = r#"{"v":1,"agent":"codex","event":"permission_request","summary":"Approve?","tool_name":"Bash"}"#;
 
-    assert!(handler
-        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
-        .is_none());
-    assert!(handler
-        .try_parse(None, "Agent turn complete", false)
-        .is_some());
+    assert!(
+        handler
+            .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
+            .is_none()
+    );
+    assert!(
+        handler
+            .try_parse(None, "Agent turn complete", false)
+            .is_some()
+    );
 }
 
 #[test]
@@ -93,12 +101,16 @@ fn codex_try_parse_ignores_other_structured_agents() {
     let mut handler = CodexSessionHandler;
     let body = r#"{"v":1,"agent":"claude","event":"stop"}"#;
 
-    assert!(handler
-        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
-        .is_none());
-    assert!(handler
-        .try_parse(None, "Agent turn complete", false)
-        .is_some());
+    assert!(
+        handler
+            .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
+            .is_none()
+    );
+    assert!(
+        handler
+            .try_parse(None, "Agent turn complete", false)
+            .is_some()
+    );
 }
 
 #[test]

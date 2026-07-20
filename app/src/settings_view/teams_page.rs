@@ -32,16 +32,16 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use super::SettingsSection;
 use super::admin_actions::AdminActions;
 use super::settings_page::{
-    render_customer_type_badge, render_separator, render_sub_header, MatchData, PageType,
-    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    render_customer_type_badge, render_separator, render_sub_header,
 };
 use super::tab_menu::Tabs;
 use super::transfer_ownership_confirmation_modal::{
     TransferOwnershipConfirmationEvent, TransferOwnershipConfirmationModal,
 };
-use super::SettingsSection;
 use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
@@ -113,8 +113,7 @@ const INVALID_DOMAINS_INSTRUCTIONS: &str =
     "Some of the provided domains are invalid, or have already been added.";
 
 const INVITE_LINK_TOGGLE_INSTRUCTIONS: &str = "As an admin, you can choose whether to enable or disable the ability for team members to invite others by invitation link.";
-const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str =
-    "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
+const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str = "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
 
 const INVITE_BY_EMAIL_EXPIRY_INSTRUCTIONS: &str = "Email invitations are valid for 7 days.";
 const INVALID_EMAILS_INSTRUCTIONS: &str =

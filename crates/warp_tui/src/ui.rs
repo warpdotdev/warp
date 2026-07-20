@@ -1,12 +1,12 @@
 //! Small presentation helpers for the `warp-tui` front-end's TUI views.
 use std::time::Duration;
 
+use warpui_core::AppContext;
+use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
     Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiStyle, TuiText,
 };
-use warpui_core::elements::CrossAxisAlignment;
-use warpui_core::AppContext;
 
 use crate::tui_builder::TuiUiBuilder;
 use crate::warping_indicator::render_spinner;

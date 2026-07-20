@@ -16,15 +16,14 @@ use warpui::{
 
 use super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use super::orchestration_events::{
-    build_lifecycle_event, LifecycleEventDetailPayload, LifecycleEventDetailStage,
-    OrchestrationEventService, PendingEvent, PendingEventDetail,
+    LifecycleEventDetailPayload, LifecycleEventDetailStage, OrchestrationEventService,
+    PendingEvent, PendingEventDetail, build_lifecycle_event,
 };
 use crate::ai::agent::conversation::{AIAgentHarness, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentExchangeId, AIAgentOutputMessageType, ReceivedMessageInput};
 use crate::ai::agent_events::{
-    run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
-    AgentEventDriverConfig, AgentEventFilter, AgentMessageEventMetadata, MessageHydrator,
-    ServerApiAgentEventSource,
+    AgentEventConsumer, AgentEventConsumerControlFlow, AgentEventDriverConfig, AgentEventFilter,
+    AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource, run_agent_event_driver,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::retry_strategies::is_transient_http_error;
@@ -1484,7 +1483,9 @@ impl OrchestrationEventStreamer {
                         "Restore: get_agent_run failed for {conv_id:?}: {err:#}; will retry"
                     );
                 } else {
-                    log::warn!("Restore: get_agent_run hit permanent error for {conv_id:?}: {err:#}; retrying with slow backoff");
+                    log::warn!(
+                        "Restore: get_agent_run hit permanent error for {conv_id:?}: {err:#}; retrying with slow backoff"
+                    );
                 }
                 self.start_restore_fetch_retry_timer(conv_id, task_id, sqlite_cursor, &err, ctx);
             }

@@ -11,19 +11,19 @@ use warpui::{AppContext, SingletonEntity};
 
 use super::config_state::{AuthSecretSelection, OrchestrationConfigState};
 use super::providers::{
-    get_base_model_choices, resolve_default_host_slug, resolve_recent_host_slug,
     ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_RUNNER_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
+    get_base_model_choices, resolve_default_host_slug, resolve_recent_host_slug,
 };
+use crate::LLMPreferences;
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
 use crate::ai::local_harness_setup::{
-    local_harness_is_product_enabled, local_harness_setup_state, LocalHarnessSetupState,
+    LocalHarnessSetupState, local_harness_is_product_enabled, local_harness_setup_state,
 };
 use crate::cloud_object::CloudObjectLookup as _;
-use crate::LLMPreferences;
 
 const DEFAULT_MODEL_LABEL: &str = "Default model";
 /// Label shown in the auth secret picker when no secret is selected

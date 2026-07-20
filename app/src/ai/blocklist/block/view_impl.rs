@@ -37,10 +37,10 @@ use pathfinder_color::ColorU;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
-use warp_core::ui::color::contrast::{
-    foreground_color_with_minimum_contrast, MinimumAllowedContrast,
-};
 use warp_core::ui::color::Rgb;
+use warp_core::ui::color::contrast::{
+    MinimumAllowedContrast, foreground_color_with_minimum_contrast,
+};
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::{
     Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
@@ -56,16 +56,15 @@ use warpui::{AppContext, Element, SingletonEntity, View, ViewContext};
 
 use super::secret_redaction::SecretRedactionState;
 use super::{
-    attachment_names, AIBlock, AIBlockAction, TextLocation,
-    DISPATCHED_REQUESTED_EDIT_KEYMAP_CONTEXT, HAS_PENDING_ACTION,
-    RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID,
+    AIBlock, AIBlockAction, DISPATCHED_REQUESTED_EDIT_KEYMAP_CONTEXT, HAS_PENDING_ACTION,
+    RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID, TextLocation, attachment_names,
 };
 use crate::ai::agent::{AIAgentCitation, AIAgentInput};
+use crate::ai::blocklist::block::DetectedLinksState;
 use crate::ai::blocklist::block::view_impl::comments::address_comment_chips;
 use crate::ai::blocklist::block::view_impl::header::{
-    render_overflow_menu_button, OVERFLOW_BUTTON_SIZE,
+    OVERFLOW_BUTTON_SIZE, render_overflow_menu_button,
 };
-use crate::ai::blocklist::block::DetectedLinksState;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::ai::blocklist::model::AIBlockModelHelper;
@@ -73,15 +72,15 @@ use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::settings::{AISettings, InputModeSettings, InputSettings};
 use crate::settings_view::SettingsSection;
+use crate::terminal::TerminalView;
 use crate::terminal::block_list_element::BlockListMenuSource;
 use crate::terminal::grid_renderer::URL_COLOR;
+use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::blocks::{BlockHeightItem, RemovableBlocklistItem, RichContentItem};
 use crate::terminal::model::rich_content::RichContentType;
-use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::view::TerminalAction;
-use crate::terminal::TerminalView;
+use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::DetectedLinkType;

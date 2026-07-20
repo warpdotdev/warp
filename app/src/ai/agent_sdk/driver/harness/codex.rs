@@ -21,25 +21,25 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::read_jsonl;
 use super::codex_transcript::{
-    codex_sessions_root, find_session_file, parse_session_meta, rehydrate_codex_transcript,
-    CodexResumeInfo, CodexTranscriptEnvelope,
+    CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
+    parse_session_meta, rehydrate_codex_transcript,
 };
 use super::json_utils::read_json_file_or_default;
 use super::{
-    write_temp_file, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
+    HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
-use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model::block::BlockId;
-use crate::terminal::CLIAgent;
 
 pub(crate) struct CodexHarness;
 

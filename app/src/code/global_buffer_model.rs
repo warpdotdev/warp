@@ -15,7 +15,7 @@ use vec1::vec1;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
 use warp_editor::content::buffer::{Buffer, ToBufferCharOffset};
-use warp_editor::content::diff::{text_diff, TextDiff};
+use warp_editor::content::diff::{TextDiff, text_diff};
 use warp_editor::content::edit::PreciseDelta;
 use warp_editor::content::version::BufferVersion;
 use warp_util::content_version::ContentVersion;

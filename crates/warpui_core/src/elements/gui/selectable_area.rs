@@ -9,7 +9,7 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use lazy_static::lazy_static;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use string_offset::ByteOffset;
 
 use super::{

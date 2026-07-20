@@ -1,5 +1,5 @@
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use anyhow::{Context, Result};
 use futures::channel::oneshot::{self, Receiver};
@@ -7,7 +7,7 @@ use futures::stream::AbortHandle;
 use warp_errors::{report_error, report_if_error};
 use warpui::r#async::Timer;
 use warpui::{
-    duration_with_jitter, Entity, ModelContext, ModelHandle, RequestState, SingletonEntity,
+    Entity, ModelContext, ModelHandle, RequestState, SingletonEntity, duration_with_jitter,
 };
 
 use super::team_tester::{TeamTesterStatus, TeamTesterStatusEvent};
@@ -26,8 +26,8 @@ use crate::server::ids::ServerId;
 use crate::server::retry_strategies::{
     OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY,
 };
-use crate::server::server_api::team::TeamClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::team::TeamClient;
 
 pub enum TeamUpdateManagerEvent {
     LeaveSuccess,
@@ -258,9 +258,11 @@ impl TeamUpdateManager {
         let model_event_sender = self.model_event_sender.clone();
         if let Some(model_event_sender) = &model_event_sender {
             for event in events {
-                report_if_error!(model_event_sender
-                    .send(event)
-                    .context("Unable to save teams metadata to sqlite"));
+                report_if_error!(
+                    model_event_sender
+                        .send(event)
+                        .context("Unable to save teams metadata to sqlite")
+                );
             }
         }
     }
@@ -451,7 +453,9 @@ impl TeamUpdateManager {
                 );
             }
             RequestState::RequestFailed(err) => {
-                log::info!("get_workspaces_metadata_for_user: request failed with error {err:#}. Retries exhausted.");
+                log::info!(
+                    "get_workspaces_metadata_for_user: request failed with error {err:#}. Retries exhausted."
+                );
             }
         }
     }

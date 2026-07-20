@@ -19,10 +19,10 @@ use pathfinder_geometry::vector::Vector2F;
 use privacy_page::{PrivacyPageView, PrivacyPageViewEvent};
 use referrals_page::{ReferralsPageEvent, ReferralsPageView};
 use scripting_page::ScriptingSettingsPageView;
-use settings_file_footer::{render_footer, SettingsFooterKind, SettingsFooterMouseStates};
+use settings_file_footer::{SettingsFooterKind, SettingsFooterMouseStates, render_footer};
 use settings_page::{
-    MatchData, SettingsPage, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
-    HEADER_PADDING,
+    HEADER_PADDING, MatchData, SettingsPage, SettingsPageEvent, SettingsPageMeta,
+    SettingsPageViewHandle,
 };
 use show_blocks_view::{ShowBlocksEvent, ShowBlocksView};
 use teams_page::{TeamsPageView, TeamsPageViewEvent};
@@ -44,8 +44,8 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::{ContextPredicate, EnabledPredicate, FixedBinding};
 use warpui::{
-    id, Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
-    UpdateView as _, View, ViewContext, ViewHandle,
+    Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
+    UpdateView as _, View, ViewContext, ViewHandle, id,
 };
 
 use self::telemetry::SettingsTelemetryEvent;
@@ -64,10 +64,10 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::MCPServerCollectionPaneEntrypoint;
 use crate::settings::{AISettings, BlockVisibilitySettings, SettingsFileError};
 use crate::settings_view::mcp_servers_page::{MCPServersSettingsPage, MCPServersSettingsPageEvent};
-use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::SizeInfo;
+use crate::terminal::model::blockgrid::BlockGrid;
 use crate::ui_components::icons;
-use crate::util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction};
+use crate::util::bindings::{BindingGroup, CustomAction, keybinding_name_to_display_string};
 use crate::view_components::ToastFlavor;
 use crate::workspace::WorkspaceAction;
 use crate::{GlobalResourceHandlesProvider, TelemetryEvent};
@@ -125,8 +125,8 @@ pub use features_page::FeaturesPageAction;
 pub use main_page::handle_experiment_change;
 pub use privacy_page::PrivacyPageAction;
 pub use settings_page::{
-    render_body_item_label, render_info_icon, render_input_list, render_separator, AdditionalInfo,
-    InputListItem, LocalOnlyIconState, ToggleState,
+    AdditionalInfo, InputListItem, LocalOnlyIconState, ToggleState, render_body_item_label,
+    render_info_icon, render_input_list, render_separator,
 };
 pub use teams_page::{OpenTeamsSettingsModalArgs, TeamsInviteOption};
 

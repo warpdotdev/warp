@@ -284,8 +284,8 @@ pub fn make_router() -> axum::Router {
 }
 
 #[cfg(feature = "jemalloc_pprof")]
-pub async fn handle_get_heap(
-) -> Result<impl axum::response::IntoResponse, (axum::http::StatusCode, String)> {
+pub async fn handle_get_heap()
+-> Result<impl axum::response::IntoResponse, (axum::http::StatusCode, String)> {
     let Some(prof_ctl) = jemalloc_pprof::PROF_CTL.as_ref() else {
         return Err((
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,

@@ -27,7 +27,7 @@ use ai::skills::ParsedSkill;
 use chrono::{DateTime, Local, TimeDelta};
 use comment::ReviewComment;
 use derivative::Derivative;
-use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
+use markdown_parser::{FormattedTable, FormattedText, FormattedTextInline, parse_markdown};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::ParticipantId;
@@ -37,10 +37,11 @@ use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_editor::render::model::LineCount;
-use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
+use warp_multi_agent_api::{AgentEvent, AgentType, diff_hunk as diff_hunk_api};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
 use super::llms::LLMId;
+use crate::TelemetryEvent;
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::block::view_impl::output::are_all_text_sections_empty;
 use crate::ai::skills::SkillDescriptor;
@@ -53,7 +54,6 @@ use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::{AIApiError, DeserializationError};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
-use crate::TelemetryEvent;
 
 /// A server supplied ID for a specific AI generated output.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -734,8 +734,7 @@ impl RenderableAIError {
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
         "Warp lost connection while receiving the agent response. This is usually temporary.";
     /// User-facing message shown when an agent-issued command exits the shell.
-    pub const AGENT_EXITED_SHELL_MESSAGE: &'static str =
-        "The shell exited while the agent was running a command, so the run could not continue. Ensure the agent is not asked to run commands or source scripts that can exit the shell.";
+    pub const AGENT_EXITED_SHELL_MESSAGE: &'static str = "The shell exited while the agent was running a command, so the run could not continue. Ensure the agent is not asked to run commands or source scripts that can exit the shell.";
     /// Creates a transient network error. `kind` is the structured cause (including the raw API
     /// error where one exists), preserved so user reports can disambiguate the different causes
     /// behind the shared user-facing copy.

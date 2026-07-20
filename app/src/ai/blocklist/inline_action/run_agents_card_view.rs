@@ -25,15 +25,15 @@ use warpui::{
 };
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{icons, AIAgentActionId, AIAgentActionResultType};
+use crate::ai::agent::{AIAgentActionId, AIAgentActionResultType, icons};
 use crate::ai::blocklist::action_model::{
     AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel, RunAgentsExecutor,
     RunAgentsExecutorEvent, RunAgentsSpawningSnapshot,
 };
 use crate::ai::blocklist::agent_view::orchestration_pill_bar::render_static_agent_pill;
+use crate::ai::blocklist::block::AIBlock;
 use crate::ai::blocklist::block::model::AIBlockModel;
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
-use crate::ai::blocklist::block::AIBlock;
 use crate::ai::blocklist::inline_action::create_environment_modal::{
     CreateEnvironmentModal, CreateEnvironmentModalEvent,
 };
@@ -45,13 +45,12 @@ use crate::ai::blocklist::inline_action::orchestration_controls::{
     OrchestrationEditState, OrchestrationPickerHandles,
 };
 use crate::ai::blocklist::inline_action::requested_action::{
-    render_requested_action_row_for_text, CTRL_C_KEYSTROKE, ENTER_KEYSTROKE,
+    CTRL_C_KEYSTROKE, ENTER_KEYSTROKE, render_requested_action_row_for_text,
 };
 use crate::ai::blocklist::telemetry::{
-    orchestration_modified_field, BlocklistOrchestrationTelemetryEvent,
-    OrchestrationApprovalStatus, OrchestrationEnteredEvent, OrchestrationEntrySource,
-    OrchestrationExecutionModeKind, OrchestrationHarnessKind, RunAgentsCardDecision,
-    RunAgentsCardDecisionEvent,
+    BlocklistOrchestrationTelemetryEvent, OrchestrationApprovalStatus, OrchestrationEnteredEvent,
+    OrchestrationEntrySource, OrchestrationExecutionModeKind, OrchestrationHarnessKind,
+    RunAgentsCardDecision, RunAgentsCardDecisionEvent, orchestration_modified_field,
 };
 use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
@@ -67,7 +66,7 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
 use crate::view_components::compactible_action_button::{
-    CompactibleActionButton, RenderCompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD,
+    CompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD, RenderCompactibleActionButton,
 };
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::dropdown::DropdownEvent;

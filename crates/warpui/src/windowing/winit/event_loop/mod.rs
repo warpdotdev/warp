@@ -10,7 +10,7 @@ use futures_util::future::LocalBoxFuture;
 use futures_util::stream::AbortHandle;
 use instant::{Duration, Instant};
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_errors::report_error;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::JsCast;
@@ -23,12 +23,14 @@ use winit::keyboard::{self, KeyCode};
 use winit::window::WindowId as WinitWindowId;
 
 use self::key_events::convert_keyboard_input_event;
+use super::CustomEvent;
 use super::app::ClipboardEvent;
 use super::window::DEFAULT_TITLEBAR_HEIGHT;
 #[cfg(windows)]
-use super::windows::{add_network_connection_listener, WindowsNetworkConnectionPoint};
-use super::CustomEvent;
+use super::windows::{WindowsNetworkConnectionPoint, add_network_connection_listener};
+use crate::Event::{ClearMarkedText, SetMarkedText, TypedCharacters};
 use crate::actions::StandardAction;
+use crate::r#async::Timer;
 use crate::event::ModifiersState;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use crate::notification::RequestPermissionsOutcome;
@@ -36,11 +38,9 @@ use crate::platform::app::{
     AppCallbackDispatcher, ApproveTerminateResult, TerminationRequestSource,
 };
 use crate::platform::{self, NotificationInfo, OperatingSystem, TerminationMode, WindowContext};
-use crate::r#async::Timer;
 use crate::rendering::wgpu::renderer;
 use crate::windowing::winit::app::RequestPermissionsCallback;
 use crate::windowing::winit::window::MIN_WINDOW_SIZE;
-use crate::Event::{ClearMarkedText, SetMarkedText, TypedCharacters};
 use crate::{AppContext, WindowId};
 
 /// This is the time duration beyond which clicks get treated as separate single clicks instead of
@@ -70,7 +70,7 @@ const LONG_PRESS_DURATION: Duration = Duration::from_millis(500);
 const MOMENTUM_DECAY: f32 = 0.968; // Every interval, velocity is multiplied by this factor.
 const MOMENTUM_DECAY_INTERVAL: f32 = 0.008; // Time period (seconds) over which MOMENTUM_DECAY is applied
 const MOMENTUM_FRAME_INTERVAL: Duration = Duration::from_millis(8); //Controls how often the momentum scroll tick fires.
-                                                                    // Higher values means it fires less often (choppier)
+// Higher values means it fires less often (choppier)
 const MOMENTUM_THRESHOLD: f32 = 50.0; // Min-velocity to start momentum scroll, Android standards
 const MOMENTUM_MIN_VELOCITY: f32 = 1.0; // When velocity falls below this, scrolling stops. 1.0 is subpixel
 const MOMENTUM_MAX_VELOCITY: f32 = 2000.0; // Hard cap on momentum initial velocity (px/s)
@@ -980,7 +980,9 @@ impl EventLoop {
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         if crate::windowing::winit::linux::take_encountered_bad_match_from_dri3_fence_from_fd() {
-            log::warn!("Encountered a DRI3FenceFromFd error, forcing use of the NVIDIA GPU and recreating resources...");
+            log::warn!(
+                "Encountered a DRI3FenceFromFd error, forcing use of the NVIDIA GPU and recreating resources..."
+            );
             self.downrank_non_nvidia_vulkan_adapters = true;
 
             self.ui_app.update(|ctx| {
@@ -1857,7 +1859,7 @@ impl EventLoop {
     /// when focused. The manager is only created on mobile devices.
     #[cfg(target_family = "wasm")]
     fn initialize_soft_keyboard(&mut self) {
-        use crate::platform::wasm::{is_mobile_device, SoftKeyboardInput, SoftKeyboardManager};
+        use crate::platform::wasm::{SoftKeyboardInput, SoftKeyboardManager, is_mobile_device};
 
         if !is_mobile_device() {
             log::info!("Not a mobile device, skipping soft keyboard initialization");
@@ -1885,8 +1887,10 @@ impl EventLoop {
                 self.soft_keyboard_manager = Some(manager);
             }
             Err(err) => {
-                report_error!(anyhow::anyhow!("{err:?}")
-                    .context("Failed to initialize soft keyboard manager"));
+                report_error!(
+                    anyhow::anyhow!("{err:?}")
+                        .context("Failed to initialize soft keyboard manager")
+                );
             }
         }
     }
@@ -1920,8 +1924,8 @@ impl EventLoop {
     /// synchronously during event processing may not work reliably on iOS Safari.
     #[cfg(target_family = "wasm")]
     fn refocus_canvas() {
-        use wasm_bindgen::prelude::Closure;
         use wasm_bindgen::JsCast;
+        use wasm_bindgen::prelude::Closure;
 
         // Defer focus to next frame to ensure we're outside the current event processing.
         let callback = Closure::once(Box::new(|| {

@@ -7,11 +7,11 @@ use std::time::Duration;
 use instant::Instant;
 use warp_errors::report_error;
 
-use super::{action_log, overlay, TestSetupUtils};
+use super::{TestSetupUtils, action_log, overlay};
+use crate::r#async::Timer;
 use crate::event::{Event, KeyEventDetails};
 use crate::keymap::{Keystroke, PerPlatformKeystroke};
 use crate::platform::{OperatingSystem, Window};
-use crate::r#async::Timer;
 use crate::{App, WindowId};
 
 const MAX_WAKEUPS_PER_SECOND: u64 = 60;

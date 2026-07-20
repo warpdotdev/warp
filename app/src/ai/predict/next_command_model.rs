@@ -9,12 +9,12 @@ use itertools::Itertools;
 #[cfg_attr(not(feature = "local_fs"), allow(unused_imports))]
 use parking_lot::{FairMutex, Mutex};
 use warp_completer::completer::{
-    self, expand_command_aliases, AliasExpansionResult, CompleterOptions,
-    CompletionsFallbackStrategy, MatchStrategy,
+    self, AliasExpansionResult, CompleterOptions, CompletionsFallbackStrategy, MatchStrategy,
+    expand_command_aliases,
 };
 use warp_completer::meta::Spanned;
-use warp_completer::parsers::hir::{Command, Expression, FlagType};
 use warp_completer::parsers::ParsedExpression;
+use warp_completer::parsers::hir::{Command, Expression, FlagType};
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
@@ -22,8 +22,8 @@ use warpui::r#async::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::generate_ai_input_suggestions::{
-    create_generate_ai_input_suggestions_request, get_context_messages,
     GenerateAIInputSuggestionsRequest, GenerateAIInputSuggestionsResponseV2, NextCommandContext,
+    create_generate_ai_input_suggestions_request, get_context_messages,
 };
 use crate::ai::block_context::BlockContext;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;

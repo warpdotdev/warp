@@ -1,7 +1,7 @@
 //! Module to attribute AI-generated requested commands
 //! to known documents (e.g. Warp Drive objects).
 
-use markdown_parser::{parse_markdown, FormattedTextLine};
+use markdown_parser::{FormattedTextLine, parse_markdown};
 use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::agent::AIAgentCitation;

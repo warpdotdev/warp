@@ -15,14 +15,14 @@ use crate::code::editor_management::CodeSource;
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::root_view::quake_mode_window_id;
 use crate::server::ids::SyncId;
-use crate::settings_view::environments_page::EnvironmentsPage;
 use crate::settings_view::SettingsSection;
+use crate::settings_view::environments_page::EnvironmentsPage;
 use crate::tab::SelectedTabColor;
 use crate::terminal::ShellLaunchData;
 use crate::themes::theme::AnsiColorIdentifier;
+use crate::workspace::WorkspaceRegistry;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::view::left_panel::ToolPanelView;
-use crate::workspace::WorkspaceRegistry;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppState {

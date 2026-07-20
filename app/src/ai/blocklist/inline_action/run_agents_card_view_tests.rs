@@ -183,10 +183,12 @@ fn from_request_sanitizes_disabled_local_harness_to_oz() {
 
     assert_eq!(state.orchestration_config_state.harness_type, "oz");
     assert_eq!(state.orchestration_config_state.model_id, "");
-    assert!(state
-        .orchestration_config_state
-        .accept_disabled_reason()
-        .is_none());
+    assert!(
+        state
+            .orchestration_config_state
+            .accept_disabled_reason()
+            .is_none()
+    );
 }
 
 #[test]
@@ -322,7 +324,7 @@ fn to_request_round_trips_request_fields() {
 }
 
 mod format_terminal_state_tests {
-    use super::super::{format_terminal_state, StatusKind};
+    use super::super::{StatusKind, format_terminal_state};
     use super::*;
 
     fn launched(name: &str, agent_id: &str) -> RunAgentsAgentOutcome {

@@ -25,9 +25,9 @@ use crate::cloud_object::{
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
+use crate::terminal::TerminalView;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::terminal::TerminalView;
 
 lazy_static! {
     // Regex to match <block:[block_id]> patterns

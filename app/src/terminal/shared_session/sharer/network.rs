@@ -50,12 +50,12 @@ use crate::editor::{CrdtOperation, ReplicaId};
 use crate::server::server_api::ServerApiProvider;
 #[cfg(not(any(test, feature = "integration_tests")))]
 use crate::server::telemetry::telemetry_context;
+use crate::terminal::TerminalModel;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shared_session::{
-    connect_endpoint, max_session_size, EventNumber, SharedSessionScrollbackType,
-    SharedSessionSource, SELECTION_THROTTLE_PERIOD,
+    EventNumber, SELECTION_THROTTLE_PERIOD, SharedSessionScrollbackType, SharedSessionSource,
+    connect_endpoint, max_session_size,
 };
-use crate::terminal::TerminalModel;
 use crate::throttle::throttle;
 
 /// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server.

@@ -12,14 +12,14 @@ use sum_tree::SeekBias;
 use warp::tui_export::TotalIndex;
 use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId, TerminalModel};
 use warpui::{EntityId, ViewHandle};
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     TuiChildView, TuiElement, TuiLayoutContext, TuiRowResize, TuiSelectionSpan, TuiViewportContent,
     TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
 };
-use warpui_core::AppContext;
 
 use super::agent_block::TuiAIBlock;
-use super::terminal_block::{should_render_terminal_block, TerminalBlockElement};
+use super::terminal_block::{TerminalBlockElement, should_render_terminal_block};
 use super::tui_cli_subagent_view::TuiCLISubagentView;
 
 pub(super) type AgentBlockRegistry = Rc<RefCell<HashMap<EntityId, ViewHandle<TuiAIBlock>>>>;

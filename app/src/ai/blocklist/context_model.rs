@@ -28,11 +28,11 @@ use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::outline::RepoOutlines;
 use crate::code_review::github_repo_model::GitHubRepoModel;
+use crate::terminal::TerminalModel;
 use crate::terminal::event::{BlockCompletedEvent, BlockType};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::terminal::TerminalModel;
 use crate::util::git::{PrInfo, RepositoryInfo};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 

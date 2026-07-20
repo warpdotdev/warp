@@ -9,10 +9,10 @@ use warp_core::ui::Icon;
 use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
-    resizable_state_handle, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
-    CrossAxisAlignment, DragBarSide, Element, Empty, Flex, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, ParentElement, PositionedElementAnchor, Resizable, ResizableStateHandle,
-    Shrinkable, Text,
+    ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide,
+    Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    PositionedElementAnchor, Resizable, ResizableStateHandle, Shrinkable, Text,
+    resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::EditableBinding;
@@ -30,26 +30,26 @@ use crate::code_review::code_review_header::HEADER_BUTTON_PADDING;
 #[cfg(feature = "local_fs")]
 use crate::code_review::code_review_view::CodeReviewAction;
 use crate::code_review::code_review_view::{
-    render_file_navigation_button, CodeReviewCommentDebugState, CodeReviewView,
-    CodeReviewViewEvent, ReviewActionTargetProvider, CONTENT_LEFT_MARGIN, CONTENT_RIGHT_MARGIN,
+    CONTENT_LEFT_MARGIN, CONTENT_RIGHT_MARGIN, CodeReviewCommentDebugState, CodeReviewView,
+    CodeReviewViewEvent, ReviewActionTargetProvider, render_file_navigation_button,
 };
 use crate::code_review::diff_state::DiffStateModel;
 use crate::code_review::telemetry_event::CodeReviewContextDestination;
 use crate::drive::panel::{MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH};
-use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
 use crate::pane_group::pane::view::header::PANE_HEADER_HEIGHT;
+use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
 use crate::pane_group::{
     Event as PaneGroupEvent, PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel,
 };
 use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::MenuPositioning;
 use crate::terminal::resizable_data::{ModalType, ResizableData};
 use crate::terminal::view::TerminalView;
-use crate::terminal::CLIAgent;
 use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icons;
-use crate::util::bindings::{keybinding_name_to_display_string, CustomAction};
+use crate::util::bindings::{CustomAction, keybinding_name_to_display_string};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
 use crate::util::path::{display_name_with_host, display_path_with_host};
@@ -57,8 +57,8 @@ use crate::view_components::action_button::{ActionButton, PaneHeaderTheme};
 #[cfg(feature = "local_fs")]
 use crate::view_components::action_button::{NakedTheme, TooltipAlignment};
 use crate::view_components::{Dropdown, DropdownItem};
-use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
 use crate::workspace::WorkspaceAction;
+use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
 
 /// Describes which agent destination is available for sending review comments.
 #[derive(Clone, Debug, PartialEq)]
@@ -736,13 +736,22 @@ impl RightPanelView {
                 view.on_open(ctx);
             });
             self.recompute_terminal_availability(ctx);
-        } else { match self.create_code_review_view(repo_path, diff_state_model.clone(), pane_group_id, ctx)
-        { Some(view) => {
-            view.update(ctx, |view, ctx| {
-                view.on_open(ctx);
-            });
-            self.recompute_terminal_availability(ctx);
-        } _ => {}}};
+        } else {
+            match self.create_code_review_view(
+                repo_path,
+                diff_state_model.clone(),
+                pane_group_id,
+                ctx,
+            ) {
+                Some(view) => {
+                    view.update(ctx, |view, ctx| {
+                        view.on_open(ctx);
+                    });
+                    self.recompute_terminal_availability(ctx);
+                }
+                _ => {}
+            }
+        };
         ctx.notify();
     }
 

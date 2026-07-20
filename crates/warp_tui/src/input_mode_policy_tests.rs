@@ -1,8 +1,8 @@
 use warp::tui_export::{InputConfig, InputType};
 
 use super::{
-    agent_config_for_autodetection, config_on_autodetection_setting_changed, AI_LOCKED_CONFIG,
-    AI_UNLOCKED_CONFIG, SHELL_LOCKED_CONFIG,
+    AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG, SHELL_LOCKED_CONFIG, agent_config_for_autodetection,
+    config_on_autodetection_setting_changed,
 };
 
 #[test]

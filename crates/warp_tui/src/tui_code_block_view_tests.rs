@@ -7,8 +7,8 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{TuiView, ViewHandle};
 
 use super::{
-    bounded_fallback_text, TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent,
-    MAX_CODE_LINES, MAX_HIGHLIGHT_BYTES, TRUNCATION_NOTICE,
+    MAX_CODE_LINES, MAX_HIGHLIGHT_BYTES, TRUNCATION_NOTICE, TuiCodeBlockPayload, TuiCodeBlockView,
+    TuiCodeBlockViewEvent, bounded_fallback_text,
 };
 use crate::test_fixtures::TestHostView;
 

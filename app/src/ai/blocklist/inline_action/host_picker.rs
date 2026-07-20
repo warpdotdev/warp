@@ -33,7 +33,7 @@ use crate::menu::{MenuItem, MenuItemFields};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::dropdown::{
-    Dropdown, DropdownAction, DropdownEvent, DropdownStyle, DROPDOWN_PADDING,
+    DROPDOWN_PADDING, Dropdown, DropdownAction, DropdownEvent, DropdownStyle,
 };
 
 // ── Public API types ────────────────────────────────────────────────

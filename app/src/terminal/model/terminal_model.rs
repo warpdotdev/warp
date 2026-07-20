@@ -20,10 +20,10 @@ use warp_core::semantic_selection::SemanticSelection;
 use warp_errors::report_error;
 pub use warp_terminal::model::BlockIndex;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::assets::asset_cache::Asset;
-use warpui::image_cache::ImageType;
-use warpui::r#async::executor::Background;
 use warpui::AppContext;
+use warpui::assets::asset_cache::Asset;
+use warpui::r#async::executor::Background;
+use warpui::image_cache::ImageType;
 
 use super::super::{AltScreen, BlockList};
 use super::ansi::{BootstrappedValue, FinishUpdateValue, InputBufferValue, Mode, PendingHook};
@@ -39,8 +39,8 @@ use super::grid::grid_handler::{
 use super::image_map::StoredImageMetadata;
 use super::index::Point;
 use super::kitty::{
-    create_kitty_error_reply, create_kitty_ok_reply, DeletionType, KittyAction, KittyChunk,
-    KittyMessage, KittyResponse, PendingKittyMessage,
+    DeletionType, KittyAction, KittyChunk, KittyMessage, KittyResponse, PendingKittyMessage,
+    create_kitty_error_reply, create_kitty_ok_reply,
 };
 use super::lifecycle::{
     BlockLifecycleCoordinator, CommandStartKind, IgnoreReason, LifecycleAction, LifecycleInput,
@@ -82,8 +82,8 @@ use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::shell::{ShellName, ShellType};
 use crate::terminal::ssh::util::{InteractiveSshCommand, SshLoginState};
 use crate::terminal::{
-    color, ssh, BlockPadding, ShellHost, ShellLaunchData, ShellLaunchState, SizeUpdate,
-    SizeUpdateReason,
+    BlockPadding, ShellHost, ShellLaunchData, ShellLaunchState, SizeUpdate, SizeUpdateReason,
+    color, ssh,
 };
 
 /// Max size of the window title stack.
@@ -3241,7 +3241,9 @@ impl ansi::Handler for TerminalModel {
                 self.is_receiving_in_band_command_output = IsReceivingInBandCommandOutput::No;
             }
             IsReceivingInBandCommandOutput::No => {
-                log::warn!("Received 'end_in_band_command_output' while not expecting to read in-band command output.");
+                log::warn!(
+                    "Received 'end_in_band_command_output' while not expecting to read in-band command output."
+                );
             }
         }
 
@@ -3344,7 +3346,9 @@ impl ansi::Handler for TerminalModel {
                 if let Some(last_item) = output.last_mut() {
                     last_item.update(completion_update);
                 } else {
-                    log::warn!("Received update last completion result OSC before any completion results have been received");
+                    log::warn!(
+                        "Received update last completion result OSC before any completion results have been received"
+                    );
                 }
             }
             IsReceivingCompletionsOutput::Yes {
@@ -3406,7 +3410,9 @@ impl ansi::Handler for TerminalModel {
                 self.handle_completed_iterm_image(pending);
             }
             IsReceivingITermImageData::No => {
-                log::warn!("Received 'end_iterm_image_receiving' while not expecting to read iTerm image chunks.")
+                log::warn!(
+                    "Received 'end_iterm_image_receiving' while not expecting to read iTerm image chunks."
+                )
             }
         }
     }
@@ -3473,7 +3479,9 @@ impl ansi::Handler for TerminalModel {
         );
 
         let IsReceivingKittyActionData::Yes { mut pending } = is_receiving_kitty_image_data else {
-            log::warn!("Received 'end_kitty_action_receiving' while not expecting to read kitty image chunks.");
+            log::warn!(
+                "Received 'end_kitty_action_receiving' while not expecting to read kitty image chunks."
+            );
             return;
         };
 
@@ -3693,7 +3701,9 @@ enum InBandCommandOutputDecodingError {
     NoContentLengthHeader,
     #[error("DCS content length header is corrupted: {0:?}")]
     ContentLengthHeaderCorrupted(ParseIntError),
-    #[error("Content length header does not match length of received content. Actual: {actual_length}, expected: {expected_length}")]
+    #[error(
+        "Content length header does not match length of received content. Actual: {actual_length}, expected: {expected_length}"
+    )]
     ContentLengthMismatch {
         actual_length: usize,
         expected_length: usize,

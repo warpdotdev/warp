@@ -2,19 +2,19 @@ use std::cell::Cell;
 
 use futures::channel::oneshot;
 use markdown_parser::{
-    parse_markdown, parse_markdown_with_gfm_tables, FormattedText, FormattedTextFragment,
-    FormattedTextLine,
+    FormattedText, FormattedTextFragment, FormattedTextLine, parse_markdown,
+    parse_markdown_with_gfm_tables,
 };
 use warp::tui_export::Appearance;
-use warpui::platform::WindowStyle;
 use warpui::AddWindowOptions;
+use warpui::platform::WindowStyle;
 use warpui_core::elements::tui::{
     Modifier, TuiBufferExt, TuiChildView, TuiElement, TuiRect, TuiText,
 };
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, ViewHandle, WindowInvalidation};
 
-use super::{render_formatted_text, TuiMarkdownBlockHooks, TuiMarkdownPalette};
+use super::{TuiMarkdownBlockHooks, TuiMarkdownPalette, render_formatted_text};
 use crate::test_fixtures::TestHostView;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};

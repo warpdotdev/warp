@@ -34,8 +34,8 @@ use ratatui::widgets::{Paragraph, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    text_width, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
-    TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
+    TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiScreenPoint,
+    TuiScreenPosition, TuiSize, TuiStyle, text_width,
 };
 use crate::AppContext;
 

@@ -22,7 +22,9 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::inline_action::create_environment_modal::{
     CreateEnvironmentModal, CreateEnvironmentModalEvent,
 };
@@ -35,7 +37,6 @@ use crate::ai::blocklist::telemetry::{
     AgentProposedConfigEvent, BlocklistOrchestrationTelemetryEvent, OrchestrationApprovalStatus,
     OrchestrationExecutionModeKind, OrchestrationHarnessKind, PlanConfigApprovalToggledEvent,
 };
-use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
 };
@@ -48,7 +49,6 @@ use crate::appearance::Appearance;
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
-use crate::BlocklistAIHistoryModel;
 
 /// True when the mode is remote and `environment_id` is non-empty.
 fn env_presence(execution_mode: &RunAgentsExecutionMode) -> bool {

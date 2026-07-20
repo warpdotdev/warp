@@ -1,9 +1,9 @@
 use std::fs;
 
 use super::{
+    ClaudeCodePluginManager, CliAgentPluginManager, MINIMUM_PLATFORM_PLUGIN_VERSION,
     check_installed, check_platform_plugin_installed, claude_code_marketplace_has_local_override,
-    installed_platform_plugin_version, installed_version, ClaudeCodePluginManager,
-    CliAgentPluginManager, MINIMUM_PLATFORM_PLUGIN_VERSION,
+    installed_platform_plugin_version, installed_version,
 };
 
 /// A version strictly below `version`, so below-minimum tests track the

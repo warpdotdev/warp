@@ -1,8 +1,8 @@
 use super::{
-    slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui, TuiSlashCommand,
+    TuiSlashCommand, slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui,
 };
 use crate::features::FeatureFlag;
-use crate::search::slash_command_menu::static_commands::{commands, Availability};
+use crate::search::slash_command_menu::static_commands::{Availability, commands};
 const BASELINE_AVAILABILITY: Availability = Availability::AGENT_VIEW
     .union(Availability::AI_ENABLED)
     .union(Availability::NO_LRC_CONTROL);
@@ -87,7 +87,7 @@ fn model_command_is_supported_in_tui_without_becoming_a_prompt_command() {
 
 #[test]
 fn exit_command_executes_immediately_and_takes_no_argument() {
-    use super::{slash_command_selection_behavior, SlashCommandSelectionBehavior};
+    use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
 
     assert_eq!(
         TuiSlashCommand::from_static_command(&commands::EXIT),
@@ -139,10 +139,10 @@ mod windows {
     use std::sync::Arc;
 
     use super::super::*;
-    use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
-    use crate::terminal::model::session::SessionInfo;
-    use crate::terminal::shell::ShellType;
     use crate::terminal::ShellLaunchData;
+    use crate::terminal::model::session::SessionInfo;
+    use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+    use crate::terminal::shell::ShellType;
 
     fn wsl_session() -> Session {
         Session::new(

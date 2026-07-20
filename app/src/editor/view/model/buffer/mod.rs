@@ -14,7 +14,7 @@ use std::ops::{AddAssign, Range};
 use std::rc::Rc;
 use std::str;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 #[cfg(test)]
@@ -24,7 +24,7 @@ use string_offset::{ByteOffset, CharOffset};
 use sum_tree::{self, Cursor, FilterCursor, SeekBias, SumTree};
 use time::{Global, Lamport};
 use undo::{LocalUndoStack, UndoHistory};
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use warpui::color::ColorU;
 use warpui::text::point::Point;
 use warpui::text::words::is_default_word_boundary;

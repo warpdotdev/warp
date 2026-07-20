@@ -8,10 +8,10 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{App, SingletonEntity};
 
 use super::{
+    CollapsibleElementState, CollapsibleExpansionState, UserAvatarInfo,
     default_collapsible_state_for_orchestration_action,
     default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
-    user_avatar_info_for_conversation_creator, CollapsibleElementState, CollapsibleExpansionState,
-    UserAvatarInfo,
+    user_avatar_info_for_conversation_creator,
 };
 use crate::ai::agent::{AIAgentActionType, StartAgentExecutionMode};
 use crate::ai::blocklist::action_model::{
@@ -128,11 +128,13 @@ fn orchestration_start_agent_prompt_stays_expanded_for_all_message_modes() {
 
 #[test]
 fn non_orchestration_actions_do_not_get_collapsible_state_defaults() {
-    assert!(default_collapsible_state_for_orchestration_action(
-        &AIAgentActionType::OpenCodeReview,
-        OrchestrationMessageDisplayMode::AlwaysCollapse,
-    )
-    .is_none());
+    assert!(
+        default_collapsible_state_for_orchestration_action(
+            &AIAgentActionType::OpenCodeReview,
+            OrchestrationMessageDisplayMode::AlwaysCollapse,
+        )
+        .is_none()
+    );
 }
 
 #[test]

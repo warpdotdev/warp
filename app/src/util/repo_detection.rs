@@ -7,9 +7,9 @@
 
 use std::future::Future;
 
-use futures::future::ready;
 #[cfg(not(target_family = "wasm"))]
 use futures::future::Either;
+use futures::future::ready;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repositories::RepoDetectionSource;

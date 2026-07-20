@@ -13,7 +13,7 @@ mod mac {
     use std::ffi::{CStr, CString};
     use std::{env, str};
 
-    use libc::{setlocale, LC_ALL, LC_CTYPE};
+    use libc::{LC_ALL, LC_CTYPE, setlocale};
     use objc2::runtime::NSObjectProtocol;
     use objc2::sel;
     use objc2_foundation::NSLocale;

@@ -29,8 +29,8 @@ use repo_metadata::repositories::DetectedRepositories;
 use string_offset::CharOffset;
 use vec1::Vec1;
 use vim::vim::{MotionType, VimMode};
-use warp_core::features::FeatureFlag;
 use warp_core::r#async::debounce;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_editor::content::buffer::InitialBufferState;
@@ -48,8 +48,8 @@ use warpui::elements::{
     MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
     Rect, Shrinkable, Stack, Text,
 };
-use warpui::keymap::macros::*;
 use warpui::keymap::FixedBinding;
+use warpui::keymap::macros::*;
 use warpui::platform::SaveFilePickerConfiguration;
 use warpui::text::point::Point;
 use warpui::ui_components::button::ButtonVariant;
@@ -61,8 +61,8 @@ use warpui::{
 
 use crate::ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent};
 use crate::code::buffer_location::LocalOrRemotePath as BufferFileLocation;
-use crate::code::editor::model::HoverableLink;
 use crate::code::editor::EditorReviewComment;
+use crate::code::editor::model::HoverableLink;
 use crate::code::footer::{CodeFooterView, CodeFooterViewEvent};
 use crate::code::global_buffer_model::{BufferState, GlobalBufferModel, GlobalBufferModelEvent};
 use crate::code::{SaveOutcome, ShowFindReferencesCardProvider};
@@ -87,13 +87,13 @@ const AUTO_SAVE_DEBOUNCE_PERIOD: Duration = Duration::from_millis(1000);
 
 use warp_core::send_telemetry_from_ctx;
 
+use super::ImmediateSaveError;
 use super::diff_viewer::DiffViewer;
 use super::editor::scroll::{ScrollPosition, ScrollTrigger};
 use super::editor::view::{CodeEditorEvent, CodeEditorView};
 use super::find_references_view::{FindReferencesView, FindReferencesViewEvent};
 use super::language_server_extension::ProcessedDiagnostic;
 use super::lsp_telemetry::LspTelemetryEvent;
-use super::ImmediateSaveError;
 
 type SaveCallback =
     Box<dyn FnOnce(SaveOutcome, &mut ViewContext<LocalCodeEditorView>) + Send + Sync + 'static>;
@@ -1824,19 +1824,21 @@ impl LocalCodeEditorView {
         let buffer_version = me.editor.as_ref(ctx).version(ctx);
 
         me.base_content_version = Some(buffer_version);
-        let save_outcome = match GlobalBufferModel::handle(ctx)
-            .update(ctx, move |model, ctx| {
-                model.save(file_id, content, buffer_version, ctx)
-            }) { Err(err) => {
-            report_error!(&err);
-            ctx.emit(LocalCodeEditorEvent::FailedToSave {
-                error: Arc::new(err),
-            });
-            SaveOutcome::Failed
-        } _ => {
-            Self::subscribe_to_global_buffer_events(file_id, ctx);
-            SaveOutcome::Succeeded
-        }};
+        let save_outcome = match GlobalBufferModel::handle(ctx).update(ctx, move |model, ctx| {
+            model.save(file_id, content, buffer_version, ctx)
+        }) {
+            Err(err) => {
+                report_error!(&err);
+                ctx.emit(LocalCodeEditorEvent::FailedToSave {
+                    error: Arc::new(err),
+                });
+                SaveOutcome::Failed
+            }
+            _ => {
+                Self::subscribe_to_global_buffer_events(file_id, ctx);
+                SaveOutcome::Succeeded
+            }
+        };
         callback(save_outcome, ctx);
     }
 
@@ -2240,7 +2242,9 @@ impl DiffViewer for LocalCodeEditorView {
             }
             if let Some(path) = self.file_path().map(|p| p.to_path_buf()) {
                 if let Err(e) = std::fs::remove_file(&path) {
-                    report_error!(anyhow::Error::new(e).context("Failed to delete file after save"));
+                    report_error!(
+                        anyhow::Error::new(e).context("Failed to delete file after save")
+                    );
                 } else {
                     // This will close tabs with the file open
                     ctx.dispatch_typed_action(&WorkspaceAction::FileDeleted { path });

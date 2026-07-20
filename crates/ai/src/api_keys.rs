@@ -11,8 +11,8 @@ use warpui_extras::secure_storage::{self, AppContextExt};
 
 pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
 pub use crate::geap_credentials::{
-    GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
-    LoadGeapCredentialsError, GEAP_REFRESH_LEAD_TIME,
+    GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
+    LoadGeapCredentialsError,
 };
 
 const SECURE_STORAGE_KEY: &str = "AiApiKeys";
@@ -559,8 +559,10 @@ impl ApiKeyManager {
             Ok(json) => json,
             Err(e) => {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Failed to read API keys from secure storage"));
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Failed to read API keys from secure storage")
+                    );
                 }
                 return ApiKeys::default();
             }
@@ -609,8 +611,10 @@ impl ApiKeyManager {
             Ok(json) => json,
             Err(e) => {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Failed to read Grok tokens from secure storage"));
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Failed to read Grok tokens from secure storage")
+                    );
                 }
                 return None;
             }
@@ -654,8 +658,10 @@ impl ApiKeyManager {
             };
             if let Err(e) = result {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Failed to persist Grok tokens to secure storage"));
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Failed to persist Grok tokens to secure storage")
+                    );
                 }
             }
         });

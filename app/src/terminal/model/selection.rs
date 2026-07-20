@@ -17,13 +17,13 @@ use warpui::text::SelectionType;
 use warpui::units::Lines;
 
 use super::index::{Direction, VisibleRow};
+use crate::terminal::Vector2F;
+use crate::terminal::model::GridStorage;
 use crate::terminal::model::ansi::CursorShape;
 use crate::terminal::model::cell::Flags;
-use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::index::{Point, Side};
-use crate::terminal::model::GridStorage;
-use crate::terminal::Vector2F;
 
 /// A Point and side within that point.
 #[derive(Debug, Copy, Clone, PartialEq)]

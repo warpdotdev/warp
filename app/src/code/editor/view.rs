@@ -11,7 +11,7 @@ use num_traits::SaturatingSub;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use string_offset::CharOffset;
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use vim::vim::{Direction, InsertPosition, VimMode, VimModel, VimState, VimSubscriber};
 use warp_core::platform::SessionPlatform;
 use warp_editor::content::buffer::{
@@ -27,10 +27,10 @@ use warp_editor::render::element::{
     DisplayOptions, DisplayStateHandle, RichTextElement, VerticalExpansionBehavior,
 };
 use warp_editor::render::model::{
-    AutoScrollMode, BlockSpacing, Decoration, ExpansionType, LineCount, ParagraphStyles,
-    RichTextStyles, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES,
+    AutoScrollMode, BlockSpacing, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES, Decoration,
+    ExpansionType, LineCount, ParagraphStyles, RichTextStyles,
 };
-use warp_editor::search::{SearchEvent, Searcher, MATCH_FILL, SELECTED_MATCH_FILL};
+use warp_editor::search::{MATCH_FILL, SELECTED_MATCH_FILL, SearchEvent, Searcher};
 use warp_util::content_version::ContentVersion;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::new_scrollable::{
@@ -53,6 +53,7 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
+use crate::code::editor::EditorReviewComment;
 use crate::code::editor::comment_editor::{CommentEditor, CommentEditorEvent};
 use crate::code::editor::comments::PendingComment;
 use crate::code::editor::diff::DiffStatus;
@@ -68,7 +69,6 @@ use crate::code::editor::model::{
 };
 use crate::code::editor::nav_bar::{NavBar, NavBarBehavior, NavBarEvent};
 use crate::code::editor::scroll::{ScrollPosition, ScrollTrigger, ScrollWheelBehavior};
-use crate::code::editor::EditorReviewComment;
 use crate::code::{
     NoopCommentEditorProvider, NoopFindReferencesCardProvider, ShowCommentEditorProvider,
     ShowFindReferencesCardProvider,
@@ -81,8 +81,8 @@ use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings}
 use crate::view_components::find::FindDirection;
 
 mod actions;
-pub use actions::init;
 pub(super) use actions::CodeEditorViewAction;
+pub use actions::init;
 
 mod vim_handler;
 
@@ -1861,9 +1861,7 @@ impl CodeEditorView {
                     first_replace = if first_replace.is_uppercase() {
                         first_replace
                     } else {
-                        {
-                            first_replace.to_uppercase().next().unwrap_or(first_replace)
-                        }
+                        { first_replace.to_uppercase().next().unwrap_or(first_replace) }
                     };
                     result.push(first_replace);
                     result.push_str(&replace_chars.collect::<String>().to_lowercase());
@@ -2297,8 +2295,8 @@ impl View for CodeEditorView {
             let render_state_ref = render_state.as_ref(app);
             let softwrap_point = render_state_ref.offset_to_softwrap_point(*offset);
             let line_number = LineCount::from(softwrap_point.row() as usize + 1); // Convert 0-indexed to 1-indexed
-                                                                                  // Create a simple EditorLineLocation::Current with the line number
-                                                                                  // We don't have hunk range info here, so use a single-line range
+            // Create a simple EditorLineLocation::Current with the line number
+            // We don't have hunk range info here, so use a single-line range
             let anchor_line = EditorLineLocation::Current {
                 line_number,
                 line_range: line_number..line_number + LineCount::from(1),

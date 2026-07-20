@@ -1,8 +1,8 @@
 use warpui::{Entity, ModelContext, ModelHandle};
 
+use crate::search::SyncDataSource;
 use crate::search::data_source::{Query, QueryFilter};
 use crate::search::mixer::{AddAsyncSourceOptions, SearchMixer};
-use crate::search::SyncDataSource;
 use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
 
 pub type SlashCommandMixer = SearchMixer<AcceptSlashCommandOrSavedPrompt>;

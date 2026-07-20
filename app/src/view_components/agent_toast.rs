@@ -3,6 +3,7 @@ use std::time::Duration;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use uuid::Uuid;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
     DropShadow, EventHandler, Expanded, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning,
@@ -10,7 +11,6 @@ use warpui::elements::{
     SavePosition, Stack,
 };
 use warpui::keymap::Keystroke;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,

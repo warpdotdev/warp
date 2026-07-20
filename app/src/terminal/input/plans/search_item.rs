@@ -3,8 +3,8 @@
 use ai::document::AIDocumentId;
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
+use warp_core::ui::theme::Fill;
 use warpui::elements::{ConstrainedBox, Container, Highlight, ParentElement, Shrinkable, Text};
 use warpui::fonts::{Properties, Weight};
 use warpui::prelude::{Align, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize};

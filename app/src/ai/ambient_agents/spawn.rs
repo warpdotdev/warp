@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use futures::{select, FutureExt, Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt, select};
 use session_sharing_protocol::common::SessionId;
 
 use super::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};

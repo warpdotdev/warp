@@ -14,18 +14,18 @@ use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
+use crate::terminal::SizeInfo;
 use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::GridStorage;
 use crate::terminal::model::ansi::{
     self, Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, LineClearMode, Mode,
     PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
 };
-use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
 use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
-use crate::terminal::model::GridStorage;
-use crate::terminal::SizeInfo;
 
 #[derive(Clone)]
 pub struct BlockGrid {

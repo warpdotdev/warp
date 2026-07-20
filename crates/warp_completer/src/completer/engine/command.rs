@@ -4,7 +4,7 @@ use super::path::{sorted_directories_relative_to, sorted_paths_relative_to};
 use crate::completer::context::CompletionContext;
 use crate::completer::matchers::MatchStrategy;
 use crate::completer::suggest::{MatchedSuggestion, Priority, Suggestion, SuggestionType};
-use crate::completer::{engine, get_path_separators, TopLevelCommandCaseSensitivity};
+use crate::completer::{TopLevelCommandCaseSensitivity, engine, get_path_separators};
 use crate::parsers::ParsedToken;
 
 /// Generates top-level completion results based on the fragment of text that is entered into the

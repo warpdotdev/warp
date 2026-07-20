@@ -22,12 +22,12 @@ use warp::tui_export::{
     ReceivedMessageDisplay, SummarizationType, TerminalModel, TodoOperation, TodoStatus,
 };
 use warpui::SingletonEntity;
+use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiContainer, TuiElement,
     TuiFlex, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiRect,
     TuiScreenPosition, TuiSelectionSpan, TuiSize, TuiText,
 };
-use warpui_core::elements::MouseStateHandle;
 use warpui_core::{
     AppContext, Entity, EntityId, EntityIdMap, ModelHandle, TuiView, TypedActionView, ViewContext,
     ViewHandle,
@@ -47,7 +47,7 @@ use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::TuiCLISubagentView;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
 use crate::tui_markdown::{
-    render_formatted_table, render_formatted_text, TuiMarkdownBlockHooks, TuiMarkdownPalette,
+    TuiMarkdownBlockHooks, TuiMarkdownPalette, render_formatted_table, render_formatted_text,
 };
 use crate::tui_plan_view::{TuiPlanView, TuiPlanViewEvent};
 

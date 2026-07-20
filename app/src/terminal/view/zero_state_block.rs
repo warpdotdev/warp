@@ -7,7 +7,7 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::Keystroke;
-use warpui::prelude::{vec2f, ConstrainedBox, Cursor, Empty, Hoverable, MouseStateHandle};
+use warpui::prelude::{ConstrainedBox, Cursor, Empty, Hoverable, MouseStateHandle, vec2f};
 use warpui::scene::{Border, CornerRadius, Radius};
 use warpui::ui_components::checkbox::Checkbox;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
@@ -15,6 +15,7 @@ use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
+use crate::WorkspaceAction;
 use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin,
     ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE, ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
@@ -32,7 +33,6 @@ use crate::ui_components::blended_colors;
 use crate::util::bindings::keybinding_name_to_keystroke;
 use crate::workspace::tab_settings::{TabSettings, TabSettingsChangedEvent};
 use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
-use crate::WorkspaceAction;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalViewZeroStateAction {
@@ -341,9 +341,11 @@ impl TypedActionView for TerminalViewZeroStateBlock {
             TerminalViewZeroStateAction::Dismiss => {
                 self.should_hide = true;
                 TerminalSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .show_terminal_zero_state_block
-                        .set_value(false, ctx));
+                    report_if_error!(
+                        settings
+                            .show_terminal_zero_state_block
+                            .set_value(false, ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -351,9 +353,11 @@ impl TypedActionView for TerminalViewZeroStateBlock {
                 let ai_settings = AISettings::handle(ctx);
                 let new_value = !*ai_settings.as_ref(ctx).nld_in_terminal_enabled_internal;
                 ai_settings.update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .nld_in_terminal_enabled_internal
-                        .set_value(new_value, ctx));
+                    report_if_error!(
+                        settings
+                            .nld_in_terminal_enabled_internal
+                            .set_value(new_value, ctx)
+                    );
                 });
                 ctx.notify();
             }

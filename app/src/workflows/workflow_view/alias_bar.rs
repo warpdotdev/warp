@@ -5,8 +5,8 @@ use anyhow::Error;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors::neutral_4;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors::neutral_4;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseState, MouseStateHandle, ParentElement, Radius,
@@ -18,8 +18,8 @@ use warpui::{
     ViewHandle,
 };
 
-use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::CloudObject;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::editor::{
     EditOrigin, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions, ValidInputType,
@@ -29,7 +29,7 @@ use crate::server::telemetry::TelemetrySpace;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::workflows::aliases::{WorkflowAlias, WorkflowAliases};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 /// Width of the alias name editor.
 const ALIAS_EDITOR_WIDTH: f32 = 100.;

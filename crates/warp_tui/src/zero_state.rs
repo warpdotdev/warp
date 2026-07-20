@@ -17,8 +17,8 @@ use warp::tui_export::{
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
-use warpui_core::elements::tui::{Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiText};
 use warpui_core::AppContext;
+use warpui_core::elements::tui::{Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiText};
 
 use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater};
 use crate::tui_builder::TuiUiBuilder;

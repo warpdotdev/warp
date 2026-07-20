@@ -11,12 +11,12 @@ use std::error::Error;
 use std::fmt;
 
 use unicode_segmentation::UnicodeSegmentation;
-use warpui_core::elements::tui::{
-    text_width, Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex,
-    TuiHoverable, TuiParentElement, TuiSizeConstraintCondition, TuiSizeConstraintSwitch, TuiStyle,
-    TuiText,
-};
 use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{
+    Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
+    TuiParentElement, TuiSizeConstraintCondition, TuiSizeConstraintSwitch, TuiStyle, TuiText,
+    text_width,
+};
 use warpui_core::{AppContext, Entity, TuiView, TypedActionView, ViewContext};
 const DIVIDER: &str = "|";
 const DIVIDER_PADDING_LEFT: u16 = 1;

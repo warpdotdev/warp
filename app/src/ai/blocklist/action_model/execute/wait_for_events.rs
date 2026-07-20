@@ -6,16 +6,16 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentActionResultType, AIAgentActionType, WaitForEventsResult};
-use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 
 /// Fallback when `idle_timeout_seconds` is unset (0). Matches the worker
 /// VM idle ceiling.

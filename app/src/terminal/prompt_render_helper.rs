@@ -19,7 +19,7 @@ use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
 use super::shell::ShellType;
-use super::{prompt, SizeInfo, TerminalModel};
+use super::{SizeInfo, TerminalModel, prompt};
 use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::appearance::Appearance;
 use crate::context_chips::display::PromptDisplay;
@@ -30,10 +30,10 @@ use crate::terminal::blockgrid_element::BlockGridElement;
 use crate::terminal::grid_size_util::grid_compute_baseline_position_fn;
 use crate::terminal::input::get_input_box_top_border_width;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
+use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::session::Sessions;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::view::{TerminalAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT};
+use crate::terminal::view::{PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT, TerminalAction};
 use crate::themes::theme::PromptColors;
 
 /// How long we're willing to wait after precmd for a marker-based prompt to appear before we

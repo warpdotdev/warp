@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use super::{parse_resume_token, TuiArgs};
+use super::{TuiArgs, parse_resume_token};
 
 #[test]
 fn parses_resume_server_token() {
@@ -29,9 +29,11 @@ fn rejects_malformed_resume_server_token() {
     let error = parse_resume_token("not-a-token".to_owned())
         .expect_err("non-UUID token should be rejected");
 
-    assert!(error
-        .to_string()
-        .contains("invalid server conversation token"));
+    assert!(
+        error
+            .to_string()
+            .contains("invalid server conversation token")
+    );
 }
 
 #[test]

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 pub use lightbox::LightboxImage;
 use pathfinder_geometry::vector::Vector2F;
-use ui_components::{lightbox, Component as _};
+use ui_components::{Component as _, lightbox};
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui::image_cache::ImageType;
 use warpui::keymap::{FixedBinding, Keystroke};

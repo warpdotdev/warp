@@ -30,12 +30,12 @@ use warpui::{
     AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WeakViewHandle,
 };
 
-use crate::ai::blocklist::{render_ai_agent_mode_icon, AIQueryHistory, AIQueryHistoryOutputStatus};
+use crate::ai::blocklist::{AIQueryHistory, AIQueryHistoryOutputStatus, render_ai_agent_mode_icon};
 use crate::appearance::Appearance;
+use crate::terminal::HistoryEntry;
 use crate::terminal::history::LinkedWorkflowData;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::rich_history::{render_ai_query_rich_history, render_rich_history};
-use crate::terminal::HistoryEntry;
 use crate::ui_components::icons::Icon as UIComponentsIcon;
 use crate::util::time_format::format_approx_duration_from_now;
 

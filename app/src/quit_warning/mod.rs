@@ -17,7 +17,7 @@ use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::settings::CodeSettings;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::workspace::Workspace;
-use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_app_ctx};
 
 /// Scope of what's being quit/closed.
 #[derive(Clone)]
@@ -600,19 +600,17 @@ impl<'a> QuitWarningDialog<'a> {
 }
 
 fn pluralize<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
-    if count > 1 {
-        plural
-    } else {
-        singular
-    }
+    if count > 1 { plural } else { singular }
 }
 
 /// Callback to disable the quit warning modal.
 fn on_disable_warning_modal(ctx: &mut AppContext) {
     GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
-        report_if_error!(general_settings
-            .show_warning_before_quitting
-            .toggle_and_save_value(ctx));
+        report_if_error!(
+            general_settings
+                .show_warning_before_quitting
+                .toggle_and_save_value(ctx)
+        );
     });
     send_telemetry_from_app_ctx!(TelemetryEvent::QuitModalDisabled, ctx);
 }

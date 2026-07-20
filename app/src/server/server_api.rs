@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use ::http::header::CONTENT_LENGTH;
 use ai::AIClient;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use auth::AuthClient;
 use block::BlockClient;
 use channel_versions::ChannelVersions;
@@ -38,7 +38,7 @@ use team::TeamClient;
 use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent;
-use warp_errors::{register_error, report_error, AnyhowErrorExt, ErrorExt};
+use warp_errors::{AnyhowErrorExt, ErrorExt, register_error, report_error};
 use warp_managed_secrets::client::ManagedSecretsClient;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
@@ -62,7 +62,7 @@ use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::{settings_view, ChannelState};
+use crate::{ChannelState, settings_view};
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
@@ -868,8 +868,10 @@ impl ServerApi {
 
                 let response = request.send().await;
                 if let Err(err) = response {
-                    report_error!(anyhow::Error::new(err)
-                        .context("Failed to send POST request to /client/login"));
+                    report_error!(
+                        anyhow::Error::new(err)
+                            .context("Failed to send POST request to /client/login")
+                    );
                 }
             }
             Err(err) => {

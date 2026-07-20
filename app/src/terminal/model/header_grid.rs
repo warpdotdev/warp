@@ -20,9 +20,9 @@ use super::grid::{Cursor, Dimensions as _, RespectDisplayedOutput};
 use super::index::{Point, VisibleRow};
 use super::selection::ScrollDelta;
 use super::{ObfuscateSecrets, RespectObfuscatedSecrets};
+use crate::terminal::SizeInfo;
 use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::SizeInfo;
 
 macro_rules! delegate {
     ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
@@ -931,7 +931,9 @@ impl HeaderGrid {
 
 impl ansi::Handler for HeaderGrid {
     fn set_title(&mut self, _: Option<String>) {
-        report_error!("Handler method HeaderGrid::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method HeaderGrid::set_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
@@ -1158,11 +1160,15 @@ impl ansi::Handler for HeaderGrid {
     }
 
     fn push_title(&mut self) {
-        report_error!("Handler method HeaderGrid::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method HeaderGrid::push_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn pop_title(&mut self) {
-        report_error!("Handler method HeaderGrid::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method HeaderGrid::pop_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn prompt_marker(&mut self, marker: ansi::PromptMarker) {

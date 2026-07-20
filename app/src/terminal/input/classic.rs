@@ -7,7 +7,7 @@ use warpui::elements::{
 };
 use warpui::{AppContext, SingletonEntity};
 
-use super::{should_render_prompt_using_editor_decorator_elements, Input, SubshellRenderState};
+use super::{Input, SubshellRenderState, should_render_prompt_using_editor_decorator_elements};
 use crate::ai::blocklist::InputType;
 use crate::appearance::Appearance;
 use crate::context_chips::spacing;
@@ -20,7 +20,7 @@ use crate::terminal::input::common::{
     add_voltron_overlay, add_workflow_info_overlay, should_show_terminal_input_message_bar,
     wrap_input_with_terminal_padding_and_focus_handler,
 };
-use crate::terminal::input::{get_input_box_top_border_width, InputDropTargetData};
+use crate::terminal::input::{InputDropTargetData, get_input_box_top_border_width};
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
 use crate::terminal::view::TerminalAction;
 use crate::terminal::warpify::render::{render_subshell_flag, render_subshell_flag_pole};

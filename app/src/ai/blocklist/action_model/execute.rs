@@ -31,16 +31,16 @@ use std::sync::Arc;
 
 use ai::agent::action_result::{InsertReviewCommentsResult, RequestCommandOutputResult};
 pub use ask_user_question::AskUserQuestionExecutor;
-pub(crate) use call_mcp_tool::coerce_integer_args;
 use call_mcp_tool::CallMCPToolExecutor;
+pub(crate) use call_mcp_tool::coerce_integer_args;
 use create_documents::CreateDocumentsExecutor;
 use edit_documents::EditDocumentsExecutor;
 use fetch_conversation::FetchConversationExecutor;
 use file_glob::FileGlobExecutor;
-use futures::future::BoxFuture;
 #[cfg(feature = "local_fs")]
 use futures::AsyncReadExt;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use grep::GrepExecutor;
 #[cfg(feature = "local_fs")]
 use mime_guess::from_path;
@@ -50,14 +50,14 @@ pub(super) use read_files::ReadFilesExecutor;
 use read_mcp_resource::ReadMCPResourceExecutor;
 use read_skill::ReadSkillExecutor;
 use request_computer_use::RequestComputerUseExecutor;
-pub(crate) use request_file_edits::{apply_edits, FileReadResult, MalformedFinalLineProxyEvent};
 pub use request_file_edits::{
     EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent, EditResolvedEvent, EditStats,
     RequestFileEditsExecutor, RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent,
 };
+pub(crate) use request_file_edits::{FileReadResult, MalformedFinalLineProxyEvent, apply_edits};
+pub use run_agents::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawningSnapshot};
 #[cfg(test)]
 pub use run_agents::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
-pub use run_agents::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawningSnapshot};
 pub use send_message::SendMessageToAgentExecutor;
 use serde::{Deserialize, Serialize};
 pub use shell_command::{ShellCommandExecutor, ShellCommandExecutorEvent};
@@ -84,6 +84,7 @@ use warpui::r#async::{Spawnable, SpawnableOutput};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::search_codebase::SearchCodebaseExecutor;
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
@@ -103,11 +104,10 @@ use crate::terminal::shell::ShellType;
 use crate::terminal::{ShellLaunchData, TerminalModel};
 #[cfg(feature = "local_fs")]
 use crate::util::image::{
-    is_supported_image_mime_type, process_image_for_agent, ProcessImageResult,
+    ProcessImageResult, is_supported_image_mime_type, process_image_for_agent,
 };
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::is_binary_file;
-use crate::BlocklistAIHistoryModel;
 
 /// Types of actions that can be executed in parallel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

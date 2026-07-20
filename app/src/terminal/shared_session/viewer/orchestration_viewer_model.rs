@@ -18,11 +18,11 @@ use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::{Event as TerminalViewEvent, TerminalView};
 

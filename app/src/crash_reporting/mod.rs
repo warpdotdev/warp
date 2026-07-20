@@ -359,7 +359,7 @@ fn init_sentry(user_id: Option<UserUid>, email: Option<String>, ctx: &mut AppCon
     // Initialize the appropriate native Sentry SDK.
     #[cfg(enable_crash_recovery)]
     {
-        use crate::crash_recovery::{is_crash_recovery_process_running, CrashRecovery};
+        use crate::crash_recovery::{CrashRecovery, is_crash_recovery_process_running};
 
         // If the crash recovery process is running, defer initialization of Sentry native until the
         // crash recovery process is torn down. Unlike Sentry Rust, we can't easily mark events as

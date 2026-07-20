@@ -16,7 +16,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_errors::report_error;
 use wgpu::rwh::HasDisplayHandle;
 use wgpu::{AdapterInfo, CompositeAlphaMode};
@@ -33,7 +33,7 @@ use winit::window::{CursorIcon, Fullscreen, ResizeDirection, UserAttentionType, 
 
 use super::app::CustomEvent;
 #[cfg(windows)]
-use super::windows::{get_system_caption_button_bounds, set_window_attribute, WindowAttributeErr};
+use super::windows::{WindowAttributeErr, get_system_caption_button_bounds, set_window_attribute};
 #[cfg(not(target_family = "wasm"))]
 use crate::platform::WindowBounds;
 use crate::platform::{
@@ -41,12 +41,12 @@ use crate::platform::{
     WindowOptions, WindowStyle,
 };
 use crate::rendering::wgpu::{
-    adapter_has_rendering_offset_bug, from_wgpu_backend, renderer, to_wgpu_backend, Renderer,
-    Resources,
+    Renderer, Resources, adapter_has_rendering_offset_bug, from_wgpu_backend, renderer,
+    to_wgpu_backend,
 };
 use crate::rendering::{GPUPowerPreference, GlyphConfig, OnGPUDeviceSelected};
 use crate::windowing::WindowCallbacks;
-use crate::{fonts, geometry, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId};
+use crate::{DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId, fonts, geometry};
 
 /// The inner margin from the edges of the window within which the mouse can drag to resize the
 /// window. Note that this value is a logical size, not a physical size. It can be converted to a

@@ -17,8 +17,8 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentSaveStatus};
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::RunAgentsPermission;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::orchestration::populate_default_auth_secret_for_execution;
 use crate::appearance::Appearance;

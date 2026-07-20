@@ -9,11 +9,11 @@ use warpui::{
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::{AgentConversationEntry, AgentConversationEntryId};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// Contains the handles needed to track an active agent view.

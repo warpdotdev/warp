@@ -133,9 +133,10 @@ fn ambient_task_id_from_conversation_metadata_requires_cloud_task_metadata() {
     )
     .unwrap_err();
 
-    assert!(err
-        .to_string()
-        .contains("Conversation 'conversation-123' is not backed by a cloud agent task"));
+    assert!(
+        err.to_string()
+            .contains("Conversation 'conversation-123' is not backed by a cloud agent task")
+    );
 }
 
 #[test]
@@ -237,9 +238,10 @@ fn missing_args_fall_back_to_env_run_id_for_request_association() {
 fn missing_args_and_missing_env_return_clear_error() {
     let err = resolve_upload_association_from_sources(None, None, None, None).unwrap_err();
 
-    assert!(err
-        .to_string()
-        .contains("no usable --run-id or --conversation-id was provided"));
+    assert!(
+        err.to_string()
+            .contains("no usable --run-id or --conversation-id was provided")
+    );
     assert!(err.to_string().contains("OZ_RUN_ID"));
 }
 

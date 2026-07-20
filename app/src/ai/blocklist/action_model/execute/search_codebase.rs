@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use futures::FutureExt;
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
-use futures::FutureExt;
 use itertools::Itertools;
 use warp_errors::report_error;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
-    read_local_file_context, ActionExecution, AnyActionExecution, ExecuteActionInput,
-    PreprocessActionInput,
+    ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput,
+    read_local_file_context,
 };
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
@@ -24,7 +24,7 @@ use crate::ai::get_relevant_files::controller::{
 };
 use crate::features::FeatureFlag;
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 pub struct SearchCodebaseExecutor {
     active_session: ModelHandle<ActiveSession>,

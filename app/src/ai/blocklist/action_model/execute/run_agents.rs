@@ -12,8 +12,8 @@ use ai::agent::action_result::{
 };
 use ai::agent::orchestration_config::OrchestrationConfig;
 use ai::skills::SkillReference;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -31,8 +31,8 @@ use crate::ai::document::plan_publication::{
 };
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 use crate::ai::orchestration::{
-    can_execute_with_auth_secret, populate_default_auth_secret_for_execution,
-    OrchestrationConfigState,
+    OrchestrationConfigState, can_execute_with_auth_secret,
+    populate_default_auth_secret_for_execution,
 };
 
 /// Per-child spawn timeout. If a child agent doesn't report back within

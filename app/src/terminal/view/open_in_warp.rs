@@ -23,7 +23,7 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::model::session::Session;
 use crate::terminal::view::inline_banner::{OpenInWarpBannerAction, OpenInWarpBannerState};
 use crate::util::openable_file_type::{
-    is_file_openable_in_warp, renders_in_warp_notebook_viewer, OpenableFileType,
+    OpenableFileType, is_file_openable_in_warp, renders_in_warp_notebook_viewer,
 };
 
 #[cfg(test)]
@@ -193,15 +193,19 @@ impl TerminalView {
                     self.close_open_in_warp_banner(banner_state.id);
                     if renders_in_warp_notebook_viewer(&banner_state.target.path) {
                         GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                            report_if_error!(settings
-                                .open_in_warp_banner_dismissed_for_markdown
-                                .set_value(true, ctx));
+                            report_if_error!(
+                                settings
+                                    .open_in_warp_banner_dismissed_for_markdown
+                                    .set_value(true, ctx)
+                            );
                         });
                     } else {
                         GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                            report_if_error!(settings
-                                .open_in_warp_banner_dismissed_for_code_and_text
-                                .set_value(true, ctx));
+                            report_if_error!(
+                                settings
+                                    .open_in_warp_banner_dismissed_for_code_and_text
+                                    .set_value(true, ctx)
+                            );
                         });
                     }
                     ctx.notify();

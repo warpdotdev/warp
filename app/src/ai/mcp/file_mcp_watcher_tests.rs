@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use futures::stream::AbortHandle;
 
 use super::{
-    parse_mcp_config_file, substitute_env_vars, FileMCPConfigDiagnosticKind,
-    FileMCPConfigParseOutcome, FileMCPWatcher,
+    FileMCPConfigDiagnosticKind, FileMCPConfigParseOutcome, FileMCPWatcher, parse_mcp_config_file,
+    substitute_env_vars,
 };
 use crate::ai::mcp::MCPProvider;
 

@@ -5,9 +5,10 @@
 
 use warp_multi_agent_api as api;
 use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
-use warpui::{integration_assert, EntityId, SingletonEntity as _};
+use warpui::{EntityId, SingletonEntity as _, integration_assert};
 
 use super::llm_judge::{LLMJudge, LLMJudgeConfig};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
@@ -17,7 +18,6 @@ use crate::ai::agent::{
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::integration_testing::view_getters::terminal_view;
-use crate::BlocklistAIHistoryModel;
 
 type TextAssertion = Box<dyn Fn(&str) -> bool + 'static>;
 type ActionAssertion = Box<dyn Fn(&AIAgentActionType) -> bool + 'static>;

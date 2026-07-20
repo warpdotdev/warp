@@ -3,8 +3,8 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::TerminalModel;
 use warpui::EntityIdMap;
-use warpui_core::elements::tui::{TuiConstraint, TuiElement, TuiLayoutContext, TuiSize};
 use warpui_core::App;
+use warpui_core::elements::tui::{TuiConstraint, TuiElement, TuiLayoutContext, TuiSize};
 
 use super::AltScreenElement;
 

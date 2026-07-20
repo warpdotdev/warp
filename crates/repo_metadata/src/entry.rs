@@ -3,9 +3,9 @@
 use std::collections::VecDeque;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "local_fs")]
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures_lite::StreamExt;
 use ignore::gitignore::Gitignore;

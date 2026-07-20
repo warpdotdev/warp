@@ -62,7 +62,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         use warpui::rendering::GPUPowerPreference;
 
         use crate::settings::{
-            init_private_user_preferences, PreferLowPowerGPU, PreferredGraphicsBackend,
+            PreferLowPowerGPU, PreferredGraphicsBackend, init_private_user_preferences,
         };
 
         let user_preferences = init_private_user_preferences();

@@ -9,6 +9,7 @@ use warpui::{
 
 use super::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use super::suggested_rule_modal::SuggestedRuleAndId;
+use crate::TelemetryEvent;
 use crate::ai::agent::{SuggestedAgentModeWorkflow, SuggestedLoggingId, SuggestedRule};
 use crate::ai::facts::{AIFact, AIMemory, CloudAIFactModel};
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -21,7 +22,6 @@ use crate::server::ids::{ClientId, SyncId};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, SecondaryTheme};
-use crate::TelemetryEvent;
 
 const MAX_CHIP_WIDTH: f32 = 316.;
 

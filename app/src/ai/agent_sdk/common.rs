@@ -21,8 +21,8 @@ use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Owner};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
-use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::AIClient;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 

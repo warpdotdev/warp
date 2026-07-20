@@ -1,5 +1,5 @@
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use itertools::Itertools;
 #[cfg(not(target_family = "wasm"))]
@@ -12,12 +12,13 @@ use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessA
 use crate::terminal::model::session::active_session::ActiveSession;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
+    TelemetryEvent,
     ai::{
         agent::{AIAgentAction, AIAgentActionResultType, CallMCPToolResult},
-        blocklist::{action_model::AIAgentActionType, BlocklistAIPermissions},
+        blocklist::{BlocklistAIPermissions, action_model::AIAgentActionType},
         mcp::TemplatableMCPServerManager,
     },
-    send_telemetry_from_app_ctx, TelemetryEvent,
+    send_telemetry_from_app_ctx,
 };
 
 pub struct CallMCPToolExecutor {

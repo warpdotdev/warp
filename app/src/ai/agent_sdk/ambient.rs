@@ -3,9 +3,9 @@ use std::io::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use comfy_table::Cell;
-use futures::{future, StreamExt};
+use futures::{StreamExt, future};
 use serde::Serialize;
 use warp_cli::agent::{Harness, OutputFormat, Prompt, RunCloudArgs};
 use warp_cli::json_filter::JsonOutput;
@@ -17,17 +17,18 @@ use warp_cli::task::{
 use warp_cli::{GlobalOptions, SortOrderArg};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use warpui::platform::TerminationMode;
 use warpui::r#async::{Spawnable, Timer};
+use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
-use super::common::{parse_ambient_task_id, EnvironmentChoice, ResolveConfigurationError};
-use crate::ai::agent::{extract_user_query_mode, UserQueryMode};
+use super::common::{EnvironmentChoice, ResolveConfigurationError, parse_ambient_task_id};
+use crate::ServerApiProvider;
+use crate::ai::agent::{UserQueryMode, extract_user_query_mode};
 use crate::ai::agent_sdk::driver::attachments::{
-    process_attachment, MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY,
+    MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY, process_attachment,
 };
 use crate::ai::ambient_agents::spawn::{
-    spawn_task, AmbientAgentEvent, SessionJoinInfo, TASK_STATUS_POLLING_DURATION,
+    AmbientAgentEvent, SessionJoinInfo, TASK_STATUS_POLLING_DURATION, spawn_task,
 };
 use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::ambient_agents::{
@@ -37,16 +38,15 @@ use crate::ai::artifacts::Artifact;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::{
     AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, ArtifactType, ExecutionLocation,
     ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
-use crate::server::server_api::ServerApi;
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::ServerApiProvider;
 
 const MAX_LINE_WIDTH: usize = 90;
 const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];

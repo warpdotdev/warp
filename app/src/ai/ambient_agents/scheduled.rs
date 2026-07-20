@@ -4,8 +4,8 @@ use std::future::Future;
 pub use cloud_object_models::{
     CloudScheduledAmbientAgent, CloudScheduledAmbientAgentModel, ScheduledAmbientAgent,
 };
-use futures::channel::oneshot;
 use futures::FutureExt;
+use futures::channel::oneshot;
 use serde_json::{Map, Value};
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};

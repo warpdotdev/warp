@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 use warpui::elements::ParentElement;
 use warpui::prelude::{
     ConstrainedBox, Container, CrossAxisAlignment, Cursor, Flex, Hoverable, MouseStateHandle, Text,

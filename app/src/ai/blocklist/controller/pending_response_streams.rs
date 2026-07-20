@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity};
 
-use super::response_stream::{ResponseStream, ResponseStreamId};
 use super::BlocklistAIController;
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::CancellationReason;
+use super::response_stream::{ResponseStream, ResponseStreamId};
 use crate::BlocklistAIHistoryModel;
+use crate::ai::agent::CancellationReason;
+use crate::ai::agent::conversation::AIConversationId;
 
 pub(super) struct PendingResponseStreams {
     streams: HashMap<ResponseStreamId, ModelHandle<ResponseStream>>,

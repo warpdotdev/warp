@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::ai::custom_model_routers::{
-    parse_model_config_yaml, CustomModelRouter, ModelConfigError,
+    CustomModelRouter, ModelConfigError, parse_model_config_yaml,
 };
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::tab_configs::{TabConfig, TabConfigError};

@@ -10,13 +10,13 @@ use markdown_parser::{
     FormattedTextLine, Hyperlink,
 };
 use unicode_width::UnicodeWidthStr;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     Modifier, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiParentElement, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
     TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::elements::{CrossAxisAlignment, ListNumbering};
-use warpui_core::AppContext;
 
 use crate::tui_builder::TuiUiBuilder;
 mod table;

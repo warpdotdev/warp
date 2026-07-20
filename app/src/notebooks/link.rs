@@ -15,11 +15,11 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, Win
 use super::file::is_markdown_file;
 use crate::drive::OpenWarpDriveObjectArgs;
 use crate::terminal::model::session::Session;
-use crate::uri::parse_url_paths::{get_item_data_from_warp_link, WarpWebLink};
+use crate::uri::parse_url_paths::{WarpWebLink, get_item_data_from_warp_link};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{is_supported_image_file, resolve_file_target, FileTarget};
+use crate::util::openable_file_type::{FileTarget, is_supported_image_file, resolve_file_target};
 use crate::workspace::ActiveSession;
 
 #[cfg(test)]

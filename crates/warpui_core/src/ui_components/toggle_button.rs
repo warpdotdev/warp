@@ -2,12 +2,12 @@ use pathfinder_geometry::vector::vec2f;
 
 use super::components::{UiComponent, UiComponentStyles};
 use super::text::Span;
+use crate::Element;
 use crate::elements::{
     ChildAnchor, ConstrainedBox, Container, Empty, Hoverable, MouseState, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
 };
 use crate::scene::Border;
-use crate::Element;
 
 /// A button element used to toggle a single value on or off.
 pub struct ToggleButton {

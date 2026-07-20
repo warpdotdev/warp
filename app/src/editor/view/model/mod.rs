@@ -25,7 +25,7 @@ pub use selections::{
     SelectionMode,
 };
 use string_offset::{ByteOffset, CharOffset};
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use vim::vim::{
     BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion, LineMotion,
     MotionType, TextObjectInclusion, TextObjectType, VimOperator, WordBound, WordMotion,
@@ -37,14 +37,14 @@ use vim::{
 };
 use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+use warpui::text::TextBuffer;
 use warpui::text::point::Point;
 use warpui::text::word_boundaries::WordBoundariesPolicy;
-use warpui::text::TextBuffer;
 use warpui::text_layout::TextStyle;
 use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
 use self::buffer::Peer;
-use super::{movement, PlainTextEditorViewAction, SelectionInsertion, ValidInputType};
+use super::{PlainTextEditorViewAction, SelectionInsertion, ValidInputType, movement};
 use crate::editor::RangeExt;
 use crate::vim_registers::VimRegisters;
 

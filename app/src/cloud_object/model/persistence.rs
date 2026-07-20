@@ -20,8 +20,8 @@ use crate::cloud_object::{
 };
 use crate::drive::folders::{CloudFolder, CloudFolderModel};
 use crate::drive::{
-    should_auto_open_welcome_folder, write_has_auto_opened_welcome_folder_to_user_defaults,
-    CloudObjectTypeAndId, DriveIndexVariant,
+    CloudObjectTypeAndId, DriveIndexVariant, should_auto_open_welcome_folder,
+    write_has_auto_opened_welcome_folder_to_user_defaults,
 };
 use crate::env_vars::{CloudEnvVarCollection, CloudEnvVarCollectionModel, EnvVarCollection};
 use crate::notebooks::CloudNotebook;
@@ -417,8 +417,8 @@ impl CloudModel {
                 object.update_from_server_object(server_object);
             } else {
                 log::warn!(
-                "Unable to update server object.  Expected object to implement GenericCloudObject"
-            );
+                    "Unable to update server object.  Expected object to implement GenericCloudObject"
+                );
                 debug_assert!(false, "Unable to update server object.  Failed downcast");
             }
             None
@@ -654,7 +654,9 @@ impl CloudModel {
 
                     return true;
                 } else {
-                    log::debug!("in memory metadata ts is greater or equal to metadata ts from update, ignoring");
+                    log::debug!(
+                        "in memory metadata ts is greater or equal to metadata ts from update, ignoring"
+                    );
                 }
             }
         } else {

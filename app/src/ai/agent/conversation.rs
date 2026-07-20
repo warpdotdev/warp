@@ -16,8 +16,8 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
 use warp_multi_agent_api::response_event::stream_finished;
 use warp_multi_agent_api::response_event::stream_finished::TokenUsage;
@@ -29,8 +29,8 @@ use super::api::ServerConversationToken;
 use super::task::helper::*;
 use super::task::transaction::{SavedTask, Transaction};
 use super::task::{
-    derive_todo_lists_from_root_task, ExtractMessagesError, Task, TaskId, TaskMessageContext,
-    UpdateTaskError, UpgradeOptimisticTaskError,
+    ExtractMessagesError, Task, TaskId, TaskMessageContext, UpdateTaskError,
+    UpgradeOptimisticTaskError, derive_todo_lists_from_root_task,
 };
 use super::task_store::TaskStore;
 use super::{
@@ -41,8 +41,8 @@ use super::{
     StopRecordingResult, SuggestedLoggingId, Suggestions,
 };
 use crate::ai::agent::api::convert_conversation::{
-    compute_time_to_first_token_ms_from_messages, proto_timestamp_to_local_datetime,
-    ConvertToExchanges,
+    ConvertToExchanges, compute_time_to_first_token_ms_from_messages,
+    proto_timestamp_to_local_datetime,
 };
 use crate::ai::agent::comment::CodeReview;
 use crate::ai::agent::icons::{
@@ -64,11 +64,11 @@ use crate::ai::llms::LLMPreferences;
 use crate::ai::skills::SkillDescriptor;
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
+use crate::persistence::ModelEvent;
 use crate::persistence::model::{
     AgentConversationData, ContextWindowSegment, ConversationUsageMetadata, ModelTokenUsage,
     PersistedAutoexecuteMode, ToolUsageMetadata,
 };
-use crate::persistence::ModelEvent;
 use crate::server::ids::ServerId;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::model::block::{
@@ -563,17 +563,18 @@ impl AIConversation {
             let forked_from_server_conversation_token = data
                 .forked_from_server_conversation_token
                 .map(ServerConversationToken::new);
-            let artifacts: Vec<Artifact> =
-                data.artifacts_json
-                    .and_then(|json| {
-                        serde_json::from_str(&json)
-                            .map_err(|e| {
-                                report_error!(anyhow::Error::new(e)
-                                    .context("Failed to deserialize artifacts"))
-                            })
-                            .ok()
-                    })
-                    .unwrap_or_default();
+            let artifacts: Vec<Artifact> = data
+                .artifacts_json
+                .and_then(|json| {
+                    serde_json::from_str(&json)
+                        .map_err(|e| {
+                            report_error!(
+                                anyhow::Error::new(e).context("Failed to deserialize artifacts")
+                            )
+                        })
+                        .ok()
+                })
+                .unwrap_or_default();
             let parent_conversation_id = data
                 .parent_conversation_id
                 .and_then(|id| AIConversationId::try_from(id).ok());
@@ -2792,9 +2793,7 @@ impl AIConversation {
                             terminal_surface_id,
                         });
 
-                        for AddedExchange {
-                            task_id, ..
-                        } in self
+                        for AddedExchange { task_id, .. } in self
                             .added_exchanges_by_response
                             .get_mut(response_stream_id)
                             .ok_or(UpdateConversationError::NoPendingRequest)?

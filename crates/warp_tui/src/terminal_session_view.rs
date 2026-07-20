@@ -13,29 +13,28 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
+    AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentPtyWriteMode, AIConversation,
+    AIConversationId, AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent,
+    AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
+    AgentInteractionMetadata, AgentViewEntryOrigin, BlockId, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
+    CLISubagentEvent, CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel,
+    ChangelogModelEvent, ChangelogRequestType, CloudConversationData, CommandExecutionSource,
+    ConversationFileExport, ConversationSelection, ConversationSelectionHandle,
+    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
+    GitRepoStatusModel, GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent,
+    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, ModelEvent, ParsedSlashCommandInput, PtyIntent,
+    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
+    ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
+    SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiMcpAction,
+    TuiMcpManager, TuiSlashCommand, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
+    TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
     block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
     export_conversation_markdown, prepare_conversation_block_restoration,
     record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
-    slash_command_selection_behavior, throttle, AIAgentActionId, AIAgentActionResultType,
-    AIAgentContext, AIAgentPtyWriteMode, AIConversation, AIConversationId,
-    AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent, AgentConversationEntryId,
-    AgentConversationListEntryState, AgentConversationsModel, AgentInteractionMetadata,
-    AgentViewEntryOrigin, BlockId, BlocklistAIActionEvent, BlocklistAIActionModel,
-    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController, CLISubagentEvent,
-    CLISubagentTarget, CancellationReason, ChangelogModel, ChangelogModelEvent,
-    ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
-    ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
-    ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
-    GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, ModelEvent,
-    ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
-    RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate,
-    SkillReference, SlashCommandDataSource as _, SlashCommandSelectionBehavior,
-    StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommand,
-    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
-    UserTakeOverReason, COMMAND_REGISTRY, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
-    WAKEUP_THROTTLE_PERIOD,
+    slash_command_selection_behavior, throttle,
 };
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
@@ -43,13 +42,13 @@ use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
+use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::tui::{
     TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
 use warpui_core::platform::TerminationMode;
-use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
@@ -60,8 +59,8 @@ use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
 use crate::conversation_selection::TuiConversationSelection;
 use crate::editor_interaction::TuiEditorCommand;
-use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
-use crate::inline_menu::{active_inline_menu, TuiInlineMenu, MAX_INLINE_MENU_ROWS};
+use crate::exit_confirmation::{CTRL_C_EXIT_WINDOW, ExitConfirmation};
+use crate::inline_menu::{MAX_INLINE_MENU_ROWS, TuiInlineMenu, active_inline_menu};
 use crate::input::view::TuiInputAction;
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
@@ -86,14 +85,14 @@ use crate::tab_bar::{
 };
 use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
-    hide_agent_requested_command_from_top_level, terminal_use_conversation_to_resume,
-    terminal_use_interrupt_action, tui_input_target, TerminalUseInterruptAction, TuiInputTarget,
+    TerminalUseInterruptAction, TuiInputTarget, hide_agent_requested_command_from_top_level,
+    terminal_use_conversation_to_resume, terminal_use_interrupt_action, tui_input_target,
 };
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{
-    TuiCLISubagentView, HAND_BACK_KEY_BINDING, TAKE_CONTROL_KEY_BINDING,
+    HAND_BACK_KEY_BINDING, TAKE_CONTROL_KEY_BINDING, TuiCLISubagentView,
 };
 use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;

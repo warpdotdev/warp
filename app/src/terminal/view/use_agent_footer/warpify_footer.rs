@@ -8,7 +8,7 @@ use warpui::prelude::Empty;
 use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::{AgentFooterButtonTheme, USE_AGENT_KEYSTROKE};
-use crate::terminal::view::{TerminalModel, PADDING_LEFT};
+use crate::terminal::view::{PADDING_LEFT, TerminalModel};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, KeystrokeSource, TooltipAlignment,

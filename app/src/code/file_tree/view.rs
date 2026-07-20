@@ -15,9 +15,9 @@ use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{FileTreeEntry, RepoMetadataModel};
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
-use warp_core::{send_telemetry_from_ctx, HostId};
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::{HostId, send_telemetry_from_ctx};
 use warp_util::path::LineAndColumnArg;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::clipboard::ClipboardContent;
@@ -34,8 +34,8 @@ use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::text_layout::TextAlignment;
 use warpui::{
-    id, AppContext, BlurContext, Element, Entity, EventContext, ModelHandle, SingletonEntity as _,
-    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
+    AppContext, BlurContext, Element, Entity, EventContext, ModelHandle, SingletonEntity as _,
+    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle, id,
 };
 
 use crate::appearance::Appearance;
@@ -54,7 +54,7 @@ use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 use crate::util::openable_file_type::{
-    is_file_content_binary, is_jupyter_notebook_file, is_markdown_file, EditorLayout, FileTarget,
+    EditorLayout, FileTarget, is_file_content_binary, is_jupyter_notebook_file, is_markdown_file,
 };
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{

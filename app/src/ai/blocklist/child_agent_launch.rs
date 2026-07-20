@@ -10,10 +10,10 @@ use {
     crate::server::server_api::ServerApiProvider,
 };
 
+use crate::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::llms::LLMId;
 use crate::ai::llms::LLMPreferences;
-use crate::AIExecutionProfilesModel;
 
 /// Server-side state prepared before a frontend creates the child's surface.
 #[cfg(not(target_family = "wasm"))]

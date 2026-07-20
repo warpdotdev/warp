@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use deltae::*;
-use kmeans_colors::{get_kmeans_hamerly, Calculate, CentroidData, Sort};
+use kmeans_colors::{Calculate, CentroidData, Sort, get_kmeans_hamerly};
 use palette::{FromColor, IntoColor, Lab, Pixel, Srgb, Srgba};
 use pathfinder_color::ColorU;
 use warp_errors::report_error;
@@ -28,8 +28,10 @@ pub fn top_colors_for_image(image_path: PathBuf) -> Result<Vec<ColorU>> {
                 .map(|color| match coloru_from_hex_string(color) {
                     Ok(color_u) => color_u,
                     Err(e) => {
-                        report_error!(anyhow::anyhow!("{e}")
-                            .context("kmeans algorithm did not produce valid hex strings"));
+                        report_error!(
+                            anyhow::anyhow!("{e}")
+                                .context("kmeans algorithm did not produce valid hex strings")
+                        );
                         ColorU::black()
                     }
                 })

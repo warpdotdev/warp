@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use warp_core::safe_warn;
 use warp_util::git::run_git_command;
 #[cfg(feature = "local_fs")]
@@ -811,8 +811,8 @@ pub async fn get_repository_info(
 /// findable from macOS GUI launches (launchd's minimal `PATH` excludes it).
 #[cfg(feature = "local_fs")]
 async fn run_gh_command(repo_path: &Path, args: &[&str], path_env: Option<&str>) -> Result<String> {
-    use command::r#async::Command;
     use command::Stdio;
+    use command::r#async::Command;
 
     log::debug!(
         "[GIT OPERATION] git.rs run_gh_command gh {}",

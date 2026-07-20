@@ -7,9 +7,9 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::{
     AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
 };
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{AmbientAgentViewModelHandleExt, PaneGroup, PaneId};
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,

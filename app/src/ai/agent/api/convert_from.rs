@@ -2,12 +2,12 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use ai::agent::UnknownCitationTypeError;
 use ai::agent::action::{LifecycleEventType as StartAgentLifecycleEventType, ReadSkillRequest};
 use ai::agent::action_result::StartAgentVersion;
 use ai::agent::convert::ToolToAIAgentActionError;
-use ai::agent::UnknownCitationTypeError;
 use ai::skills::{
-    skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref, SkillPathOrigin,
+    SkillPathOrigin, skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref,
 };
 use api::ask_user_question::question::QuestionType;
 use warp_core::channel::ChannelState;
@@ -786,8 +786,8 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                 create_standard_action(stop_recording.into())
             }
             api::message::tool_call::Tool::Subagent(subagent) => {
-                use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 use api::message::tool_call::subagent::Metadata;
+                use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 let subagent_type = match subagent.metadata {
                     Some(Metadata::Cli(_)) => SubagentType::Cli,
                     Some(Metadata::Research(_)) => SubagentType::Research,

@@ -14,8 +14,8 @@ use crate::appearance::Appearance;
 use crate::search::command_search::searcher::{AcceptedHistoryItem, CommandSearchItemAction};
 use crate::search::item::SearchItem;
 use crate::search::result_renderer::ItemHighlightState;
-use crate::terminal::rich_history::render_rich_history;
 use crate::terminal::HistoryEntry;
+use crate::terminal::rich_history::render_rich_history;
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::util::time_format::format_approx_duration_from_now;
 

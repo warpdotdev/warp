@@ -5,7 +5,7 @@ use std::sync::Arc;
 use futures::Future;
 use itertools::Itertools;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::settings::Setting;
@@ -43,10 +43,10 @@ use super::empty_trash_confirmation_dialog::{
     EmptyTrashConfirmationDialog, EmptyTrashConfirmationEvent,
 };
 use super::folders::CloudFolder;
-use super::items::ai_fact_collection::WarpDriveAIFactCollection;
-use super::items::item::{tools_panel_menu_direction, ItemStates, WarpDriveRow};
-use super::items::mcp_server_collection::WarpDriveMCPServerCollection;
 use super::items::WarpDriveItemId;
+use super::items::ai_fact_collection::WarpDriveAIFactCollection;
+use super::items::item::{ItemStates, WarpDriveRow, tools_panel_menu_direction};
+use super::items::mcp_server_collection::WarpDriveMCPServerCollection;
 use super::settings::WarpDriveSettings;
 use super::sharing::dialog::{SharingDialog, SharingDialogEvent};
 use super::sharing::{ContentEditability, ShareableObject};
@@ -54,10 +54,10 @@ use super::{CloudObjectTypeAndId, DriveObjectType, DriveSortOrder};
 use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::ai::facts::{AIFact, AIMemory};
 use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
 use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::AuthViewVariant;
-use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::model::view::{CloudViewModel, CloudViewModelEvent, UpdateTimestamp};
 use crate::cloud_object::{
@@ -85,8 +85,8 @@ use crate::settings::app_installation_detection::{
 };
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::{highlight, icon_button};
-use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
-use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
+use crate::ui_components::icons::{ICON_DIMENSIONS, Icon};
+use crate::ui_components::menu_button::{MenuDirection, icon_button_with_context_menu};
 #[cfg(target_family = "wasm")]
 use crate::uri::web_intent_parser::open_url_on_desktop;
 use crate::util::color::coloru_with_opacity;
@@ -96,7 +96,7 @@ use crate::workspace::active_terminal_in_window;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::WorkspaceUid;
-use crate::{send_telemetry_from_ctx, ObjectActions};
+use crate::{ObjectActions, send_telemetry_from_ctx};
 
 const WARP_DRIVE_TITLE: &str = "Warp Drive";
 
@@ -1258,7 +1258,9 @@ impl DriveIndex {
                     {
                         self.expand_section_for_object(&id.uid().clone(), ctx);
                     } else {
-                        log::warn!("unknown GenericStringObject type found while trying to manually expand drive section. {object_id:?}");
+                        log::warn!(
+                            "unknown GenericStringObject type found while trying to manually expand drive section. {object_id:?}"
+                        );
                     }
                 }
             };
@@ -2417,7 +2419,10 @@ impl DriveIndex {
         .finish()
     }
 
-    fn render_all_sections(&self, app: &AppContext) -> impl Iterator<Item = Box<dyn Element>> + use<> {
+    fn render_all_sections(
+        &self,
+        app: &AppContext,
+    ) -> impl Iterator<Item = Box<dyn Element>> + use<> {
         let appearance = Appearance::as_ref(app);
         let cloud_model = CloudModel::as_ref(app);
 
@@ -4905,12 +4910,14 @@ impl DriveIndex {
             space: *space,
             offset,
         });
-        let menu_items = vec![MenuItemFields::new("Collapse all")
-            .with_on_select_action(DriveIndexAction::CollapseAllInLocation(
-                CloudObjectLocation::Space(*space),
-            ))
-            .with_icon(Icon::ListCollapsed)
-            .into_item()];
+        let menu_items = vec![
+            MenuItemFields::new("Collapse all")
+                .with_on_select_action(DriveIndexAction::CollapseAllInLocation(
+                    CloudObjectLocation::Space(*space),
+                ))
+                .with_icon(Icon::ListCollapsed)
+                .into_item(),
+        ];
 
         ctx.update_view(&self.menu, |menu, ctx| {
             menu.set_items(menu_items, ctx);
@@ -5115,28 +5122,29 @@ impl View for DriveIndex {
         let index_content = match (
             self.should_show_personal_object_limit_status,
             self.render_personal_limit_status(appearance, app),
-        ) { (true, Some(personal_object_limit_card)) => {
-            // Render column with a spacer to ensure the tip appears at the bottom of drive
-            let col = Flex::column()
-                .with_child(index)
-                .with_child(Shrinkable::new(1., Empty::new().finish()).finish())
-                .finish();
+        ) {
+            (true, Some(personal_object_limit_card)) => {
+                // Render column with a spacer to ensure the tip appears at the bottom of drive
+                let col = Flex::column()
+                    .with_child(index)
+                    .with_child(Shrinkable::new(1., Empty::new().finish()).finish())
+                    .finish();
 
-            let mut stack = Stack::new().with_constrain_absolute_children();
-            stack.add_child(col);
-            stack.add_positioned_child(
-                personal_object_limit_card,
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::BottomMiddle,
-                    ChildAnchor::BottomMiddle,
-                ),
-            );
-            stack.finish()
-        } _ => {
-            index
-        }};
+                let mut stack = Stack::new().with_constrain_absolute_children();
+                stack.add_child(col);
+                stack.add_positioned_child(
+                    personal_object_limit_card,
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., 0.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::BottomMiddle,
+                        ChildAnchor::BottomMiddle,
+                    ),
+                );
+                stack.finish()
+            }
+            _ => index,
+        };
 
         let mut drive = Flex::column();
 
@@ -5398,7 +5406,9 @@ impl TypedActionView for DriveIndex {
                         report_error!("Creation of EnvVarCollections is not yet supported")
                     }
                     DriveObjectType::AIFact | DriveObjectType::AIFactCollection => {
-                        report_error!("Use DriveIndexAction::OpenAIFactCollection to open the pane view instead");
+                        report_error!(
+                            "Use DriveIndexAction::OpenAIFactCollection to open the pane view instead"
+                        );
                     }
                     DriveObjectType::MCPServer | DriveObjectType::MCPServerCollection => {
                         report_error!(

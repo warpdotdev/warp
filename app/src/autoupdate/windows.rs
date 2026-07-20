@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use channel_versions::VersionInfo;
 use command::blocking::Command;
 use lazy_static::lazy_static;
@@ -14,7 +14,7 @@ use tempfile::TempPath;
 use warp_core::channel::{Channel, ChannelState};
 use warpui::AppContext;
 
-use super::{release_assets_directory_url, DownloadReady};
+use super::{DownloadReady, release_assets_directory_url};
 use crate::server::telemetry::TelemetryEvent;
 use crate::util::windows::install_dir;
 

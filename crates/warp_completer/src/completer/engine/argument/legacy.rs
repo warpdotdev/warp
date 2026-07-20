@@ -15,7 +15,7 @@ use warp_util::path::ShellFamily;
 use super::add_extra_positional;
 use crate::completer::context::CompletionContext;
 use crate::completer::engine::path::{
-    sorted_cd_directories, sorted_directories_relative_to, sorted_paths_relative_to, EngineFileType,
+    EngineFileType, sorted_cd_directories, sorted_directories_relative_to, sorted_paths_relative_to,
 };
 use crate::completer::engine::{self};
 use crate::completer::matchers::MatchStrategy;
@@ -24,10 +24,10 @@ use crate::completer::suggest::{
 };
 use crate::completer::{CommandExitStatus, GeneratorContext, LocationType};
 use crate::meta::{Span, Spanned};
-use crate::parsers::hir::{Command, ShellCommand};
 use crate::parsers::ArgumentError::{
     MissingMandatoryPositional, MissingValueForName, UnexpectedArgument,
 };
+use crate::parsers::hir::{Command, ShellCommand};
 use crate::parsers::{
     ClassifiedCommand, ParseError, ParseErrorReason, ParsedToken, SignatureAtTokenIndex,
 };

@@ -1,8 +1,8 @@
 use lsp::LspManagerModel;
 use remote_server::proto::TextEdit;
+use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
-use repo_metadata::RepoMetadataModel;
 use warp_files::FileModel;
 use warp_util::content_version::ContentVersion;
 use warp_util::host_id::HostId;
@@ -96,10 +96,12 @@ fn open_server_local_creates_buffer_and_is_server_local() {
         let handle = gbm(&app);
         app.read(|ctx| {
             assert!(handle.as_ref(ctx).is_server_local(file_id));
-            assert!(handle
-                .as_ref(ctx)
-                .sync_clock_for_server_local(file_id)
-                .is_some());
+            assert!(
+                handle
+                    .as_ref(ctx)
+                    .sync_clock_for_server_local(file_id)
+                    .is_some()
+            );
         });
     })
 }

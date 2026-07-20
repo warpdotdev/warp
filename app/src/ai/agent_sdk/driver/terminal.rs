@@ -23,17 +23,17 @@ use super::AgentDriverError;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
 use crate::pane_group::NewTerminalOptions;
-use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
+use crate::terminal::TerminalView;
+use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::find::RegexDFAs;
 use crate::terminal::model::grid::RespectDisplayedOutput;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::session::ExecuteCommandOptions;
-use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
-use crate::terminal::TerminalView;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Describes why a terminal session bootstrap failed.
@@ -467,8 +467,10 @@ impl TerminalDriver {
         &mut self,
         command: &str,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>, AgentDriverError>
-    {
+    ) -> Result<
+        impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>,
+        AgentDriverError,
+    > {
         let (exit_tx, exit_rx) = oneshot::channel::<ExitCode>();
         let (start_tx, start_rx) = oneshot::channel::<BlockId>();
 
@@ -552,8 +554,10 @@ impl TerminalDriver {
         &mut self,
         target: &str,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>, AgentDriverError>
-    {
+    ) -> Result<
+        impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>,
+        AgentDriverError,
+    > {
         let cd_command = self.build_cd_command(target, ctx);
         self.execute_command(&cd_command, ctx)
     }

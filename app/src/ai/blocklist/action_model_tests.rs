@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::*;
-use crate::ai::agent::task::TaskId;
 use crate::ai::agent::AIAgentActionResultType;
+use crate::ai::agent::task::TaskId;
 
 fn make_action_result(id: &str) -> Arc<AIAgentActionResult> {
     Arc::new(AIAgentActionResult {

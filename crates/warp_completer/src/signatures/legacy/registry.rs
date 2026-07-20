@@ -232,35 +232,38 @@ impl CommandRegistry {
                         .execute_command_at_pwd(&command_to_run, None)
                         .await
                     {
-                        match output.to_string() { Ok(output_string) => {
-                            // If the command output was successful, attempt to complete on the alias.
-                            match output.status {
-                                CommandExitStatus::Success => {
-                                    let expanded_command =
-                                        alias.on_complete(&output_string, tokens, token_idx);
+                        match output.to_string() {
+                            Ok(output_string) => {
+                                // If the command output was successful, attempt to complete on the alias.
+                                match output.status {
+                                    CommandExitStatus::Success => {
+                                        let expanded_command =
+                                            alias.on_complete(&output_string, tokens, token_idx);
 
-                                    if let Some(expanded_command) = expanded_command {
-                                        return SignatureResult::NeedAliasExpansion(
-                                            expanded_command,
-                                        );
+                                        if let Some(expanded_command) = expanded_command {
+                                            return SignatureResult::NeedAliasExpansion(
+                                                expanded_command,
+                                            );
+                                        }
+                                    }
+                                    CommandExitStatus::Failure => {
+                                        // We purposefully do not log an error here if the command failed because
+                                        // many commands (such as `git`) will fail if there isn't a valid alias for
+                                        // the token.
+                                        log::debug!(
+                                            "Execution of `{}` failed with output: {}",
+                                            command_to_run,
+                                            &output_string
+                                        )
                                     }
                                 }
-                                CommandExitStatus::Failure => {
-                                    // We purposefully do not log an error here if the command failed because
-                                    // many commands (such as `git`) will fail if there isn't a valid alias for
-                                    // the token.
-                                    log::debug!(
-                                        "Execution of `{}` failed with output: {}",
-                                        command_to_run,
-                                        &output_string
-                                    )
-                                }
                             }
-                        } _ => {
-                            log::debug!(
-                                "Execution of `{command_to_run}` returned an unparseable output",
-                            );
-                        }}
+                            _ => {
+                                log::debug!(
+                                    "Execution of `{command_to_run}` returned an unparseable output",
+                                );
+                            }
+                        }
                     }
                 }
             }

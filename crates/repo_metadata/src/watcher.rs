@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 #[cfg(feature = "local_fs")]
-use futures::{future::OptionFuture, FutureExt as _};
+use futures::{FutureExt as _, future::OptionFuture};
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 

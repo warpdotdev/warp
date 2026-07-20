@@ -18,17 +18,17 @@ use warpui::r#async::SpawnedFutureHandle;
 use warpui::{EntityId, ModelContext};
 use work_queue::FindWorkQueue;
 
-use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
 use super::FindOptions;
+use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::find::model::TerminalFindModel;
+use crate::terminal::model::TerminalModel;
 use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, TotalIndex,
 };
 use crate::terminal::model::grid::grid_handler::{AbsolutePoint, GridHandler};
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
-use crate::terminal::model::TerminalModel;
 use crate::throttle::throttle;
 use crate::view_components::find::{FindDirection, FindEvent};
 

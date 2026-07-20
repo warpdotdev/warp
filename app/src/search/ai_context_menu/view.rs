@@ -29,7 +29,7 @@ use crate::drive::settings::WarpDriveSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::blocks::data_source::BlockDataSource;
 #[cfg(not(target_family = "wasm"))]
-use crate::search::ai_context_menu::code::data_source::{code_data_source, CodeSymbolCache};
+use crate::search::ai_context_menu::code::data_source::{CodeSymbolCache, code_data_source};
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::code::is_code_symbols_indexing;
 #[cfg(not(target_family = "wasm"))]

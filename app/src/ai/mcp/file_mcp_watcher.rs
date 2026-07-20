@@ -5,8 +5,8 @@ use std::pin::Pin;
 use std::sync::LazyLock;
 
 use async_channel::Sender;
-use futures::stream::AbortHandle;
 use futures::Future;
+use futures::stream::AbortHandle;
 use regex::Regex;
 use repo_metadata::repositories::{
     DetectedRepositories, DetectedRepositoriesEvent, RepoDetectionSource,
@@ -18,12 +18,12 @@ use warp_core::safe_warn;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::HomeDirectoryWatcherEvent;
 
-use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
-use crate::ai::mcp::{home_config_file_path, MCPProvider, ParsedTemplatableMCPServerResult};
-use crate::warp_managed_paths_watcher::{
-    warp_managed_mcp_config_path, WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent,
-};
 use crate::HomeDirectoryWatcher;
+use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
+use crate::ai::mcp::{MCPProvider, ParsedTemplatableMCPServerResult, home_config_file_path};
+use crate::warp_managed_paths_watcher::{
+    WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent, warp_managed_mcp_config_path,
+};
 
 static ENV_VAR_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("Regex is valid"));

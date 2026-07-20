@@ -15,7 +15,7 @@ use ai::document::{AIDocumentId, AIDocumentVersion};
 use chrono::{DateTime, Local};
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 #[cfg(feature = "voice_input")]
 use settings::Setting;
 use settings::ToggleableSetting;
@@ -26,21 +26,21 @@ use toolbar_item::AgentToolbarItemKind;
 use voice_input::{StartListeningError, VoiceSessionResult};
 use warp_cli::agent::Harness;
 use warp_core::context_flag::ContextFlag;
+use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::contrast::MinimumAllowedContrast;
-use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
 #[cfg(any(not(target_family = "wasm"), feature = "voice_input"))]
 use warp_errors::report_error;
 use warp_errors::report_if_error;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DispatchEventResult, Element, Empty, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
     Wrap, WrapFill, WrapFillEntireRun,
 };
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
@@ -51,14 +51,14 @@ pub(crate) use self::environment_selector::sort_environments_by_recency;
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };
+use crate::ai::AIRequestUsageModel;
+use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
-use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
-use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::completer::SessionContext;
@@ -78,9 +78,11 @@ use crate::settings::{
 };
 use crate::settings_view::SettingsSection;
 #[cfg(not(target_family = "wasm"))]
+use crate::terminal::ShellLaunchData;
+#[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{
-    compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
-    PluginInstallError, PluginModalKind,
+    CliAgentPluginManager, PluginInstallError, PluginModalKind, compare_versions,
+    plugin_manager_for, plugin_manager_for_with_shell,
 };
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
@@ -98,21 +100,19 @@ use crate::terminal::view::ambient_agent::{
     AmbientAgentViewModel, ModelSelector, ModelSelectorEvent,
 };
 use crate::terminal::view::init::OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING;
-use crate::terminal::view::{resolve_ai_query_routing, AIQueryRouting, TerminalAction};
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::ShellLaunchData;
+use crate::terminal::view::{AIQueryRouting, TerminalAction, resolve_ai_query_routing};
 use crate::terminal::{CLIAgent, TerminalModel};
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{
-    ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, TooltipAlignment,
-};
 use crate::view_components::DismissibleToast;
 #[cfg(not(target_family = "wasm"))]
 use crate::view_components::ToastLink;
-use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, TooltipAlignment,
+};
 use crate::workspace::ToastStack;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
+use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
@@ -126,10 +126,8 @@ const FAST_FORWARD_LOCKED_TOOLTIP: &str =
 const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
 const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
 
-const LIVE_REMOTE_VM_INDICATOR_TOOLTIP: &str =
-    "Connected to a live cloud agent session. Your next prompt continues on the running remote machine.";
-const NEW_CLOUD_VM_INDICATOR_TOOLTIP: &str =
-    "Not connected to cloud agent. Your next prompt starts a new cloud machine to continue this conversation.";
+const LIVE_REMOTE_VM_INDICATOR_TOOLTIP: &str = "Connected to a live cloud agent session. Your next prompt continues on the running remote machine.";
+const NEW_CLOUD_VM_INDICATOR_TOOLTIP: &str = "Not connected to cloud agent. Your next prompt starts a new cloud machine to continue this conversation.";
 
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
 
@@ -2507,9 +2505,11 @@ impl TypedActionView for AgentInputFooter {
             AgentInputFooterAction::ToggleAutodetectionSetting => {
                 let ai_settings = AISettings::handle(ctx);
                 ai_settings.update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .ai_autodetection_enabled_internal
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .ai_autodetection_enabled_internal
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             AgentInputFooterAction::InstallPlugin => {

@@ -1,10 +1,10 @@
 use std::process;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde_json::json;
+use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::federate::{FederateCommand, IssueGcpTokenArgs, IssueTokenArgs};
-use warp_cli::GlobalOptions;
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretManager;
@@ -106,8 +106,10 @@ fn issue_gcp_token(ctx: &mut AppContext, args: IssueGcpTokenArgs) -> Result<()> 
                 // If we can't cache the token, report an error but don't fail the command.
                 if let Some(output_path) = output_file {
                     if let Err(err) = std::fs::write(&output_path, &output) {
-                        report_error!(anyhow!(err)
-                            .context(format!("Error writing GCP token to {output_path}")));
+                        report_error!(
+                            anyhow!(err)
+                                .context(format!("Error writing GCP token to {output_path}"))
+                        );
                     }
                 }
 

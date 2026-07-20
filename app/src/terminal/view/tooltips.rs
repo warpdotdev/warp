@@ -9,11 +9,11 @@ use warpui::{AppContext, Element, EventContext};
 
 use super::{GridHighlightedLink, TerminalAction, TerminalView};
 use crate::appearance::Appearance;
+use crate::terminal::TerminalModel;
 use crate::terminal::links::directly_open_link_keybinding_string;
 use crate::terminal::model::{ObfuscateSecrets, Secret};
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::SecretTooltip;
-use crate::terminal::TerminalModel;
 use crate::util::tooltips::{TooltipLink, TooltipRedaction};
 
 cfg_if::cfg_if! {

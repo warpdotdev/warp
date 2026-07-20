@@ -18,6 +18,7 @@ use crate::appearance::Appearance;
 use crate::cloud_object::Space;
 use crate::modal::{Modal, ModalViewState};
 use crate::server::cloud_objects::update_manager::InitiatedBy;
+use crate::settings_view::SettingsSection;
 use crate::settings_view::mcp_servers::edit_page::{
     MCPServersEditPageView, MCPServersEditPageViewEvent,
 };
@@ -27,9 +28,8 @@ use crate::settings_view::mcp_servers::installation_modal::{
 use crate::settings_view::mcp_servers::list_page::{
     MCPServersListPageView, MCPServersListPageViewEvent,
 };
-use crate::settings_view::mcp_servers::{style, ServerCardItemId};
+use crate::settings_view::mcp_servers::{ServerCardItemId, style};
 use crate::settings_view::settings_page::{MatchData, PageType, SettingsPageMeta, SettingsWidget};
-use crate::settings_view::SettingsSection;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 

@@ -134,9 +134,11 @@ fn searchable_page_starts_on_the_selected_row_and_digits_still_confirm() {
             snapshot(&["auto", "gpt-5", "claude"], Some("gpt-5")),
         );
         assert!(selected_line(&app, &selector).contains("(2) gpt-5"));
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("Search:")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("Search:"))
+        );
 
         act(
             &mut app,
@@ -163,19 +165,23 @@ fn up_from_top_focuses_search_and_down_returns_to_first_row() {
         );
 
         act(&mut app, &selector, TuiOptionSelectorAction::MoveUp);
-        assert!(app.read(|ctx| selector
-            .as_ref(ctx)
-            .search_field
-            .as_ref()
-            .expect("searchable page has an editor")
-            .as_ref(ctx)
-            .is_focused()));
-        assert!(app.read(|ctx| selector
-            .as_ref(ctx)
-            .interaction
-            .selection
-            .selected_index()
-            .is_none()));
+        assert!(app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .search_field
+                .as_ref()
+                .expect("searchable page has an editor")
+                .as_ref(ctx)
+                .is_focused()
+        }));
+        assert!(app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .interaction
+                .selection
+                .selected_index()
+                .is_none()
+        }));
 
         act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
         assert!(selected_line(&app, &selector).contains("(1) auto"));
@@ -200,19 +206,23 @@ fn search_and_last_option_wrap_in_both_directions() {
 
         // Down from the last option returns to Search.
         act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
-        assert!(app.read(|ctx| selector
-            .as_ref(ctx)
-            .search_field
-            .as_ref()
-            .expect("searchable page has an editor")
-            .as_ref(ctx)
-            .is_focused()));
-        assert!(app.read(|ctx| selector
-            .as_ref(ctx)
-            .interaction
-            .selection
-            .selected_index()
-            .is_none()));
+        assert!(app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .search_field
+                .as_ref()
+                .expect("searchable page has an editor")
+                .as_ref(ctx)
+                .is_focused()
+        }));
+        assert!(app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .interaction
+                .selection
+                .selected_index()
+                .is_none()
+        }));
     });
 }
 #[test]
@@ -258,13 +268,15 @@ fn typing_a_letter_from_the_list_focuses_and_seeds_search() {
             &selector,
             TuiOptionSelectorAction::FocusSearchAndInsert('g'),
         );
-        assert!(app.read(|ctx| selector
-            .as_ref(ctx)
-            .search_field
-            .as_ref()
-            .expect("searchable page has an editor")
-            .as_ref(ctx)
-            .is_focused()));
+        assert!(app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .search_field
+                .as_ref()
+                .expect("searchable page has an editor")
+                .as_ref(ctx)
+                .is_focused()
+        }));
         assert_eq!(
             app.read(|ctx| selector
                 .as_ref(ctx)
@@ -275,9 +287,11 @@ fn typing_a_letter_from_the_list_focuses_and_seeds_search() {
                 .text(ctx)),
             "g"
         );
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("gpt-5")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("gpt-5"))
+        );
     });
 }
 
@@ -567,9 +581,11 @@ fn digits_are_viewport_relative_in_scrolled_lists() {
         // Scroll two rows down; digit 1 now confirms the third row,
         // and the clipped top renders an overflow marker.
         act(&mut app, &selector, TuiOptionSelectorAction::ScrollBy(2));
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.trim() == "↑"));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.trim() == "↑")
+        );
         act(
             &mut app,
             &selector,
@@ -596,9 +612,11 @@ fn navigation_scrolls_to_keep_the_selection_visible() {
         }
         // The selection scrolled beyond the first viewport.
         assert!(selected_line(&app, &selector).contains("row-9"));
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.trim() == "↑"));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.trim() == "↑")
+        );
     });
 }
 
@@ -663,18 +681,22 @@ fn loading_and_empty_states_render_non_selectable_status_rows() {
         let mut loading = snapshot(&["Skip (advanced)"], None);
         loading.status = OptionSourceStatus::Loading;
         set_page(&mut app, &selector, loading);
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("Loading…")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("Loading…"))
+        );
 
         let mut empty = snapshot_of(Vec::new(), None);
         empty.status = OptionSourceStatus::Empty {
             message: "No harnesses available".to_string(),
         };
         set_page(&mut app, &selector, empty);
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("No harnesses available")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("No harnesses available"))
+        );
         // Nothing is confirmable in an empty list.
         confirm(&mut app, &selector);
         assert!(primary_events(&events).is_empty());
@@ -691,9 +713,11 @@ fn failed_state_offers_a_retry_row_that_emits_retry_requested() {
         };
         set_page(&mut app, &selector, failed);
         let lines = render_lines(&app, &selector, 60);
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Unable to load secrets")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Unable to load secrets"))
+        );
         assert!(lines.iter().any(|line| line.contains("Retry")));
         // The Retry row is reachable by keyboard.
         act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
@@ -715,9 +739,11 @@ fn custom_text_editor_trims_validates_and_submits() {
         });
         set_page(&mut app, &selector, with_footer);
         // The footer renders and confirming it opens the one-line editor.
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("Custom host…")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("Custom host…"))
+        );
         act(&mut app, &selector, TuiOptionSelectorAction::SelectItem(1));
         assert!(custom_text_field(&app, &selector).read(&app, |field, _| field.is_focused()));
 
@@ -730,9 +756,11 @@ fn custom_text_editor_trims_validates_and_submits() {
         );
         confirm(&mut app, &selector);
         assert!(primary_events(&events).is_empty());
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("Enter a value to continue.")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("Enter a value to continue."))
+        );
 
         // Valid input is trimmed and submitted.
         for c in "my-host ".chars() {
@@ -761,9 +789,11 @@ fn custom_text_editor_trims_validates_and_submits() {
 
         // Editing the custom option again starts from the submitted value.
         confirm(&mut app, &selector);
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("Custom host…: my-host")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("Custom host…: my-host"))
+        );
     });
 }
 
@@ -838,9 +868,11 @@ fn create_new_auth_secret_footer_is_ignored() {
         set_page(&mut app, &selector, with_footer);
         // Resource creation is out of scope in the TUI: the
         // footer contributes no navigable item.
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .all(|line| !line.contains("New API key")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .all(|line| !line.contains("New API key"))
+        );
     });
 }
 
@@ -852,9 +884,11 @@ fn set_page_invalidates_layout() {
 
         set_page(&mut app, &selector, snapshot(&["a"], Some("a")));
 
-        assert!(events
-            .borrow()
-            .contains(&TuiOptionSelectorEvent::LayoutInvalidated));
+        assert!(
+            events
+                .borrow()
+                .contains(&TuiOptionSelectorEvent::LayoutInvalidated)
+        );
     });
 }
 #[test]
@@ -872,9 +906,11 @@ fn layout_invalidated_is_emitted_only_when_overflow_markers_toggle() {
         for _ in 0..5 {
             act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
         }
-        assert!(!events
-            .borrow()
-            .contains(&TuiOptionSelectorEvent::LayoutInvalidated));
+        assert!(
+            !events
+                .borrow()
+                .contains(&TuiOptionSelectorEvent::LayoutInvalidated)
+        );
 
         // Scrolling past the viewport reveals the `↑` marker: one event.
         act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
@@ -903,9 +939,11 @@ fn layout_invalidated_is_emitted_when_the_custom_text_error_row_toggles() {
 
         // An empty submit adds the validation-error row.
         confirm(&mut app, &selector);
-        assert!(events
-            .borrow()
-            .contains(&TuiOptionSelectorEvent::LayoutInvalidated));
+        assert!(
+            events
+                .borrow()
+                .contains(&TuiOptionSelectorEvent::LayoutInvalidated)
+        );
         events.borrow_mut().clear();
 
         // Typing clears the error row.
@@ -914,9 +952,11 @@ fn layout_invalidated_is_emitted_when_the_custom_text_error_row_toggles() {
             &selector,
             TuiEditorViewAction::Editor(TuiEditorAction::InsertChar('x')),
         );
-        assert!(events
-            .borrow()
-            .contains(&TuiOptionSelectorEvent::LayoutInvalidated));
+        assert!(
+            events
+                .borrow()
+                .contains(&TuiOptionSelectorEvent::LayoutInvalidated)
+        );
     });
 }
 

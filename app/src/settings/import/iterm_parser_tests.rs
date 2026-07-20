@@ -6,12 +6,12 @@ use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::fonts::FontInfo;
 use warpui::keymap::Keystroke;
 
-use super::{color_dictionary_to_coloru, ITermTheme, ITermThemeType};
+use super::{ITermTheme, ITermThemeType, color_dictionary_to_coloru};
 use crate::settings::import::config::{
     GlobalHotkey, HotkeyError, ImportedFont, ParseableConfig, ThemeType,
 };
 use crate::settings::import::iterm_parser::{
-    default_dark_theme, default_light_theme, Flags, ITermKeystroke, ITermProfile,
+    Flags, ITermKeystroke, ITermProfile, default_dark_theme, default_light_theme,
 };
 
 fn courier_new() -> Vec<FontInfo> {

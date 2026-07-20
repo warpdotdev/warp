@@ -10,8 +10,8 @@ use settings::Setting;
 use siphasher::sip::SipHasher;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{
     NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
@@ -53,7 +53,7 @@ use crate::ai::agent_management::details_action_buttons::{
 use crate::ai::agent_management::telemetry::{
     AgentManagementTelemetryEvent, ArtifactType, FilterType, OpenedFrom,
 };
-use crate::ai::ambient_agents::{cancel_task_with_toast, AgentSource};
+use crate::ai::ambient_agents::{AgentSource, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::format_credits;
 use crate::ai::conversation_details_panel::{
@@ -90,7 +90,7 @@ use crate::workspace::{
     ForkedConversationDestination, RestoreConversationLayout, ToastStack, WorkspaceAction,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, AgentModeEntrypoint};
+use crate::{AgentModeEntrypoint, send_telemetry_from_ctx};
 
 lazy_static! {
     static ref HASHER: SipHasher = SipHasher::new_with_keys(0, 0);
@@ -1004,43 +1004,49 @@ impl AgentManagementView {
             self.list_state.add_item();
             let card_key = card.item_id.as_key();
 
-            match old_items.remove(&card_key) { Some(mut existing) => {
-                // Update artifacts view if it exists, or create if needed
-                if should_show_artifacts(&card.artifacts) {
-                    if let Some(view) = &existing.artifact_buttons_view {
-                        view.update(ctx, |v, ctx| v.update_artifacts(&card.artifacts, ctx));
+            match old_items.remove(&card_key) {
+                Some(mut existing) => {
+                    // Update artifacts view if it exists, or create if needed
+                    if should_show_artifacts(&card.artifacts) {
+                        if let Some(view) = &existing.artifact_buttons_view {
+                            view.update(ctx, |v, ctx| v.update_artifacts(&card.artifacts, ctx));
+                        } else {
+                            existing.artifact_buttons_view =
+                                Some(self.create_artifact_buttons_view(&card.artifacts, ctx));
+                        }
                     } else {
-                        existing.artifact_buttons_view =
-                            Some(self.create_artifact_buttons_view(&card.artifacts, ctx));
+                        existing.artifact_buttons_view = None;
                     }
-                } else {
-                    existing.artifact_buttons_view = None;
+
+                    existing.action_buttons_view.update(ctx, |row, ctx| {
+                        row.set_config(card.action_buttons_config, ctx)
+                    });
+
+                    new_items.push(existing);
                 }
+                _ => {
+                    let artifact_buttons_view = if should_show_artifacts(&card.artifacts) {
+                        Some(self.create_artifact_buttons_view(&card.artifacts, ctx))
+                    } else {
+                        None
+                    };
+                    let action_buttons_view = self.create_action_buttons_view(
+                        card.item_id,
+                        card.action_buttons_config,
+                        ctx,
+                    );
 
-                existing.action_buttons_view.update(ctx, |row, ctx| {
-                    row.set_config(card.action_buttons_config, ctx)
-                });
-
-                new_items.push(existing);
-            } _ => {
-                let artifact_buttons_view = if should_show_artifacts(&card.artifacts) {
-                    Some(self.create_artifact_buttons_view(&card.artifacts, ctx))
-                } else {
-                    None
-                };
-                let action_buttons_view =
-                    self.create_action_buttons_view(card.item_id, card.action_buttons_config, ctx);
-
-                new_items.push(CardState {
-                    hover_state: MouseStateHandle::default(),
-                    avatar_hover_state: MouseStateHandle::default(),
-                    session_status_hover_state: MouseStateHandle::default(),
-                    action_buttons_hover_state: MouseStateHandle::default(),
-                    artifact_buttons_view,
-                    action_buttons_view,
-                    item_id: card.item_id,
-                });
-            }}
+                    new_items.push(CardState {
+                        hover_state: MouseStateHandle::default(),
+                        avatar_hover_state: MouseStateHandle::default(),
+                        session_status_hover_state: MouseStateHandle::default(),
+                        action_buttons_hover_state: MouseStateHandle::default(),
+                        artifact_buttons_view,
+                        action_buttons_view,
+                        item_id: card.item_id,
+                    });
+                }
+            }
         }
 
         // Restore approximate scroll position for the new list state

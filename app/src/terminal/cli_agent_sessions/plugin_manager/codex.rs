@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{
-    compare_versions, run_cli_command_logged, CliAgentPluginManager, PluginInstallError,
-    PluginInstructionStep, PluginInstructions,
+    CliAgentPluginManager, PluginInstallError, PluginInstructionStep, PluginInstructions,
+    compare_versions, run_cli_command_logged,
 };
 use crate::features::FeatureFlag;
 use crate::terminal::model::session::LocalCommandExecutor;

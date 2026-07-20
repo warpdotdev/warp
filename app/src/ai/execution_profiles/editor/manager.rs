@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WindowId};
 
+use crate::PaneViewLocator;
 use crate::ai::execution_profiles::profiles::ClientProfileId;
 use crate::pane_group::{ExecutionProfileEditorPane, PaneContent};
-use crate::PaneViewLocator;
 
 /// Manages execution profile editor panes across different windows and profiles.
 ///

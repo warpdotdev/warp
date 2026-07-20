@@ -8,10 +8,10 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use super::{Session, SessionType, Sessions};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::model::session::SessionsEvent;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
-use crate::terminal::ShellLaunchData;
 
 pub struct ActiveSession {
     model_event_dispatcher: ModelHandle<ModelEventDispatcher>,

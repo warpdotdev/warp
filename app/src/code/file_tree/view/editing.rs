@@ -10,12 +10,12 @@ use std::sync::Arc;
 use repo_metadata::file_tree_store::FileTreeEntryState;
 use repo_metadata::{FileMetadata, FileTreeEntry};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::elements::MouseStateHandle;
 use warpui::ViewContext;
+use warpui::elements::MouseStateHandle;
 
 use super::{FileTreeIdentifier, FileTreeItem, FileTreeView};
-use crate::code::file_tree::view::{PendingEdit, PendingEditKind};
 use crate::code::file_tree::FileTreeEvent;
+use crate::code::file_tree::view::{PendingEdit, PendingEditKind};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 

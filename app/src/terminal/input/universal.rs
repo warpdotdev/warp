@@ -5,12 +5,12 @@ use warpui::elements::{
 };
 use warpui::{AppContext, SingletonEntity};
 
+use super::Input;
 use super::common::{
     add_command_xray_overlay, add_input_suggestions_overlays, add_vim_status_to_stack,
     add_voltron_overlay, add_workflow_info_overlay, maybe_add_buy_credits_banner,
     wrap_input_with_terminal_padding_and_focus_handler,
 };
-use super::Input;
 use crate::ai::blocklist::InputType;
 use crate::appearance::Appearance;
 use crate::context_chips::spacing;

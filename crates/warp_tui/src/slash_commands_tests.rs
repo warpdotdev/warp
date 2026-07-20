@@ -2,8 +2,8 @@ use ai::skills::SkillReference;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp::tui_export::{
-    slash_commands, AcceptSlashCommandOrSavedPrompt, DetectedCommand, DetectedSkillCommand,
-    ParsedSlashCommandInput, SlashCommandId, SlashCommandMixer,
+    AcceptSlashCommandOrSavedPrompt, DetectedCommand, DetectedSkillCommand,
+    ParsedSlashCommandInput, SlashCommandId, SlashCommandMixer, slash_commands,
 };
 use warp_search_core::inline_menu::InlineMenuSelection;
 use warpui_core::elements::tui::{
@@ -13,10 +13,11 @@ use warpui_core::elements::tui::{
 use warpui_core::{App, AppContext, EntityIdMap};
 
 use super::{
+    MAX_VISIBLE_ROWS, TuiSlashCommandModel, TuiSlashCommandRow,
     argument_hint_text_for_parsed_input, highlighted_prefix_len_for_parsed_input,
-    menu_query_for_parsed_input, TuiSlashCommandModel, TuiSlashCommandRow, MAX_VISIBLE_ROWS,
+    menu_query_for_parsed_input,
 };
-use crate::inline_menu::{keep_selected_visible, TuiInlineMenu};
+use crate::inline_menu::{TuiInlineMenu, keep_selected_visible};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
 fn parsed_skill(argument: Option<&str>) -> ParsedSlashCommandInput {
@@ -58,9 +59,11 @@ fn slash_command_menu_renders_view_logs_row() {
             let lines = render_menu_lines(element, ctx);
 
             assert!(lines.iter().any(|line| line.contains("/view-logs")));
-            assert!(lines
-                .iter()
-                .any(|line| line.contains("Bundle your TUI logs")));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Bundle your TUI logs"))
+            );
         });
     });
 }

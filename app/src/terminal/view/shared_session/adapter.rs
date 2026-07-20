@@ -18,9 +18,9 @@ use crate::banner::{Banner, BannerTextContent};
 use crate::terminal::shared_session::participant_avatar_view::ParticipantAvatarView;
 use crate::terminal::shared_session::presence_manager::PresenceManager;
 use crate::terminal::shared_session::render_util::{
-    participant_avatar_for_selected_block, ParticipantAvatarParams,
+    ParticipantAvatarParams, participant_avatar_for_selected_block,
 };
-use crate::terminal::view::{throttle, TerminalAction, TerminalView};
+use crate::terminal::view::{TerminalAction, TerminalView, throttle};
 use crate::ui_components::icons::Icon;
 
 /// The kind of shared session this is.

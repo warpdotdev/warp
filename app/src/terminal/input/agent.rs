@@ -16,11 +16,12 @@ use super::common::{
     wrap_input_with_terminal_padding_and_focus_handler,
 };
 use super::{Input, InputAction, InputDropTargetData};
-use crate::ai::blocklist::agent_view::shortcuts::{
-    render_agent_shortcuts_view, AgentShortcutsViewContext,
-};
-use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::BlocklistAIHistoryModel;
 use crate::ai::blocklist::InputType;
+use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::ai::blocklist::agent_view::shortcuts::{
+    AgentShortcutsViewContext, render_agent_shortcuts_view,
+};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::appearance::Appearance;
 use crate::context_chips::spacing::{self};
@@ -29,7 +30,6 @@ use crate::features::FeatureFlag;
 use crate::settings::InputModeSettings;
 use crate::terminal::settings::TerminalSettings;
 use crate::terminal::view::TerminalAction;
-use crate::BlocklistAIHistoryModel;
 
 pub(super) const CLOUD_MODE_V2_MAX_WIDTH: f32 = 720.;
 

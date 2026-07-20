@@ -23,8 +23,8 @@ use warpui_core::fonts::{Cache, FamilyId, Weight};
 use warpui_core::presenter::ChildView;
 use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
 use warpui_core::{
-    platform, AddWindowOptions, AppContext, AssetProvider, Element, Entity, SingletonEntity as _,
-    TypedActionView, View, ViewContext, ViewHandle,
+    AddWindowOptions, AppContext, AssetProvider, Element, Entity, SingletonEntity as _,
+    TypedActionView, View, ViewContext, ViewHandle, platform,
 };
 
 #[derive(Clone, Copy, RustEmbed)]

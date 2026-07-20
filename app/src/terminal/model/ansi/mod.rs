@@ -1232,7 +1232,9 @@ where
                             );
                         }
                         _ => {
-                            log::warn!("Invalid Warp OSC marker parameter for completions match metadata: {parameter}");
+                            log::warn!(
+                                "Invalid Warp OSC marker parameter for completions match metadata: {parameter}"
+                            );
                         }
                     }
                 }

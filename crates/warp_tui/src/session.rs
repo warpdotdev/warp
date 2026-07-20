@@ -5,8 +5,8 @@
 //! defers creating the first terminal session until login.
 
 use anyhow::{Context, Result};
-use clap::error::ErrorKind;
 use clap::Parser;
+use clap::error::ErrorKind;
 use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::telemetry::TelemetryEvent as _;

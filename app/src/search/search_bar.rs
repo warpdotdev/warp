@@ -20,10 +20,10 @@ use crate::editor::{
     PlainTextEditorViewAction as EditorAction, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions,
 };
+use crate::search::QueryFilter;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::SearchMixer;
 use crate::search::result_renderer::{QueryResultIndex, QueryResultRenderer};
-use crate::search::QueryFilter;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 

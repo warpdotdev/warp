@@ -7,8 +7,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use ai::diff_validation::{
-    fuzzy_match_diffs, fuzzy_match_v4a_diffs, AIRequestedCodeDiff, DiffDelta, DiffMatchFailures,
-    DiffType, ParsedDiff, SearchAndReplace, V4AHunk,
+    AIRequestedCodeDiff, DiffDelta, DiffMatchFailures, DiffType, ParsedDiff, SearchAndReplace,
+    V4AHunk, fuzzy_match_diffs, fuzzy_match_v4a_diffs,
 };
 use itertools::Itertools;
 use vec1::Vec1;

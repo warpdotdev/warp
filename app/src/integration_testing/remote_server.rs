@@ -8,7 +8,7 @@ use warp_errors::report_error;
 use warpui::integration::{
     AssertionCallback, AssertionOutcome, AssertionWithDataCallback, StepDataMap, TestStep,
 };
-use warpui::{async_assert, async_assert_eq, App, SingletonEntity, WindowId};
+use warpui::{App, SingletonEntity, WindowId, async_assert, async_assert_eq};
 
 use crate::integration_testing::view_getters::single_terminal_view_for_tab;
 use crate::remote_server::manager::{

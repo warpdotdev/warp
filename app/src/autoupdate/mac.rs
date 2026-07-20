@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, fs, str};
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use channel_versions::VersionInfo;
-use command::blocking;
 use command::r#async::Command;
+use command::blocking;
 use futures::{StreamExt, TryStreamExt as _};
 use futures_lite::future;
 use instant::Instant;
@@ -22,7 +22,7 @@ use warp_core::safe_error;
 use warp_errors::report_error;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
-use super::{release_assets_directory_url, DownloadReady};
+use super::{DownloadReady, release_assets_directory_url};
 use crate::appearance::AppearanceManager;
 use crate::autoupdate::{AutoupdateStage, AutoupdateState};
 use crate::channel::{Channel, ChannelState};

@@ -62,8 +62,8 @@ use std::hash::Hash;
 use std::ops::{Deref as _, Range};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -73,30 +73,29 @@ use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
 use ai::index::full_source_code_embedding::manager::{BuildSource, CodebaseIndexManager};
 use async_channel::{Receiver, Sender};
 use base64::Engine as _;
-use block_banner::{render_warpification_banner, WarpifyBannerState};
-pub use block_banner::{WithinBlockBanner, BLOCK_BANNER_HEIGHT};
+pub use block_banner::{BLOCK_BANNER_HEIGHT, WithinBlockBanner};
+use block_banner::{WarpifyBannerState, render_warpification_banner};
 use block_onboarding::onboarding_drive_sharing_block::OnboardingDriveSharingBlock;
 use bookmarks::render_floating_block_snapshot;
 use chrono::{DateTime, Local, NaiveDateTime};
 use command_corrections::rules::generic::history::History as CommandCorrectionsHistoryRule;
 use command_corrections::rules::{Rule, RuleId as CommandCorrectionsRuleId};
-use command_corrections::{correct_command, Command, Correction, HistoryItem, SessionMetadata};
+use command_corrections::{Command, Correction, HistoryItem, SessionMetadata, correct_command};
 use enclose::enclose;
 pub use init::{
-    init, CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
-    TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
+    CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
+    TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING, init,
 };
 use init::{INPUT_BOX_VISIBLE_KEY, TOGGLE_BLOCK_FILTER_KEYBINDING};
 use inline_banner::{
-    render_alias_expansion_banner, render_aws_bedrock_login_banner,
-    render_aws_cli_not_installed_banner, render_inline_notifications_discovery_banner,
-    render_inline_notifications_error_banner, render_inline_shared_session_ended_banner,
-    render_inline_shared_session_started_banner, render_open_in_warp_banner,
-    render_shell_process_terminated_banner, render_vim_mode_banner, AliasExpansionBanner,
-    AliasExpansionBannerAction, AnonymousUserAISignUpBannerState, AnonymousUserLoginBannerAction,
-    AwsBedrockLoginBannerAction, AwsBedrockLoginBannerState, AwsCliNotInstalledBannerAction,
-    AwsCliNotInstalledBannerState, ByoLlmAuthBannerSessionState, OpenInWarpBannerState,
-    VimModeBannerAction,
+    AliasExpansionBanner, AliasExpansionBannerAction, AnonymousUserAISignUpBannerState,
+    AnonymousUserLoginBannerAction, AwsBedrockLoginBannerAction, AwsBedrockLoginBannerState,
+    AwsCliNotInstalledBannerAction, AwsCliNotInstalledBannerState, ByoLlmAuthBannerSessionState,
+    OpenInWarpBannerState, VimModeBannerAction, render_alias_expansion_banner,
+    render_aws_bedrock_login_banner, render_aws_cli_not_installed_banner,
+    render_inline_notifications_discovery_banner, render_inline_notifications_error_banner,
+    render_inline_shared_session_ended_banner, render_inline_shared_session_started_banner,
+    render_open_in_warp_banner, render_shell_process_terminated_banner, render_vim_mode_banner,
 };
 pub use inline_banner::{NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction};
 use instant::Instant;
@@ -123,7 +122,7 @@ use session_sharing_protocol::sharer::{
 use settings::{Setting, ToggleableSetting};
 use shared_session::cloud_conversation_continuation::CloudConversationContinuationUiState;
 pub(crate) use shared_session::cloud_conversation_continuation::{
-    resolve_ai_query_routing, AIQueryRouting,
+    AIQueryRouting, resolve_ai_query_routing,
 };
 use shared_session::{SharedSessionAdapter, Viewer};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
@@ -131,10 +130,10 @@ use sum_tree::SeekBias;
 use use_agent_footer::UseAgentToolbar;
 use uuid::Uuid;
 use vec1::vec1;
+use warp_core::r#async::debounce;
 use warp_core::channel::ChannelState;
 use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
-use warp_core::r#async::debounce;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_errors::{report_error, report_if_error};
@@ -144,6 +143,8 @@ use warp_util::path::LineAndColumnArg;
 use warp_util::path::ShellFamily;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::assets::asset_cache::{AssetCache, AssetCacheEvent};
+use warpui::r#async::executor::Background;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::clipboard_utils::get_image_filepaths_from_paths;
 use warpui::elements::new_scrollable::{
@@ -152,32 +153,30 @@ use warpui::elements::new_scrollable::{
 };
 use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
 use warpui::elements::{
-    get_rich_content_position_id, Align, Border, ChildAnchor, ChildView, Clipped,
-    ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DispatchEventResult, DropTarget, DropTargetData, Empty, EventHandler, Expanded, Fill, Flex,
-    Hoverable, Icon, LiveElement, MouseStateHandle, NewScrollable, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds,
-    Radius, Rect, SavePosition, ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth,
-    Shrinkable, Stack, Text,
+    Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, DropTarget, DropTargetData,
+    Empty, EventHandler, Expanded, Fill, Flex, Hoverable, Icon, LiveElement, MouseStateHandle,
+    NewScrollable, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect, SavePosition,
+    ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text,
+    get_rich_content_position_id,
 };
 use warpui::event::ModifiersState;
 use warpui::fonts::{Cache as FontCache, FamilyId, Properties};
-use warpui::geometry::vector::{vec2f, Vector2F};
+use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::image_cache::ImageType;
 use warpui::keymap::Keystroke;
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
 use warpui::platform::{Cursor, OperatingSystem};
-use warpui::r#async::executor::Background;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::text::SelectionType;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
 use warpui::windowing::WindowManager;
 use warpui::{
-    end_trace_after_next, record_trace_event, windowing, AccessibilityData, AppContext,
-    BlurContext, CursorInfo, Element, Entity, EntityId, EventContext, FocusContext, ModelAsRef,
-    ModelHandle, SingletonEntity, Tracked, TypedActionView, View, ViewAsRef, ViewContext,
-    ViewHandle, WeakModelHandle, WeakViewHandle, WindowId,
+    AccessibilityData, AppContext, BlurContext, CursorInfo, Element, Entity, EntityId,
+    EventContext, FocusContext, ModelAsRef, ModelHandle, SingletonEntity, Tracked, TypedActionView,
+    View, ViewAsRef, ViewContext, ViewHandle, WeakModelHandle, WeakViewHandle, WindowId,
+    end_trace_after_next, record_trace_event, windowing,
 };
 
 use self::link_detection::HighlightedLinkOption;
@@ -196,17 +195,17 @@ use super::model::secrets::RichContentSecretTooltipInfo;
 use super::model::selection::ExpandedSelectionRange;
 use super::model::session::SessionBootstrappedEvent;
 use super::settings::AltScreenPaddingMode;
-use super::ssh::util::{parse_interactive_ssh_command, InteractiveSshCommand, SshWarpifyCommand};
+use super::ssh::util::{InteractiveSshCommand, SshWarpifyCommand, parse_interactive_ssh_command};
+use super::warpify::WarpificationSource;
 use super::warpify::success_block::{WarpifySuccessBlock, WarpifySuccessBlockEvent};
 use super::warpify::trigger_state::{SshBlockState, WarpifyState};
-use super::warpify::WarpificationSource;
-use super::{cli_agent, CLIAgent, GridType};
+use super::{CLIAgent, GridType, cli_agent};
+#[cfg(any(test, feature = "integration_tests"))]
+use crate::ai::agent::UserQueryMode;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::agent::todos::popup::{AgentTodosPopupEvent, AgentTodosPopupView};
-#[cfg(any(test, feature = "integration_tests"))]
-use crate::ai::agent::UserQueryMode;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentActionType, AIAgentCitation, AIAgentContext, AIAgentExchangeId,
     AIAgentInput, AIAgentOutputStatus, AIAgentPtyWriteMode, AIAgentTextSection,
@@ -218,17 +217,17 @@ use crate::ai::agent::{
 use crate::ai::agent::{CurrentHead, DiffBase};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::{
-    conversation_output_status_from_conversation, AmbientAgentTaskId, AmbientConversationStatus,
+    AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
 };
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::agent_view::{
-    fork_from_last_known_good_state_exchange_id, get_agent_view_entry_block_position_id,
-    is_in_cloud_context, AgentViewController, AgentViewControllerEvent,
-    AgentViewConversationSelection, AgentViewDisplayMode, AgentViewEntryBlockParams,
-    AgentViewEntryOrigin, AgentViewHeaderDisabledTheme, AgentViewHeaderTheme,
-    AgentViewZeroStateBlock, AgentViewZeroStateEvent, EphemeralMessageModel,
+    AgentViewController, AgentViewControllerEvent, AgentViewConversationSelection,
+    AgentViewDisplayMode, AgentViewEntryBlockParams, AgentViewEntryOrigin,
+    AgentViewHeaderDisabledTheme, AgentViewHeaderTheme, AgentViewZeroStateBlock,
+    AgentViewZeroStateEvent, ENTER_OR_EXIT_CONFIRMATION_WINDOW, EphemeralMessageModel,
     ExitConfirmationTrigger, GuiInputModePolicy, InlineAgentViewHeader, OrchestrationPillBar,
-    ENTER_OR_EXIT_CONFIRMATION_WINDOW,
+    fork_from_last_known_good_state_exchange_id, get_agent_view_entry_block_position_id,
+    is_in_cloud_context,
 };
 use crate::ai::blocklist::block::cli::{CLISubagentView, CLISubagentViewEvent};
 use crate::ai::blocklist::block::cli_controller::{
@@ -249,24 +248,24 @@ use crate::ai::blocklist::orchestration_topology::OrchestrationNavigationDirecti
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
 use crate::ai::blocklist::summarization_cancel_dialog::SummarizationCancelDialog;
-use crate::ai::blocklist::telemetry_banner::{should_collect_ai_ugc_telemetry, TelemetryBanner};
+use crate::ai::blocklist::telemetry_banner::{TelemetryBanner, should_collect_ai_ugc_telemetry};
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, TimingInfo,
 };
 use crate::ai::blocklist::{
-    ai_brand_color, block_context_from_terminal_model,
-    get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
-    is_lrc_auto_queue_active, AIBlock, AIBlockEvent, AutofireAction, BlocklistAIActionEvent,
-    BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, ClientIdentifiers,
-    ConversationSelection, ConversationStatusUpdate, InputConfig, InputType,
+    AIBlock, AIBlockEvent, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, AutofireAction,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextEvent,
+    BlocklistAIContextModel, BlocklistAIController, BlocklistAIControllerEvent,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel,
+    ClientIdentifiers, ConversationSelection, ConversationStatusUpdate, InputConfig, InputType,
     InputTypeAutoDetectionSource, LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel,
-    MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
-    PendingAttachment, PendingQueryState, QueuedQuery, QueuedQueryId, QueuedQueryModel,
-    QueuedQueryOrigin, RequestFileEditsFormatKind, ShellCommandExecutor, ShellCommandExecutorEvent,
-    SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
+    MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PRE_REWIND_PREFIX,
+    PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedQuery, QueuedQueryId,
+    QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind, ShellCommandExecutor,
+    ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent,
+    StartAgentRequest, ai_brand_color, block_context_from_terminal_model,
+    get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
+    is_lrc_auto_queue_active,
 };
 use crate::ai::conversation_details_panel::ConversationDetailsPanelEvent;
 use crate::ai::conversation_utils;
@@ -282,14 +281,14 @@ use crate::ai::predict::prompt_suggestions::{
     is_accept_prompt_suggestion_bound_to_cmd_enter,
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
-use crate::ai_assistant::{AskAIType, ASK_AI_ASSISTANT_TEXT};
+use crate::ai_assistant::{ASK_AI_ASSISTANT_TEXT, AskAIType};
 use crate::antivirus::AntivirusInfo;
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthStateProvider, UserUid};
-use crate::autoupdate::{self, get_update_state, AutoupdateStage};
+use crate::autoupdate::{self, AutoupdateStage, get_update_state};
 use crate::banner::{
     Banner, BannerAction, BannerEvent, BannerState, BannerTextButton, BannerTextContent,
     DismissalType,
@@ -299,8 +298,10 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObject, GenericStringObjectFormat, JsonObjectType};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
+#[cfg(feature = "local_fs")]
+use crate::code_review::DiffSetScope;
 use crate::code_review::comments::{
-    convert_insert_review_comments, AttachedReviewComment, PendingImportedReviewComment,
+    AttachedReviewComment, PendingImportedReviewComment, convert_insert_review_comments,
 };
 #[cfg(feature = "local_fs")]
 use crate::code_review::context::{
@@ -313,14 +314,12 @@ use crate::code_review::diff_state::{DiffMode, GitDeltaPreference};
 use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusModel, GitStatusMetadata};
 use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-#[cfg(feature = "local_fs")]
-use crate::code_review::DiffSetScope;
+use crate::context_chips::ContextChipKind;
 use crate::context_chips::prompt::{Prompt, PromptSelection};
 use crate::context_chips::prompt_type::PromptType;
-use crate::context_chips::ContextChipKind;
+use crate::drive::CloudObjectTypeAndId;
 use crate::drive::settings::WarpDriveSettings;
 use crate::drive::sharing::ShareableObject;
-use crate::drive::CloudObjectTypeAndId;
 use crate::editor::{AutosuggestionType, CrdtOperation, EditorAction};
 use crate::env_vars::env_var_collection_block::{
     EnvVarCollectionBlock, EnvVarCollectionBlockEvent,
@@ -339,7 +338,7 @@ use crate::remote_server::manager::{
     RemoteServerInitPhase, RemoteServerManager, RemoteServerManagerEvent,
 };
 use crate::resource_center::{
-    mark_feature_used_and_write_to_user_defaults, Tip, TipHint, TipsCompleted,
+    Tip, TipHint, TipsCompleted, mark_feature_used_and_write_to_user_defaults,
 };
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -367,19 +366,20 @@ use crate::settings::{
 };
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::settings_view::{flags, SettingsSection};
+use crate::settings_view::{SettingsSection, flags};
 use crate::shell_indicator::ShellIndicatorType;
-use crate::terminal::alias::{check_for_alias_async, AliasedCommand};
+use crate::terminal::alias::{AliasedCommand, check_for_alias_async};
 use crate::terminal::alt_screen::alt_screen_element::AltScreenElement;
 use crate::terminal::alt_screen::should_intercept_scroll;
 use crate::terminal::alt_screen_reporting::{AltScreenReporting, AltScreenReportingChangedEvent};
 use crate::terminal::block_filter::{
-    filter_button_position_id, BlockFilterEditor, BlockFilterEditorEvent, BlockFilterQuery,
-    OpenedFromClick,
+    BlockFilterEditor, BlockFilterEditorEvent, BlockFilterQuery, OpenedFromClick,
+    filter_button_position_id,
 };
 use crate::terminal::block_list_element::{
-    render_hoverable_block_button, BlockListElement, BlockListMenuSource, BlockListMouseStates,
-    BlockSelectAction, BlockTextSelectAction, SnackbarHeaderState, ToolbeltButtonTooltip,
+    BlockListElement, BlockListMenuSource, BlockListMouseStates, BlockSelectAction,
+    BlockTextSelectAction, SnackbarHeaderState, ToolbeltButtonTooltip,
+    render_hoverable_block_button,
 };
 use crate::terminal::block_list_viewport::{
     AutoscrollBehavior, InputMode, OverhangingBlock, ScrollPosition, ScrollPositionUpdate,
@@ -387,12 +387,12 @@ use crate::terminal::block_list_viewport::{
 };
 use crate::terminal::bootstrap::init_subshell_command;
 use crate::terminal::cli_agent_sessions::event::{
-    parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
-    CLI_AGENT_NOTIFICATION_SENTINEL,
+    CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource,
+    CLIAgentEventType, parse_event,
 };
-use crate::terminal::cli_agent_sessions::listener::{is_agent_supported, CLIAgentSessionListener};
+use crate::terminal::cli_agent_sessions::listener::{CLIAgentSessionListener, is_agent_supported};
 #[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
+use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
@@ -415,7 +415,7 @@ use crate::terminal::input::{
     MenuPositioningProvider,
 };
 use crate::terminal::keys::TerminalKeybindings;
-use crate::terminal::ligature_settings::{should_use_ligature_rendering, LigatureSettings};
+use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
 use crate::terminal::links::should_directly_open_link;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::get_shell_starter;
@@ -434,7 +434,7 @@ use crate::terminal::model::blocks::{
     RemovableBlocklistItem,
 };
 use crate::terminal::model::escape_sequences::{
-    self, alt_screen_scroll_to_pty_bytes, EscCodes, ToEscapeSequence, C1,
+    self, C1, EscCodes, ToEscapeSequence, alt_screen_scroll_to_pty_bytes,
 };
 use crate::terminal::model::grid::grid_handler::{FragmentBoundary, TermMode};
 use crate::terminal::model::index::{Point, Side};
@@ -452,8 +452,8 @@ use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDisp
 use crate::terminal::recorder::PtyRecorder;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::session_settings::{
-    NotificationsMode, NotificationsSettings, SessionSettings, SessionSettingsChangedEvent,
-    ToolbarChipSelection, DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION,
+    DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION, NotificationsMode, NotificationsSettings,
+    SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
 };
 use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
 use crate::terminal::shared_session::role_change_modal::{
@@ -469,10 +469,9 @@ use crate::terminal::view::init_environment::mode_selector::{
 };
 use crate::terminal::view::init_environment::{InitEnvironmentBlock, InitEnvironmentBlockEvent};
 use crate::terminal::view::inline_banner::{
-    render_agent_mode_setup_banner, AgentModeSetupSpeedbumpBannerAction,
-    AgentModeSetupSpeedbumpBannerState, AliasExpansionBannerState,
-    NotificationsDiscoveryBannerState, NotificationsErrorBannerState, PromptSuggestionBannerState,
-    VimModeBannerState,
+    AgentModeSetupSpeedbumpBannerAction, AgentModeSetupSpeedbumpBannerState,
+    AliasExpansionBannerState, NotificationsDiscoveryBannerState, NotificationsErrorBannerState,
+    PromptSuggestionBannerState, VimModeBannerState, render_agent_mode_setup_banner,
 };
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
 pub use crate::terminal::view::rich_content::{
@@ -491,48 +490,48 @@ use crate::terminal::view::ssh_tmux_deprecation_banner::{
 };
 use crate::terminal::view::telemetry::PromptSuggestionFallbackReason;
 use crate::terminal::view::zero_state_block::TerminalViewZeroStateBlock;
+use crate::terminal::warpify::SubshellSource;
 use crate::terminal::warpify::render::render_subshell_separator;
 use crate::terminal::warpify::settings::WarpifySettings;
-use crate::terminal::warpify::SubshellSource;
 use crate::terminal::waterfall_gap_element::WaterfallGapElement;
 use crate::terminal::writeable_pty::{PtyIntent, PtyIntentEvent, TerminalSurface};
 use crate::terminal::{
+    AudibleBell, BlockListSettings, BlockListSettingsChangedEvent, CellSizeAndWindowPadding,
+    History, HistoryEntry, ShellHost, ShellLaunchData, SizeInfo, SizeUpdate, SizeUpdateReason,
+    color, element_size_at_last_frame, height_in_range_approx, heights_approx_eq,
+    heights_approx_gt, prompt,
+};
+use crate::terminal::{
+    TerminalModel,
     block_list_element::BlockHoverAction,
     // find::{Event as FindEvent, Find, FindDirection},
-    input::{Event as InputEvent, Input, INPUT_A11Y_HELPER, INPUT_A11Y_LABEL},
+    input::{Event as InputEvent, INPUT_A11Y_HELPER, INPUT_A11Y_LABEL, Input},
     model::block::SerializedBlock,
     shell::ShellType,
     terminal_size_element::TerminalSizeElement,
-    TerminalModel,
-};
-use crate::terminal::{
-    color, element_size_at_last_frame, height_in_range_approx, heights_approx_eq,
-    heights_approx_gt, prompt, AudibleBell, BlockListSettings, BlockListSettingsChangedEvent,
-    CellSizeAndWindowPadding, History, HistoryEntry, ShellHost, ShellLaunchData, SizeInfo,
-    SizeUpdate, SizeUpdateReason,
 };
 use crate::themes::theme::WarpTheme;
 use crate::throttle::throttle;
 use crate::ui_components::icons::{self};
 use crate::util::bindings::{
-    custom_tag_to_keystroke, keybinding_name_to_display_string, keybinding_name_to_keystroke,
-    set_custom_keybinding, CustomAction,
+    CustomAction, custom_tag_to_keystroke, keybinding_name_to_display_string,
+    keybinding_name_to_keystroke, set_custom_keybinding,
 };
 use crate::util::clipboard::clipboard_content_with_escaped_paths;
 use crate::util::color::darken;
 #[cfg(feature = "local_fs")]
-use crate::util::file::external_editor::{settings::EditorLayout, EditorSettings};
+use crate::util::file::external_editor::{EditorSettings, settings::EditorLayout};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{
-    renders_in_warp_notebook_viewer, resolve_file_target, FileTarget,
+    FileTarget, renders_in_warp_notebook_viewer, resolve_file_target,
 };
-use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
+use crate::util::repo_detection::{RepoDetectionSessionType, detect_possible_git_repo};
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::{ActionButton, ButtonSize, KeystrokeSource};
 use crate::view_components::find::{Event as FindEvent, Find, FindDirection, FindWithinBlockState};
 use crate::view_components::{DismissibleToast, ToastFlavor};
-use crate::workflows::workflow::Workflow;
 use crate::workflows::WorkflowSelectionSource;
+use crate::workflows::workflow::Workflow;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalVariant;
 use crate::workspace::{
@@ -542,8 +541,8 @@ use crate::workspace::{
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
 use crate::{
-    safe_error, safe_warn, send_telemetry_from_ctx, send_telemetry_sync_from_ctx,
-    AIAgentActionResultType, AIRequestUsageModel, ActiveSession as WindowActiveSession,
+    AIAgentActionResultType, AIRequestUsageModel, ActiveSession as WindowActiveSession, safe_error,
+    safe_warn, send_telemetry_from_ctx, send_telemetry_sync_from_ctx,
 };
 
 lazy_static! {
@@ -10116,8 +10115,10 @@ impl TerminalView {
                         conversation_id
                     }
                     Err(e) => {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Failed to enter agent view for passive code diff"));
+                        report_error!(
+                            anyhow::Error::new(e)
+                                .context("Failed to enter agent view for passive code diff")
+                        );
                         return false;
                     }
                 }
@@ -10334,9 +10335,11 @@ impl TerminalView {
         }
         self.remove_vim_mode_banner(ctx);
         VimBannerSettings::handle(ctx).update(ctx, |banner_settings, model_ctx| {
-            report_if_error!(banner_settings
-                .vim_keybindings_banner_state
-                .set_value(BannerState::Dismissed, model_ctx));
+            report_if_error!(
+                banner_settings
+                    .vim_keybindings_banner_state
+                    .set_value(BannerState::Dismissed, model_ctx)
+            );
         });
     }
 
@@ -10628,9 +10631,11 @@ impl TerminalView {
             }
             AwsBedrockLoginBannerAction::DontShowAgain => {
                 AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-                    report_if_error!(ai_settings
-                        .aws_bedrock_login_banner_dismissed
-                        .set_value(true, ctx));
+                    report_if_error!(
+                        ai_settings
+                            .aws_bedrock_login_banner_dismissed
+                            .set_value(true, ctx)
+                    );
                 });
             }
             AwsBedrockLoginBannerAction::Dismiss => {
@@ -14548,11 +14553,7 @@ impl TerminalView {
             .editor()
             .as_ref(ctx)
             .selected_text(ctx);
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
+        if text.is_empty() { None } else { Some(text) }
     }
 }
 
@@ -14801,9 +14802,11 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .nld_in_terminal_enabled_internal
-                .set_value(enable, ctx));
+            report_if_error!(
+                settings
+                    .nld_in_terminal_enabled_internal
+                    .set_value(enable, ctx)
+            );
         });
     }
 
@@ -15402,38 +15405,40 @@ impl TerminalView {
                     ctx.notify();
                 }
                 CodeDiffViewEvent::ContinuePassiveCodeDiffWithAgent { accepted } => {
-                    let conversation_id = if let Some(conversation_id) = conversation_id {
-                        conversation_id
-                    } else {
-                        // No existing conversation (ephemeral shell-command trigger): start a
-                        // new one and open the agent view.
-                        match me.try_enter_agent_view(
-                            None,
-                            AgentViewEntryOrigin::AcceptedPassiveCodeDiff,
-                            None,
-                            ctx,
-                        ) {
-                            Ok(conversation_id) => {
-                                if let Some(block_id) = trigger_block_id.as_ref() {
-                                    me.associate_and_promote_block_for_conversation(
-                                        block_id.clone(),
+                    let conversation_id =
+                        if let Some(conversation_id) = conversation_id {
+                            conversation_id
+                        } else {
+                            // No existing conversation (ephemeral shell-command trigger): start a
+                            // new one and open the agent view.
+                            match me.try_enter_agent_view(
+                                None,
+                                AgentViewEntryOrigin::AcceptedPassiveCodeDiff,
+                                None,
+                                ctx,
+                            ) {
+                                Ok(conversation_id) => {
+                                    if let Some(block_id) = trigger_block_id.as_ref() {
+                                        me.associate_and_promote_block_for_conversation(
+                                            block_id.clone(),
+                                            conversation_id,
+                                            ctx,
+                                        );
+                                    }
+                                    me.set_rich_content_agent_view_conversation_id(
+                                        wrapper_view_id,
                                         conversation_id,
-                                        ctx,
                                     );
+                                    conversation_id
                                 }
-                                me.set_rich_content_agent_view_conversation_id(
-                                    wrapper_view_id,
-                                    conversation_id,
-                                );
-                                conversation_id
+                                Err(e) => {
+                                    report_error!(anyhow::Error::new(e).context(
+                                        "Failed to enter agent view for passive code diff"
+                                    ));
+                                    return;
+                                }
                             }
-                            Err(e) => {
-                                report_error!(anyhow::Error::new(e)
-                                    .context("Failed to enter agent view for passive code diff"));
-                                return;
-                            }
-                        }
-                    };
+                        };
 
                     // Use the passive diff summary as the conversation title.
                     if let Some(title) = title_for_result.as_ref() {
@@ -16496,11 +16501,13 @@ impl TerminalView {
                             Some(model.link_at_range(url, RespectObfuscatedSecrets::Yes));
                         url_content
                             .map(|url_content| {
-                                vec![MenuItemFields::new("Copy URL")
-                                    .with_on_select_action(TerminalAction::ContextMenu(
-                                        ContextMenuAction::CopyUrl { url_content },
-                                    ))
-                                    .into_item()]
+                                vec![
+                                    MenuItemFields::new("Copy URL")
+                                        .with_on_select_action(TerminalAction::ContextMenu(
+                                            ContextMenuAction::CopyUrl { url_content },
+                                        ))
+                                        .into_item(),
+                                ]
                             })
                             .unwrap_or_default()
                     }
@@ -16832,24 +16839,30 @@ impl TerminalView {
                         ))
                         .into_item(),
                 ]);
-                items.append(&mut vec![MenuItemFields::new("Toggle block filter")
-                    .with_on_select_action(TerminalAction::ToggleBlockFilterOnSelectedOrLastBlock(
-                        ToggleBlockFilterSource::ContextMenu,
-                    ))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        TOGGLE_BLOCK_FILTER_KEYBINDING,
-                        ctx,
-                    ))
-                    .into_item()]);
-                items.append(&mut vec![MenuItemFields::new("Toggle bookmark")
-                    .with_on_select_action(TerminalAction::ContextMenu(
-                        ContextMenuAction::ToggleBookmark,
-                    ))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        "terminal:bookmark_selected_block",
-                        ctx,
-                    ))
-                    .into_item()]);
+                items.append(&mut vec![
+                    MenuItemFields::new("Toggle block filter")
+                        .with_on_select_action(
+                            TerminalAction::ToggleBlockFilterOnSelectedOrLastBlock(
+                                ToggleBlockFilterSource::ContextMenu,
+                            ),
+                        )
+                        .with_key_shortcut_label(keybinding_name_to_display_string(
+                            TOGGLE_BLOCK_FILTER_KEYBINDING,
+                            ctx,
+                        ))
+                        .into_item(),
+                ]);
+                items.append(&mut vec![
+                    MenuItemFields::new("Toggle bookmark")
+                        .with_on_select_action(TerminalAction::ContextMenu(
+                            ContextMenuAction::ToggleBookmark,
+                        ))
+                        .with_key_shortcut_label(keybinding_name_to_display_string(
+                            "terminal:bookmark_selected_block",
+                            ctx,
+                        ))
+                        .into_item(),
+                ]);
 
                 items.append(&mut vec![
                     MenuItem::Separator,
@@ -16863,15 +16876,17 @@ impl TerminalView {
                         ))
                         .into_item(),
                 ]);
-                items.append(&mut vec![MenuItemFields::new(scroll_to_bottom_str)
-                    .with_on_select_action(TerminalAction::ContextMenu(
-                        ContextMenuAction::ScrollToBottomOfBlock,
-                    ))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        "terminal:scroll_to_bottom_of_selected_block",
-                        ctx,
-                    ))
-                    .into_item()]);
+                items.append(&mut vec![
+                    MenuItemFields::new(scroll_to_bottom_str)
+                        .with_on_select_action(TerminalAction::ContextMenu(
+                            ContextMenuAction::ScrollToBottomOfBlock,
+                        ))
+                        .with_key_shortcut_label(keybinding_name_to_display_string(
+                            "terminal:scroll_to_bottom_of_selected_block",
+                            ctx,
+                        ))
+                        .into_item(),
+                ]);
 
                 // Add debugging link for command blocks run by the agent
                 if is_single_selection {
@@ -17106,12 +17121,14 @@ impl TerminalView {
         is_rprompt_shown: bool,
         position: PromptPosition,
     ) -> Vec<MenuItem<TerminalAction>> {
-        let mut items = vec![MenuItemFields::new("Copy prompt")
-            .with_on_select_action(TerminalAction::ContextMenu(ContextMenuAction::CopyPrompt {
-                position,
-                part: PromptPart::EntirePrompt,
-            }))
-            .into_item()];
+        let mut items = vec![
+            MenuItemFields::new("Copy prompt")
+                .with_on_select_action(TerminalAction::ContextMenu(ContextMenuAction::CopyPrompt {
+                    position,
+                    part: PromptPart::EntirePrompt,
+                }))
+                .into_item(),
+        ];
 
         if is_rprompt_shown {
             items.push(
@@ -20783,26 +20800,34 @@ impl TerminalView {
             ctx.focus(blocked_cli_subagent_view);
         } else if should_focus_terminal {
             self.focus_terminal(ctx);
-        } else { match self.active_ssh_remote_server_choice_block() { Some(ssh_choice_view) => {
-            ctx.focus(&ssh_choice_view);
-        } _ => if let (Some(active_ai_block_view_handle), false) =
-            (self.active_ai_block(ctx), is_input_visible)
-        {
-            ctx.focus(active_ai_block_view_handle);
-        } else if self.has_active_init_project(ctx) && self.is_last_block_init_step(ctx) {
-            self.try_focus_active_init_step(ctx);
-        } else if let Some(active_init_environment_block_handle) =
-            self.active_init_environment_block(ctx)
-        {
-            active_init_environment_block_handle
-                .update(ctx, |block, ctx| block.try_steal_focus(ctx));
-        } else if let Some(env_var_collection_block_handle) =
-            self.active_env_var_collection_block(ctx)
-        {
-            ctx.focus(env_var_collection_block_handle);
         } else {
-            self.focus_input_box(ctx);
-        }}}
+            match self.active_ssh_remote_server_choice_block() {
+                Some(ssh_choice_view) => {
+                    ctx.focus(&ssh_choice_view);
+                }
+                _ => {
+                    if let (Some(active_ai_block_view_handle), false) =
+                        (self.active_ai_block(ctx), is_input_visible)
+                    {
+                        ctx.focus(active_ai_block_view_handle);
+                    } else if self.has_active_init_project(ctx) && self.is_last_block_init_step(ctx)
+                    {
+                        self.try_focus_active_init_step(ctx);
+                    } else if let Some(active_init_environment_block_handle) =
+                        self.active_init_environment_block(ctx)
+                    {
+                        active_init_environment_block_handle
+                            .update(ctx, |block, ctx| block.try_steal_focus(ctx));
+                    } else if let Some(env_var_collection_block_handle) =
+                        self.active_env_var_collection_block(ctx)
+                    {
+                        ctx.focus(env_var_collection_block_handle);
+                    } else {
+                        self.focus_input_box(ctx);
+                    }
+                }
+            }
+        }
     }
 
     fn close_context_menu(&mut self, ctx: &mut ViewContext<Self>, should_redetermine_focus: bool) {
@@ -21368,32 +21393,39 @@ impl TerminalView {
                 };
                 let initial_prompt = initial_prompt.clone();
 
-                match self.pane_stack.as_ref().and_then(|h| h.upgrade(ctx)) { Some(pane_stack) => {
-                    let should_pop = pane_stack.as_ref(ctx).depth() > 1;
-                    if should_pop {
-                        pane_stack.update(ctx, |stack, ctx| {
-                            stack.pop(ctx);
-                        });
+                match self.pane_stack.as_ref().and_then(|h| h.upgrade(ctx)) {
+                    Some(pane_stack) => {
+                        let should_pop = pane_stack.as_ref(ctx).depth() > 1;
+                        if should_pop {
+                            pane_stack.update(ctx, |stack, ctx| {
+                                stack.pop(ctx);
+                            });
+                        }
+
+                        let active_view = pane_stack.as_ref(ctx).active_view().clone();
+
+                        // If the active view is `self`, this cloud-mode terminal is the root of the
+                        // pane stack and has no parent terminal to host a local agent conversation.
+                        if active_view.id() == self.id() {
+                            log::warn!(
+                                "ExitCloudModeAndStartLocalAgent received but cloud-mode pane has no parent terminal"
+                            );
+                        } else {
+                            active_view.update(ctx, |view, ctx| {
+                                view.enter_agent_view_for_new_conversation(
+                                    initial_prompt,
+                                    origin,
+                                    ctx,
+                                );
+                            });
+                        }
                     }
-
-                    let active_view = pane_stack.as_ref(ctx).active_view().clone();
-
-                    // If the active view is `self`, this cloud-mode terminal is the root of the
-                    // pane stack and has no parent terminal to host a local agent conversation.
-                    if active_view.id() == self.id() {
+                    _ => {
                         log::warn!(
-                            "ExitCloudModeAndStartLocalAgent received but cloud-mode pane has no parent terminal"
+                            "ExitCloudModeAndStartLocalAgent received but no pane stack available; cannot start local agent without a parent terminal"
                         );
-                    } else {
-                        active_view.update(ctx, |view, ctx| {
-                            view.enter_agent_view_for_new_conversation(initial_prompt, origin, ctx);
-                        });
                     }
-                } _ => {
-                    log::warn!(
-                        "ExitCloudModeAndStartLocalAgent received but no pane stack available; cannot start local agent without a parent terminal"
-                    );
-                }}
+                }
 
                 ctx.notify();
             }
@@ -22119,9 +22151,11 @@ impl TerminalView {
             set_custom_keybinding(MOVE_LINE_END_BINDING_NAME, &CTRL_E_KEYSTROKE, ctx);
         }
         EmacsBindingsSettings::handle(ctx).update(ctx, |settings_model, settings_ctx| {
-            report_if_error!(settings_model
-                .emacs_bindings_banner_state
-                .set_value(BannerState::Dismissed, settings_ctx));
+            report_if_error!(
+                settings_model
+                    .emacs_bindings_banner_state
+                    .set_value(BannerState::Dismissed, settings_ctx)
+            );
         });
         self.is_emacs_bindings_banner_open = false;
         ctx.notify();
@@ -26751,8 +26785,11 @@ impl TypedActionView for TerminalView {
                                     AgentViewEntryOrigin::LongRunningCommand,
                                     ctx,
                                 ) {
-                                    report_error!(anyhow::Error::new(e)
-                                        .context("Failed to enter inline agent view for tag-in"));
+                                    report_error!(
+                                        anyhow::Error::new(e).context(
+                                            "Failed to enter inline agent view for tag-in"
+                                        )
+                                    );
                                 }
                             }
                         });
@@ -26899,16 +26936,17 @@ impl TypedActionView for TerminalView {
                 let mut images = Vec::new();
                 let mut initial_index = None;
                 for (attachment_index, image) in pending_images {
-                    let image_bytes =
-                        match base64::engine::general_purpose::STANDARD.decode(&image.data) {
-                            Ok(image_bytes) => image_bytes,
-                            Err(error) => {
-                                log::warn!(
+                    let image_bytes = match base64::engine::general_purpose::STANDARD
+                        .decode(&image.data)
+                    {
+                        Ok(image_bytes) => image_bytes,
+                        Err(error) => {
+                            log::warn!(
                                 "Failed to decode pending image attachment for lightbox: {error}"
                             );
-                                continue;
-                            }
-                        };
+                            continue;
+                        }
+                    };
 
                     let asset_id = format!("pending-attachment-lightbox-{attachment_index}");
                     AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {

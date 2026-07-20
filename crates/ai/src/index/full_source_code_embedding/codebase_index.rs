@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -10,9 +10,9 @@ use chrono::{DateTime, Utc};
 use futures::stream::AbortHandle;
 use ignore::gitignore::Gitignore;
 use instant::Instant;
+use repo_metadata::Repository;
 #[cfg(feature = "local_fs")]
 use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy};
-use repo_metadata::Repository;
 use warp_core::safe_error;
 use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext, ModelHandle};
@@ -27,7 +27,7 @@ use super::manager::{
 use super::merkle_tree::{MerkleTree, SerializedCodebaseIndex};
 #[cfg(feature = "local_fs")]
 use super::search_shaping::build_fragments_from_file_contents;
-use super::search_shaping::{fragments_to_context_locations, ReadFragmentResult};
+use super::search_shaping::{ReadFragmentResult, fragments_to_context_locations};
 use super::store_client::StoreClient;
 use super::sync_client::{FlushFragmentResult, SyncOperationError};
 use super::{

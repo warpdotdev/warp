@@ -28,10 +28,10 @@ use warpui::{
     ViewHandle, WeakViewHandle,
 };
 
-use super::qr_code::{qr_matrix_for_url, qr_png_for_url, QrMatrix, QUIET_ZONE_MODULES};
+use super::qr_code::{QUIET_ZONE_MODULES, QrMatrix, qr_matrix_for_url, qr_png_for_url};
 use super::{
-    style, ContentEditability, LinkSharingSubjectType, ShareableObject, SharingAccessLevel,
-    Subject, SubjectExt, TeamKind, UserKind,
+    ContentEditability, LinkSharingSubjectType, ShareableObject, SharingAccessLevel, Subject,
+    SubjectExt, TeamKind, UserKind, style,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::auth::AuthStateProvider;
@@ -47,11 +47,11 @@ use crate::server::ids::ServerId;
 use crate::server::telemetry::{
     CloudObjectTelemetryMetadata, OpenedSharingDialogEvent, SharingDialogSource,
 };
+use crate::terminal::TerminalView;
+use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shared_session::permissions_manager::{
     SessionPermissionsEvent, SessionPermissionsManager,
 };
-use crate::terminal::shared_session::SharedSessionActionSource;
-use crate::terminal::TerminalView;
 use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
@@ -61,7 +61,7 @@ use crate::word_block_editor::{
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 mod inheritance;
 
@@ -329,7 +329,7 @@ impl SharingDialog {
                 CloudModelEvent::ObjectDeleted { .. } => return,
                 CloudModelEvent::ObjectForceExpanded { .. } => return,
                 CloudModelEvent::ObjectSynced { .. } | CloudModelEvent::InitialLoadCompleted => {
-                    return
+                    return;
                 }
             };
 
@@ -986,14 +986,16 @@ impl SharingDialog {
             let is_session = matches!(self.target, Some(ShareableObject::Session { .. }));
 
             self.guest_menu.update(ctx, |menu, ctx| {
-                let mut items = vec![MenuItemFields::new(SharingAccessLevel::View.label())
-                    .with_on_select_action(SharingDialogAction::SetGuestAccessLevel(
-                        SharingAccessLevel::View,
-                    ))
-                    .with_disabled(
-                        inherited_access && current_access_level >= SharingAccessLevel::View,
-                    )
-                    .into_item()];
+                let mut items = vec![
+                    MenuItemFields::new(SharingAccessLevel::View.label())
+                        .with_on_select_action(SharingDialogAction::SetGuestAccessLevel(
+                            SharingAccessLevel::View,
+                        ))
+                        .with_disabled(
+                            inherited_access && current_access_level >= SharingAccessLevel::View,
+                        )
+                        .into_item(),
+                ];
 
                 // Only add Edit option if not an AI conversation
                 if !is_ai_conversation {
@@ -1367,11 +1369,13 @@ impl SharingDialog {
         let is_ai_conversation = matches!(self.target, Some(ShareableObject::AIConversation(_)));
 
         self.invite_form.access_level_menu.update(ctx, |menu, ctx| {
-            let mut items = vec![MenuItemFields::new(SharingAccessLevel::View.label())
-                .with_on_select_action(SharingDialogAction::SetInviteAccessLevel(
-                    SharingAccessLevel::View,
-                ))
-                .into_item()];
+            let mut items = vec![
+                MenuItemFields::new(SharingAccessLevel::View.label())
+                    .with_on_select_action(SharingDialogAction::SetInviteAccessLevel(
+                        SharingAccessLevel::View,
+                    ))
+                    .into_item(),
+            ];
 
             // Only add Edit option if not an AI conversation
             if !is_ai_conversation {
@@ -1622,7 +1626,9 @@ impl SharingDialog {
             }
             Some(ShareableObject::Session { handle, .. }) => {
                 let Some(handle) = handle.upgrade(ctx) else {
-                    report_error!("Unable to upgrade handle to TerminalView when sending email invitations for session");
+                    report_error!(
+                        "Unable to upgrade handle to TerminalView when sending email invitations for session"
+                    );
                     return;
                 };
 

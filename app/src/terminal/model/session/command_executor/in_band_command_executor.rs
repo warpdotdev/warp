@@ -16,12 +16,12 @@ use warpui::r#async::block_on;
 
 use super::ExecuteCommandOptions;
 use crate::safe_info;
+use crate::terminal::SizeInfo;
 use crate::terminal::event::ExecutedExecutorCommandEvent;
 use crate::terminal::model::session::command_executor::{
-    shared, CommandExecutor, ExecutorCommandEvent,
+    CommandExecutor, ExecutorCommandEvent, shared,
 };
 use crate::terminal::shell::{Shell, ShellType};
-use crate::terminal::SizeInfo;
 
 #[derive(Clone, Debug)]
 pub struct InBandCommand {
@@ -232,7 +232,11 @@ impl InBandCommandExecutor {
                         }
                     }
                 } else {
-                    log::warn!("Cached in-band command ID {} does not match ID of executed in-band command output {}", cmd.id, &event.command_id);
+                    log::warn!(
+                        "Cached in-band command ID {} does not match ID of executed in-band command output {}",
+                        cmd.id,
+                        &event.command_id
+                    );
                     // If the command event that we received is not for the current running command,
                     // we need to restore the command as the currently running command.
                     *current_command = Some(cmd);
@@ -325,7 +329,9 @@ impl InBandCommandExecutor {
 
                 let in_band_command = match shell.shell_type() {
                     ShellType::PowerShell => {
-                        format!("Warp-Run-GeneratorCommand {id} '{escaped_command}' -ErrorAction Ignore")
+                        format!(
+                            "Warp-Run-GeneratorCommand {id} '{escaped_command}' -ErrorAction Ignore"
+                        )
                     }
                     ShellType::Fish => {
                         // Add a leading space for in-band commands in fish, which omits them from

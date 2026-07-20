@@ -17,8 +17,8 @@ use warp_core::{safe_info, safe_warn};
 use warpui::r#async::FutureExt;
 use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
-use super::terminal::TerminalDriver;
 use super::AgentDriverError;
+use super::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;

@@ -30,14 +30,14 @@ use super::delete_environment_confirmation_dialog::{
     DeleteEnvironmentConfirmationDialog, DeleteEnvironmentConfirmationDialogEvent,
 };
 use super::settings_page::{
-    MatchData, PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
-    SettingsWidget, CONTENT_FONT_SIZE,
+    CONTENT_FONT_SIZE, MatchData, PageType, SettingsPageEvent, SettingsPageMeta,
+    SettingsPageViewHandle, SettingsWidget,
 };
 use super::update_environment_form::{
     EnvironmentFormInitArgs, EnvironmentFormValues, UpdateEnvironmentForm,
     UpdateEnvironmentFormEvent,
 };
-use super::{editor_text_colors, SettingsSection};
+use super::{SettingsSection, editor_text_colors};
 use crate::ai::ambient_agents::github_auth_url::GithubAuthRedirectTarget;
 use crate::ai::cloud_environments::{self, CloudAmbientAgentEnvironment};
 use crate::appearance::Appearance;
@@ -64,8 +64,8 @@ use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icons::Icon;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::view_components::{
-    render_copyable_text_field, CopyButtonPlacement, CopyableTextFieldConfig, DismissibleToast,
-    COPY_FEEDBACK_DURATION,
+    COPY_FEEDBACK_DURATION, CopyButtonPlacement, CopyableTextFieldConfig, DismissibleToast,
+    render_copyable_text_field,
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -75,7 +75,7 @@ use new_environment_button::NewEnvironmentButtonView;
 #[cfg(not(target_family = "wasm"))]
 #[allow(unused_imports)] // IntegrationsClient trait is used in fetch_github_repos
 use {
-    crate::server::server_api::{integrations::IntegrationsClient, ServerApiProvider},
+    crate::server::server_api::{ServerApiProvider, integrations::IntegrationsClient},
     warp_graphql::queries::user_github_info::UserGithubInfoResult,
 };
 
@@ -1448,8 +1448,7 @@ impl EnvironmentsPageWidget {
                 icon: Icon::Github,
                 title: "Quick setup",
                 badge: Some("Suggested"),
-                subtitle:
-                    "Select the GitHub repositories you’d like to work with and we’ll suggest a base image and config",
+                subtitle: "Select the GitHub repositories you’d like to work with and we’ll suggest a base image and config",
                 action_button: github_button,
                 compact_action_button: github_button_compact,
                 icon_size,
@@ -1462,8 +1461,7 @@ impl EnvironmentsPageWidget {
                 icon: Icon::Terminal,
                 title: "Use the agent",
                 badge: None,
-                subtitle:
-                    "Choose a locally set up project and we’ll help you set up an environment based on it",
+                subtitle: "Choose a locally set up project and we’ll help you set up an environment based on it",
                 action_button: local_repos_button,
                 compact_action_button: local_repos_button_compact,
                 icon_size,
@@ -2040,8 +2038,8 @@ impl SettingsPageMeta for EnvironmentsPageView {
 }
 
 use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::view::{HeaderContent, HeaderRenderContext};
 use crate::pane_group::pane::BackingView;
+use crate::pane_group::pane::view::{HeaderContent, HeaderRenderContext};
 
 impl BackingView for EnvironmentsPageView {
     type PaneHeaderOverflowMenuAction = EnvironmentsPageAction;

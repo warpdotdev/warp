@@ -14,14 +14,14 @@ use super::manager::{
 };
 use crate::ai::blocklist::SessionContext;
 use crate::ai::codebase_auto_indexing::{
-    auto_index_candidate_roots, should_auto_index_codebase, should_use_codebase_indexing,
-    CodebaseAutoIndexingSurface,
+    CodebaseAutoIndexingSurface, auto_index_candidate_roots, should_auto_index_codebase,
+    should_use_codebase_indexing,
 };
 use crate::server::telemetry::{
     RemoteCodebaseAutoIndexTrigger, RemoteCodebaseIndexStatusTelemetrySource,
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 #[derive(Clone, Debug)]
 pub struct RemoteCodebaseSearchContext {

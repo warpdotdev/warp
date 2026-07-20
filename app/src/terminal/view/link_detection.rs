@@ -1,14 +1,14 @@
 use std::ops::Deref;
 
 use serde::{Serialize, Serializer};
-use warpui::platform::Cursor;
 use warpui::ViewContext;
+use warpui::platform::Cursor;
 
+use crate::terminal::TerminalModel;
+use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::model::grid::grid_handler::Link;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{WithinBlock, WithinModel};
-use crate::terminal::model::RespectObfuscatedSecrets;
-use crate::terminal::TerminalModel;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {

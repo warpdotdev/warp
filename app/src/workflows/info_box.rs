@@ -25,15 +25,15 @@ use warpui::{
 };
 
 use super::command_parser::{
-    compute_workflow_display_data, WorkflowArgumentIndex, WorkflowDisplayData,
+    WorkflowArgumentIndex, WorkflowDisplayData, compute_workflow_display_data,
 };
 use super::workflow::Argument;
 use super::workflow_view::env_var_selector::{EnvVarSelector, EnvVarSelectorEvent};
 use super::{AIWorkflowOrigin, CloudWorkflow};
 use crate::ai::blocklist::ai_brand_color;
 use crate::appearance::Appearance;
-use crate::cloud_object::model::actions::{ObjectActionType, ObjectActions};
 use crate::cloud_object::CloudObjectMetadataExt;
+use crate::cloud_object::model::actions::{ObjectActionType, ObjectActions};
 use crate::server::ids::SyncId;
 use crate::settings::InputModeSettings;
 use crate::terminal::block_list_viewport::InputMode;

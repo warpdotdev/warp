@@ -10,8 +10,8 @@ use warpui::elements::{
 use warpui::platform::Cursor;
 use warpui::{AppContext, Element, EntityId, SingletonEntity, ViewHandle};
 
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::block::DirectoryContext;
 use crate::ai::blocklist::{
     get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,

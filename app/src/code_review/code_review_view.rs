@@ -11,15 +11,15 @@ use itertools::Itertools;
 #[cfg(feature = "local_fs")]
 use num_traits::SaturatingSub;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use rand::distributions::Alphanumeric;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use rand::Rng;
+use rand::distributions::Alphanumeric;
 use string_offset::CharOffset;
 use vec1::Vec1;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::{safe_error, safe_info, SessionId};
+use warp_core::{SessionId, safe_error, safe_info};
 use warp_editor::content::buffer::{AutoScrollBehavior, InitialBufferState, SelectionOffsets};
 use warp_editor::model::CoreEditorModel;
 use warp_editor::render::element::VerticalExpansionBehavior;
@@ -34,19 +34,18 @@ use warpui::elements::new_scrollable::{
     NewScrollable, NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
 };
 use warpui::elements::{
-    resizable_state_handle, Align, Border, ChildAnchor, ChildView, Clipped,
-    ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DispatchEventResult, DragBarSide, Element, Empty, EventHandler, Flex, Hoverable, List,
-    ListState, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Percentage, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, Rect, Resizable, ResizableStateHandle, SavePosition,
-    ScrollOffset, ScrollStateHandle, ScrollbarWidth, Shrinkable, Stack, Text,
-    DEFAULT_UI_LINE_HEIGHT_RATIO,
+    Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, DispatchEventResult,
+    DragBarSide, Element, Empty, EventHandler, Flex, Hoverable, List, ListState, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius,
+    Rect, Resizable, ResizableStateHandle, SavePosition, ScrollOffset, ScrollStateHandle,
+    ScrollbarWidth, Shrinkable, Stack, Text, resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::Keystroke;
 use warpui::platform::Cursor;
-use warpui::text_layout::{default_compute_baseline_position, ClipConfig};
+use warpui::text_layout::{ClipConfig, default_compute_baseline_position};
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
@@ -57,33 +56,36 @@ use warpui::{
 
 use super::code_review_header::CodeReviewHeader;
 use super::comment_list_view::{CommentListDebugState, CommentListEvent, CommentListView};
-use super::comments::{attach_pending_imported_comments, AttachedReviewComment, CommentOrigin};
+use super::comments::{AttachedReviewComment, CommentOrigin, attach_pending_imported_comments};
 use super::diff_size_limits::DiffSize;
 use super::git_dialog::{GitDialog, GitDialogEvent, GitDialogKind};
 use super::{GlobalCodeReviewEvent, GlobalCodeReviewModel};
+#[cfg(feature = "local_fs")]
+use crate::TelemetryEvent;
 use crate::ai::agent::{
     AIAgentAttachment, AgentReviewCommentBatch, CurrentHead, DiffBase, DiffSetHunk,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::appearance::Appearance;
+use crate::code::ShowCommentEditorProvider;
+#[cfg(not(target_family = "wasm"))]
+use crate::code::ShowFindReferencesCard;
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::comment_editor::DEFAULT_COMMENT_MAX_WIDTH;
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
 use crate::code::editor::{
-    add_color, remove_color, CommentEditor, CommentEditorEvent, EditorCommentsModel,
-    EditorReviewComment, GutterHoverTarget,
+    CommentEditor, CommentEditorEvent, EditorCommentsModel, EditorReviewComment, GutterHoverTarget,
+    add_color, remove_color,
 };
 use crate::code::editor_management::CodeEditorStatus;
 use crate::code::footer::{CodeFooterView, CodeFooterViewEvent};
 use crate::code::global_buffer_model::GlobalBufferModel;
 use crate::code::local_code_editor::{
-    render_unsaved_circle_with_tooltip, LocalCodeEditorEvent, LocalCodeEditorView,
+    LocalCodeEditorEvent, LocalCodeEditorView, render_unsaved_circle_with_tooltip,
 };
 use crate::code::view::PendingSaveIntent;
-use crate::code::ShowCommentEditorProvider;
-#[cfg(not(target_family = "wasm"))]
-use crate::code::ShowFindReferencesCard;
+use crate::code_review::DiffSetScope;
 use crate::code_review::comments::{
     AttachedReviewCommentTarget, CommentId, ReviewCommentBatch, ReviewCommentBatchEvent,
 };
@@ -108,13 +110,12 @@ use crate::code_review::telemetry_event::{
     AddToContextOrigin, CodeReviewContextDestination, CodeReviewTelemetryEvent, GitButtonKind,
     PaneStateChange,
 };
-use crate::code_review::DiffSetScope;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::InteractionState;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
-use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
-use crate::pane_group::pane::{view, BackingView, PaneEvent};
 use crate::pane_group::PaneId;
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
+use crate::pane_group::pane::{BackingView, PaneEvent, view};
 use crate::quit_warning::UnsavedStateSummary;
 use crate::send_telemetry_from_ctx;
 #[cfg(feature = "local_fs")]
@@ -129,29 +130,27 @@ use crate::terminal::view::{CliAgentRouting, InitProjectModel, TerminalAction, T
 use crate::themes::theme::WarpTheme;
 use crate::ui_components::blended_colors::{neutral_2, neutral_3};
 use crate::ui_components::buttons::icon_button_with_color;
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::ui_components::icons::Icon;
-use crate::ui_components::render_file_search_row::{render_file_search_row, FileSearchRowOptions};
+use crate::ui_components::render_file_search_row::{FileSearchRowOptions, render_file_search_row};
 use crate::util::bindings::{
-    custom_tag_to_keystroke, keybinding_name_to_display_string, CustomAction,
+    CustomAction, custom_tag_to_keystroke, keybinding_name_to_display_string,
 };
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 use crate::util::git::{BranchEntry, PrInfo};
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::resolve_file_target_with_editor_choice;
-#[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::resolve_file_target_with_editor_choice;
+use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, DangerPrimaryTheme, KeystrokeSource,
     NakedTheme, PaneHeaderTheme, SecondaryTheme, TooltipAlignment,
 };
 use crate::view_components::find::{Event as FindViewEvent, Find, FindEvent, FindWithinBlockState};
-use crate::view_components::DismissibleToast;
 use crate::workspace::view::right_panel::{ReviewDestination, ReviewSubmissionResult};
 use crate::workspace::{ToastStack, Workspace, WorkspaceAction};
-#[cfg(feature = "local_fs")]
-use crate::TelemetryEvent;
 
 pub struct CodeReviewHeaderFields {
     pub is_in_split_pane: bool,

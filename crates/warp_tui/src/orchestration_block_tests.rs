@@ -15,8 +15,8 @@ use warpui::{AddWindowOptions, App, ViewHandle};
 use warpui_core::TypedActionView as _;
 
 use super::{
-    build_request, CardMode, ConfigPage, OrchestrationBlockController, TuiOrchestrationBlock,
-    TuiOrchestrationBlockAction, TuiOrchestrationBlockEvent,
+    CardMode, ConfigPage, OrchestrationBlockController, TuiOrchestrationBlock,
+    TuiOrchestrationBlockAction, TuiOrchestrationBlockEvent, build_request,
 };
 use crate::option_selector::{TuiOptionSelectorAction, TuiOptionSelectorEvent};
 use crate::test_fixtures::TestHostView;
@@ -383,10 +383,12 @@ fn selector_layout_invalidations_are_forwarded() {
             block.handle_selector_event(&TuiOptionSelectorEvent::LayoutInvalidated, ctx);
         });
 
-        assert!(events
-            .borrow()
-            .iter()
-            .any(|event| matches!(event, TuiOrchestrationBlockEvent::LayoutInvalidated)));
+        assert!(
+            events
+                .borrow()
+                .iter()
+                .any(|event| matches!(event, TuiOrchestrationBlockEvent::LayoutInvalidated))
+        );
     });
 }
 
@@ -407,11 +409,13 @@ fn selector_actions_commit_edits_and_follow_the_dynamic_page_sequence() {
         );
         app.read(|ctx| {
             let block = block.as_ref(ctx);
-            assert!(!block
-                .orchestration_edit_state
-                .orchestration_config_state
-                .execution_mode
-                .is_remote());
+            assert!(
+                !block
+                    .orchestration_edit_state
+                    .orchestration_config_state
+                    .execution_mode
+                    .is_remote()
+            );
             assert_eq!(
                 block.mode,
                 CardMode::Configuring {
@@ -430,11 +434,13 @@ fn selector_actions_commit_edits_and_follow_the_dynamic_page_sequence() {
         );
         app.read(|ctx| {
             let block = block.as_ref(ctx);
-            assert!(block
-                .orchestration_edit_state
-                .orchestration_config_state
-                .execution_mode
-                .is_remote());
+            assert!(
+                block
+                    .orchestration_edit_state
+                    .orchestration_config_state
+                    .execution_mode
+                    .is_remote()
+            );
             assert_eq!(
                 block.mode,
                 CardMode::Configuring {

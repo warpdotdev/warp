@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
     Empty, Flex, Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
@@ -23,14 +23,14 @@ use crate::ai::blocklist::agent_view::orchestration_pill_bar::{
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::usage::render_context_window_usage_icon;
 use crate::ai::blocklist::usage::rollup::{
-    compute_orchestration_rollup, AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry,
+    AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry, compute_orchestration_rollup,
 };
 use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
-    token_usage_category_display_name, ContextWindowSegment, ContextWindowSegmentType,
-    ModelTokenUsage, FULL_TERMINAL_USE_CATEGORY, PRIMARY_AGENT_CATEGORY,
+    ContextWindowSegment, ContextWindowSegmentType, FULL_TERMINAL_USE_CATEGORY, ModelTokenUsage,
+    PRIMARY_AGENT_CATEGORY, token_usage_category_display_name,
 };
 use crate::ui_components::blended_colors;
 

@@ -8,8 +8,8 @@ use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_if_error;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
@@ -348,9 +348,11 @@ impl TypedActionView for HarnessSelector {
                 });
                 // Persist the selection to settings for next time.
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .last_selected_harness
-                        .set_value(Some(harness.config_name().to_string()), ctx));
+                    report_if_error!(
+                        settings
+                            .last_selected_harness
+                            .set_value(Some(harness.config_name().to_string()), ctx)
+                    );
                 });
                 self.set_menu_visibility(false, ctx);
             }

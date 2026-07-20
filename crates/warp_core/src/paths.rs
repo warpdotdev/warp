@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use cfg_if::cfg_if;
 use directories::BaseDirs;
 
-use crate::channel::{Channel, ChannelState};
 use crate::AppId;
+use crate::channel::{Channel, ChannelState};
 
 /// The name of the directory in which to put non-global Warp-specific files.
 ///

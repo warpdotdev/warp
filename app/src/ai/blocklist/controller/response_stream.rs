@@ -10,7 +10,7 @@ use warp_errors::report_error;
 use warp_multi_agent_api::response_event;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::ai::agent::api::{self, generate_multi_agent_output, ConvertToAPITypeError};
+use crate::ai::agent::api::{self, ConvertToAPITypeError, generate_multi_agent_output};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIIdentifiers, CancellationReason};
 use crate::network::NetworkStatus;

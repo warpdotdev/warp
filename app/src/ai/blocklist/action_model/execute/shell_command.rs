@@ -6,7 +6,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Local};
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
-use futures::{select, FutureExt};
+use futures::{FutureExt, select};
 use futures_lite::pin;
 use itertools::Itertools;
 use parking_lot::FairMutex;
@@ -22,18 +22,18 @@ use crate::ai::agent::{
     ReadShellCommandOutputResult, RequestCommandOutputResult, ShellCommandDelay, ShellCommandError,
     TransferShellCommandControlToUserResult, WriteToLongRunningShellCommandResult,
 };
-use crate::ai::blocklist::permissions::CommandExecutionPermission;
 use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::blocklist::permissions::CommandExecutionPermission;
 use crate::ai::execution_profiles::WriteToPtyPermission;
+use crate::terminal::TerminalModel;
 use crate::terminal::event::BlockMetadataReceivedEvent;
 use crate::terminal::model::block::{
-    formatted_terminal_contents_for_input, Block, BlockId, CURSOR_MARKER,
+    Block, BlockId, CURSOR_MARKER, formatted_terminal_contents_for_input,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
-use crate::terminal::TerminalModel;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 pub struct ShellCommandExecutor {
     active_session: ModelHandle<ActiveSession>,

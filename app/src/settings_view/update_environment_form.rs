@@ -27,7 +27,8 @@ use warpui::{
 };
 
 use super::editor_text_colors;
-use super::settings_page::{render_input_list, InputListItem};
+use super::settings_page::{InputListItem, render_input_list};
+use crate::ChannelState;
 use crate::ai::ambient_agents::github_auth_notifier::{GitHubAuthEvent, GitHubAuthNotifier};
 use crate::ai::ambient_agents::github_auth_url::{self, AuthSource, GithubAuthRedirectTarget};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
@@ -45,11 +46,10 @@ use crate::view_components::action_button::{
     ActionButton, DangerSecondaryTheme, PrimaryTheme, SecondaryTheme,
 };
 use crate::view_components::{
-    render_warning_box, SubmittableTextInput, SubmittableTextInputEvent, WarningBoxButtonConfig,
-    WarningBoxConfig,
+    SubmittableTextInput, SubmittableTextInputEvent, WarningBoxButtonConfig, WarningBoxConfig,
+    render_warning_box,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::ChannelState;
 
 const SUBMIT_BUTTON_FOCUSED: &str = "SubmitButtonFocused";
 

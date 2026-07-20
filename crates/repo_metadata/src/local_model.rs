@@ -16,8 +16,8 @@ use futures::channel::oneshot;
 use futures::future::{self, BoxFuture, FutureExt as _};
 use warp_core::{safe_warn, send_telemetry_from_ctx};
 use warp_util::sync::Condition;
-use warpui_core::r#async::{FutureId, SpawnedFutureHandle};
 use warpui_core::ModelHandle;
+use warpui_core::r#async::{FutureId, SpawnedFutureHandle};
 
 /// Represents either a file or directory in a repository.
 #[derive(Debug, Clone)]
@@ -45,15 +45,15 @@ use warp_util::standardized_path::StandardizedPath;
 #[cfg(feature = "local_fs")]
 use crate::entry::LAZY_LOAD_FILE_LIMIT;
 use crate::entry::{
-    matches_force_included_path, BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry,
-    FileId, IgnoredPathStrategy,
+    BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy,
+    matches_force_included_path,
 };
 use crate::repository::Repository;
 use crate::standing_queries::{
     StandingQueryDefinitions, StandingQueryResults, StandingQueryResultsDelta,
 };
 use crate::telemetry::RepoMetadataTelemetryEvent;
-use crate::{gitignores_for_directory, matches_gitignores, RepoMetadataError};
+use crate::{RepoMetadataError, gitignores_for_directory, matches_gitignores};
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use notify_debouncer_full::notify::RecursiveMode;
@@ -76,8 +76,8 @@ use crate::file_tree_store::{
     FileTreeState,
 };
 use crate::file_tree_update::{
-    flatten_entry_metadata, DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate,
-    MetadataUpdateType, RepoMetadataUpdate, RepoNodeMetadata,
+    DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate, MetadataUpdateType,
+    RepoMetadataUpdate, RepoNodeMetadata, flatten_entry_metadata,
 };
 
 /// Maximum depth to traverse when building file trees

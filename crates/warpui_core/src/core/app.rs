@@ -8,7 +8,7 @@ use std::rc::{self, Rc};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Utc;
 use futures::future::join_all;
 use futures::prelude::*;
@@ -22,15 +22,17 @@ use rustc_hash::FxHashMap;
 use warp_errors::report_error;
 
 use super::{
-    autotracking, ActionCallback, BlurContext, FocusContext, GlobalActionCallback, GlobalShortcut,
+    ActionCallback, BlurContext, FocusContext, GlobalActionCallback, GlobalShortcut,
     InvalidationCallback, Observation, PendingUnsubscribes, RefCounts, Subscription, TaskCallback,
-    TypedActionCallback, ViewType,
+    TypedActionCallback, ViewType, autotracking,
 };
 use crate::accessibility::{AccessibilityVerbosity, ActionAccessibilityContent};
 use crate::actions::StandardAction;
 use crate::app_focus_telemetry::AppFocusInfo;
-use crate::assets::asset_cache::{AssetCache, AssetHandle, AssetSource, AssetState};
 use crate::assets::AssetProvider;
+use crate::assets::asset_cache::{AssetCache, AssetHandle, AssetSource, AssetState};
+use crate::r#async::executor::{self, Background, Foreground, ForegroundTask};
+use crate::r#async::{FutureId, SpawnableOutput, Timer, block_on};
 use crate::core::{ActionType, StoredView, Window};
 use crate::event::KeyState;
 use crate::fonts::{self, ExternalFontFamily, FallbackFontModel, RequestedFallbackFontSource};
@@ -51,17 +53,16 @@ use crate::platform::{
     TerminationMode, WindowBounds, WindowContext, WindowOptions, WindowStyle,
 };
 use crate::presenter::{CursorUpdate, DispatchedActionKind};
-use crate::r#async::executor::{self, Background, Foreground, ForegroundTask};
-use crate::r#async::{block_on, FutureId, SpawnableOutput, Timer};
 use crate::util::post_inc;
 use crate::windowing::{self, WindowCallbacks, WindowManager};
 use crate::{
-    assets, rendering, AccessibilityData, Action, AddSingletonModel, AddWindowOptions, AnyModel,
-    AnyModelHandle, ApplicationBundleInfo, Clipboard, CursorInfo, Effect, Element, Entity,
-    EntityId, EntityIdMap, EntityIdSet, Event, GetSingletonModelHandle, ModelAsRef, ModelContext,
-    ModelHandle, NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView,
-    Scene, SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
-    ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor,
+    AccessibilityData, Action, AddSingletonModel, AddWindowOptions, AnyModel, AnyModelHandle,
+    ApplicationBundleInfo, Clipboard, CursorInfo, Effect, Element, Entity, EntityId, EntityIdMap,
+    EntityIdSet, Event, GetSingletonModelHandle, ModelAsRef, ModelContext, ModelHandle,
+    NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView, Scene,
+    SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
+    ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor, assets,
+    rendering,
 };
 
 #[cfg(feature = "tui")]
@@ -4291,9 +4292,9 @@ impl AppContext {
     pub fn open_file_picker(
         &mut self,
         callback: impl FnOnce(Result<Vec<String>, FilePickerError>, &mut AppContext)
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
         config: FilePickerConfiguration,
     ) {
         self.platform_delegate

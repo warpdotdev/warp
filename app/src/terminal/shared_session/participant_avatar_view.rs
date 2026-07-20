@@ -4,13 +4,13 @@ use pathfinder_geometry::vector::vec2f;
 use session_sharing_protocol::common::{ParticipantId, ParticipantInfo, Role};
 use session_sharing_protocol::sharer::RoleUpdateReason;
 use warpui::accessibility::AccessibilityContent;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Fill, Flex, Hoverable, MainAxisAlignment, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Stack,
 };
 use warpui::platform::Cursor;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
@@ -158,9 +158,11 @@ impl ParticipantAvatarView {
 
     fn context_menu_items(&self) -> Vec<MenuItem<ParticipantAvatarAction>> {
         let participant_id = self.participant_id.clone();
-        let mut items = vec![MenuItemFields::new(self.display_name.clone())
-            .with_disabled(true)
-            .into_item()];
+        let mut items = vec![
+            MenuItemFields::new(self.display_name.clone())
+                .with_disabled(true)
+                .into_item(),
+        ];
 
         match self.role {
             Some(Role::Reader) => items.extend([MenuItemFields::new("Make editor")

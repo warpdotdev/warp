@@ -7,7 +7,7 @@ use derive_more::AddAssign as DeriveAddAssign;
 use ordered_float::OrderedFloat;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use sum_tree::SumTree;
 
 use super::{
@@ -89,7 +89,7 @@ impl From<Pixels> for Height {
 
 impl<'a> sum_tree::Dimension<'a, RowLayoutSummary> for Height {
     fn add_summary(&mut self, summary: &'a RowLayoutSummary) {
-        self.0 .0 += summary.height;
+        self.0.0 += summary.height;
     }
 }
 
@@ -322,7 +322,7 @@ impl TableState {
     fn scroll_top_pixels(&self) -> Pixels {
         let mut cursor = self.rows.cursor::<RowCount, Height>();
         cursor.seek(&self.scroll_top.row_index, sum_tree::SeekBias::Right);
-        let row_start_height = cursor.start().0 .0;
+        let row_start_height = cursor.start().0.0;
         self.header_height + row_start_height + self.scroll_top.offset_from_start
     }
 
@@ -378,7 +378,7 @@ impl TableState {
 
             let mut height_cursor = self.rows.cursor::<RowCount, Height>();
             height_cursor.seek(&row_index, sum_tree::SeekBias::Right);
-            let row_start_height = height_cursor.start().0 .0;
+            let row_start_height = height_cursor.start().0.0;
 
             let offset = pixels_in_rows - row_start_height;
 

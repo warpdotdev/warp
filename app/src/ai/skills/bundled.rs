@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use ai::skills::{parse_bundled_skill, ParsedSkill, SkillPathOrigin, SkillReference};
+use ai::skills::{ParsedSkill, SkillPathOrigin, SkillReference, parse_bundled_skill};
 use futures::TryStreamExt;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;

@@ -17,7 +17,7 @@ use warpui::{
 };
 
 use super::dropdown::{
-    DropdownAction, DropdownItem, DropdownItemAction, MenuHeaderTextFormatter, DROPDOWN_PADDING,
+    DROPDOWN_PADDING, DropdownAction, DropdownItem, DropdownItemAction, MenuHeaderTextFormatter,
     TOP_MENU_BAR_HEIGHT, TOP_MENU_BAR_MAX_WIDTH,
 };
 use crate::appearance::Appearance;

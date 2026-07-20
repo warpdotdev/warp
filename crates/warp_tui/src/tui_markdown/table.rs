@@ -1,14 +1,14 @@
 use markdown_parser::{FormattedTable, FormattedTextInline, Hyperlink, TableAlignment};
 use unicode_width::UnicodeWidthStr;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiFlex, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
     TuiParentElement, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
     TuiText,
 };
-use warpui_core::AppContext;
 
 use super::{
-    blank_row, inline_spans, push_span, TuiFixedWidth, TuiMarkdownPalette, TuiMarkdownRule,
+    TuiFixedWidth, TuiMarkdownPalette, TuiMarkdownRule, blank_row, inline_spans, push_span,
 };
 
 const TABLE_COLUMN_GAP: u16 = 3;

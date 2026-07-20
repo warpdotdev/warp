@@ -14,8 +14,8 @@ use notify_debouncer_full::notify::{
     self, EventKind, RecommendedWatcher, RecursiveMode, WatchFilter,
 };
 use notify_debouncer_full::{
-    new_debouncer_opt, DebounceEventHandler, DebounceEventResult, DebouncedEvent, Debouncer,
-    NoCache,
+    DebounceEventHandler, DebounceEventResult, DebouncedEvent, Debouncer, NoCache,
+    new_debouncer_opt,
 };
 use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext};

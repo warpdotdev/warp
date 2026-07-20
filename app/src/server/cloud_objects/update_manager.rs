@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::future::Future;
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -21,16 +21,16 @@ use warp_graphql::scalars::time::ServerTimestamp;
 use warp_util::sync::Condition;
 use warpui::r#async::{FutureId, Timer};
 use warpui::{
-    duration_with_jitter, AppContext, Entity, ModelContext, ModelHandle, RequestState, RetryOption,
-    SingletonEntity,
+    AppContext, Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity,
+    duration_with_jitter,
 };
 
 use super::listener::ObjectUpdateMessage;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::scheduled::{
     CloudScheduledAmbientAgentModel, ScheduledAmbientAgent,
 };
-use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -38,8 +38,8 @@ use crate::ai::execution_profiles::{AIExecutionProfile, CloudAIExecutionProfileM
 use crate::ai::facts::{AIFact, CloudAIFactModel};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::templatable::{CloudTemplatableMCPServerModel, TemplatableMCPServer};
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::actions::{
     ObjectAction, ObjectActionHistory, ObjectActionType, ObjectActions,
 };
@@ -59,6 +59,7 @@ use crate::cloud_object::{
     ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflowEnum, Space,
     UpdateCloudObjectResult,
 };
+use crate::drive::CloudObjectTypeAndId;
 use crate::drive::drive_helpers::{
     is_feature_gated_anonymous_user_past_env_var_limit,
     is_feature_gated_anonymous_user_past_notebook_limit,
@@ -66,14 +67,13 @@ use crate::drive::drive_helpers::{
 };
 use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::drive::sharing::SharingAccessLevel;
-use crate::drive::CloudObjectTypeAndId;
 use crate::env_vars::{CloudEnvVarCollectionModel, EnvVarCollection};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::persistence::ModelEvent;
 use crate::server::ids::{
-    parse_sqlite_id_to_uid, ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId, SyncId,
-    ToServerId,
+    ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId, SyncId, ToServerId,
+    parse_sqlite_id_to_uid,
 };
 use crate::server::retry_strategies::{
     OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY,
@@ -2882,7 +2882,9 @@ impl UpdateManager {
                 let cloud_model = CloudModel::as_ref(ctx);
                 let object: Option<&CloudWorkflowEnum> = cloud_model.get_object_of_type(enum_id);
                 let Some(object) = object else {
-                    report_error!("Could not find referenced workflow enum to copy over to the new space, skipping");
+                    report_error!(
+                        "Could not find referenced workflow enum to copy over to the new space, skipping"
+                    );
                     continue;
                 };
 

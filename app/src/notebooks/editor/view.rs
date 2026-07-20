@@ -3,7 +3,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use markdown_parser::{parse_html, parse_markdown, FormattedText};
+use markdown_parser::{FormattedText, parse_html, parse_markdown};
 use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use warp_editor::content::anchor::Anchor;
@@ -21,6 +21,7 @@ use warp_util::user_input::UserInput;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::actions::StandardAction;
 use warpui::assets::asset_cache::{AssetCache, AssetHandle, AssetState};
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     AnchorPair, Axis, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
@@ -35,7 +36,6 @@ use warpui::image_cache::ImageType;
 use warpui::keymap::{EditableBinding, FixedBinding, PerPlatformKeystroke};
 use warpui::platform::{Cursor, OperatingSystem};
 use warpui::presenter::ChildView;
-use warpui::r#async::SpawnedFutureHandle;
 #[cfg(feature = "local_fs")]
 use warpui::text::word_boundaries::WordBoundariesPolicy;
 use warpui::ui_components::button::ButtonVariant;
@@ -43,8 +43,8 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
 use warpui::windowing::WindowManager;
 use warpui::{
-    windowing, AppContext, BlurContext, CursorInfo, Element, Entity, FocusContext, ModelHandle,
-    SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
+    AppContext, BlurContext, CursorInfo, Element, Entity, FocusContext, ModelHandle,
+    SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle, windowing,
 };
 
 use super::block_insertion_menu::{BlockInsertionMenuState, BlockInsertionSource};
@@ -53,7 +53,7 @@ use super::keys::NotebookKeybindings;
 use super::link_editor::{LinkEditor, LinkEditorEvent};
 use super::model::{NotebooksEditorModel, RichTextEditorModelEvent};
 use super::omnibar::{Omnibar, OmnibarEvent};
-use super::{rich_text_styles, BlockType, NotebookWorkflow};
+use super::{BlockType, NotebookWorkflow, rich_text_styles};
 use crate::appearance::Appearance;
 use crate::cmd_or_ctrl_shift;
 use crate::editor::InteractionState;
@@ -70,9 +70,9 @@ use crate::terminal::links::directly_open_link_keybinding_string;
 use crate::ui_components::icons::ICON_DIMENSIONS;
 use crate::util::bindings::CustomAction;
 #[cfg(feature = "local_fs")]
-use crate::util::link_detection::{detect_file_paths, get_word_range_at_offset, DetectedLinkType};
+use crate::util::link_detection::{DetectedLinkType, detect_file_paths, get_word_range_at_offset};
 use crate::util::tooltips::{
-    render_tooltip, should_show_open_in_warp_link, TooltipLink, TooltipRedaction,
+    TooltipLink, TooltipRedaction, render_tooltip, should_show_open_in_warp_link,
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::WorkspaceAction;
@@ -1387,21 +1387,24 @@ impl RichTextEditorView {
                 .insert(handle.clone())
             {
                 let asset_cache = AssetCache::as_ref(ctx);
-                match handle.when_loaded(asset_cache) { Some(future) => {
-                    ctx.spawn(future, move |me, (), ctx| {
-                        me.pending_layout_affecting_asset_loads.remove(&handle);
-                        me.model.update(ctx, |model, ctx| {
-                            if Self::should_rebuild_layout_after_layout_affecting_asset_load(
-                                model.interaction_state(ctx),
-                            ) {
-                                model.rebuild_layout(ctx);
-                            }
+                match handle.when_loaded(asset_cache) {
+                    Some(future) => {
+                        ctx.spawn(future, move |me, (), ctx| {
+                            me.pending_layout_affecting_asset_loads.remove(&handle);
+                            me.model.update(ctx, |model, ctx| {
+                                if Self::should_rebuild_layout_after_layout_affecting_asset_load(
+                                    model.interaction_state(ctx),
+                                ) {
+                                    model.rebuild_layout(ctx);
+                                }
+                            });
+                            ctx.notify();
                         });
-                        ctx.notify();
-                    });
-                } _ => {
-                    self.pending_layout_affecting_asset_loads.remove(&handle);
-                }}
+                    }
+                    _ => {
+                        self.pending_layout_affecting_asset_loads.remove(&handle);
+                    }
+                }
             }
         }
     }
@@ -3590,11 +3593,7 @@ impl RichTextAction<RichTextEditorView> for EditorViewAction {
                 ..
             } = loc
             {
-                if !clamped {
-                    Some(*char_offset)
-                } else {
-                    None
-                }
+                if !clamped { Some(*char_offset) } else { None }
             } else {
                 None
             }

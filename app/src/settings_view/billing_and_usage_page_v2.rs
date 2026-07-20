@@ -27,18 +27,18 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use super::SettingsSection;
 use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSectionView;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
 pub use super::billing_and_usage_page::BillingAndUsagePageEvent;
 use super::billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab};
-use super::settings_page::{render_customer_type_badge, render_info_icon, AdditionalInfo};
-use super::SettingsSection;
-use crate::ai::request_usage_model::{
-    BonusGrant, BonusGrantScope, BonusGrantType, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
-};
+use super::settings_page::{AdditionalInfo, render_customer_type_badge, render_info_icon};
 use crate::ai::AIRequestUsageModel;
+use crate::ai::request_usage_model::{
+    AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD, BonusGrant, BonusGrantScope, BonusGrantType,
+};
 use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthManager, AuthStateProvider};
@@ -51,12 +51,12 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::ui_components::tab_selector::{self, SettingsTab};
-use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::view_components::ToastFlavor;
+use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{CustomerType, Workspace, WorkspaceUid};
-use crate::{send_telemetry_from_ctx, WorkspaceAction};
+use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =

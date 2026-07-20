@@ -4,13 +4,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use ai::agent::document_action_presentation::DocumentActionPresentation;
-use markdown_parser::{parse_markdown_with_gfm_tables, FormattedText, FormattedTextLine};
+use markdown_parser::{FormattedText, FormattedTextLine, parse_markdown_with_gfm_tables};
 use warp::tui_export::{
     AIAgentAction, AIAgentActionType, BlocklistAIActionEvent, BlocklistAIActionModel,
 };
 use warpui_core::elements::tui::{
-    tui_collapsible, Modifier, TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiParentElement,
-    TuiText,
+    Modifier, TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiText,
+    tui_collapsible,
 };
 use warpui_core::elements::{CrossAxisAlignment, MouseStateHandle};
 use warpui_core::{
@@ -18,10 +18,10 @@ use warpui_core::{
 };
 
 use crate::keybindings::plan_toggle_hint;
-use crate::tool_call_labels::{tool_call_display_state, ToolCallDisplayState};
+use crate::tool_call_labels::{ToolCallDisplayState, tool_call_display_state};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
-use crate::tui_markdown::{render_formatted_text, TuiMarkdownBlockHooks, TuiMarkdownPalette};
+use crate::tui_markdown::{TuiMarkdownBlockHooks, TuiMarkdownPalette, render_formatted_text};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct TuiPlanCodeKey {

@@ -30,11 +30,14 @@ pub fn delete_conversation(
                             .delete_ai_conversation(token.clone())
                             .await
                             .context("Failed to delete conversation from cloud")
-                        { Err(e) => {
-                            report_error!(e);
-                        } _ => {
-                            log::info!("Successfully deleted conversation from cloud: {token}");
-                        }}
+                        {
+                            Err(e) => {
+                                report_error!(e);
+                            }
+                            _ => {
+                                log::info!("Successfully deleted conversation from cloud: {token}");
+                            }
+                        }
                     },
                     |_, _, _| {},
                 );

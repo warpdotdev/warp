@@ -4,8 +4,8 @@
 
 use windows::Win32::System::Console::HPCON;
 use windows::Win32::System::Threading::{
-    DeleteProcThreadAttributeList, InitializeProcThreadAttributeList, UpdateProcThreadAttribute,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+    DeleteProcThreadAttributeList, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, UpdateProcThreadAttribute,
 };
 pub struct ProcThreadAttributeList {
     data: Box<[u8]>,

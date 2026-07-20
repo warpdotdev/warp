@@ -40,8 +40,8 @@ pub mod test_utils;
 
 pub use lifecycle::{LifecycleRecoveryRecord, StartCommandOutcome};
 pub use secrets::{
-    set_user_and_enterprise_secret_regexes, ObfuscateSecrets, RespectObfuscatedSecrets, Secret,
-    SecretHandle,
+    ObfuscateSecrets, RespectObfuscatedSecrets, Secret, SecretHandle,
+    set_user_and_enterprise_secret_regexes,
 };
 pub use warp_terminal::model::grid::cell;
-pub use warp_terminal::model::{char_or_str, escape_sequences, mouse, BlockId};
+pub use warp_terminal::model::{BlockId, char_or_str, escape_sequences, mouse};

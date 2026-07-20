@@ -18,11 +18,11 @@ use super::cloud_conversation_continuation::TombstoneCta;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, ArtifactType};
 use crate::ai::ambient_agents::{
-    conversation_output_status_from_conversation, AmbientAgentTask, AmbientAgentTaskId,
-    AmbientConversationStatus,
+    AmbientAgentTask, AmbientAgentTaskId, AmbientConversationStatus,
+    conversation_output_status_from_conversation,
 };
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
-use crate::ai::blocklist::{format_credits, BlocklistAIHistoryModel};
+use crate::ai::blocklist::{BlocklistAIHistoryModel, format_credits};
 use crate::appearance::Appearance;
 use crate::server::ids::SyncId;
 use crate::server::server_api::ServerApiProvider;

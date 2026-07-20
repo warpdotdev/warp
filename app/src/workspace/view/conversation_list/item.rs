@@ -29,7 +29,7 @@ use crate::menu::Menu;
 use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::ui_components::icons::Icon;
-use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
+use crate::ui_components::menu_button::{MenuDirection, icon_button_with_context_menu};
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::util::truncation::truncate_from_end;
 use crate::workspace::view::conversation_list::view::ConversationListViewAction;

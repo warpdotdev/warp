@@ -4,8 +4,8 @@ use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Container, OffsetPositioning, ParentAnchor, ParentElement as _,

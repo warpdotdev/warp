@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use async_compat::CompatExt as _;
 use mcp::oauth::{
-    self, load_credentials_from_secure_storage, write_to_secure_storage, AuthContext,
-    CallbackResult, FileBasedPersistedCredentialsMap, OAuthCallbackMode, PersistedCredentials,
-    PersistedCredentialsMap, FILE_BASED_MCP_CREDENTIALS_KEY, TEMPLATABLE_MCP_CREDENTIALS_KEY,
+    self, AuthContext, CallbackResult, FILE_BASED_MCP_CREDENTIALS_KEY,
+    FileBasedPersistedCredentialsMap, OAuthCallbackMode, PersistedCredentials,
+    PersistedCredentialsMap, TEMPLATABLE_MCP_CREDENTIALS_KEY, load_credentials_from_secure_storage,
+    write_to_secure_storage,
 };
 use mcp::runtime::{error_to_user_message, spawn_server};
 use parking_lot::Mutex;
@@ -31,9 +32,9 @@ use crate::ai::mcp::templatable::{CloudTemplatableMCPServer, GalleryData};
 use crate::ai::mcp::templatable_installation::VariableValue;
 use crate::ai::mcp::templatable_manager::FigmaMcpStatus;
 use crate::ai::mcp::{
-    logs, Author, CloudMCPServer, FileBasedMCPManager, JsonTemplate, MCPGalleryManager, MCPServer,
+    Author, CloudMCPServer, FileBasedMCPManager, JsonTemplate, MCPGalleryManager, MCPServer,
     MCPServerExt, MCPServerUpdate, ParsedTemplatableMCPServerResult, StaticEnvVar,
-    TemplatableMCPServer, TemplatableMCPServerInstallation, TransportType,
+    TemplatableMCPServer, TemplatableMCPServerInstallation, TransportType, logs,
 };
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
@@ -43,7 +44,7 @@ use crate::cloud_object::{
 };
 use crate::drive::CloudObjectTypeAndId;
 use crate::persistence::{
-    database_file_path_for_current_scope, establish_ro_connection, ModelEvent,
+    ModelEvent, database_file_path_for_current_scope, establish_ro_connection,
 };
 use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, SyncId};
@@ -54,7 +55,7 @@ use crate::settings::AISettings;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, GlobalResourceHandlesProvider};
+use crate::{GlobalResourceHandlesProvider, send_telemetry_from_ctx};
 
 /// Controls the behavior of `spawn_server_impl`.
 enum SpawnMode {
@@ -1124,16 +1125,19 @@ impl TemplatableMCPServerManager {
         self.pending_oauth_csrf
             .retain(|_, v| *v != installation_uuid);
         self.authorization_urls.remove(&installation_uuid);
-        match self.active_servers.remove(&installation_uuid) { Some(server_info) => {
-            self.change_server_state(installation_uuid, MCPServerState::ShuttingDown, ctx);
-            // Cancel the server, and emit NotRunning state once it has stopped.
-            ctx.spawn(server_info.shutdown(), move |me, _, ctx| {
-                me.change_server_state(installation_uuid, MCPServerState::NotRunning, ctx);
-                ctx.dispatch_global_action("workspace:save_app", ());
-            });
-        } _ => {
-            self.change_server_state(installation_uuid, MCPServerState::NotRunning, ctx);
-        }}
+        match self.active_servers.remove(&installation_uuid) {
+            Some(server_info) => {
+                self.change_server_state(installation_uuid, MCPServerState::ShuttingDown, ctx);
+                // Cancel the server, and emit NotRunning state once it has stopped.
+                ctx.spawn(server_info.shutdown(), move |me, _, ctx| {
+                    me.change_server_state(installation_uuid, MCPServerState::NotRunning, ctx);
+                    ctx.dispatch_global_action("workspace:save_app", ());
+                });
+            }
+            _ => {
+                self.change_server_state(installation_uuid, MCPServerState::NotRunning, ctx);
+            }
+        }
 
         log::debug!("Successfully shut down server with installation uuid {installation_uuid}");
     }
@@ -1187,8 +1191,10 @@ impl TemplatableMCPServerManager {
                 mcp_server_installation: mcp_server_installation.clone(),
             };
             if let Err(err) = sender.send(event) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to save TemplatableMCPServerInstallation to database"));
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Failed to save TemplatableMCPServerInstallation to database")
+                );
             }
         }
 
@@ -1271,8 +1277,10 @@ impl TemplatableMCPServerManager {
                 installation_uuids: installation_uuids.clone(),
             };
             if let Err(err) = sender.send(event) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to delete installations from local database"));
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Failed to delete installations from local database")
+                );
             }
         }
 
@@ -1614,8 +1622,10 @@ impl TemplatableMCPServerManager {
                         ctx
                     );
                 }
-                Err(e) => report_error!(anyhow::Error::new(e)
-                    .context("Failed to convert legacy MCP server to templatable")),
+                Err(e) => report_error!(
+                    anyhow::Error::new(e)
+                        .context("Failed to convert legacy MCP server to templatable")
+                ),
             }
         }
     }

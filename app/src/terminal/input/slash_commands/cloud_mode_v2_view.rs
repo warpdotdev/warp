@@ -22,12 +22,12 @@ use crate::search::mixer::{AddAsyncSourceOptions, SearchMixer, SearchMixerEvent}
 use crate::search::result_renderer::{QueryResultRenderer, QueryResultRendererStyles};
 use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
-use crate::terminal::input::inline_menu::{styles as inline_styles, QueryResultRendererExt as _};
+use crate::terminal::input::inline_menu::{QueryResultRendererExt as _, styles as inline_styles};
 use crate::terminal::input::slash_command_model::{SlashCommandEntryState, SlashCommandModel};
 use crate::terminal::input::slash_commands::view::CloseReason;
 use crate::terminal::input::slash_commands::{
-    saved_prompts_data_source, slash_command_query, AcceptSlashCommandOrSavedPrompt,
-    GuiSlashCommandDataSource, GuiZeroStateDataSource, SlashCommandsEvent, UpdatedActiveCommands,
+    AcceptSlashCommandOrSavedPrompt, GuiSlashCommandDataSource, GuiZeroStateDataSource,
+    SlashCommandsEvent, UpdatedActiveCommands, saved_prompts_data_source, slash_command_query,
 };
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,

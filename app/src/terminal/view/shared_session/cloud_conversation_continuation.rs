@@ -7,15 +7,15 @@ use crate::ai::agent::conversation::{
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::{
-    conversation_output_status_from_conversation, AmbientAgentTask, AmbientAgentTaskId,
-    AmbientConversationStatus,
+    AmbientAgentTask, AmbientAgentTaskId, AmbientConversationStatus,
+    conversation_output_status_from_conversation,
 };
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, ServerGuestSubject};
 use crate::drive::sharing::SharingAccessLevel;
-use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::terminal::TerminalModel;
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

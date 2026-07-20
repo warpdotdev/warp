@@ -27,9 +27,10 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    build_secret_env_vars, AgentDriver, AgentDriverError, IdleTimeoutSender,
+    AgentDriver, AgentDriverError, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    build_secret_env_vars,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -39,8 +40,8 @@ use crate::ai::agent::{
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
-use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::mcp::JSONTransportType;
+use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::skills::SkillManager;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
@@ -510,9 +511,11 @@ fn task_env_vars_include_parent_run_id_when_present() {
         )),
         Some(&OsString::from("1"))
     );
-    assert!(env_vars
-        .get(&OsString::from(OZ_CLI_ENV))
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        env_vars
+            .get(&OsString::from(OZ_CLI_ENV))
+            .is_some_and(|value| !value.is_empty())
+    );
 
     let server_root_url = ChannelState::server_root_url().into_owned();
     if overrides_allowed && !server_root_url.is_empty() {
@@ -541,8 +544,10 @@ fn task_env_vars_include_parent_run_id_when_present() {
                 Some(&OsString::from(url.into_owned()))
             ),
             _ => {
-                assert!(!env_vars
-                    .contains_key(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV)))
+                assert!(
+                    !env_vars
+                        .contains_key(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV))
+                )
             }
         }
     } else {
@@ -600,10 +605,12 @@ fn task_env_vars_enable_external_parent_listener_for_claude_runs_without_parent_
 fn task_env_vars_propagate_message_listener_state_root_with_legacy_alias() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440003".parse().unwrap();
     // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var(
-        OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-        "/tmp/message-listener-root",
-    ) };
+    unsafe {
+        std::env::set_var(
+            OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+            "/tmp/message-listener-root",
+        )
+    };
     let env_vars = task_env_vars(Some(&task_id), None, Harness::Claude);
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV) };

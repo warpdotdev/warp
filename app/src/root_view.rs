@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use anyhow::Result;
 use cfg_if::cfg_if;
@@ -12,7 +12,7 @@ use onboarding::{
 };
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::SessionId;
 use settings::Setting as _;
@@ -31,9 +31,9 @@ use warpui::presenter::ChildView;
 use warpui::rendering::OnGPUDeviceSelected;
 use warpui::windowing::WindowManager;
 use warpui::{
-    id, AddWindowOptions, AppContext, DisplayId, Element, Entity, EntityId, FocusContext,
+    AddWindowOptions, AppContext, DisplayId, Element, Entity, EntityId, FocusContext,
     NextNewWindowsHasThisWindowsBoundsUponClose, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle, WindowId,
+    ViewContext, ViewHandle, WindowId, id,
 };
 
 use crate::ai::agent::api::ServerConversationToken;
@@ -77,19 +77,19 @@ use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
 use crate::settings::cloud_preferences_syncer::{
     CloudPreferencesSyncer, CloudPreferencesSyncerEvent,
 };
-use crate::settings::{apply_onboarding_settings, AISettings, QuakeModeSettings, ThemeSettings};
+use crate::settings::{AISettings, QuakeModeSettings, ThemeSettings, apply_onboarding_settings};
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::settings_view::{flags, OpenTeamsSettingsModalArgs, SettingsSection};
+use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection, flags};
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::keys_settings::KeysSettings;
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::{cell_size_and_padding, TerminalAction};
+use crate::terminal::view::{TerminalAction, cell_size_and_padding};
 use crate::themes::onboarding_theme_picker_themes;
 use crate::themes::theme::{AnsiColorIdentifier, Blend, Fill, ThemeKind, WarpThemeConfig};
 use crate::uri::{OpenMCPSettingsArgs, OpenSettingsArgs};
 use crate::util::bindings::{self, is_binding_pty_compliant};
-use crate::util::traffic_lights::{traffic_light_data, TrafficLightData, TrafficLightMouseStates};
+use crate::util::traffic_lights::{TrafficLightData, TrafficLightMouseStates, traffic_light_data};
 use crate::view_components::DismissibleToast;
 use crate::window_settings::WindowSettings;
 use crate::workspace::hoa_onboarding::mark_hoa_onboarding_completed;
@@ -100,8 +100,8 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::{
-    send_telemetry_from_app_ctx, send_telemetry_from_ctx, ChannelState, GlobalResourceHandles,
-    GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
+    ChannelState, GlobalResourceHandles, GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
+    send_telemetry_from_app_ctx, send_telemetry_from_ctx,
 };
 
 const WINDOW_TITLE: &str = "Warp";
@@ -573,13 +573,16 @@ fn open_launch_config(arg: &OpenLaunchConfigArg, ctx: &mut AppContext) {
 }
 
 fn send_feedback(_: &(), ctx: &mut AppContext) {
-    match active_workspace(ctx) { Some(workspace) => {
-        workspace.update(ctx, |workspace, ctx| {
-            workspace.handle_action(&WorkspaceAction::SendFeedback, ctx);
-        });
-    } _ => {
-        ctx.open_url(&crate::util::links::feedback_form_url());
-    }}
+    match active_workspace(ctx) {
+        Some(workspace) => {
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.handle_action(&WorkspaceAction::SendFeedback, ctx);
+            });
+        }
+        _ => {
+            ctx.open_url(&crate::util::links::feedback_form_url());
+        }
+    }
 }
 
 /// Creates a new window with the transferred pane group.
@@ -644,13 +647,16 @@ pub fn create_transferred_window(
     let pane_group_id = transferred_tab.pane_group.id();
     ctx.transfer_view_tree_to_window(pane_group_id, source_window_id, new_window_id);
 
-    match WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx) { Some(new_workspace) => {
-        new_workspace.update(ctx, |workspace, ctx| {
-            workspace.adopt_transferred_pane_group(transferred_tab.pane_group.clone(), ctx);
-        });
-    } _ => {
-        log::warn!("Failed to find workspace in newly created window {new_window_id:?}");
-    }}
+    match WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx) {
+        Some(new_workspace) => {
+            new_workspace.update(ctx, |workspace, ctx| {
+                workspace.adopt_transferred_pane_group(transferred_tab.pane_group.clone(), ctx);
+            });
+        }
+        _ => {
+            log::warn!("Failed to find workspace in newly created window {new_window_id:?}");
+        }
+    }
     new_window_id
 }
 
@@ -1854,10 +1860,7 @@ impl RootView {
         result: &Result<UpdateReady>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Ok(UpdateReady::Yes {
-            new_version, ..
-        }) = result
-        {
+        if let Ok(UpdateReady::Yes { new_version, .. }) = result {
             log::info!("Update ready for channel version {new_version:?}");
             if new_version.update_by.is_some() {
                 log::info!("Update ready, there is an update-by time, checking for server time.");

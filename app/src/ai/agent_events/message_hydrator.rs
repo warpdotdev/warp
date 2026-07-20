@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 #[cfg(not(target_family = "wasm"))]
 use futures::future::Either;
 #[cfg(not(target_family = "wasm"))]
@@ -13,10 +13,10 @@ use warpui::r#async::Timer;
 
 use crate::ai::agent::ReceivedMessageInput;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::{AIClient, AgentRunEvent, ReadAgentMessageResponse};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::presigned_upload::HttpStatusError;
-use crate::server::server_api::ServerApi;
 
 pub(crate) const DEFAULT_AGENT_MESSAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_AGENT_MESSAGE_RETRY_DELAY: Duration = Duration::from_millis(50);

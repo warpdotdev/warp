@@ -18,8 +18,8 @@ use crate::ai::agent::{
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::{
-    apply_edits, BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind,
-    SessionContext,
+    BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind, SessionContext,
+    apply_edits,
 };
 use crate::ai::paths::host_native_absolute_path;
 use crate::auth::auth_state::AuthStateProvider;

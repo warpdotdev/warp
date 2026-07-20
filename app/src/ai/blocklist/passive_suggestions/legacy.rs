@@ -21,7 +21,7 @@ use crate::ai::agent::{AIAgentExchangeId, CancellationReason};
 use crate::ai::blocklist::controller::response_stream::ResponseStreamId;
 use crate::ai::blocklist::controller::{BlocklistAIController, BlocklistAIControllerEvent};
 use crate::ai::blocklist::{
-    read_local_file_context, BlocklistAIHistoryModel, BlocklistAIPermissions,
+    BlocklistAIHistoryModel, BlocklistAIPermissions, read_local_file_context,
 };
 use crate::ai::paths::host_native_absolute_path;
 use crate::ai::predict::generate_am_query_suggestions::{
@@ -34,8 +34,8 @@ use crate::server::telemetry::PromptSuggestionFallbackReason;
 use crate::settings::AISettings;
 use crate::terminal::event::{BlockType, UserBlockCompleted};
 use crate::terminal::model::block::BlockId;
-use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
+use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::view::{AgentModePromptSuggestion, PromptSuggestion};

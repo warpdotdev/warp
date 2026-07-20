@@ -8,7 +8,7 @@
 
 use ai::agent::action::RunAgentsExecutionMode;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
@@ -26,31 +26,35 @@ use warpui::{
     SingletonEntity, SizeConstraint, View, ViewContext, ViewHandle,
 };
 
+use crate::LLMPreferences;
 use crate::ai::blocklist::inline_action::host_picker::HostPicker;
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
+use crate::ai::orchestration::{
+    AUTH_SECRET_INHERIT_LABEL, AUTH_SECRET_INHERIT_LABEL, OptionBadge, OptionBadge, OptionFooter,
+    OptionFooter, OptionRow, OptionRow, OptionSnapshot, OptionSnapshot, OptionSourceStatus,
+    OptionSourceStatus, api_key_snapshot, api_key_snapshot, build_runner_snapshot,
+    environment_snapshot, environment_snapshot, harness_snapshot, harness_snapshot, host_snapshot,
+    host_snapshot, model_snapshot, model_snapshot, persist_auth_secret_selection,
+    persist_auth_secret_selection,
+};
 pub use crate::ai::orchestration::{
-    accept_disabled_reason_with_auth, empty_env_recommendation_message,
+    AuthSecretSelection, ORCHESTRATION_WARP_WORKER_HOST, ORCHESTRATION_WARP_WORKER_HOST,
+    OrchestrationConfigState, OrchestrationConfigState, OrchestrationEditState,
+    OrchestrationEditState, accept_disabled_reason_with_auth, empty_env_recommendation_message,
     persist_environment_selection, persist_host_selection,
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
-    resolve_default_host_slug, should_show_auth_secret_picker, AuthSecretSelection,
-    OrchestrationConfigState, OrchestrationEditState, ORCHESTRATION_WARP_WORKER_HOST,
-};
-use crate::ai::orchestration::{
-    api_key_snapshot, build_runner_snapshot, environment_snapshot, harness_snapshot, host_snapshot,
-    model_snapshot, persist_auth_secret_selection, OptionBadge, OptionFooter, OptionRow,
-    OptionSnapshot, OptionSourceStatus, AUTH_SECRET_INHERIT_LABEL,
+    resolve_default_host_slug, should_show_auth_secret_picker,
 };
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::view_components::FilterableDropdown;
 use crate::view_components::dropdown::{
     Dropdown, DropdownAction, DropdownItemAction, DropdownStyle,
 };
-use crate::view_components::FilterableDropdown;
-use crate::LLMPreferences;
 
 // ── Shared constants ────────────────────────────────────────────────
 

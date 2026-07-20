@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 #[cfg(feature = "local_tty")]
 use command::r#async::Command;
 #[cfg(feature = "local_tty")]

@@ -20,14 +20,14 @@ use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use async_channel::{Receiver, Sender};
 use async_compat::Compat;
 use async_trait::async_trait;
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use futures_util::stream::AbortHandle;
-use http::header::{HeaderValue, AUTHORIZATION};
+use http::header::{AUTHORIZATION, HeaderValue};
 use instant::Instant;
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 use warp_managed_secrets::client::{IdentityTokenOptions, ManagedSecretsClient, TaskIdentityToken};

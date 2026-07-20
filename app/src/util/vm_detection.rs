@@ -1,8 +1,8 @@
 /// Detects if we're running in a Windows Parallels VM.
 #[cfg(windows)]
 pub fn is_running_in_windows_parallels_vm() -> bool {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
 

@@ -15,14 +15,14 @@ use remote_server::proto::OpenBufferSuccess;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use warp_core::channel::ChannelState;
-use warp_core::{safe_error, SessionId};
+use warp_core::{SessionId, safe_error};
 use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
 use warp_util::file::FileId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::platform::TerminationMode;
 use warpui::r#async::{Spawnable, SpawnableOutput, SpawnedFutureHandle};
+use warpui::platform::TerminationMode;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::codebase_index_status::{
@@ -34,17 +34,12 @@ use super::diff_state_tracker::{
     DiffModelKey, DiffStateUpdate, RemoteDiffStateManager, SubscribeOutcome,
 };
 use super::proto::{
-    client_message, delete_file_response, discard_files_response, get_diff_state_response,
-    get_fragment_metadata_from_hash_response, git_commit_chain_response, git_create_pr_response,
-    git_generate_commit_message_response, git_get_committed_branch_files_response,
-    git_push_response, host_scoped_request, notification, remote_skill_proto,
-    resolve_conflict_response, run_command_response, save_buffer_response, server_message,
-    session_scoped_request, write_file_response, Abort, Authenticate, BranchInfo, BufferEdit,
-    BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseIndexStatus,
-    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile,
-    DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
-    DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
-    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
+    Abort, Authenticate, BranchInfo, BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer,
+    CodebaseIndexLimits, CodebaseIndexStatus, CodebaseIndexStatusUpdated,
+    CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile, DeleteFileResponse,
+    DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse, DiscardFilesSuccess,
+    DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead, FileContextProto,
+    FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
@@ -61,7 +56,12 @@ use super::proto::{
     RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess,
     SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped,
     TextEdit, UpdateGitHubPrInfo, UpdateGitHubRepoInfo, UpdateGitStatus, UploadHandoffSnapshot,
-    WriteFile, WriteFileResponse, WriteFileSuccess,
+    WriteFile, WriteFileResponse, WriteFileSuccess, client_message, delete_file_response,
+    discard_files_response, get_diff_state_response, get_fragment_metadata_from_hash_response,
+    git_commit_chain_response, git_create_pr_response, git_generate_commit_message_response,
+    git_get_committed_branch_files_response, git_push_response, host_scoped_request, notification,
+    remote_skill_proto, resolve_conflict_response, run_command_response, save_buffer_response,
+    server_message, session_scoped_request, write_file_response,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use super::{diff_state_proto, ripgrep_search};
@@ -86,9 +86,9 @@ pub type ConnectionId = uuid::Uuid;
 use super::protocol::RequestId;
 use crate::ai::agent::FileLocations;
 use crate::ai::blocklist::handoff::snapshot::upload_result_to_proto;
-use crate::ai::blocklist::{read_local_file_context, ReadFileContextResult};
+use crate::ai::blocklist::{ReadFileContextResult, read_local_file_context};
 use crate::ai::skills::{
-    bundled_skill_snapshot_protos, BundledSkill, SkillManager, SkillManagerEvent,
+    BundledSkill, SkillManager, SkillManagerEvent, bundled_skill_snapshot_protos,
 };
 use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::code_review::git_actions;

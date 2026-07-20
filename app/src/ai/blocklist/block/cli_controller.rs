@@ -8,6 +8,7 @@ use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -21,10 +22,9 @@ use crate::ai::blocklist::{
     BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
 };
 use crate::server::telemetry::{CLISubagentControlState, TelemetryEvent};
+use crate::terminal::TerminalModel;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::terminal::TerminalModel;
-use crate::BlocklistAIHistoryModel;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum UserTakeOverReason {
@@ -550,8 +550,10 @@ impl CLISubagentController {
                         AgentViewEntryOrigin::LongRunningCommand,
                         ctx,
                     ) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Failed to enter inline agent view for LRC handoff"));
+                        report_error!(
+                            anyhow::Error::new(e)
+                                .context("Failed to enter inline agent view for LRC handoff")
+                        );
                     }
                 }
             });
@@ -668,8 +670,10 @@ impl CLISubagentController {
                     task_id,
                     *conversation_id,
                 ) {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Could not update interaction mode to agent-monitored"));
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Could not update interaction mode to agent-monitored")
+                    );
                     return;
                 };
 

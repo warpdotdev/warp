@@ -2,7 +2,7 @@ use warp_core::safe_info;
 use warpui_core::keymap::Keystroke;
 use warpui_core::{Entity, ModelContext, ModelHandle, ViewContext};
 
-use crate::register::{valid_register_name, BLACK_HOLE_REGISTER};
+use crate::register::{BLACK_HOLE_REGISTER, valid_register_name};
 
 /// ASCII code for backspace.
 /// In Normal and Visual modes, Vim treats backspace as a leftward character motion.
@@ -787,7 +787,7 @@ impl VimFSA {
             "backspace" => match self.mode {
                 VimMode::Insert => self.handle_insert_mode_backspace().into(),
                 VimMode::Visual(_) | VimMode::Normal => {
-                    return self.typed_character(BACKSPACE_CHAR)
+                    return self.typed_character(BACKSPACE_CHAR);
                 }
                 VimMode::Replace => self.change_mode(VimMode::Normal.into()).into(),
             },

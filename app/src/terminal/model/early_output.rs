@@ -270,22 +270,27 @@ impl EarlyOutputHandler<'_> {
             }
         }
 
-        match self.inner().pending_background_block.take() { Some(mut block) => {
-            debug_assert!(
-                !block.started(),
-                "Started background blocks should be in the block list"
-            );
-            let retval = f(&mut block);
-            store_pending_block(self.block_list, block);
-            retval
-        } _ => if let Some(block) = self.block_list.background_block_mut() {
-            f(block)
-        } else {
-            let mut block = self.block_list.create_pending_background_block();
-            let retval = f(&mut block);
-            store_pending_block(self.block_list, block);
-            retval
-        }}
+        match self.inner().pending_background_block.take() {
+            Some(mut block) => {
+                debug_assert!(
+                    !block.started(),
+                    "Started background blocks should be in the block list"
+                );
+                let retval = f(&mut block);
+                store_pending_block(self.block_list, block);
+                retval
+            }
+            _ => {
+                if let Some(block) = self.block_list.background_block_mut() {
+                    f(block)
+                } else {
+                    let mut block = self.block_list.create_pending_background_block();
+                    let retval = f(&mut block);
+                    store_pending_block(self.block_list, block);
+                    retval
+                }
+            }
+        }
     }
 }
 

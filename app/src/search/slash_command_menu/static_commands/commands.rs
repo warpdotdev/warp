@@ -6,8 +6,8 @@ use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 
 use super::Availability;
-use crate::search::slash_command_menu::static_commands::Argument;
 use crate::search::slash_command_menu::StaticCommand;
+use crate::search::slash_command_menu::static_commands::Argument;
 use crate::ui_components::color_dot;
 
 pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {

@@ -3,11 +3,11 @@ use std::path::Path;
 
 use command::r#async::Command;
 use instant::Instant;
-use objc2::rc::{autoreleasepool, Retained};
+use objc2::rc::{Retained, autoreleasepool};
 use objc2_app_kit::NSWorkspace;
 use objc2_foundation::{NSBundle, NSString, NSURL};
-use warp_core::channel::ChannelState;
 use warp_core::AppId;
+use warp_core::channel::ChannelState;
 use warp_errors::report_error;
 use warpui::ApplicationBundleInfo;
 

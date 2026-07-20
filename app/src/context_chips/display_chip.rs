@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Empty, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    DEFAULT_UI_LINE_HEIGHT_RATIO, Empty, Flex, Hoverable, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Cache, FamilyId, Properties, Weight};
 use warpui::keymap::Keystroke;
@@ -28,8 +28,8 @@ use super::display_menu::{
     ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
 };
 use super::{
-    agent_view_chip_color, github_pr_display_text_from_url, render_text_from_kind, ChipResult,
-    ChipValue, ContextChipKind,
+    ChipResult, ChipValue, ContextChipKind, agent_view_chip_color, github_pr_display_text_from_url,
+    render_text_from_kind,
 };
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::prompt::plan_and_todo_list::{PlanAndTodoListEvent, PlanAndTodoListView};
@@ -41,7 +41,7 @@ use crate::code_review::code_review_view::CODE_REVIEW_TOOLTIP_TEXT;
 use crate::code_review::diff_state::DiffStats;
 use crate::completer::SessionContext;
 use crate::context_chips::git_branch_on_click::{
-    is_plausible_new_branch_name, GitBranchOnClickValue,
+    GitBranchOnClickValue, is_plausible_new_branch_name,
 };
 use crate::context_chips::node_version_popup::{NodeVersionPopupEvent, NodeVersionPopupView};
 use crate::context_chips::spacing;
@@ -887,20 +887,21 @@ impl DisplayChip {
                 ctx.subscribe_to_view(&menu_view, |me, _, event, ctx| match event {
                     PromptDisplayMenuEvent::MenuAction(generic_event) => {
                         let action_item = generic_event.action_item.as_any();
-                        let command =
-                            if let Some(git_branch) = action_item.downcast_ref::<GitBranch>() {
-                                git_branch.prompt_chip_command()
-                            } else if let Some(create_branch) =
-                                action_item.downcast_ref::<CreateGitBranch>()
-                            {
-                                create_branch.prompt_chip_command()
-                            } else {
-                                log::warn!(
+                        let command = if let Some(git_branch) =
+                            action_item.downcast_ref::<GitBranch>()
+                        {
+                            git_branch.prompt_chip_command()
+                        } else if let Some(create_branch) =
+                            action_item.downcast_ref::<CreateGitBranch>()
+                        {
+                            create_branch.prompt_chip_command()
+                        } else {
+                            log::warn!(
                                 "MenuAction event should contain a GitBranch or CreateGitBranch \
                                  action item"
                             );
-                                return;
-                            };
+                            return;
+                        };
 
                         ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(command));
                         me.close_git_branch_menu(ctx);
@@ -2018,17 +2019,18 @@ impl View for DisplayChip {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        match self.render_chip(app) { Some(chip) => {
-            if self.is_in_agent_view {
-                chip
-            } else {
-                Container::new(chip)
-                    .with_margin_right(CHIP_MARGIN_RIGHT)
-                    .finish()
+        match self.render_chip(app) {
+            Some(chip) => {
+                if self.is_in_agent_view {
+                    chip
+                } else {
+                    Container::new(chip)
+                        .with_margin_right(CHIP_MARGIN_RIGHT)
+                        .finish()
+                }
             }
-        } _ => {
-            Empty::new().finish()
-        }}
+            _ => Empty::new().finish(),
+        }
     }
 }
 

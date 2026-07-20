@@ -33,8 +33,8 @@ use std::fmt::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ai::skills::SkillReference;
@@ -42,8 +42,8 @@ use async_channel::Sender;
 use base64::Engine as _;
 #[cfg(feature = "local_fs")]
 use diesel::SqliteConnection;
-use futures::stream::AbortHandle;
 use futures::FutureExt as _;
+use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use ordered_float::Float;
@@ -64,45 +64,45 @@ use warp_completer::completer::{
     MatchStrategy, MatchType, PathSeparators, SuggestionResults,
 };
 use warp_completer::meta::{HasSpan, Spanned};
-use warp_completer::parsers::simple::command_at_cursor_position;
 use warp_completer::parsers::LiteCommand;
+use warp_completer::parsers::simple::command_at_cursor_position;
 use warp_completer::signatures::CommandRegistry;
 use warp_completer::util::parse_current_commands_and_tokens;
-use warp_core::context_flag::ContextFlag;
 use warp_core::r#async::debounce;
-use warp_core::ui::theme::color::internal_colors;
+use warp_core::context_flag::ContextFlag;
 use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
 use warp_errors::{report_error, report_if_error};
 use warp_util::path::ShellFamily;
+pub use warpui::WindowId;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use warpui::r#async::FutureExt as _;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::clipboard::{ClipboardContent, ImageData};
 use warpui::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES;
 use warpui::color::ColorU;
 use warpui::elements::{
-    resizable_state_handle, Align, AnchorPair, ChildAnchor, Clipped, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, DispatchEventResult, DropTargetData, Element, EventHandler,
-    Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType,
-    ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius,
-    ResizableStateHandle, SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor, YAxisAnchor,
+    Align, AnchorPair, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DispatchEventResult, DropTargetData, Element, EventHandler, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
+    ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius, ResizableStateHandle,
+    SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor, YAxisAnchor, resizable_state_handle,
 };
 pub use warpui::elements::{ParentElement as _, Stack};
-pub use warpui::geometry::vector::{vec2f, Vector2F};
+pub use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::keymap::{BindingDescription, EditableBinding, FixedBinding, Keystroke};
 use warpui::platform::OperatingSystem;
 use warpui::presenter::ChildView;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use warpui::r#async::FutureExt as _;
-use warpui::r#async::SpawnedFutureHandle;
 use warpui::text_layout::TextStyle;
 use warpui::ui_components::chip::Chip;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::IntoPixels;
-pub use warpui::WindowId;
 use warpui::{
-    end_trace, start_trace, AppContext, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle,
-    SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
+    AppContext, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle, SingletonEntity,
+    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle, end_trace, start_trace,
 };
 
 use self::decorations::InputBackgroundJobOptions;
@@ -116,23 +116,23 @@ use super::model::block::{
 };
 use super::model::session::{Session, SessionId, SessionType, Sessions};
 use super::prompt_render_helper::{
-    should_render_prompt_on_same_line, should_render_prompt_using_editor_decorator_elements,
-    PromptRenderHelper, SameLinePromptElements,
+    PromptRenderHelper, SameLinePromptElements, should_render_prompt_on_same_line,
+    should_render_prompt_using_editor_decorator_elements,
 };
 use super::safe_mode_settings::{
-    get_secret_obfuscation_mode, SafeModeSettings, SafeModeSettingsChangedEvent,
+    SafeModeSettings, SafeModeSettingsChangedEvent, get_secret_obfuscation_mode,
 };
 use super::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use super::settings::{SpacingMode, TerminalSettings, TerminalSettingsChangedEvent};
+use super::shared_session::SharedSessionStatus;
 use super::shared_session::presence_manager::PresenceManager;
 use super::shared_session::viewer::history_model::SharedSessionHistoryModel;
-use super::shared_session::SharedSessionStatus;
 use super::shell::ShellType;
 use super::universal_developer_input::{
     UniversalDeveloperInputButtonBar, UniversalDeveloperInputButtonBarEvent,
 };
 use super::view::ambient_agent::{
-    is_cloud_agent_pre_first_exchange, AmbientAgentViewModel, AmbientAgentViewModelEvent,
+    AmbientAgentViewModel, AmbientAgentViewModelEvent, is_cloud_agent_pre_first_exchange,
 };
 use super::view::inline_banner::{
     PromptSuggestionBannerState, ZeroStatePromptSuggestionTriggeredFrom,
@@ -140,10 +140,13 @@ use super::view::inline_banner::{
 };
 use super::view::queued_prompts_panel::{QueuedPromptsPanelEvent, QueuedPromptsPanelView};
 use super::view::{
-    ExecuteCommandEvent, SyncInputType, TerminalAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT,
+    ExecuteCommandEvent, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT, SyncInputType, TerminalAction,
 };
 use super::warpify::SubshellSource;
-use super::{prompt, History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig};
+use super::{History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig, prompt};
+#[allow(unused_imports)]
+use crate::ASSETS;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentContext, AIAgentExchangeId, CancellationReason, EntrypointType, ImageContext,
@@ -158,28 +161,29 @@ use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::agent_view::agent_input_footer::sort_environments_by_recency;
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
 use crate::ai::blocklist::agent_view::{
-    is_in_cloud_context, AgentInputFooter, AgentInputFooterEvent, AgentViewController,
-    AgentViewEntryOrigin, EphemeralMessageModel,
+    AgentInputFooter, AgentInputFooterEvent, AgentViewController, AgentViewEntryOrigin,
+    EphemeralMessageModel, is_in_cloud_context,
 };
 use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBar;
 use crate::ai::blocklist::conversation_selection::ConversationSelectionHandle;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::touched_repos::{
-    pick_handoff_overlap_env, resolve_repo_for_path, TouchedWorkspace,
+    TouchedWorkspace, pick_handoff_overlap_env, resolve_repo_for_path,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::ai::blocklist::{
-    ai_brand_color, ai_indicator_height, render_ai_agent_mode_icon, render_ai_follow_up_icon,
-    AttachmentType, BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-    InputTypeAutoDetectionSource, PendingAttachment, PendingFile, QueuedQuery, QueuedQueryEvent,
-    QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
-    BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
+    AttachmentType, BLOCK_CONTEXT_ATTACHMENT_REGEX, BlocklistAIActionModel,
+    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    BlocklistAIInputEvent, BlocklistAIInputModel, DIFF_HUNK_ATTACHMENT_REGEX,
+    DRIVE_OBJECT_ATTACHMENT_REGEX, InputConfig, InputType, InputTypeAutoDetectionSource,
+    PendingAttachment, PendingFile, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
+    QueuedQueryOrigin, SlashCommandRequest, ai_brand_color, ai_indicator_height,
+    render_ai_agent_mode_icon, render_ai_follow_up_icon,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
@@ -191,8 +195,8 @@ use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::predict::next_command_model::{
-    is_command_valid, is_next_command_enabled, NextCommandModel, NextCommandModelEvent,
-    NextCommandSuggestionState, ZeroStateSuggestionInfo,
+    NextCommandModel, NextCommandModelEvent, NextCommandSuggestionState, ZeroStateSuggestionInfo,
+    is_command_valid, is_next_command_enabled,
 };
 use crate::ai::predict::predict_am_queries::PredictAMQueriesRequest;
 use crate::ai::predict::prompt_suggestions::{
@@ -200,7 +204,6 @@ use crate::ai::predict::prompt_suggestions::{
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
 use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
-use crate::ai::AIRequestUsageModel;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::channel::{Channel, ChannelState};
@@ -218,14 +221,14 @@ use crate::context_chips::display_chip::{DisplayChipConfig, PromptChipShellComma
 use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::spacing;
 use crate::editor::{
-    default_cursor_colors, position_id_for_cached_point, position_id_for_cursor,
-    position_id_for_first_cursor, AttachedImage as AttachedImageRawData, AutosuggestionLocation,
-    AutosuggestionType, BaselinePositionComputationMethod, CommandXRayAnchor, CrdtOperation,
-    CursorColors, DisplayPoint, EditOrigin, EditorAction, EditorDecoratorElements, EditorOptions,
-    EditorSnapshot, EditorView, Event as EditorEvent, ImageContextOptions, InteractionState,
-    PathTransformerFn, PlainTextEditorViewAction, Point as BufferPoint, PropagateAndNoOpEscapeKey,
-    PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, ReplicaId, TextColors,
-    TextRun, MAX_IMAGES_PER_CONVERSATION,
+    AttachedImage as AttachedImageRawData, AutosuggestionLocation, AutosuggestionType,
+    BaselinePositionComputationMethod, CommandXRayAnchor, CrdtOperation, CursorColors,
+    DisplayPoint, EditOrigin, EditorAction, EditorDecoratorElements, EditorOptions, EditorSnapshot,
+    EditorView, Event as EditorEvent, ImageContextOptions, InteractionState,
+    MAX_IMAGES_PER_CONVERSATION, PathTransformerFn, PlainTextEditorViewAction,
+    Point as BufferPoint, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
+    PropagateHorizontalNavigationKeys, ReplicaId, TextColors, TextRun, default_cursor_colors,
+    position_id_for_cached_point, position_id_for_cursor, position_id_for_first_cursor,
 };
 use crate::env_vars::EnvVarCollectionExt;
 use crate::features::FeatureFlag;
@@ -234,26 +237,26 @@ use crate::input_suggestions::{
     TabCompletionsPreselectOption,
 };
 use crate::network::NetworkStatus;
-use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::PaneGroupAction;
+use crate::pane_group::focus_state::PaneFocusHandle;
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::prefix::longest_common_prefix;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::resource_center::{
-    mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipHint, TipsCompleted,
+    Tip, TipAction, TipHint, TipsCompleted, mark_feature_used_and_write_to_user_defaults,
 };
+use crate::search::QueryFilter;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::search::is_valid_search_query;
 use crate::search::ai_context_menu::view::AIContextMenuAction;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
-use crate::search::QueryFilter;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AttachmentFileInfo;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::AttachmentInput;
-use crate::server::server_api::ServerApi;
 use crate::server::telemetry::{
     AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
     AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
@@ -264,12 +267,13 @@ use crate::session_management::SessionNavigationPromptElements;
 use crate::settings::{
     AISettings, AISettingsChangedEvent, AliasExpansionSettings, AppEditorSettings,
     AppEditorSettingsChangedEvent, InputModeSettings, InputSettings, InputSettingsChangedEvent,
-    PrivacySettings, MAX_TIMES_TO_SHOW_AUTOSUGGESTION_HINT,
+    MAX_TIMES_TO_SHOW_AUTOSUGGESTION_HINT, PrivacySettings,
 };
-use crate::settings_view::{flags, SettingsSection};
+use crate::settings_view::{SettingsSection, flags};
 use crate::suggestions::ignored_suggestions_model::{
     IgnoredSuggestionsModel, IgnoredSuggestionsModelEvent, SuggestionType,
 };
+use crate::terminal::CLIAgent;
 use crate::terminal::buy_credits_banner::{BuyCreditsBanner, BuyCreditsBannerEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
@@ -296,9 +300,9 @@ use crate::terminal::input::skills::{
 };
 use crate::terminal::input::slash_command_model::{SlashCommandEntryState, SlashCommandModel};
 use crate::terminal::input::slash_commands::{
-    slash_command_is_submitted_as_prompt, CloudModeV2SlashCommandView, GuiSlashCommandDataSource,
-    InlineSlashCommandView, SlashCommandDataSource as _, SlashCommandTrigger,
-    UpdatedActiveCommands,
+    CloudModeV2SlashCommandView, GuiSlashCommandDataSource, InlineSlashCommandView,
+    SlashCommandDataSource as _, SlashCommandTrigger, UpdatedActiveCommands,
+    slash_command_is_submitted_as_prompt,
 };
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
@@ -315,12 +319,11 @@ use crate::terminal::view::ambient_agent::{
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
 };
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
-use crate::terminal::view::{resolve_ai_query_routing, AIQueryRouting, CodeDiffAction};
-use crate::terminal::CLIAgent;
+use crate::terminal::view::{AIQueryRouting, CodeDiffAction, resolve_ai_query_routing};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::user_config::WarpConfig;
-use crate::util::bindings::{self, keybinding_name_to_normalized_string, CustomAction};
+use crate::util::bindings::{self, CustomAction, keybinding_name_to_normalized_string};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor;
 use crate::util::image::MAX_IMAGE_COUNT_FOR_QUERY;
@@ -332,11 +335,12 @@ use crate::voltron::{
 };
 use crate::workflows::aliases::WorkflowAliases;
 use crate::workflows::command_parser::{
-    compute_workflow_display_data, compute_workflow_display_data_for_history_command,
-    compute_workflow_display_data_with_overrides, WorkflowArgumentIndex, WorkflowDisplayData,
+    WorkflowArgumentIndex, WorkflowDisplayData, compute_workflow_display_data,
+    compute_workflow_display_data_for_history_command,
+    compute_workflow_display_data_with_overrides,
 };
 use crate::workflows::info_box::{
-    WorkflowsInfoBoxViewEvent, WorkflowsMoreInfoView, WORKFLOW_PARAMETER_HIGHLIGHT_COLOR,
+    WORKFLOW_PARAMETER_HIGHLIGHT_COLOR, WorkflowsInfoBoxViewEvent, WorkflowsMoreInfoView,
 };
 use crate::workflows::local_workflows::LocalWorkflows;
 use crate::workflows::workflow_enum::EnumVariants;
@@ -348,9 +352,7 @@ use crate::workspace::{
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 #[allow(unused_imports)]
-use crate::ASSETS;
-#[allow(unused_imports)]
-use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx, AgentModeEntrypoint, ServerApiProvider};
+use crate::{AgentModeEntrypoint, ServerApiProvider, cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
 /// Drop target data for dropping content on the [`Input`].
 #[derive(Debug, Clone)]
@@ -3654,23 +3656,24 @@ impl Input {
         });
 
         let cloud_mode_v2_slash_commands_view =
-            match cloud_mode_composer_slash_command_data_source.clone() { Some(v2_data_source) => {
-                let view = ctx.add_typed_action_view(|ctx| {
-                    CloudModeV2SlashCommandView::new(
-                        &slash_command_model,
-                        v2_data_source,
-                        suggestions_mode_model.clone(),
-                        buffer_model.clone(),
-                        ctx,
-                    )
-                });
-                ctx.subscribe_to_view(&view, |me, _, event, ctx| {
-                    me.handle_slash_commands_menu_event(event, ctx);
-                });
-                Some(view)
-            } _ => {
-                None
-            }};
+            match cloud_mode_composer_slash_command_data_source.clone() {
+                Some(v2_data_source) => {
+                    let view = ctx.add_typed_action_view(|ctx| {
+                        CloudModeV2SlashCommandView::new(
+                            &slash_command_model,
+                            v2_data_source,
+                            suggestions_mode_model.clone(),
+                            buffer_model.clone(),
+                            ctx,
+                        )
+                    });
+                    ctx.subscribe_to_view(&view, |me, _, event, ctx| {
+                        me.handle_slash_commands_menu_event(event, ctx);
+                    });
+                    Some(view)
+                }
+                _ => None,
+            };
 
         ctx.subscribe_to_model(&ai_input_model, move |me, _, event, ctx| {
             match event {
@@ -4931,14 +4934,17 @@ impl Input {
                     AgentConversationNavigationSubject::Entry(*item_id),
                     Some(RestoreConversationLayout::ActivePane),
                     ctx,
-                ) { Some(action) => {
-                    ctx.dispatch_typed_action_deferred(action);
-                } _ => {
-                    ctx.emit(Event::ShowToast {
-                        message: "Couldn't navigate to conversation.".to_string(),
-                        flavor: ToastFlavor::Error,
-                    });
-                }}
+                ) {
+                    Some(action) => {
+                        ctx.dispatch_typed_action_deferred(action);
+                    }
+                    _ => {
+                        ctx.emit(Event::ShowToast {
+                            message: "Couldn't navigate to conversation.".to_string(),
+                            flavor: ToastFlavor::Error,
+                        });
+                    }
+                }
             }
             InlineConversationMenuEvent::Dismissed => {
                 if self
@@ -9356,9 +9362,11 @@ impl Input {
             .info_box_expanded;
 
         InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-            report_if_error!(input_settings
-                .workflows_box_expanded
-                .set_value(info_box_expanded, ctx));
+            report_if_error!(
+                input_settings
+                    .workflows_box_expanded
+                    .set_value(info_box_expanded, ctx)
+            );
         });
     }
 
@@ -10840,9 +10848,11 @@ impl Input {
                                         current_count + 1
                                     };
 
-                                    report_if_error!(input_settings
-                                        .autosuggestion_accepted_count
-                                        .set_value(new_count, ctx))
+                                    report_if_error!(
+                                        input_settings
+                                            .autosuggestion_accepted_count
+                                            .set_value(new_count, ctx)
+                                    )
                                 }
                             })
                         }
@@ -15115,16 +15125,19 @@ impl Input {
                     .shared_session_input_state
                     .as_ref()
                     .map(|state| state.history_model.clone())
-                { Some(shared_session_history_model) => {
-                    shared_session_history_model.update(ctx, |history_model, _ctx| {
-                        history_model.push(HistoryEntry::for_completed_block(
-                            block_completed.command,
-                            &block_completed.serialized_block,
-                        ))
-                    })
-                } _ => {
-                    log::warn!("Tried to access non-existent shared session history model")
-                }}
+                {
+                    Some(shared_session_history_model) => {
+                        shared_session_history_model.update(ctx, |history_model, _ctx| {
+                            history_model.push(HistoryEntry::for_completed_block(
+                                block_completed.command,
+                                &block_completed.serialized_block,
+                            ))
+                        })
+                    }
+                    _ => {
+                        log::warn!("Tried to access non-existent shared session history model")
+                    }
+                }
             } else if is_next_command_enabled(ctx) {
                 self.maybe_predict_next_action_ai(block_completed, ctx);
             }

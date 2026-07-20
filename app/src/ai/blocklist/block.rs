@@ -42,8 +42,8 @@ use secret_redaction::*;
 use serde::Serialize;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::buffer::InitialBufferState;
 #[cfg(feature = "local_fs")]
 use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
@@ -52,14 +52,14 @@ use warp_errors::{report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
 use warpui::assets::asset_cache::AssetCache;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    get_rich_content_position_id, ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, SecretRange, SelectionBound, SelectionHandle, TableStateHandle,
+    ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize, MouseStateHandle, SecretRange,
+    SelectionBound, SelectionHandle, TableStateHandle, get_rich_content_position_id,
 };
 use warpui::image_cache::ImageType;
 use warpui::keymap::FixedBinding;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::text::SelectionType;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
@@ -155,13 +155,13 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
 use crate::code::editor_management::CodeSource;
+use crate::code_review::CodeReviewTelemetryEvent;
 use crate::code_review::comment_rendering::{CommentViewCard, HeaderClickHandler};
 use crate::code_review::comments::{
-    attach_pending_imported_comments, convert_insert_review_comments, AttachedReviewComment,
-    CommentId, CommentOrigin,
+    AttachedReviewComment, CommentId, CommentOrigin, attach_pending_imported_comments,
+    convert_insert_review_comments,
 };
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::code_review::CodeReviewTelemetryEvent;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
@@ -177,12 +177,12 @@ use crate::settings::{
 };
 use crate::settings_view::SettingsSection;
 use crate::terminal::find::TerminalFindModel;
+use crate::terminal::model::BlockId;
 use crate::terminal::model::secrets::RichContentSecretTooltipInfo;
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
-use crate::terminal::model::BlockId;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::safe_mode_settings::{
-    get_secret_obfuscation_mode, SafeModeSettings, SafeModeSettingsChangedEvent,
+    SafeModeSettings, SafeModeSettingsChangedEvent, get_secret_obfuscation_mode,
 };
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::terminal::view::{
@@ -192,20 +192,20 @@ use crate::terminal::{ShellLaunchData, TerminalModel, TerminalView};
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::*;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{is_supported_image_file, FileTarget};
+use crate::util::openable_file_type::{FileTarget, is_supported_image_file};
+use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
     SecondaryTheme,
 };
 use crate::view_components::compactible_action_button::CompactibleActionButton;
 use crate::view_components::find::FindEvent;
-use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, WorkspaceAction};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit, LLMPreferences,
-    PrivacySettings, ToastStack,
+    AIAgentTodoList, Appearance, FileEdit, LLMPreferences, PrivacySettings, ToastStack,
+    send_telemetry_from_ctx,
 };
 
 /// The default display name used for the user if they have no associated display name.
@@ -1546,12 +1546,17 @@ impl AIBlock {
         if me.model.status(ctx).is_streaming() {
             me.model
                 .on_updated_output(Box::new(Self::on_output_status_update), ctx);
-        } else { match me.model.status(ctx).output_to_render() { Some(output) => {
-            // "Simulate" receiving this output if output is already complete.
-            let output = output.get();
-            me.handle_updated_output(&output, ctx);
-            me.handle_complete_output(&output, ctx);
-        } _ => {}}}
+        } else {
+            match me.model.status(ctx).output_to_render() {
+                Some(output) => {
+                    // "Simulate" receiving this output if output is already complete.
+                    let output = output.get();
+                    me.handle_updated_output(&output, ctx);
+                    me.handle_complete_output(&output, ctx);
+                }
+                _ => {}
+            }
+        }
 
         match me.model.status(ctx) {
             AIBlockOutputStatus::Complete { .. } => {
@@ -4521,8 +4526,10 @@ impl AIBlock {
                             ..
                         } if speedbump_action_id == action_id && *shown.lock() => {
                             BlocklistAIPermissions::handle(ctx).update(ctx, |permissions, ctx| {
-                                report_if_error!(permissions
-                                    .set_should_autoexecute_readonly_commands(*checked, ctx));
+                                report_if_error!(
+                                    permissions
+                                        .set_should_autoexecute_readonly_commands(*checked, ctx)
+                                );
                             });
                         }
                         AutonomySettingSpeedbump::ShouldShowForFileAccess {
@@ -4574,8 +4581,12 @@ impl AIBlock {
                                     permission,
                                     AgentModeCodingPermissionsType::AllowReadingSpecificFiles
                                 ) {
-                                    report_if_error!(permissions
-                                        .add_filepath_to_code_read_allowlist(root_repo_path, ctx));
+                                    report_if_error!(
+                                        permissions.add_filepath_to_code_read_allowlist(
+                                            root_repo_path,
+                                            ctx
+                                        )
+                                    );
                                 }
                             });
                         }
@@ -6410,14 +6421,16 @@ impl TypedActionView for AIBlock {
                     .last()
                     .map(|action| action.id.clone());
                 if let Some(run_agents_id) = run_agents_id {
-                    match self.run_agents_card_views.get(&run_agents_id).cloned()
-                    { Some(card_view) => {
-                        card_view.update(ctx, |view, ctx_view| view.accept(ctx_view));
-                    } _ => {
-                        log::warn!(
-                            "ExecuteNextPendingAction: no RunAgentsCardView for {run_agents_id:?}"
-                        );
-                    }}
+                    match self.run_agents_card_views.get(&run_agents_id).cloned() {
+                        Some(card_view) => {
+                            card_view.update(ctx, |view, ctx_view| view.accept(ctx_view));
+                        }
+                        _ => {
+                            log::warn!(
+                                "ExecuteNextPendingAction: no RunAgentsCardView for {run_agents_id:?}"
+                            );
+                        }
+                    }
                 } else {
                     self.action_model.update(ctx, |action_model, ctx| {
                         action_model.execute_next_action_for_user(self.conversation_id(), ctx)
@@ -6541,9 +6554,11 @@ impl TypedActionView for AIBlock {
                     }
                 });
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .rule_suggestions_enabled_internal
-                        .set_value(false, ctx));
+                    report_if_error!(
+                        settings
+                            .rule_suggestions_enabled_internal
+                            .set_value(false, ctx)
+                    );
                 });
                 ctx.notify();
             }

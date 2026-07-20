@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{sink, Sink};
+use std::io::{Sink, sink};
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
@@ -17,7 +17,7 @@ use crate::terminal::model::ansi::{self};
 use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::shared_session::ai_agent::decode_agent_response_event;
 use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
-use crate::terminal::shared_session::{decode_scrollback, SharedSessionStatus};
+use crate::terminal::shared_session::{SharedSessionStatus, decode_scrollback};
 use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::{TerminalModel, TerminalView};
 

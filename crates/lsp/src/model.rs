@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Error, Result};
 use instant::Instant;
@@ -18,21 +18,21 @@ use simple_logger::manager::LogManager;
 use warp_core::features::FeatureFlag;
 #[cfg(not(target_arch = "wasm32"))]
 use warp_errors::report_error;
-use warpui_core::r#async::executor::Background;
 #[cfg(not(target_arch = "wasm32"))]
 use warpui_core::SingletonEntity;
+use warpui_core::r#async::executor::Background;
 use warpui_core::{Entity, ModelContext};
 
-use crate::config::{lsp_uri_to_path, LanguageId};
+use crate::config::{LanguageId, lsp_uri_to_path};
 use crate::server_repo_watcher::LspRepoWatcher;
 use crate::supported_servers::LSPServerType;
 use crate::types::{
     DefinitionLocation, DocumentVersion, HoverResult, Location, ReferenceLocation,
     TextDocumentContentChangeEvent, TextEdit, WatchedFileChangeEvent,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use crate::{spawn_lsp_service, LspServiceInitializationResult};
 use crate::{LspServerConfig, LspServerLogLevel, LspService};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{LspServiceInitializationResult, spawn_lsp_service};
 
 static NEXT_LANGUAGE_SERVER_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -512,7 +512,10 @@ impl LspServerModel {
         })
     }
 
-    pub fn did_close_document(&self, path: PathBuf) -> Result<impl Future<Output = Result<()>> + use<>> {
+    pub fn did_close_document(
+        &self,
+        path: PathBuf,
+    ) -> Result<impl Future<Output = Result<()>> + use<>> {
         let service = self.service()?;
         Ok(async move { service.text_document().did_close(&path).await })
     }

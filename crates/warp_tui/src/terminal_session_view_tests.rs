@@ -1,7 +1,7 @@
 use warp::appearance::Appearance;
 use warp::tui_export::{
-    export_conversation_markdown, register_tui_session_view_test_singletons, PtyIntent,
-    PtyIntentEvent, SizeInfo, SizeUpdate,
+    PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, export_conversation_markdown,
+    register_tui_session_view_test_singletons,
 };
 use warpui::platform::WindowStyle;
 use warpui::{
@@ -15,8 +15,8 @@ use warpui_core::keymap::{Context, Keystroke, Trigger};
 use warpui_core::{App, AppContext, TuiView};
 
 use super::{
-    export_file_success_message, log_bundle_success_message, raw_prompt_if_not_blank,
-    render_left_footer_hint, TuiTerminalSessionEvent, ORCHESTRATION_TAB_BAR_FOCUSED_FLAG,
+    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, TuiTerminalSessionEvent, export_file_success_message,
+    log_bundle_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::keybindings::{
@@ -316,10 +316,12 @@ fn alternate_screen_clears_orchestration_tab_focus_and_bindings() {
         });
         view.read(&app, |view, ctx| {
             assert!(!view.orchestration_tabs_focused);
-            assert!(!view
-                .keymap_context(ctx)
-                .set
-                .contains(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG));
+            assert!(
+                !view
+                    .keymap_context(ctx)
+                    .set
+                    .contains(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG)
+            );
         });
     });
 }
@@ -346,8 +348,11 @@ fn orchestration_updates_refresh_only_the_focused_session() {
             }),
             Some(foreground_id)
         );
-        assert!(app
-            .read(|ctx| { ctx.check_view_or_child_focused(fixture.window_id, &foreground.id()) }));
+        assert!(
+            app.read(|ctx| {
+                ctx.check_view_or_child_focused(fixture.window_id, &foreground.id())
+            })
+        );
         assert!(background.read(&app, |view, _| view.orchestration_tabs_focused));
 
         app.update_model(&fixture.sessions, |sessions, ctx| {

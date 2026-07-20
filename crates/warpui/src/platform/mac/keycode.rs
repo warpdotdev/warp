@@ -1,6 +1,6 @@
 use std::slice;
 
-use cocoa::base::{id, BOOL};
+use cocoa::base::{BOOL, id};
 use cocoa::foundation::NSUInteger;
 use objc2::rc::Retained;
 use objc2_foundation::{NSArray, NSNumber, NSString};

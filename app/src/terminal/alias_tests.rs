@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use smol_str::SmolStr;
 
 use super::*;
-use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
 use crate::terminal::model::session::SessionInfo;
+use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
 
 #[test]
 fn test_is_expandable_alias_when_expandable() {

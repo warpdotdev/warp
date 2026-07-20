@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use itertools::Itertools as _;
-use markdown_parser::{parse_markdown, FormattedText, FormattedTextFragment, FormattedTextLine};
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine, parse_markdown};
 use parking_lot::FairMutex;
 use settings::Setting;
 use warp_core::features::FeatureFlag;
@@ -43,9 +43,9 @@ use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::model::blocks::BlockHeightItem;
 use crate::terminal::model::session::{BootstrapSessionType, Session, SessionType, Sessions};
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
-use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::terminal::view::TerminalAction;
-use crate::terminal::{self, prompt, TerminalModel};
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use crate::terminal::{self, TerminalModel, prompt};
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
@@ -516,9 +516,11 @@ impl TypedActionView for AgentViewZeroStateBlock {
                 self.is_oz_updates_expanded = !is_expanded;
 
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .should_expand_oz_updates
-                        .set_value(!is_expanded, ctx));
+                    report_if_error!(
+                        settings
+                            .should_expand_oz_updates
+                            .set_value(!is_expanded, ctx)
+                    );
                 });
             }
             AgentViewZeroStateAction::OpenConversation { conversation_id } => {
@@ -716,89 +718,94 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
         return vec![];
     }
     let mut body_items = match render_recent_conversations_section(
-            RecentConversationProps {
-                recent_conversations,
-                active_session,
-                current_working_directory,
-                state_handles,
-            },
-            app,
-        ) { Some(recent_conversations_section) => {
-        vec![recent_conversations_section]
-    } _ => {
-        let mut body_items = vec![
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone()),
-                        MessageItem::text("start a new agent conversation"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation {
-                            origin: AgentViewEntryOrigin::Input {
-                                was_prompt_autodetected: false,
-                            },
-                        });
-                    },
-                    state_handles.start_new_conversation.clone(),
-                )]),
-                app,
-            ),
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(
-                            ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
-                        ),
-                        MessageItem::text("start a new cloud agent conversation"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::EnterCloudAgentView);
-                    },
-                    state_handles.start_cloud_conversation.clone(),
-                )]),
-                app,
-            ),
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(Keystroke {
-                            key: "/model".to_owned(),
-                            ..Default::default()
-                        }),
-                        MessageItem::text("switch model"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::OpenModelSelector);
-                    },
-                    state_handles.switch_model.clone(),
-                )]),
-                app,
-            ),
-        ];
-
-        // Only show "escape to go back" if there's a parent terminal
-        if has_parent_terminal {
-            body_items.push(render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(Keystroke {
-                            key: "escape".to_owned(),
-                            ..Default::default()
-                        }),
-                        MessageItem::text("go back to terminal"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::ExitAgentView);
-                    },
-                    state_handles.exit.clone(),
-                )]),
-                app,
-            ));
+        RecentConversationProps {
+            recent_conversations,
+            active_session,
+            current_working_directory,
+            state_handles,
+        },
+        app,
+    ) {
+        Some(recent_conversations_section) => {
+            vec![recent_conversations_section]
         }
+        _ => {
+            let mut body_items = vec![
+                render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(
+                                ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
+                            ),
+                            MessageItem::text("start a new agent conversation"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation {
+                                origin: AgentViewEntryOrigin::Input {
+                                    was_prompt_autodetected: false,
+                                },
+                            });
+                        },
+                        state_handles.start_new_conversation.clone(),
+                    )]),
+                    app,
+                ),
+                render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(
+                                ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
+                            ),
+                            MessageItem::text("start a new cloud agent conversation"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::EnterCloudAgentView);
+                        },
+                        state_handles.start_cloud_conversation.clone(),
+                    )]),
+                    app,
+                ),
+                render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(Keystroke {
+                                key: "/model".to_owned(),
+                                ..Default::default()
+                            }),
+                            MessageItem::text("switch model"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::OpenModelSelector);
+                        },
+                        state_handles.switch_model.clone(),
+                    )]),
+                    app,
+                ),
+            ];
 
-        body_items
-    }};
+            // Only show "escape to go back" if there's a parent terminal
+            if has_parent_terminal {
+                body_items.push(render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(Keystroke {
+                                key: "escape".to_owned(),
+                                ..Default::default()
+                            }),
+                            MessageItem::text("go back to terminal"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::ExitAgentView);
+                        },
+                        state_handles.exit.clone(),
+                    )]),
+                    app,
+                ));
+            }
+
+            body_items
+        }
+    };
 
     if should_show_init_callout {
         let appearance = Appearance::as_ref(app);

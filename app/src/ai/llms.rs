@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
 pub use ai::LLMId;
+use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
 use anyhow::Context as _;
 use parking_lot::FairMutex;
-use serde::{de, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
@@ -16,8 +16,8 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::custom_model_routers::{self, CustomModelRouter, ModelConfigError};
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::AISettings;
@@ -999,7 +999,10 @@ impl LLMPreferences {
     }
 
     /// Returns the set of LLMs available for coding.
-    pub fn get_coding_llm_choices(&self, app: &AppContext) -> impl Iterator<Item = &LLMInfo> + use<'_> {
+    pub fn get_coding_llm_choices(
+        &self,
+        app: &AppContext,
+    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
         // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         self.models_by_feature
@@ -1016,7 +1019,10 @@ impl LLMPreferences {
     }
 
     /// Returns the set of LLMs available for CLI agent.
-    pub fn get_cli_agent_llm_choices(&self, app: &AppContext) -> impl Iterator<Item = &LLMInfo> + use<'_> {
+    pub fn get_cli_agent_llm_choices(
+        &self,
+        app: &AppContext,
+    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
         // Don't show admin-disabled models in the dropdown
         self.get_cli_agent_available()
             .choices

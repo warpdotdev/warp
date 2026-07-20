@@ -3,7 +3,7 @@ use std::hash::{Hash as _, Hasher as _};
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{pin_mut, FutureExt as _};
+use futures::{FutureExt as _, pin_mut};
 use itertools::Itertools;
 use warp_completer::completer::CommandExitStatus;
 use warp_core::r#async::debounce;
@@ -22,7 +22,7 @@ use super::context_chip::{
 };
 use super::logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger};
 use super::prompt::Prompt;
-use super::{chips_to_string, ChipResult, ChipValue, ContextChipKind};
+use super::{ChipResult, ChipValue, ContextChipKind, chips_to_string};
 use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel};
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 use crate::context_chips::display_chip::GitLineChanges;

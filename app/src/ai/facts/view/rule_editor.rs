@@ -13,7 +13,7 @@ use warpui::{
     ViewHandle,
 };
 
-use super::{is_delete_allowed, style, AIFact, CloudAIFact, CloudAIFactModel};
+use super::{AIFact, CloudAIFact, CloudAIFactModel, is_delete_allowed, style};
 use crate::ai::facts::AIMemory;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::CloudModel;

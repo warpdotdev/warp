@@ -11,9 +11,10 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use rangemap::RangeMap;
 use smallvec::SmallVec;
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 
-use crate::elements::{Fill, DEFAULT_UI_LINE_HEIGHT_RATIO};
+use crate::Scene;
+use crate::elements::{DEFAULT_UI_LINE_HEIGHT_RATIO, Fill};
 use crate::fonts::{
     Cache as FontCache, FamilyId, FontId, GlyphId, Properties, RequestedFallbackFontSource,
     TextLayoutSystem,
@@ -22,7 +23,6 @@ use crate::geometry::rect::RectF;
 use crate::geometry::vector::vec2f;
 use crate::platform::LineStyle;
 use crate::scene::{Border, CornerRadius, Dash, GlyphFade};
-use crate::Scene;
 
 type StyleRun = (Range<usize>, StyleAndFont);
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::super::blocklist::block::secret_redaction::{
-    find_secrets_in_text, SECRET_REDACTION_REPLACEMENT_CHARACTER,
+    SECRET_REDACTION_REPLACEMENT_CHARACTER, find_secrets_in_text,
 };
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput, AnyFileContent,
