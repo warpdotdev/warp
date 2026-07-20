@@ -194,6 +194,12 @@ impl TuiPermissionPrompt {
         self.is_active(app) && !self.body_editing
     }
 
+    /// Restores Yes as the highlighted response after body editing.
+    pub(crate) fn restore_options_focus(&mut self, ctx: &mut ViewContext<Self>) {
+        self.body_editing = false;
+        self.selector
+            .update(ctx, |selector, ctx| selector.select_first(ctx));
+    }
     /// Translates selector outcomes into tool-host permission events.
     fn handle_selector_event(
         &mut self,

@@ -394,6 +394,14 @@ impl TuiOptionSelector {
         ctx.notify();
     }
 
+    /// Restores the first option as the active highlight.
+    pub(crate) fn select_first(&mut self, ctx: &mut ViewContext<Self>) {
+        self.select_id(self.page.snapshot.rows.first().map(|row| row.id.clone()));
+        self.sync_after_items_changed();
+        ctx.focus_self();
+        ctx.notify();
+    }
+
     /// The current inline Other buffer, trimmed for questionnaire transitions.
     pub(crate) fn active_custom_text(&self, ctx: &AppContext) -> Option<String> {
         self.custom_text.is_editing().then(|| {

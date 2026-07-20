@@ -665,19 +665,36 @@ impl TuiAIBlock {
         for action in shell_command_actions {
             if let Some(TuiToolCallView::ShellCommand(view)) = self.action_views.get(&action.id) {
                 view.update(ctx, |view, ctx| {
-                    view.update_action(action, output_streaming);
-                    ctx.notify();
+                    view.update_action(action, output_streaming, ctx);
                 });
                 continue;
             }
             let action_id = action.id.clone();
             let action_model = action_model.clone();
+            let conversation_id = self.conversation_id;
             let terminal_model = self.terminal_model.clone();
-            let view = ctx.add_typed_action_tui_view(|_| {
-                TuiShellCommandView::new(action, output_streaming, action_model, terminal_model)
+            let view = ctx.add_typed_action_tui_view(|ctx| {
+                TuiShellCommandView::new(
+                    action,
+                    output_streaming,
+                    action_model,
+                    conversation_id,
+                    terminal_model,
+                    ctx,
+                )
             });
             ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
+                TuiShellCommandViewEvent::BlockingStateChanged => {
+                    ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
+                    me.invalidate_layout(ctx);
+                }
                 TuiShellCommandViewEvent::LayoutChanged => me.invalidate_layout(ctx),
+                TuiShellCommandViewEvent::ReplacementGuidanceSubmitted(text) => {
+                    ctx.emit(TuiAIBlockEvent::ReplacementGuidanceSubmitted {
+                        conversation_id: me.conversation_id,
+                        text: text.clone(),
+                    });
+                }
             });
             self.action_views
                 .insert(action_id, TuiToolCallView::ShellCommand(view));
@@ -796,10 +813,12 @@ impl TuiAIBlock {
                 .as_ref(ctx)
                 .active_permission_prompt(ctx)
                 .map(TuiBlockingChild::Permission),
+            TuiToolCallView::ShellCommand(view) => view
+                .as_ref(ctx)
+                .active_permission_prompt(ctx)
+                .map(TuiBlockingChild::Permission),
             // These tool views render inline and never replace the input.
-            TuiToolCallView::AskQuestion(_)
-            | TuiToolCallView::Plan(_)
-            | TuiToolCallView::ShellCommand(_) => None,
+            TuiToolCallView::AskQuestion(_) | TuiToolCallView::Plan(_) => None,
         }
     }
 

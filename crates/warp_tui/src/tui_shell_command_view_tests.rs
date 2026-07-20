@@ -5,18 +5,23 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId, Appearance, TaskId,
-    TerminalModel,
+    TerminalModel, queue_tui_permission_action,
 };
 use warpui::AddWindowOptions;
 use warpui::platform::WindowStyle;
-use warpui_core::elements::tui::{TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize};
+use warpui_core::elements::tui::{
+    Color, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
+};
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityIdMap, TuiView, TypedActionView, ViewHandle};
+use warpui_core::{
+    App, AppContext, EntityIdMap, TuiView, TypedActionView, ViewHandle, WindowInvalidation,
+};
 
 use super::{
     ShellCommandViewState, TuiShellCommandView, TuiShellCommandViewAction, TuiShellCommandViewEvent,
 };
 use crate::test_fixtures::{TestHostView, add_test_action_model};
+use crate::tui_builder::TuiUiBuilder;
 
 #[test]
 fn command_without_terminal_block_uses_fallback_row() {
@@ -39,6 +44,102 @@ fn command_without_terminal_block_uses_fallback_row() {
 }
 
 #[test]
+fn blocked_command_card_matches_permission_layout() {
+    App::test((), |mut app| async move {
+        let action = command_action("action-1", "echo 1");
+        let view = add_shell_view(
+            &mut app,
+            action.clone(),
+            Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
+        );
+        let (action_model, conversation_id) = app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            (view.action_model.clone(), view.conversation_id)
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, conversation_id, ctx);
+        });
+
+        let mut presenter = TuiPresenter::new();
+        let frame = app.update(|ctx| {
+            let view_ref = view.as_ref(ctx);
+            let prompt = &view_ref.permission_prompt;
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(view.id());
+            invalidation.updated.insert(view_ref.command_editor.id());
+            invalidation.updated.insert(prompt.id());
+            invalidation
+                .updated
+                .extend(prompt.as_ref(ctx).child_view_ids(ctx));
+            presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
+            presenter.present(ctx, &view, TuiRect::new(0, 0, 80, 16))
+        });
+        let lines = frame.buffer.to_lines();
+        let row_containing = |text: &str| {
+            u16::try_from(
+                lines
+                    .iter()
+                    .position(|line| line.contains(text))
+                    .unwrap_or_else(|| panic!("missing {text:?} in {lines:?}")),
+            )
+            .expect("row fits in the TUI")
+        };
+        let header_row = row_containing("Is it OK if I run this command");
+        let command_row = row_containing("echo 1");
+        let first_option_row = row_containing("(1) yes");
+        let footer_row = row_containing("Esc to cancel");
+        assert!(first_option_row >= command_row + 2);
+
+        let (header_background, surface_background) = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            (
+                builder.permission_header_background(),
+                builder.permission_surface_background(),
+            )
+        });
+        assert_ne!(header_background, surface_background);
+        assert_eq!(frame.buffer[(79, header_row)].bg, header_background);
+        assert_eq!(frame.buffer[(79, command_row)].bg, surface_background);
+        assert_eq!(frame.buffer[(79, footer_row)].bg, Color::Reset);
+    });
+}
+
+#[test]
+fn command_editing_saves_text_without_executing() {
+    App::test((), |mut app| async move {
+        let action = command_action("action-1", "echo original");
+        let view = add_shell_view(
+            &mut app,
+            action,
+            Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.begin_command_edit(ctx);
+            view.command_editor.update(ctx, |editor, ctx| {
+                editor.set_text("echo edited\necho second", ctx);
+            });
+            view.save_command_edit(ctx);
+        });
+
+        app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            assert!(!view.editing_command);
+            assert_eq!(
+                view.command_editor.as_ref(ctx).text(ctx),
+                "echo edited\necho second"
+            );
+            assert!(
+                view.action_model
+                    .as_ref(ctx)
+                    .get_action_result(&view.action.id)
+                    .is_none()
+            );
+        });
+    });
+}
+
+#[test]
 fn terminal_block_is_collapsed_by_default_and_expands_inline() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -53,6 +154,8 @@ fn terminal_block_is_collapsed_by_default_and_expands_inline() {
                 TuiShellCommandViewEvent::LayoutChanged => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
+                TuiShellCommandViewEvent::BlockingStateChanged
+                | TuiShellCommandViewEvent::ReplacementGuidanceSubmitted(_) => {}
             });
         });
         let collapsed_height = app.read(|app| {
@@ -120,8 +223,15 @@ fn add_shell_view(
             },
             |_| TestHostView,
         );
-        ctx.add_typed_action_tui_view(window_id, move |_| {
-            TuiShellCommandView::new(action, false, action_model, terminal_model)
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiShellCommandView::new(
+                action,
+                false,
+                action_model,
+                AIConversationId::new(),
+                terminal_model,
+                ctx,
+            )
         })
     })
 }
