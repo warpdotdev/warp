@@ -91,7 +91,7 @@ impl WaitForEventsExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let AIAgentActionType::WaitForEvents {
             tool_call_id,
             idle_timeout_seconds,
@@ -197,8 +197,8 @@ impl WaitForEventsExecutor {
         let Some(pending) = self.pending.remove(&conversation_id) else {
             return;
         };
-        if let Some(gen) = self.conversation_generation.get_mut(&conversation_id) {
-            *gen += 1;
+        if let Some(r#gen) = self.conversation_generation.get_mut(&conversation_id) {
+            *r#gen += 1;
         }
         pending.watchdog_handle.abort();
         drop(pending.sender);

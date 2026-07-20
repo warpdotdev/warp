@@ -528,7 +528,7 @@ impl BlocklistAIActionModel {
     pub fn get_pending_actions_for_conversation(
         &self,
         conversation_id: &AIConversationId,
-    ) -> impl Iterator<Item = &AIAgentAction> {
+    ) -> impl Iterator<Item = &AIAgentAction> + use<'_> {
         self.pending_actions
             .get(conversation_id)
             .into_iter()

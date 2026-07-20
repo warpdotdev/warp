@@ -232,7 +232,7 @@ impl CommandRegistry {
                         .execute_command_at_pwd(&command_to_run, None)
                         .await
                     {
-                        if let Ok(output_string) = output.to_string() {
+                        match output.to_string() { Ok(output_string) => {
                             // If the command output was successful, attempt to complete on the alias.
                             match output.status {
                                 CommandExitStatus::Success => {
@@ -256,11 +256,11 @@ impl CommandRegistry {
                                     )
                                 }
                             }
-                        } else {
+                        } _ => {
                             log::debug!(
                                 "Execution of `{command_to_run}` returned an unparseable output",
                             );
-                        }
+                        }}
                     }
                 }
             }

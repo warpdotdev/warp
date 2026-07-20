@@ -642,7 +642,7 @@ fn update_matches_for_filtered_block<'a>(
     let Some(displayed_rows) = block.displayed_output_row_ranges() else {
         matches.for_each(|find_match| {
             if let BlockListMatch::CommandBlock(BlockGridMatch {
-                ref mut is_filtered,
+                is_filtered,
                 ..
             }) = find_match
             {

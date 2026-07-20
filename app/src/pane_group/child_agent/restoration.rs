@@ -270,7 +270,7 @@ impl PaneGroup {
             ctx,
         );
 
-        if let Some(new_terminal_view) = self.terminal_view_from_pane_id(new_pane_id, ctx) {
+        match self.terminal_view_from_pane_id(new_pane_id, ctx) { Some(new_terminal_view) => {
             if let Some(task_context) = child_task_context.as_ref() {
                 apply_hidden_child_agent_task_context(&new_terminal_view, task_context, ctx);
             }
@@ -290,13 +290,13 @@ impl PaneGroup {
             });
 
             self.child_agent_panes.insert(child_id, new_pane_id.into());
-        } else {
+        } _ => {
             report_error!(
                 "Failed to get terminal view for child agent pane",
                 extra: { "child_id" => ?child_id }
             );
             self.discard_pane(new_pane_id.into(), ctx);
-        }
+        }}
     }
 
     /// Materializes a hidden shared-session viewer pane for a viewer-

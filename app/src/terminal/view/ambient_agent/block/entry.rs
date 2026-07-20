@@ -50,15 +50,15 @@ impl AmbientAgentEntryBlock {
         pane_stack: WeakModelHandle<PaneStack<TerminalView>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        if let Some(view_model) = terminal_view
+        match terminal_view
             .as_ref(ctx)
             .ambient_agent_view_model()
             .cloned()
-        {
+        { Some(view_model) => {
             ctx.subscribe_to_model(&view_model, Self::handle_ambient_agent_view_model_event);
-        } else {
+        } _ => {
             log::warn!("AmbientAgentEntryBlock created without an ambient agent view model");
-        }
+        }}
 
         let pane_configuration = terminal_view.as_ref(ctx).pane_configuration().clone();
         ctx.subscribe_to_model(&pane_configuration, Self::handle_pane_configuration_event);

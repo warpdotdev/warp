@@ -705,7 +705,7 @@ impl BlockGrid {
         self.grid_handler.reset_received_osc();
     }
 
-    fn ansi_handler(&mut self) -> &mut impl ansi::Handler {
+    fn ansi_handler(&mut self) -> &mut (impl ansi::Handler + use<>) {
         self.grid_handler.ansi_handler()
     }
 

@@ -16,7 +16,7 @@ use super::utils::nsstring_as_str;
 pub unsafe fn response_from_native(
     seconds_from_epoch: i32,
     data: id,
-) -> Result<NotificationResponse> {
+) -> Result<NotificationResponse> { unsafe {
     let data = nsstring_as_str(data)?;
 
     // Only set the data if it's not an empty string.
@@ -28,7 +28,7 @@ pub unsafe fn response_from_native(
         timestamp.naive_utc(),
         data.map(Into::into),
     ))
-}
+}}
 
 /// Build a Notification send error from a native notification event
 ///
@@ -38,7 +38,7 @@ pub unsafe fn response_from_native(
 pub unsafe fn send_error_from_native(
     error_type: NSUInteger,
     error_message: id,
-) -> Result<NotificationSendError> {
+) -> Result<NotificationSendError> { unsafe {
     let error_message = nsstring_as_str(error_message)?.to_owned();
 
     Ok(match error_type {
@@ -46,7 +46,7 @@ pub unsafe fn send_error_from_native(
         1 => NotificationSendError::Other { error_message },
         _ => NotificationSendError::Other { error_message },
     })
-}
+}}
 
 /// Build a Notification request permissions outcome from a native notification event
 ///
@@ -56,7 +56,7 @@ pub unsafe fn send_error_from_native(
 pub unsafe fn request_permissions_outcome_from_native(
     outcome_type: NSUInteger,
     outcome_message: id,
-) -> Result<RequestPermissionsOutcome> {
+) -> Result<RequestPermissionsOutcome> { unsafe {
     let outcome_message = nsstring_as_str(outcome_message)?.to_owned();
 
     Ok(match outcome_type {
@@ -69,4 +69,4 @@ pub unsafe fn request_permissions_outcome_from_native(
             error_message: outcome_message,
         },
     })
-}
+}}

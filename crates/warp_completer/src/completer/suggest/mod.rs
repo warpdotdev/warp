@@ -289,7 +289,7 @@ impl SuggestionResults {
         &self,
         query: &str,
         path_separators: &[char],
-    ) -> impl Iterator<Item = FilteredSuggestion<'_>> + '_ {
+    ) -> impl Iterator<Item = FilteredSuggestion<'_>> + '_ + use<'_> {
         // We build up the suggestions to avoid having to iterate over the
         // same set of suggestions multiple times. This is performance-sensitive code.
         // Note that the suggestions in these sets are mutually exclusive.

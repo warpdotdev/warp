@@ -2010,11 +2010,10 @@ impl BlocklistAIHistoryModel {
                 {
                     log::warn!("Failed to mark exchange as cancelled: {e}");
                 }
-            } else if let Err(e) =
-                conversation.mark_request_cancelled(stream_id, terminal_surface_id, reason, ctx)
-            {
+            } else { match conversation.mark_request_cancelled(stream_id, terminal_surface_id, reason, ctx)
+            { Err(e) => {
                 log::warn!("Failed to mark exchange as cancelled: {e}");
-            }
+            } _ => {}}}
         }
         AIDocumentModel::handle(ctx).update(ctx, |model, ctx| {
             model.clear_streaming_documents_for_conversation(&conversation_id, ctx);

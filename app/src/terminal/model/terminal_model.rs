@@ -590,7 +590,7 @@ impl SelectedBlockRange {
     pub fn range(
         &self,
         sort_direction: Option<BlockSortDirection>,
-    ) -> impl Iterator<Item = BlockIndex> {
+    ) -> impl Iterator<Item = BlockIndex> + use<> {
         let range = self.start().0..=self.end().0;
         // Note we need the heap allocation through the box because we
         // can't return .rev() and not .rev() iterators without it.
@@ -614,7 +614,7 @@ impl SelectedBlockRange {
     pub fn intersection(
         &self,
         other: &RangeInclusive<BlockIndex>,
-    ) -> impl Iterator<Item = BlockIndex> {
+    ) -> impl Iterator<Item = BlockIndex> + use<> {
         (max(self.start().0, other.start().0)..=min(self.end().0, other.end().0))
             .map(BlockIndex::from)
     }
@@ -1906,7 +1906,7 @@ impl TerminalModel {
     pub fn possible_file_paths_at_point(
         &self,
         point: WithinModel<Point>,
-    ) -> impl Iterator<Item = WithinModel<PossiblePath>> {
+    ) -> impl Iterator<Item = WithinModel<PossiblePath>> + use<> {
         match point {
             WithinModel::AltScreen(inner_point) => Either::Left(
                 self.alt_screen
@@ -2470,7 +2470,7 @@ impl TerminalModel {
 /// the provided method call on the active handler, either the block_list or the
 /// alt_screen if it is active.
 macro_rules! delegate {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         if $self.alt_screen_active {
             $self.alt_screen.$method($( $arg ),*)
         } else {

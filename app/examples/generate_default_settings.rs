@@ -147,17 +147,17 @@ fn main() {
 
         let default_json = (entry.file_default_value_fn)();
 
-        if let Err(err) = toml_prefs.write_value_with_hierarchy(
+        match toml_prefs.write_value_with_hierarchy(
             entry.storage_key,
             default_json,
             entry.hierarchy,
             entry.max_table_depth,
-        ) {
+        ) { Err(err) => {
             eprintln!("Warning: failed to write {}: {err}", entry.storage_key);
             failed += 1;
-        } else {
+        } _ => {
             written += 1;
-        }
+        }}
     }
 
     println!(

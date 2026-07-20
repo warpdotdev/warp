@@ -97,7 +97,7 @@ impl FileGlobExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let AIAgentAction {
             action:
                 AIAgentActionType::FileGlob { patterns, path }

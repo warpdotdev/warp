@@ -384,12 +384,12 @@ impl CommentListView {
         for comment in comments {
             let id = comment.id;
 
-            let entry = if let Some(mut existing) = self.comments_by_id.shift_remove(&id) {
+            let entry = match self.comments_by_id.shift_remove(&id) { Some(mut existing) => {
                 existing
                     .card
                     .update_source(comment, self.repo_path.as_ref(), ctx);
                 existing
-            } else {
+            } _ => {
                 let card = CommentViewCard::new(
                     comment,
                     false, /* always_use_static_diff */
@@ -424,7 +424,7 @@ impl CommentListView {
                     icon_button: action_button,
                     mouse_state: Default::default(),
                 }
-            };
+            }};
 
             new_comments_by_id.insert(id, entry);
         }

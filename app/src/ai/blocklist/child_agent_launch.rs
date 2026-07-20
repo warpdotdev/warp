@@ -30,7 +30,7 @@ pub fn prepare_local_oz_child_launch(
     prompt: &str,
     parent_run_id: Option<&str>,
     ctx: &AppContext,
-) -> impl Future<Output = anyhow::Result<PreparedLocalOzChildLaunch>> + 'static {
+) -> impl Future<Output = anyhow::Result<PreparedLocalOzChildLaunch>> + 'static + use<> {
     let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
     let agent_name = normalize_orchestrator_agent_name(name);
     let conversation_name = agent_name.clone().unwrap_or_default();

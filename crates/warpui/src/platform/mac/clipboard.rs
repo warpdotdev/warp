@@ -9,7 +9,7 @@ use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
 use objc2_foundation::{ns_string, NSArray, NSData, NSString};
 use warpui_core::clipboard::{ClipboardContent, ImageData};
 
-extern "C" {
+unsafe extern "C" {
     fn getFilePathsFromPasteboard() -> id;
 }
 

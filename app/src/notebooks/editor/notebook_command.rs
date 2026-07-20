@@ -223,7 +223,7 @@ impl NotebookCommand {
 
         let syntax_config = {
             let ps = SyntaxSet::load_defaults_newlines();
-            if let Ok(asset) = ASSETS.get("bundled/syntax_theme/base16.tmTheme") {
+            match ASSETS.get("bundled/syntax_theme/base16.tmTheme") { Ok(asset) => {
                 let mut cursor = std::io::Cursor::new(asset);
                 match ThemeSet::load_from_reader(&mut cursor) {
                     Ok(theme) => Some((ps, theme)),
@@ -232,9 +232,9 @@ impl NotebookCommand {
                         None
                     }
                 }
-            } else {
+            } _ => {
                 None
-            }
+            }}
         };
 
         ctx.subscribe_to_model(&content, Self::on_buffer_content_updated);

@@ -357,13 +357,13 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
                 CustomAction::DisableSyncTerminalInputs,
                 ctx,
                 Box::new(|ctx| {
-                    if let Some(window_id) = WindowManager::handle(ctx).as_ref(ctx).active_window()
-                    {
+                    match WindowManager::handle(ctx).as_ref(ctx).active_window()
+                    { Some(window_id) => {
                         SyncedInputState::handle(ctx)
                             .read(ctx, |status, _| !status.is_syncing_any_inputs(window_id))
-                    } else {
+                    } _ => {
                         false
-                    }
+                    }}
                 }),
             ),
         ],
@@ -1088,21 +1088,21 @@ fn custom_action_dispatcher(action: CustomAction) -> impl Fn(&mut AppContext) + 
 /// Dispatch events to open the user's default tab type in the active window
 /// or make a new window if there is no active window.
 fn open_new_default_tab_or_window(ctx: &mut AppContext) {
-    if let Some(wid) = WindowManager::handle(ctx).as_ref(ctx).active_window() {
+    match WindowManager::handle(ctx).as_ref(ctx).active_window() { Some(wid) => {
         ctx.dispatch_custom_action(CustomAction::NewTab, wid)
-    } else {
+    } _ => {
         open_new_window(ctx)
-    }
+    }}
 }
 
 /// Dispatch events to open an agent tab in the active window
 /// or make a new window if there is no active window.
 fn open_new_agent_tab_or_window(ctx: &mut AppContext) {
-    if let Some(wid) = WindowManager::handle(ctx).as_ref(ctx).active_window() {
+    match WindowManager::handle(ctx).as_ref(ctx).active_window() { Some(wid) => {
         ctx.dispatch_custom_action(CustomAction::NewAgentTab, wid)
-    } else {
+    } _ => {
         open_new_window(ctx)
-    }
+    }}
 }
 
 /// Dispatch event to open a new Warp window

@@ -423,7 +423,7 @@ impl AccountWidget {
         let mut user_info = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
         if let Some(profile_image_source) = profile_image_source {
             // Only continue if profile_image_source is a source with a non empty url/path
-            if matches!(profile_image_source, AssetSource::Async { ref id, .. } if !id.key().is_empty())
+            if matches!(profile_image_source, AssetSource::Async { id, .. } if !id.key().is_empty())
                 || matches!(profile_image_source, AssetSource::Bundled { path, .. } if !path.is_empty())
                 || matches!(profile_image_source, AssetSource::LocalFile { path, .. } if !path.is_empty())
             {

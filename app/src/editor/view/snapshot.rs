@@ -627,7 +627,7 @@ impl ViewSnapshot {
     pub fn vim_visual_tails<'a>(
         &self,
         app: &'a AppContext,
-    ) -> impl Iterator<Item = DisplayPoint> + 'a {
+    ) -> impl Iterator<Item = DisplayPoint> + 'a + use<'a> {
         let editor_model = self.editor_model.as_ref(app);
         let map = editor_model.display_map(app);
         editor_model

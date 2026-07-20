@@ -8743,16 +8743,16 @@ impl View for EditorView {
             .with_cursor(Cursor::IBeam)
             .finish();
 
-        if let Some(controls) = self.render_controls(ctx) {
+        match self.render_controls(ctx) { Some(controls) => {
             let mut row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::End);
             row.add_child(Shrinkable::new(1., hoverable).finish());
             row.add_child(controls);
             row.finish()
-        } else {
+        } _ => {
             hoverable
-        }
+        }}
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> warpui::keymap::Context {

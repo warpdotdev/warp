@@ -17,7 +17,7 @@ use crate::parsers::SignatureAtTokenIndex;
 fn short_hand_flag_suggestions(
     signature: &SpecSignature,
     partial_without_dashes: &str,
-) -> impl Iterator<Item = MatchedSuggestion> {
+) -> impl Iterator<Item = MatchedSuggestion> + use<> {
     signature
         .short_hand_flags()
         .filter_map(|flag| {
@@ -81,7 +81,7 @@ fn long_hand_flag_suggestions(
     matcher: MatchStrategy,
     partial_without_dashes: &str,
     style: Option<FlagStyle>,
-) -> impl Iterator<Item = MatchedSuggestion> {
+) -> impl Iterator<Item = MatchedSuggestion> + use<> {
     signature
         .long_hand_flags()
         .filter(|flag| style.is_none_or(|style| flag.style == style))

@@ -1065,18 +1065,17 @@ impl TypedActionView for SettingsImportView {
                 self.set_preferences(ctx, terminal_type_and_profile);
 
                 // write_theme can fail because we write themes in a separate directory.
-                if let Some(theme_type) =
-                    ImportedConfigModel::as_ref(ctx).write_theme(terminal_type_and_profile)
-                {
+                match ImportedConfigModel::as_ref(ctx).write_theme(terminal_type_and_profile)
+                { Some(theme_type) => {
                     SettingsImportView::set_theme(
                         ctx,
                         theme_type,
                         &self.configs[selected_idx].config_name,
                     );
                     ctx.emit(SettingsImportEvent::Completed(true));
-                } else {
+                } _ => {
                     ctx.emit(SettingsImportEvent::Completed(false));
-                }
+                }}
                 self.state = State::Completed {
                     imported_idx: self.radio_button_state.get_selected_idx(),
                 };

@@ -1650,12 +1650,7 @@ fn launch_local_no_harness_child(
             let is_shared_session_creator =
                 inherit_share_for_local_child(host_source.as_ref(), child_task_id);
 
-            if let Some(HiddenChildAgentConversation {
-                terminal_view: new_terminal_view,
-                terminal_view_id,
-                conversation_id,
-                ..
-            }) = create_hidden_child_agent_conversation(
+            match create_hidden_child_agent_conversation(
                 group,
                 HiddenChildAgentConversationRequest {
                     parent_pane_id,
@@ -1670,7 +1665,12 @@ fn launch_local_no_harness_child(
                     is_shared_session_creator,
                 },
                 ctx,
-            ) {
+            ) { Some(HiddenChildAgentConversation {
+                terminal_view: new_terminal_view,
+                terminal_view_id,
+                conversation_id,
+                ..
+            }) => {
                 apply_child_agent_model_override(terminal_view_id, model_id.as_deref(), ctx);
 
                 // Stamp the task id on the child conversation directly
@@ -1708,7 +1708,7 @@ fn launch_local_no_harness_child(
                         ctx,
                     );
                 });
-            } else {
+            } _ => {
                 let _ = create_error_child_agent_conversation(
                     group,
                     ErrorChildAgentConversationRequest {
@@ -1722,7 +1722,7 @@ fn launch_local_no_harness_child(
                     },
                     ctx,
                 );
-            }
+            }}
         }
         Err(error) => {
             let _ = create_error_child_agent_conversation(
@@ -1800,12 +1800,7 @@ fn launch_local_harness_child(
                 } = launch;
                 let is_shared_session_creator =
                     inherit_share_for_local_child(host_source.as_ref(), task_id);
-                if let Some(HiddenChildAgentConversation {
-                    terminal_view: new_terminal_view,
-                    terminal_view_id,
-                    conversation_id,
-                    ..
-                }) = create_hidden_child_agent_conversation(
+                match create_hidden_child_agent_conversation(
                     group,
                     HiddenChildAgentConversationRequest {
                         parent_pane_id,
@@ -1817,7 +1812,12 @@ fn launch_local_harness_child(
                         is_shared_session_creator,
                     },
                     ctx,
-                ) {
+                ) { Some(HiddenChildAgentConversation {
+                    terminal_view: new_terminal_view,
+                    terminal_view_id,
+                    conversation_id,
+                    ..
+                }) => {
                     apply_child_agent_model_override(terminal_view_id, model_id.as_deref(), ctx);
 
                     BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
@@ -1847,7 +1847,7 @@ fn launch_local_harness_child(
                             ctx,
                         );
                     });
-                } else {
+                } _ => {
                     let _ = create_error_child_agent_conversation(
                         group,
                         ErrorChildAgentConversationRequest {
@@ -1862,7 +1862,7 @@ fn launch_local_harness_child(
                         },
                         ctx,
                     );
-                }
+                }}
             }
             Err(error_message) => {
                 let _ = create_error_child_agent_conversation(

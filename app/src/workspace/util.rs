@@ -65,7 +65,7 @@ impl WelcomeTipsViewState {
 
     pub fn close_popup(&mut self) {
         if let WelcomeTipsViewState::Available {
-            ref mut is_popup_open,
+            is_popup_open,
             ..
         } = self
         {
@@ -75,7 +75,7 @@ impl WelcomeTipsViewState {
 
     pub fn toggle_popup(&mut self) {
         if let WelcomeTipsViewState::Available {
-            ref mut is_popup_open,
+            is_popup_open,
             ..
         } = self
         {
@@ -404,11 +404,11 @@ fn get_terminal_background_opacity(window_id: WindowId, app: &AppContext) -> u8 
         .background_opacity
         .effective_opacity(window_id, app);
 
-    if let Some(img) = theme.background_image() {
+    match theme.background_image() { Some(img) => {
         let opacity_ratio = background_opacity as f32 / 100.;
         // Scale the overlay opacity with the background opacity ratio.
         (((100 - img.opacity) as f32) * opacity_ratio) as u8
-    } else {
+    } _ => {
         background_opacity
-    }
+    }}
 }

@@ -7375,7 +7375,7 @@ fn run_input_mode_prefix_test(udi_enabled: bool, input_type: InputType) {
 }
 
 macro_rules! input_mode_prefix_tests {
-    ($($name:ident: ($udi_enabled:literal, $input_mode:expr),)*) => {
+    ($($name:ident: ($udi_enabled:literal, $input_mode:expr_2021),)*) => {
         $(
             #[test]
             fn $name() {

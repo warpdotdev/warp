@@ -80,7 +80,7 @@ impl ZeroState {
     fn valid_query_filters(
         app: &AppContext,
         window_id: WindowId,
-    ) -> impl Iterator<Item = QueryFilter> {
+    ) -> impl Iterator<Item = QueryFilter> + use<> {
         let show_warp_drive = WarpDriveSettings::is_warp_drive_enabled(app);
 
         let mut valid_filters = vec![];

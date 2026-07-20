@@ -4,7 +4,7 @@ pub use terminal_model::TerminalModel;
 #[cfg(test)]
 #[macro_export]
 macro_rules! assert_lines_approx_eq {
-    ($actual:expr, $expected:expr) => {{
+    ($actual:expr_2021, $expected:expr_2021) => {{
         float_cmp::assert_approx_eq!(
             warpui::units::Lines,
             $actual,

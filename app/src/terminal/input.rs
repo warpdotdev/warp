@@ -3654,7 +3654,7 @@ impl Input {
         });
 
         let cloud_mode_v2_slash_commands_view =
-            if let Some(v2_data_source) = cloud_mode_composer_slash_command_data_source.clone() {
+            match cloud_mode_composer_slash_command_data_source.clone() { Some(v2_data_source) => {
                 let view = ctx.add_typed_action_view(|ctx| {
                     CloudModeV2SlashCommandView::new(
                         &slash_command_model,
@@ -3668,9 +3668,9 @@ impl Input {
                     me.handle_slash_commands_menu_event(event, ctx);
                 });
                 Some(view)
-            } else {
+            } _ => {
                 None
-            };
+            }};
 
         ctx.subscribe_to_model(&ai_input_model, move |me, _, event, ctx| {
             match event {
@@ -4927,18 +4927,18 @@ impl Input {
                     ctx.notify();
                 }
                 self.clear_buffer_and_reset_undo_stack(ctx);
-                if let Some(action) = AgentConversationsModel::resolve_open_action(
+                match AgentConversationsModel::resolve_open_action(
                     AgentConversationNavigationSubject::Entry(*item_id),
                     Some(RestoreConversationLayout::ActivePane),
                     ctx,
-                ) {
+                ) { Some(action) => {
                     ctx.dispatch_typed_action_deferred(action);
-                } else {
+                } _ => {
                     ctx.emit(Event::ShowToast {
                         message: "Couldn't navigate to conversation.".to_string(),
                         flavor: ToastFlavor::Error,
                     });
-                }
+                }}
             }
             InlineConversationMenuEvent::Dismissed => {
                 if self
@@ -15111,20 +15111,20 @@ impl Input {
                 self.flush_deferred_remote_operations(ctx);
 
                 // Update shared session history model
-                if let Some(shared_session_history_model) = self
+                match self
                     .shared_session_input_state
                     .as_ref()
                     .map(|state| state.history_model.clone())
-                {
+                { Some(shared_session_history_model) => {
                     shared_session_history_model.update(ctx, |history_model, _ctx| {
                         history_model.push(HistoryEntry::for_completed_block(
                             block_completed.command,
                             &block_completed.serialized_block,
                         ))
                     })
-                } else {
+                } _ => {
                     log::warn!("Tried to access non-existent shared session history model")
-                }
+                }}
             } else if is_next_command_enabled(ctx) {
                 self.maybe_predict_next_action_ai(block_completed, ctx);
             }

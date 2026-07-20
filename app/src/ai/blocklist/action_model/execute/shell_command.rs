@@ -211,7 +211,7 @@ impl ShellCommandExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let model = self.terminal_model.lock();
 
         // Determine the action we want to take based on the input.
@@ -517,7 +517,7 @@ impl ShellCommandExecutor {
         &mut self,
         block_selector: BlockSelector,
         delay: Option<ShellCommandDelay>,
-    ) -> impl Spawnable<Output = ActionResult> {
+    ) -> impl Spawnable<Output = ActionResult> + use<> {
         // Create a channel to notify us when we receive block metadata.
         let (block_metadata_received_tx, block_metadata_received_rx) = oneshot::channel();
         self.block_finished_senders

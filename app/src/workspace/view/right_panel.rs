@@ -736,14 +736,13 @@ impl RightPanelView {
                 view.on_open(ctx);
             });
             self.recompute_terminal_availability(ctx);
-        } else if let Some(view) =
-            self.create_code_review_view(repo_path, diff_state_model.clone(), pane_group_id, ctx)
-        {
+        } else { match self.create_code_review_view(repo_path, diff_state_model.clone(), pane_group_id, ctx)
+        { Some(view) => {
             view.update(ctx, |view, ctx| {
                 view.on_open(ctx);
             });
             self.recompute_terminal_availability(ctx);
-        };
+        } _ => {}}};
         ctx.notify();
     }
 

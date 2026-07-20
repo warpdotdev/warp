@@ -44,7 +44,7 @@ impl AskUserQuestionExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let questions = match &input.action.action {
             AIAgentActionType::AskUserQuestion { questions } => questions,
             _ => {

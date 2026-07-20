@@ -467,7 +467,7 @@ impl TerminalDriver {
         &mut self,
         command: &str,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<impl Future<Output = Result<CommandHandle, AgentDriverError>>, AgentDriverError>
+    ) -> Result<impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>, AgentDriverError>
     {
         let (exit_tx, exit_rx) = oneshot::channel::<ExitCode>();
         let (start_tx, start_rx) = oneshot::channel::<BlockId>();
@@ -507,7 +507,7 @@ impl TerminalDriver {
         &self,
         command: String,
         ctx: &ModelContext<Self>,
-    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> {
+    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> + use<> {
         let session = self.terminal_view.read(ctx, |terminal, app| {
             terminal
                 .active_block_session_id()
@@ -552,7 +552,7 @@ impl TerminalDriver {
         &mut self,
         target: &str,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<impl Future<Output = Result<CommandHandle, AgentDriverError>>, AgentDriverError>
+    ) -> Result<impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>, AgentDriverError>
     {
         let cd_command = self.build_cd_command(target, ctx);
         self.execute_command(&cd_command, ctx)
@@ -570,7 +570,7 @@ impl TerminalDriver {
         &self,
         target: &str,
         ctx: &ModelContext<Self>,
-    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> {
+    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> + use<> {
         let cd_command = self.build_cd_command(target, ctx);
         self.execute_silent_command(cd_command, ctx)
     }
@@ -591,7 +591,7 @@ impl TerminalDriver {
     /// is `BootstrapError::TimedOut`.
     pub fn wait_for_session_bootstrapped(
         &mut self,
-    ) -> impl Future<Output = Result<(), BootstrapError>> {
+    ) -> impl Future<Output = Result<(), BootstrapError>> + use<> {
         let bootstrap_rx = self.bootstrap_rx.take();
 
         async move {
@@ -619,7 +619,7 @@ impl TerminalDriver {
     /// - wait for session sharing later (e.g. right before running visible commands)
     pub fn wait_for_session_shared(
         &mut self,
-    ) -> impl Future<Output = Result<(), AgentDriverError>> {
+    ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
         let rx = self.session_share_rx.take();
 
         async move {

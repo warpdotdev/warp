@@ -1678,9 +1678,9 @@ impl<'a> TabComponent<'a> {
         };
 
         let compact_icon = {
-            if let Some(indicator) = self.render_indicator() {
+            match self.render_indicator() { Some(indicator) => {
                 indicator
-            } else {
+            } _ => {
                 // Fallback to terminal icon if no indicator is present
                 Icon::Terminal
                     .to_warpui_icon(
@@ -1691,7 +1691,7 @@ impl<'a> TabComponent<'a> {
                             .into(),
                     )
                     .finish()
-            }
+            }}
         };
         let compact_tab_content = Clipped::new(
             Flex::row()

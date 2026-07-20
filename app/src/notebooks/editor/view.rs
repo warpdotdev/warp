@@ -1387,7 +1387,7 @@ impl RichTextEditorView {
                 .insert(handle.clone())
             {
                 let asset_cache = AssetCache::as_ref(ctx);
-                if let Some(future) = handle.when_loaded(asset_cache) {
+                match handle.when_loaded(asset_cache) { Some(future) => {
                     ctx.spawn(future, move |me, (), ctx| {
                         me.pending_layout_affecting_asset_loads.remove(&handle);
                         me.model.update(ctx, |model, ctx| {
@@ -1399,9 +1399,9 @@ impl RichTextEditorView {
                         });
                         ctx.notify();
                     });
-                } else {
+                } _ => {
                     self.pending_layout_affecting_asset_loads.remove(&handle);
-                }
+                }}
             }
         }
     }

@@ -92,7 +92,7 @@ impl ColorSampler {
     pub fn most_common(&self) -> Option<ColorU> {
         self.counts
             .iter()
-            .max_by_key(|(_, &count)| count)
+            .max_by_key(|&(_, &count)| count)
             .map(|(&color, _)| color)
     }
 

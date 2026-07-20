@@ -45,7 +45,7 @@ impl CreateDocumentsExecutor {
         input: ExecuteActionInput,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput { action, .. } = input;
         let AIAgentAction {
             id: action_id,

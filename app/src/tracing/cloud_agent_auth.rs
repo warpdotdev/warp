@@ -74,7 +74,8 @@ impl AuthContext {
         let token =
             std::env::var(CLOUD_AGENT_OTLP_TOKEN).context("Cloud-agent OTLP token is missing")?;
         // Remove the bootstrap secret as soon as it is owned so child processes cannot inherit it.
-        std::env::remove_var(CLOUD_AGENT_OTLP_TOKEN);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(CLOUD_AGENT_OTLP_TOKEN) };
         let token = token.trim().to_owned();
         anyhow::ensure!(!token.is_empty(), "Cloud-agent OTLP token is empty");
 

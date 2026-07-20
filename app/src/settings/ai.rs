@@ -784,8 +784,8 @@ impl schemars::JsonSchema for ToolbarCommandMap {
         std::borrow::Cow::Borrowed("ToolbarCommandMap")
     }
 
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        gen.subschema_for::<HashMap<String, String>>()
+    fn json_schema(r#gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        r#gen.subschema_for::<HashMap<String, String>>()
     }
 }
 

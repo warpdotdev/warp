@@ -117,7 +117,7 @@ impl FileSearchModel {
 
         match working_dir {
             // Local session: read the filesystem directly.
-            Some(LocalOrRemotePath::Local(ref local_path)) => {
+            Some(LocalOrRemotePath::Local(local_path)) => {
                 let current_dir: &Path = local_path.as_path();
                 let current_dir_string = current_dir.to_string_lossy().to_string();
 
@@ -146,7 +146,7 @@ impl FileSearchModel {
             }
             // Remote session: query repo metadata (populated by the remote
             // server's NavigatedToDirectory lazy-load).
-            Some(LocalOrRemotePath::Remote(ref remote_path)) => {
+            Some(LocalOrRemotePath::Remote(remote_path)) => {
                 let id = RepositoryIdentifier::Remote(remote_path.clone());
                 let repo_metadata = RepoMetadataModel::as_ref(app);
                 // Truncated results (capped at the repo metadata budget) are

@@ -338,17 +338,17 @@ impl PrivacySettings {
             // Convert EnterpriseSecretRegex to CustomSecretRegex for internal use
             let mut enterprise_secrets = Vec::new();
             for enterprise_regex in enterprise_regexes {
-                if let Ok(regex) = Regex::new(&enterprise_regex.pattern) {
+                match Regex::new(&enterprise_regex.pattern) { Ok(regex) => {
                     enterprise_secrets.push(CustomSecretRegex {
                         pattern: regex,
                         name: enterprise_regex.name,
                     });
-                } else {
+                } _ => {
                     report_error!(
                         "Invalid enterprise secret regex pattern",
                         extra: { "pattern" => %enterprise_regex.pattern }
                     );
-                }
+                }}
             }
             self.enterprise_secret_regex_list = enterprise_secrets;
         } else {
@@ -618,7 +618,7 @@ impl PrivacySettings {
 
         // Add all the default regexes if they don't already exist
         for default_regex in crate::terminal::model::secrets::regexes::DEFAULT_REGEXES_WITH_NAMES {
-            if let Ok(regex) = Regex::new(default_regex.pattern) {
+            match Regex::new(default_regex.pattern) { Ok(regex) => {
                 let custom_regex = CustomSecretRegex {
                     pattern: regex,
                     name: Some(default_regex.name.to_string()),
@@ -626,12 +626,12 @@ impl PrivacySettings {
                 if !new_user_secret_regex_list.contains(&custom_regex) {
                     new_user_secret_regex_list.push(custom_regex);
                 }
-            } else {
+            } _ => {
                 report_error!(
                     "Failed to compile default regex",
                     extra: { "pattern" => %default_regex.pattern }
                 );
-            }
+            }}
         }
 
         if num_existing_regexes == new_user_secret_regex_list.len() {

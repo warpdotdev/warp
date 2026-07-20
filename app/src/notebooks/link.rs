@@ -129,7 +129,7 @@ impl NotebookLinks {
         &self,
         link: &str,
         ctx: &AppContext,
-    ) -> impl Future<Output = Result<LinkTarget, ResolveError>> {
+    ) -> impl Future<Output = Result<LinkTarget, ResolveError>> + use<> {
         if let Ok(url) = Url::parse(link) {
             // The `url` crate only provides `to_file_path` on certain platforms.
             #[cfg(feature = "local_fs")]

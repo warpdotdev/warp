@@ -27,7 +27,7 @@ use super::utils::nsstring_as_str;
 use super::{app, make_nsstring, Clipboard, Window};
 
 // Functions implemented in objC files.
-extern "C" {
+unsafe extern "C" {
     // Requests permissions to send desktop notifications.
     fn requestNotificationPermissions(on_completion_callback: *const c_void);
     // Sends a desktop notification.
@@ -456,7 +456,7 @@ impl platform::Delegate for AppDelegate {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// # Safety
 /// This function is marked unsafe because it retrieves the pointer to the callback
 /// function that we sent down to the Objective-C code.
@@ -464,16 +464,16 @@ pub unsafe extern "C-unwind" fn warp_on_request_notification_permissions_complet
     result_type: NSUInteger,
     result_msg: id,
     callback: *mut c_void,
-) {
+) { unsafe {
     let outcome =
         super::notification::request_permissions_outcome_from_native(result_type, result_msg);
     if let Ok(outcome) = outcome {
         let callback = Box::from_raw(callback as *mut RequestNotificationPermissionsCallback);
         callback(outcome);
     }
-}
+}}
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// # Safety
 /// This function is marked unsafe because it retrieves the pointer to the callback
 /// function that we sent down to the Objective-C code.
@@ -481,13 +481,13 @@ pub unsafe extern "C-unwind" fn warp_on_notification_send_error(
     error_type: NSUInteger,
     error_msg: id,
     callback: *mut c_void,
-) {
+) { unsafe {
     let notification_error = super::notification::send_error_from_native(error_type, error_msg);
     if let Ok(notification_error) = notification_error {
         let callback = Box::from_raw(callback as *mut NotificationSendErrorCallback);
         callback(notification_error);
     }
-}
+}}
 
 impl platform::DispatchDelegate for DispatchDelegate {
     fn is_main_thread(&self) -> bool {

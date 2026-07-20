@@ -7494,7 +7494,7 @@ impl TypedActionView for CodeReviewView {
                     !self.discard_dialog_state.stash_changes_enabled;
                 ctx.notify();
             }
-            CodeReviewAction::ToggleFileSelection(ref file_path) => {
+            CodeReviewAction::ToggleFileSelection(file_path) => {
                 if let Some(selected) = self.discard_dialog_state.selected_files.get_mut(file_path)
                 {
                     *selected = !*selected;

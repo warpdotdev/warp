@@ -443,7 +443,7 @@ impl AutoupdateState {
                 self.stage = AutoupdateStage::NoUpdateAvailable;
                 log::info!("No update available");
             }
-            Err(ref e) => {
+            Err(e) => {
                 // We commonly get errors as the autoupdate code runs when a laptop wakes up
                 // briefly while asleep, but the network call to check for updates gets cancelled
                 // when returning to sleep. So we fail silently and wait for the next update poll.

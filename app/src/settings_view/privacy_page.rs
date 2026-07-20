@@ -434,7 +434,7 @@ impl PrivacyPageView {
 
         let privacy_settings_handle = PrivacySettings::handle(ctx);
         ctx.update_model(&privacy_settings_handle, |privacy_settings, ctx| {
-            if let Ok(regex) = Regex::new(&pattern) {
+            match Regex::new(&pattern) { Ok(regex) => {
                 let mut new_user_secret_regex_list =
                     privacy_settings.user_secret_regex_list.to_vec();
                 new_user_secret_regex_list.push(CustomSecretRegex {
@@ -454,12 +454,12 @@ impl PrivacyPageView {
                     report_error!("Failed to add custom regex to secret regex list");
                 }
                 ctx.notify();
-            } else {
+            } _ => {
                 report_error!(
                     "Invalid regex pattern",
                     extra: { "pattern" => %pattern }
                 );
-            }
+            }}
         });
     }
 

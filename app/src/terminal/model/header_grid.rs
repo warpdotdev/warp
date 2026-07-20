@@ -25,7 +25,7 @@ use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::SizeInfo;
 
 macro_rules! delegate {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         match $self.receiving_chars_for_prompt {
             Some(ansi::PromptKind::Initial) => {
                 let mut retval = None;
@@ -50,7 +50,7 @@ macro_rules! delegate {
 /// Any methods which write responses back to the shell process cannot have double delegation, since
 /// that would result in extra responses being sent back to the shell.
 macro_rules! delegate_with_writer {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         match $self.receiving_chars_for_prompt {
             Some(ansi::PromptKind::Initial) => {
                 if $self.honor_ps1 {

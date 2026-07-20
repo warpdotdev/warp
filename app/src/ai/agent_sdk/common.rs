@@ -116,7 +116,7 @@ pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyh
 /// other operations that depend on team membership.
 pub fn refresh_workspace_metadata<C>(
     ctx: &mut C,
-) -> impl Future<Output = anyhow::Result<()>> + Send + 'static
+) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<C>
 where
     C: GetSingletonModelHandle + UpdateModel,
 {
@@ -137,7 +137,7 @@ where
 /// Refresh Warp Drive before executing an operation.
 pub fn refresh_warp_drive(
     ctx: &AppContext,
-) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
     UpdateManager::as_ref(ctx)
         .initial_load_complete()
         .with_timeout(WARP_DRIVE_SYNC_TIMEOUT)

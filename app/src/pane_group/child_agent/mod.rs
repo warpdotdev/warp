@@ -120,13 +120,13 @@ pub(crate) fn create_hidden_child_agent_conversation(
     };
 
     let terminal_view_id = new_terminal_view.id();
-    if let Some(parent_terminal_view) = group.terminal_view_from_pane_id(parent_pane_id, ctx) {
+    match group.terminal_view_from_pane_id(parent_pane_id, ctx) { Some(parent_terminal_view) => {
         inherit_child_agent_settings(parent_terminal_view.id(), terminal_view_id, ctx);
-    } else {
+    } _ => {
         log::warn!(
             "Could not find parent terminal view for pane {parent_pane_id:?}; child will use default AI profile"
         );
-    }
+    }}
     if let Some(task_context) = task_context.as_ref() {
         apply_hidden_child_agent_task_context(&new_terminal_view, task_context, ctx);
     }

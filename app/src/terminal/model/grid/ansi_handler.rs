@@ -1377,7 +1377,7 @@ impl ansi::Handler for GridHandler {
             (scroll_right_px / (self.ansi_handler_state.cell_width as f32)).ceil() as usize;
 
         let image_id = image.metadata.id;
-        let placement_id = rand::thread_rng().gen();
+        let placement_id = rand::thread_rng().r#gen();
 
         self.ansi_handler_state
             .event_proxy

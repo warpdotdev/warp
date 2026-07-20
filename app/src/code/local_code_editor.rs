@@ -1824,19 +1824,19 @@ impl LocalCodeEditorView {
         let buffer_version = me.editor.as_ref(ctx).version(ctx);
 
         me.base_content_version = Some(buffer_version);
-        let save_outcome = if let Err(err) = GlobalBufferModel::handle(ctx)
+        let save_outcome = match GlobalBufferModel::handle(ctx)
             .update(ctx, move |model, ctx| {
                 model.save(file_id, content, buffer_version, ctx)
-            }) {
+            }) { Err(err) => {
             report_error!(&err);
             ctx.emit(LocalCodeEditorEvent::FailedToSave {
                 error: Arc::new(err),
             });
             SaveOutcome::Failed
-        } else {
+        } _ => {
             Self::subscribe_to_global_buffer_events(file_id, ctx);
             SaveOutcome::Succeeded
-        };
+        }};
         callback(save_outcome, ctx);
     }
 

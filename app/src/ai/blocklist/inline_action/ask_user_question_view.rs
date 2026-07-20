@@ -1390,7 +1390,7 @@ pub(crate) fn render_text_with_markdown_support(
     text_color: pathfinder_color::ColorU,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    if let Ok(formatted_text) = markdown_parser::parse_markdown(text) {
+    match markdown_parser::parse_markdown(text) { Ok(formatted_text) => {
         FormattedTextElement::new(
             formatted_text,
             font_size,
@@ -1401,12 +1401,12 @@ pub(crate) fn render_text_with_markdown_support(
         )
         .with_line_height_ratio(DEFAULT_UI_LINE_HEIGHT_RATIO)
         .finish()
-    } else {
+    } _ => {
         Text::new(text.to_string(), appearance.ui_font_family(), font_size)
             .soft_wrap(true)
             .with_color(text_color)
             .finish()
-    }
+    }}
 }
 
 /// An element that lays out its child—so the child contributes to sizing—but never paints it or

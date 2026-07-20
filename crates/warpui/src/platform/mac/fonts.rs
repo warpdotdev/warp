@@ -281,7 +281,7 @@ impl FontDB {
 
     // This functions the same as the family_name method in core text font descriptor, but it returns
     // None instead of panicking when the descriptor does not include the family_name attribute.
-    unsafe fn get_family_name(descriptor: &ItemRef<CTFontDescriptor>) -> Option<String> {
+    unsafe fn get_family_name(descriptor: &ItemRef<CTFontDescriptor>) -> Option<String> { unsafe {
         let value = CTFontDescriptorCopyAttribute(
             descriptor.as_concrete_TypeRef(),
             kCTFontFamilyNameAttribute,
@@ -293,9 +293,9 @@ impl FontDB {
         let value = CFType::wrap_under_create_rule(value);
         let s = CFString::wrap_under_get_rule(value.as_CFTypeRef() as CFStringRef);
         Some(s.to_string())
-    }
+    }}
 
-    unsafe fn get_font_name(descriptor: &ItemRef<CTFontDescriptor>) -> Option<String> {
+    unsafe fn get_font_name(descriptor: &ItemRef<CTFontDescriptor>) -> Option<String> { unsafe {
         let value =
             CTFontDescriptorCopyAttribute(descriptor.as_concrete_TypeRef(), kCTFontNameAttribute);
         if value.is_null() {
@@ -305,7 +305,7 @@ impl FontDB {
         let value = CFType::wrap_under_create_rule(value);
         let s = CFString::wrap_under_get_rule(value.as_CFTypeRef() as CFStringRef);
         Some(s.to_string())
-    }
+    }}
 
     pub fn fallback_fonts(&self, font_id: FontId) -> Vec<FontId> {
         self.fallback_fonts

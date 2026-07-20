@@ -1783,13 +1783,12 @@ impl<V: warpui::View> PageType<V> {
     }
 
     pub fn render(&self, view: &V, app: &AppContext) -> Box<dyn Element> {
-        if let (Some(vertical_scroll_state), Some(horizontal_scroll_state)) =
-            self.get_scroll_states()
-        {
+        match self.get_scroll_states()
+        { (Some(vertical_scroll_state), Some(horizontal_scroll_state)) => {
             self.wrap_dual_scrollable(view, horizontal_scroll_state, vertical_scroll_state, app)
-        } else {
+        } _ => {
             self.render_page(view, app)
-        }
+        }}
     }
 }
 

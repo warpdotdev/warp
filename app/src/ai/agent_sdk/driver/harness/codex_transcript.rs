@@ -133,7 +133,7 @@ pub(crate) fn find_session_file(sessions_root: &Path, session_id: Uuid) -> Optio
     None
 }
 
-fn read_subdirs(parent: &Path) -> impl Iterator<Item = PathBuf> {
+fn read_subdirs(parent: &Path) -> impl Iterator<Item = PathBuf> + use<> {
     fs::read_dir(parent)
         .into_iter()
         .flatten()

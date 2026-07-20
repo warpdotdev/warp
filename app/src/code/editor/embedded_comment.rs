@@ -90,11 +90,11 @@ impl EmbeddedItem for EmbeddedCommentSpace {
     }
 
     fn to_rich_format(&self, app: &AppContext) -> EmbeddedItemRichFormat<'_> {
-        let text = if let Some(editor) = self.get_comment_editor(app) {
+        let text = match self.get_comment_editor(app) { Some(editor) => {
             editor.read(app, |editor, app| editor.comment_text(app))
-        } else {
+        } _ => {
             String::new()
-        };
+        }};
 
         EmbeddedItemRichFormat {
             plain_text: text.to_string(),

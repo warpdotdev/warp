@@ -3185,7 +3185,7 @@ impl Element for BlockListElement {
 
         // Use a macro for creating a viewport, to ensure that callers use consistent parameters
         macro_rules! create_viewport {
-            ($block_list:expr) => {
+            ($block_list:expr_2021) => {
                 ViewportState::new(
                     $block_list,
                     self.snackbar_header_state.clone(),

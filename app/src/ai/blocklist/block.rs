@@ -1546,12 +1546,12 @@ impl AIBlock {
         if me.model.status(ctx).is_streaming() {
             me.model
                 .on_updated_output(Box::new(Self::on_output_status_update), ctx);
-        } else if let Some(output) = me.model.status(ctx).output_to_render() {
+        } else { match me.model.status(ctx).output_to_render() { Some(output) => {
             // "Simulate" receiving this output if output is already complete.
             let output = output.get();
             me.handle_updated_output(&output, ctx);
             me.handle_complete_output(&output, ctx);
-        }
+        } _ => {}}}
 
         match me.model.status(ctx) {
             AIBlockOutputStatus::Complete { .. } => {
@@ -6410,14 +6410,14 @@ impl TypedActionView for AIBlock {
                     .last()
                     .map(|action| action.id.clone());
                 if let Some(run_agents_id) = run_agents_id {
-                    if let Some(card_view) = self.run_agents_card_views.get(&run_agents_id).cloned()
-                    {
+                    match self.run_agents_card_views.get(&run_agents_id).cloned()
+                    { Some(card_view) => {
                         card_view.update(ctx, |view, ctx_view| view.accept(ctx_view));
-                    } else {
+                    } _ => {
                         log::warn!(
                             "ExecuteNextPendingAction: no RunAgentsCardView for {run_agents_id:?}"
                         );
-                    }
+                    }}
                 } else {
                     self.action_model.update(ctx, |action_model, ctx| {
                         action_model.execute_next_action_for_user(self.conversation_id(), ctx)

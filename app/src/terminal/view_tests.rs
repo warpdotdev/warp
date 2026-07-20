@@ -2963,7 +2963,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         // We need to manually trigger re-renders to ensure the AltScreenElement is recreated, e.g.
         // so its `is_terminal_selecting` property will be up-to-date.
         macro_rules! rerender {
-            ($app:ident, $presenter:expr, $invalidation:expr, $size_info:expr) => {
+            ($app:ident, $presenter:expr_2021, $invalidation:expr_2021, $size_info:expr_2021) => {
                 app.update(enclose!((presenter, invalidation) move |ctx| {
                     presenter
                         .borrow_mut()

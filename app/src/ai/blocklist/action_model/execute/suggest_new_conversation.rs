@@ -41,7 +41,7 @@ impl SuggestNewConversationExecutor {
         &mut self,
         input: ExecuteActionInput,
         _ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let AIAgentAction {
             action: AIAgentActionType::SuggestNewConversation { message_id },
             ..

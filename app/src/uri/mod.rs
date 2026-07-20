@@ -1019,14 +1019,14 @@ impl Action {
                     return;
                 };
 
-                if let Some(workspace) = workspaces.pop() {
+                match workspaces.pop() { Some(workspace) => {
                     workspace.update(ctx, |workspace, ctx| {
                         workspace
                             .handle_action(&WorkspaceAction::OpenRepository { path: None }, ctx);
                     });
-                } else {
+                } _ => {
                     log::warn!("no workspace views in window {window_id} for open repo action");
-                }
+                }}
             }
             Action::CloudAgentSetup => {
                 let window_id =
@@ -1044,15 +1044,15 @@ impl Action {
                     return;
                 };
 
-                if let Some(workspace) = workspaces.pop() {
+                match workspaces.pop() { Some(workspace) => {
                     workspace.update(ctx, |workspace, ctx| {
                         workspace.handle_action(&WorkspaceAction::OpenCloudAgentSetupGuide, ctx);
                     });
-                } else {
+                } _ => {
                     log::warn!(
                         "no workspace views in window {window_id} for cloud agent setup action"
                     );
-                }
+                }}
             }
             Action::NewCloudAgentConversation => {
                 let Some(window_id) = primary_window_id else {
@@ -1067,15 +1067,15 @@ impl Action {
                     return;
                 };
 
-                if let Some(workspace) = workspaces.pop() {
+                match workspaces.pop() { Some(workspace) => {
                     workspace.update(ctx, |workspace, ctx| {
                         workspace.handle_action(&WorkspaceAction::AddAmbientAgentTab, ctx);
                     });
-                } else {
+                } _ => {
                     log::warn!(
                         "no workspace views in window {window_id} for new cloud agent conversation action"
                     );
-                }
+                }}
             }
             Action::NewAgentConversation => {
                 let window_id =

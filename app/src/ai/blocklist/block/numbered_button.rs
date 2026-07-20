@@ -147,9 +147,8 @@ pub(super) fn build_text_button_content(
     let font_size = appearance.monospace_font_size();
     let text_color = theme.foreground().into();
 
-    let label_element = if let (true, Ok(formatted_text)) =
-        (use_markdown, markdown_parser::parse_markdown(text_label))
-    {
+    let label_element = match (use_markdown, markdown_parser::parse_markdown(text_label))
+    { (true, Ok(formatted_text)) => {
         FormattedTextElement::new(
             formatted_text,
             font_size,
@@ -161,7 +160,7 @@ pub(super) fn build_text_button_content(
         .with_line_height_ratio(DEFAULT_UI_LINE_HEIGHT_RATIO)
         .disable_mouse_interaction()
         .finish()
-    } else {
+    } _ => {
         Text::new(
             text_label.to_string(),
             appearance.ui_font_family(),
@@ -170,7 +169,7 @@ pub(super) fn build_text_button_content(
         .soft_wrap(true)
         .with_color(text_color)
         .finish()
-    };
+    }};
 
     if !recommended {
         return label_element;

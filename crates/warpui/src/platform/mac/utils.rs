@@ -59,7 +59,7 @@ const NUMPAD_ENTER_KEY: u16 = 0x03;
 const ESCAPE_KEY: u16 = 0x1b;
 const TAB_KEY: u16 = '\t' as u16;
 const SHIFTED_TAB_KEY: u16 = 0x19;
-extern "C" {
+unsafe extern "C" {
     fn CGColorGetComponents(color: CGColorRef) -> *const CGFloat;
 }
 
@@ -112,14 +112,14 @@ pub fn unicode_char_to_key(char: u16) -> Option<&'static str> {
 /// # Safety
 ///
 /// This code is only unsafe since it requires interfacing with platform code.
-pub unsafe fn nsstring_as_str<'a>(nsstring: *const Object) -> Result<&'a str, Utf8Error> {
+pub unsafe fn nsstring_as_str<'a>(nsstring: *const Object) -> Result<&'a str, Utf8Error> { unsafe {
     // The caller guarantees `nsstring` points at a live Objective-C string, so
     // reinterpret it as an `NSString` for typed access to its UTF-8 bytes.
     let nsstring = &*nsstring.cast::<NSString>();
     let cstr = nsstring.UTF8String();
     let len = nsstring.lengthOfBytesUsingEncoding(NSUTF8StringEncoding);
     std::str::from_utf8(slice::from_raw_parts(cstr.cast::<u8>(), len))
-}
+}}
 
 pub fn color_u_to_cg_color(color: ColorU) -> CGColor {
     CGColor::rgb(

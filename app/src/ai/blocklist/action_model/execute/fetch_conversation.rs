@@ -30,7 +30,7 @@ impl FetchConversationExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput { action, .. } = input;
         let AIAgentActionType::FetchConversation { conversation_id } = &action.action else {
             return ActionExecution::<Option<CloudConversationData>>::InvalidAction;

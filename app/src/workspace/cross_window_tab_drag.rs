@@ -2004,7 +2004,7 @@ fn compute_insertion_index_for_window(
         }
     }
 
-    if let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx) {
+    match WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx) { Some(ws) => {
         ws.read(ctx, |workspace, ctx| {
             workspace.tab_insertion_index_for_cursor(
                 target_window_id,
@@ -2012,9 +2012,9 @@ fn compute_insertion_index_for_window(
                 ctx,
             )
         })
-    } else {
+    } _ => {
         0
-    }
+    }}
 }
 
 #[cfg(test)]

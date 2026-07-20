@@ -4375,15 +4375,15 @@ impl Workspace {
             return;
         }
 
-        if let Some(action) = AgentConversationsModel::resolve_open_action(
+        match AgentConversationsModel::resolve_open_action(
             AgentConversationNavigationSubject::ServerToken(server_token.clone()),
             Some(RestoreConversationLayout::NewTab),
             ctx,
-        ) {
+        ) { Some(action) => {
             ctx.dispatch_typed_action_deferred(action);
-        } else {
+        } _ => {
             self.load_cloud_conversation_into_new_transcript_viewer(server_token, None, ctx);
-        }
+        }}
     }
 
     /// Load the conversation into a transcript viewer in a new tab (with no input/backing shell)
@@ -4810,7 +4810,7 @@ impl Workspace {
     pub fn has_warp_drive_initialized_sections(
         &self,
         app: &AppContext,
-    ) -> impl Future<Output = ()> {
+    ) -> impl Future<Output = ()> + use<> {
         self.left_panel_view
             .as_ref(app)
             .warp_drive_view()
@@ -6294,11 +6294,11 @@ impl Workspace {
                             )
                         });
 
-                    if let Some(terminal_view_handle) = self
+                    match self
                         .active_tab_pane_group()
                         .as_ref(ctx)
                         .terminal_view_from_pane_id(new_pane_id, ctx)
-                    {
+                    { Some(terminal_view_handle) => {
                         let editor_ref = Some(editor_env.as_str());
                         let path_clone = path.clone();
                         terminal_view_handle.update(ctx, |terminal, ctx| {
@@ -6311,11 +6311,11 @@ impl Workspace {
                             terminal.set_pending_command(&editor_command, ctx);
                         });
                         return;
-                    } else {
+                    } _ => {
                         report_error!(
                             "Could not get terminal view handle for new pane when attempting to open file with $EDITOR."
                         );
-                    }
+                    }}
                 }
 
                 crate::util::file::open_file_path_in_external_editor(line_col, path.clone(), ctx);
@@ -11095,18 +11095,18 @@ impl Workspace {
     }
 
     fn is_input_box_visible(&self, app: &AppContext) -> bool {
-        if let (Some(terminal_model), Some(terminal_view)) = (
+        match (
             self.get_active_session_terminal_model(app),
             self.active_tab_pane_group()
                 .as_ref(app)
                 .active_session_view(app),
-        ) {
+        ) { (Some(terminal_model), Some(terminal_view)) => {
             terminal_view.read(app, |view, ctx| {
                 view.is_input_box_visible(&terminal_model.lock(), ctx)
             })
-        } else {
+        } _ => {
             false
-        }
+        }}
     }
 
     fn maybe_refresh_workflow_info_box_and_input(
@@ -12514,15 +12514,15 @@ impl Workspace {
 
         #[cfg(all(feature = "local_tty", not(target_family = "wasm")))]
         if is_docker_sandbox {
-            if let Some(terminal_view) = self
+            match self
                 .active_tab_pane_group()
                 .as_ref(ctx)
                 .active_session_view(ctx)
-            {
+            { Some(terminal_view) => {
                 TerminalView::initialize_docker_sandbox_environment(&terminal_view, ctx);
-            } else {
+            } _ => {
                 log::warn!("Could not find docker sandbox terminal view after creating new tab");
-            }
+            }}
         }
         #[cfg(not(all(feature = "local_tty", not(target_family = "wasm"))))]
         let _ = is_docker_sandbox;
@@ -15339,16 +15339,15 @@ impl Workspace {
             })
             .map(|tab| tab.pane_group.clone())
             .unwrap_or_else(|| self.active_tab_pane_group().clone());
-        let target = if let Some((original_pane_id, orchestrator_view)) =
-            pane_group.as_ref(ctx).original_session_if_swapped(ctx)
-        {
+        let target = match pane_group.as_ref(ctx).original_session_if_swapped(ctx)
+        { Some((original_pane_id, orchestrator_view)) => {
             pane_group.update(ctx, |group, ctx| {
                 group.reveal_and_focus_pane(original_pane_id, ctx);
             });
             orchestrator_view
-        } else {
+        } _ => {
             source_view.clone()
-        };
+        }};
 
         let agent_view_controller = target.as_ref(ctx).agent_view_controller().clone();
         if agent_view_controller
@@ -17298,7 +17297,7 @@ impl Workspace {
     ) {
         let window_id = ctx.window_id();
 
-        if let Some(active_input_view_handle) = self.get_active_input_view_handle(ctx) {
+        match self.get_active_input_view_handle(ctx) { Some(active_input_view_handle) => {
             active_input_view_handle.update(ctx, |input_view, input_ctx| {
                 input_view.replace_buffer_content(contents, input_ctx);
             });
@@ -17306,9 +17305,9 @@ impl Workspace {
             ctx.windows().show_window_and_focus_app(window_id);
 
             ctx.notify();
-        } else {
+        } _ => {
             report_error!("workspace::view::fill_input(): no active input view handle to fill");
-        }
+        }}
     }
 
     /// Insert the given command that should open a subshell. And set a flag that we should
@@ -17360,7 +17359,7 @@ impl Workspace {
         let pane_group_handle = pane_group_handle.clone();
         self.refresh_working_directories_for_pane_group(&pane_group_handle, ctx);
 
-        if let Some(terminal_handle) = pane_group_handle.as_ref(ctx).active_session_view(ctx) {
+        match pane_group_handle.as_ref(ctx).active_session_view(ctx) { Some(terminal_handle) => {
             #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
             let (
                 session,
@@ -17455,7 +17454,7 @@ impl Workspace {
                 // function. Calling setup_code_review_panel here would race
                 // with that path and re-create models that were just dropped.
             }
-        } else {
+        } _ => {
             let enablement = CodingPanelEnablementState::from_session_env(
                 file_tree_and_global_search_are_enabled,
                 false,
@@ -17473,7 +17472,7 @@ impl Workspace {
                     right_panel.update_session_env(false, false, ctx);
                 });
             }
-        }
+        }}
     }
 
     fn handle_warp_drive_event(&mut self, event: &DrivePanelEvent, ctx: &mut ViewContext<Self>) {
@@ -24140,7 +24139,7 @@ impl TypedActionView for Workspace {
                         prompt: AUTO_CLOUD_HANDOFF_PROMPT.to_owned(),
                         attachments: HandoffLaunchAttachments::default(),
                     });
-                    if let Some(source_view) = self.terminal_view(*terminal_view_id, ctx) {
+                    match self.terminal_view(*terminal_view_id, ctx) { Some(source_view) => {
                         self.start_local_to_cloud_handoff_from_source(
                             source_view,
                             launch,
@@ -24148,14 +24147,14 @@ impl TypedActionView for Workspace {
                             intent,
                             ctx,
                         );
-                    } else {
+                    } _ => {
                         log::debug!(
                             "Skipping automatic local-to-cloud handoff via {:?}: terminal view {:?} is no longer open",
                             trigger,
                             terminal_view_id,
                         );
                         Self::record_automatic_handoff_failed(intent, ctx);
-                    }
+                    }}
                 }
                 #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
                 {
@@ -27486,7 +27485,7 @@ impl View for Workspace {
             .background_opacity
             .effective_opacity(self.window_id, app);
 
-        if let Some(img) = theme.background_image() {
+        match theme.background_image() { Some(img) => {
             let opacity_ratio = background_opacity as f32 / 100.;
             stack.add_child(
                 Shrinkable::new(
@@ -27500,13 +27499,13 @@ impl View for Workspace {
                 .finish(),
             );
             stack.add_child(workspace.finish());
-        } else {
+        } _ => {
             stack.add_child(
                 workspace
                     .with_background(theme.surface_2().with_opacity(background_opacity))
                     .finish(),
             );
-        }
+        }}
 
         let input_position_id = self
             .get_active_input_view_handle(app)

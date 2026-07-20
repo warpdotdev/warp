@@ -56,7 +56,7 @@ impl DirectoryFetcher {
         }
 
         // Always use async method - SessionContext works for both local and remote sessions
-        if let Some(session_ctx) = self.session_context.clone() {
+        match self.session_context.clone() { Some(session_ctx) => {
             let dir_path = self.current_directory.clone();
 
             self.fetch_handle = Some(ctx.spawn(
@@ -70,12 +70,12 @@ impl DirectoryFetcher {
                 },
             ));
             ctx.emit(DirectoryFetcherEvent::FetchStarted);
-        } else {
+        } _ => {
             // If no session context, we can't fetch directory contents
             log::warn!("No SessionContext available for directory fetching");
             ctx.emit(DirectoryFetcherEvent::FetchCompleted { success: false });
             ctx.notify();
-        }
+        }}
     }
 
     /// Asynchronously list directory files using SessionContext

@@ -573,13 +573,13 @@ fn open_launch_config(arg: &OpenLaunchConfigArg, ctx: &mut AppContext) {
 }
 
 fn send_feedback(_: &(), ctx: &mut AppContext) {
-    if let Some(workspace) = active_workspace(ctx) {
+    match active_workspace(ctx) { Some(workspace) => {
         workspace.update(ctx, |workspace, ctx| {
             workspace.handle_action(&WorkspaceAction::SendFeedback, ctx);
         });
-    } else {
+    } _ => {
         ctx.open_url(&crate::util::links::feedback_form_url());
-    }
+    }}
 }
 
 /// Creates a new window with the transferred pane group.
@@ -644,13 +644,13 @@ pub fn create_transferred_window(
     let pane_group_id = transferred_tab.pane_group.id();
     ctx.transfer_view_tree_to_window(pane_group_id, source_window_id, new_window_id);
 
-    if let Some(new_workspace) = WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx) {
+    match WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx) { Some(new_workspace) => {
         new_workspace.update(ctx, |workspace, ctx| {
             workspace.adopt_transferred_pane_group(transferred_tab.pane_group.clone(), ctx);
         });
-    } else {
+    } _ => {
         log::warn!("Failed to find workspace in newly created window {new_window_id:?}");
-    }
+    }}
     new_window_id
 }
 
@@ -1855,7 +1855,7 @@ impl RootView {
         ctx: &mut ViewContext<Self>,
     ) {
         if let Ok(UpdateReady::Yes {
-            ref new_version, ..
+            new_version, ..
         }) = result
         {
             log::info!("Update ready for channel version {new_version:?}");
@@ -3479,12 +3479,12 @@ impl AuthOnboardingState {
 
         // If we didn't transition to Onboarding, set the Terminal state.
         match self {
-            AuthOnboardingState::Auth(ref args)
-            | AuthOnboardingState::ConfirmIncomingAuth(ref args) => {
+            &mut AuthOnboardingState::Auth(ref args)
+            | &mut AuthOnboardingState::ConfirmIncomingAuth(ref args) => {
                 let workspace = args.clone().create_workspace(ctx);
                 *self = AuthOnboardingState::Terminal(workspace);
             }
-            AuthOnboardingState::LoginSlide { ref target, .. } => {
+            &mut AuthOnboardingState::LoginSlide { ref target, .. } => {
                 let workspace = target.to_workspace(ctx);
                 *self = AuthOnboardingState::Terminal(workspace);
             }

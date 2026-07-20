@@ -1056,7 +1056,7 @@ impl View for LoginSlideView {
         let mut stack = Stack::new();
 
         // Background (same as onboarding parent)
-        if let Some(img) = theme.background_image() {
+        match theme.background_image() { Some(img) => {
             stack.add_child(
                 Shrinkable::new(
                     1.,
@@ -1072,13 +1072,13 @@ impl View for LoginSlideView {
                     .with_background(theme.background().with_opacity(overlay_opacity))
                     .finish(),
             );
-        } else {
+        } _ => {
             stack.add_child(
                 Container::new(warpui::elements::Empty::new().finish())
                     .with_background(theme.background())
                     .finish(),
             );
-        }
+        }}
 
         // Two-column slide layout
         // static_left calls the left closure twice (narrow + wide). We use a

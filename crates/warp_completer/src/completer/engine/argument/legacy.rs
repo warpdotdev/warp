@@ -623,7 +623,7 @@ async fn generate_suggestions_for_argument_type(
     matcher: MatchStrategy,
     dynamic_completion_data: Option<&DynamicCompletionData>,
     ctx: &dyn CompletionContext,
-) -> impl IntoIterator<Item = MatchedSuggestion> {
+) -> impl IntoIterator<Item = MatchedSuggestion> + use<> {
     match argument_type {
         ArgumentType::Suggestion(suggestion) => {
             let warp_suggestion: Suggestion = suggestion.clone().into();

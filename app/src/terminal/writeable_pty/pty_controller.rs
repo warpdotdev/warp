@@ -424,7 +424,7 @@ impl<T: EventLoopSender> PtyController<T> {
             // reduces the amount of reformatting that Fish tries to do and so improves
             // bootstrap speed. We need to add an explicit leading space, since Fish
             // automatically trims the input when performing a bracketed paste.
-            if let Some(file) = create_bootstrap_file(&bootstrap, shell_type, wsl_distribution) {
+            match create_bootstrap_file(&bootstrap, shell_type, wsl_distribution) { Some(file) => {
                 if let Some(path) = file.path_as_bytes() {
                     self.source_bootstrap_script(path, shell_type, ctx);
                 } else {
@@ -433,13 +433,13 @@ impl<T: EventLoopSender> PtyController<T> {
                 }
 
                 self.bootstrap_file = Some(file);
-            } else {
+            } _ => {
                 self.write_bytes(&b" "[..], ctx);
                 self.write_bytes(escape_sequences::BRACKETED_PASTE_START, ctx);
                 self.write_bytes(bootstrap, ctx);
                 self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);
                 self.write_terminating_bootstrap_bytes(ctx);
-            }
+            }}
         } else if bootstrap::is_container_subshell(pending_session_info) {
             // Write in 4KB chunks with 50ms delays to avoid overwhelming
             // PTY buffers in container exec sessions (podman/docker exec -it),

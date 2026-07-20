@@ -1525,7 +1525,7 @@ where
         }
 
         macro_rules! configure_charset {
-            ($charset:path, $intermediates:expr) => {{
+            ($charset:path, $intermediates:expr_2021) => {{
                 let index: CharsetIndex = match $intermediates {
                     [b'('] => CharsetIndex::G0,
                     [b')'] => CharsetIndex::G1,

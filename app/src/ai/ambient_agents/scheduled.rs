@@ -141,7 +141,7 @@ impl ScheduledAgentManager {
         &self,
         schedule_id: SyncId,
         app: &AppContext,
-    ) -> impl warpui::r#async::Spawnable<Output = anyhow::Result<Option<ScheduledAgentHistory>>>
+    ) -> impl warpui::r#async::Spawnable<Output = anyhow::Result<Option<ScheduledAgentHistory>>> + use<>
     {
         let ai_client = ServerApiProvider::as_ref(app).get_ai_client();
 
@@ -202,7 +202,7 @@ impl ScheduledAgentManager {
         config: ScheduledAmbientAgent,
         owner: Owner,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<SyncId>> + Send + 'static {
+    ) -> impl Future<Output = anyhow::Result<SyncId>> + Send + 'static + use<> {
         let client_id = ClientId::default();
         let create_future = UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
             update_manager.create_scheduled_ambient_agent_online(config, client_id, owner, ctx)
@@ -217,7 +217,7 @@ impl ScheduledAgentManager {
         error_message: &'static str,
         modifier: F,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<F>
     where
         F: FnOnce(&mut ScheduledAmbientAgent) + Send + 'static,
     {
@@ -256,7 +256,7 @@ impl ScheduledAgentManager {
         &mut self,
         schedule_id: SyncId,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
         self.modify_schedule(
             schedule_id,
             "Failed to pause schedule",
@@ -270,7 +270,7 @@ impl ScheduledAgentManager {
         &mut self,
         schedule_id: SyncId,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
         self.modify_schedule(
             schedule_id,
             "Failed to unpause schedule",
@@ -285,7 +285,7 @@ impl ScheduledAgentManager {
         schedule_id: SyncId,
         params: UpdateScheduleParams,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
         self.modify_schedule(
             schedule_id,
             "Failed to update schedule",
@@ -357,7 +357,7 @@ impl ScheduledAgentManager {
         &mut self,
         schedule_id: SyncId,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
         let id_and_type = CloudObjectTypeAndId::GenericStringObject {
             object_type: GenericStringObjectFormat::Json(JsonObjectType::ScheduledAmbientAgent),
             id: schedule_id,

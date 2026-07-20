@@ -955,14 +955,14 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
         };
         let results = self.render_results_only(should_reverse, horizontal_padding, app);
 
-        if let Some(banner) = self.banner_fn.as_ref().and_then(|f| f(app)) {
+        match self.banner_fn.as_ref().and_then(|f| f(app)) { Some(banner) => {
             Flex::column()
                 .with_child(banner)
                 .with_child(Expanded::new(1., results).finish())
                 .finish()
-        } else {
+        } _ => {
             results
-        }
+        }}
     }
 
     fn details_display_idx(&self) -> Option<usize> {
@@ -1019,11 +1019,11 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> View for InlineMenuView<A, T
         } else {
             let results_list = self.render_results_list(app);
 
-            if let Some((details_config, rendered_details)) = A::details_render_config(app).zip(
+            match A::details_render_config(app).zip(
                 self.details_display_idx()
                     .and_then(|idx| self.result_renderers.get(idx))
                     .and_then(|renderer| renderer.search_result.render_details(app)),
-            ) {
+            ) { Some((details_config, rendered_details)) => {
                 let mut split_view =
                     Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
@@ -1109,9 +1109,9 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> View for InlineMenuView<A, T
                     split_view.add_child(Expanded::new(1., laid_out_details).finish());
                     content = split_view.finish();
                 }
-            } else {
+            } _ => {
                 content = results_list;
-            }
+            }}
         }
 
         if self.compact_layout {

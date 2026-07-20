@@ -24,7 +24,7 @@ impl RepoDataSource {
         Self {}
     }
 
-    pub fn top_n(&self, limit: usize, app: &AppContext) -> impl Iterator<Item = RepoSearchItem> {
+    pub fn top_n(&self, limit: usize, app: &AppContext) -> impl Iterator<Item = RepoSearchItem> + use<> {
         PersistedWorkspace::as_ref(app)
             .workspaces()
             .filter(|cbm| cbm.path.is_dir())

@@ -326,7 +326,7 @@ impl OneTimeModalModel {
     /// modal is closed, or when it next closes if currently open. The future
     /// reads live modal state at poll time, so it can be created ahead of the
     /// modal opening.
-    pub fn wait_until_auto_handoff_sleep_modal_closed(&self) -> impl Future<Output = ()> {
+    pub fn wait_until_auto_handoff_sleep_modal_closed(&self) -> impl Future<Output = ()> + use<> {
         self.auto_handoff_sleep_modal_closed.wait()
     }
 

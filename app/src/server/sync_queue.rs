@@ -233,17 +233,17 @@ impl QueueItem {
     ) -> Vec<QueueItem> {
         objects
             .map(|object| {
-                if let Some(create_object_queue_item) = object.create_object_queue_item(
+                match object.create_object_queue_item(
                     CloudObjectEventEntrypoint::default(),
                     // InitiatedBy::User was added as a default value since we do not save the initiated_by values in the Sqlite cache.
                     // InitiatedBy::User is a safer default option because it will show toasts.
                     // In the future, if System events are common, we may want to save the initiated_by field in Sqlite.
                     InitiatedBy::User,
-                ) {
+                ) { Some(create_object_queue_item) => {
                     create_object_queue_item
-                } else {
+                } _ => {
                     object.update_object_queue_item(None)
-                }
+                }}
             })
             .collect::<Vec<_>>()
     }

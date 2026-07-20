@@ -1228,7 +1228,7 @@ impl UpdateManager {
     }
 
     /// Wait for an initial load to complete.
-    pub fn initial_load_complete(&self) -> impl Future<Output = ()> {
+    pub fn initial_load_complete(&self) -> impl Future<Output = ()> + use<> {
         // We're not using `async fn` here so that the returned Future doesn't borrow self.
         self.has_initial_load.wait()
     }
@@ -3228,7 +3228,7 @@ impl UpdateManager {
         client_id: ClientId,
         owner: Owner,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<ServerId>> {
+    ) -> impl Future<Output = anyhow::Result<ServerId>> + use<> {
         self.create_object_online(
             CloudAmbientAgentEnvironmentModel::new(ambient_agent_environment),
             owner,
@@ -3247,7 +3247,7 @@ impl UpdateManager {
         client_id: ClientId,
         owner: Owner,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<ServerId>> {
+    ) -> impl Future<Output = anyhow::Result<ServerId>> + use<> {
         self.create_object_online(
             CloudScheduledAmbientAgentModel::new(scheduled_ambient_agent),
             owner,
@@ -3266,7 +3266,7 @@ impl UpdateManager {
         scheduled_ambient_agent_id: SyncId,
         revision_ts: Option<Revision>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> {
+    ) -> impl Future<Output = anyhow::Result<()>> + use<> {
         self.update_object_online(
             CloudScheduledAmbientAgentModel::new(scheduled_ambient_agent),
             scheduled_ambient_agent_id,
@@ -3687,7 +3687,7 @@ impl UpdateManager {
         force_expand: bool,
         initial_folder_id: Option<SyncId>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<ServerId>>
+    ) -> impl Future<Output = anyhow::Result<ServerId>> + use<K, M>
     where
         K: HashableId
             + ToServerId
@@ -3812,7 +3812,7 @@ impl UpdateManager {
         object_id: SyncId,
         revision_ts: Option<Revision>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>>
+    ) -> impl Future<Output = anyhow::Result<()>> + use<K, M>
     where
         K: HashableId
             + ToServerId

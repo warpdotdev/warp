@@ -1876,7 +1876,7 @@ impl CodeEditorModel {
         &self,
         config: &SearchConfig,
         ctx: &AppContext,
-    ) -> anyhow::Result<impl Future<Output = SearchResults>> {
+    ) -> anyhow::Result<impl Future<Output = SearchResults> + use<>> {
         let buffer = self.content().as_ref(ctx);
         let search_future = buffer.search(buffer.prepare_search(config)?);
 
@@ -2820,16 +2820,15 @@ impl CodeEditorModel {
         let new_selections = current_selections.mapped(|selection| {
             let start_offset = selection.head;
 
-            let end_offset = if let Ok(boundaries) =
-                vim_word_iterator_from_offset(start_offset, buffer, direction, bound, word_type)
-            {
+            let end_offset = match vim_word_iterator_from_offset(start_offset, buffer, direction, bound, word_type)
+            { Ok(boundaries) => {
                 boundaries
                     .take(word_count as usize)
                     .last()
                     .unwrap_or(start_offset)
-            } else {
+            } _ => {
                 start_offset
-            };
+            }};
 
             SelectionOffsets {
                 head: end_offset,
@@ -2923,9 +2922,8 @@ impl CodeEditorModel {
         let current_selections = selection_model.selection_offsets();
         let new_selections = current_selections.mapped(|selection| {
             let start_offset = selection.head;
-            let (cursor_position, selection_start) = if let Ok(boundaries) =
-                vim_word_iterator_from_offset(start_offset, buffer, *direction, *bound, *word_type)
-            {
+            let (cursor_position, selection_start) = match vim_word_iterator_from_offset(start_offset, buffer, *direction, *bound, *word_type)
+            { Ok(boundaries) => {
                 let mut target_pos = boundaries
                     .take(word_count as usize)
                     .last()
@@ -2965,9 +2963,9 @@ impl CodeEditorModel {
                         (target_pos, actual_start)
                     }
                 }
-            } else {
+            } _ => {
                 (start_offset, start_offset)
-            };
+            }};
 
             SelectionOffsets {
                 head: cursor_position,

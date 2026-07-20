@@ -260,15 +260,15 @@ impl Voltron {
     }
 
     fn placeholder(&mut self, ctx: &mut ViewContext<Self>) -> Option<&'static str> {
-        if let Some(current_feature) = self.current_feature() {
+        match self.current_feature() { Some(current_feature) => {
             Some(match current_feature.feature_view_handle {
                 VoltronFeatureViewHandle::Workflows(view_handle) => {
                     view_handle.read(ctx, |view, _| view.editor_placeholder_text())
                 }
             })
-        } else {
+        } _ => {
             None
-        }
+        }}
     }
 
     fn load(&mut self, metadata: VoltronMetadata, ctx: &mut ViewContext<Self>) {
@@ -480,16 +480,16 @@ impl View for Voltron {
     /// Voltron by itself doesn't provide any a11y features. Instead it delegates it to the
     /// currently selected feature's a11y methods.
     fn accessibility_contents(&self, ctx: &AppContext) -> Option<AccessibilityContent> {
-        if let Some(current_feature) = self.current_feature() {
+        match self.current_feature() { Some(current_feature) => {
             // TODO create a delegate macro rather than having all those matches everywhere
             match current_feature.feature_view_handle {
                 VoltronFeatureViewHandle::Workflows(view_handle) => {
                     view_handle.as_ref(ctx).accessibility_contents(ctx)
                 }
             }
-        } else {
+        } _ => {
             None
-        }
+        }}
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {

@@ -538,7 +538,7 @@ impl SharingDialog {
                     }
                 }
             }
-            Some(ShareableObject::Session { ref handle, .. }) => {
+            Some(ShareableObject::Session { handle, .. }) => {
                 // Sharer always has Full access.
                 if handle.upgrade(app).is_some_and(|handle| {
                     handle

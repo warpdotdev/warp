@@ -118,7 +118,7 @@ impl MenuItemData {
 /// We hand Cocoa a void* which is really an unwrapped Box<Rc<MenuItemData>>.
 /// The NSMenuItem logically holds a reference count on this Rc, which is balanced in our dealloc callback below.
 /// The following functions are invoked from Cocoa.
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_menu_item_needs_update(item: id, ctx: *mut c_void) {
     let ctx = MenuItemData::read_context(ctx);
     let props: MenuItemProperties = ctx.props.borrow().clone();
@@ -142,20 +142,20 @@ extern "C-unwind" fn warp_menu_item_needs_update(item: id, ctx: *mut c_void) {
     unsafe { apply_changes(updated_properties, item) };
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_menu_item_triggered(_item: id, ctx: *mut c_void) {
     let func = &MenuItemData::read_context(ctx).triggered;
     callback_dispatcher().menu_item_triggered(func);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_menu_item_deallocated(ctx: *mut c_void) {
     MenuItemData::consume_context(ctx)
 }
 
 // Declarations of functions implemented in ObjC files.
 // These signatures must be manually synced - there's no type checking here.
-extern "C" {
+unsafe extern "C" {
     fn make_delegated_menu(title: id) -> id;
     fn make_warp_custom_menu_item(ctx: *mut c_void) -> id;
     fn set_menu_item_submenu(item: id, submenu: id);
@@ -319,16 +319,16 @@ unsafe fn apply_changes(changes: MenuItemPropertyChanges, item: id) {
     });
 }
 
-unsafe fn make_submenu(menu_items: Vec<MenuItem>) -> id {
+unsafe fn make_submenu(menu_items: Vec<MenuItem>) -> id { unsafe {
     let nsmenu = make_delegated_menu(ns_string!("") as *const NSString as id);
     let nsmenu_ref = &*nsmenu.cast::<NSMenu>();
     for menu_item in menu_items {
         nsmenu_ref.addItem(&*make_menu_item(menu_item).cast::<NSMenuItem>());
     }
     nsmenu
-}
+}}
 
-unsafe fn make_menu_item(menu_item: MenuItem) -> id {
+unsafe fn make_menu_item(menu_item: MenuItem) -> id { unsafe {
     match menu_item {
         MenuItem::Custom(custom_menu_item) => {
             let props = custom_menu_item.properties;
@@ -367,11 +367,11 @@ unsafe fn make_menu_item(menu_item: MenuItem) -> id {
         }
         MenuItem::Services => make_services_menu_item(),
     }
-}
+}}
 
 /// \return an autoreleased NSMenuItem with a submenu represented by \p menu.
 // This supports creating the top-level menu bar.
-unsafe fn make_top_level_menu_item(menu: Menu) -> id {
+unsafe fn make_top_level_menu_item(menu: Menu) -> id { unsafe {
     let mtm = MainThreadMarker::new_unchecked();
     let nsmenu = make_delegated_menu(Retained::as_ptr(&NSString::from_str(&menu.title)) as id);
     let nsmenu = &*nsmenu.cast::<NSMenu>();
@@ -389,27 +389,27 @@ unsafe fn make_top_level_menu_item(menu: Menu) -> id {
     let menuitem = NSMenuItem::new(mtm);
     menuitem.setSubmenu(Some(nsmenu));
     Retained::autorelease_ptr(menuitem) as id
-}
+}}
 
 /// \return an NSMenu representing the given menu bar.
-pub unsafe fn make_main_menu(menubar: MenuBar) -> Retained<NSMenu> {
+pub unsafe fn make_main_menu(menubar: MenuBar) -> Retained<NSMenu> { unsafe {
     let mtm = MainThreadMarker::new_unchecked();
     let main_menu = NSMenu::new(mtm);
     for menu in menubar.menus {
         main_menu.addItem(&*make_top_level_menu_item(menu).cast::<NSMenuItem>());
     }
     main_menu
-}
+}}
 
 /// \return an NSMenu representing the given dock menu.
-pub unsafe fn make_dock_menu(menu: Menu) -> Retained<NSMenu> {
+pub unsafe fn make_dock_menu(menu: Menu) -> Retained<NSMenu> { unsafe {
     let mtm = MainThreadMarker::new_unchecked();
     let dock_menu = NSMenu::new(mtm);
     for item in menu.menu_items {
         dock_menu.addItem(&*make_menu_item(item).cast::<NSMenuItem>());
     }
     dock_menu
-}
+}}
 
 #[cfg(test)]
 #[path = "menus_tests.rs"]

@@ -255,13 +255,16 @@ fn invalid_env_run_id_returns_clear_error() {
 #[test]
 fn load_env_run_id_reads_variable() {
     let previous = env::var_os(OZ_RUN_ID_ENV_VAR);
-    env::set_var(OZ_RUN_ID_ENV_VAR, "550e8400-e29b-41d4-a716-446655440000");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { env::set_var(OZ_RUN_ID_ENV_VAR, "550e8400-e29b-41d4-a716-446655440000") };
 
     let loaded = load_env_run_id().unwrap();
 
     match previous {
-        Some(value) => env::set_var(OZ_RUN_ID_ENV_VAR, value),
-        None => env::remove_var(OZ_RUN_ID_ENV_VAR),
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(value) => unsafe { env::set_var(OZ_RUN_ID_ENV_VAR, value) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { env::remove_var(OZ_RUN_ID_ENV_VAR) },
     }
 
     assert_eq!(

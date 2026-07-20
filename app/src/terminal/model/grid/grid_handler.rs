@@ -559,7 +559,7 @@ impl GridHandler {
         )
     }
 
-    pub(in crate::terminal::model) fn ansi_handler(&mut self) -> &mut impl ansi::Handler {
+    pub(in crate::terminal::model) fn ansi_handler(&mut self) -> &mut (impl ansi::Handler + use<>) {
         self
     }
 

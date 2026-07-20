@@ -715,7 +715,7 @@ impl DriveIndex {
         }
     }
 
-    pub fn has_initialized_sections(&self) -> impl Future<Output = ()> {
+    pub fn has_initialized_sections(&self) -> impl Future<Output = ()> + use<> {
         // We're not using `async fn` here so that the returned Future doesn't borrow self.
         self.has_initialized_sections.wait()
     }
@@ -2264,7 +2264,7 @@ impl DriveIndex {
         appearance: &Appearance,
         cloud_model: &CloudModel,
         app: &AppContext,
-    ) -> Option<impl Iterator<Item = Box<dyn Element>>> {
+    ) -> Option<impl Iterator<Item = Box<dyn Element>> + use<>> {
         let mut rendered_space = vec![];
 
         // Do not render "Create team" or "Join team" sections in the trash index
@@ -2417,7 +2417,7 @@ impl DriveIndex {
         .finish()
     }
 
-    fn render_all_sections(&self, app: &AppContext) -> impl Iterator<Item = Box<dyn Element>> {
+    fn render_all_sections(&self, app: &AppContext) -> impl Iterator<Item = Box<dyn Element>> + use<> {
         let appearance = Appearance::as_ref(app);
         let cloud_model = CloudModel::as_ref(app);
 
@@ -5112,10 +5112,10 @@ impl View for DriveIndex {
         )
         .finish();
 
-        let index_content = if let (true, Some(personal_object_limit_card)) = (
+        let index_content = match (
             self.should_show_personal_object_limit_status,
             self.render_personal_limit_status(appearance, app),
-        ) {
+        ) { (true, Some(personal_object_limit_card)) => {
             // Render column with a spacer to ensure the tip appears at the bottom of drive
             let col = Flex::column()
                 .with_child(index)
@@ -5134,9 +5134,9 @@ impl View for DriveIndex {
                 ),
             );
             stack.finish()
-        } else {
+        } _ => {
             index
-        };
+        }};
 
         let mut drive = Flex::column();
 

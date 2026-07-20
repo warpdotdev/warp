@@ -2226,12 +2226,12 @@ impl View for GlobalSearchView {
         if should_render_pre_search_zero_state {
             body =
                 body.with_child(Shrinkable::new(1.0, self.render_pre_search_state(app)).finish());
-        } else if let Some(results) = self.render_results(app) {
+        } else { match self.render_results(app) { Some(results) => {
             let results_section = Container::new(results)
                 .with_horizontal_padding(12.)
                 .finish();
             body = body.with_child(Shrinkable::new(1.0, results_section).finish());
-        }
+        } _ => {}}}
 
         let has_results = !self.directory_entries.is_empty();
 

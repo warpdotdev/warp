@@ -43,7 +43,7 @@ pub unsafe fn from_native(
     native_event: id,
     window_height: Option<f32>,
     is_first_mouse: bool,
-) -> Option<Event> {
+) -> Option<Event> { unsafe {
     let native_event = &*native_event.cast::<NSEvent>();
     let event_type = native_event.r#type();
 
@@ -248,4 +248,4 @@ pub unsafe fn from_native(
         }),
         _ => None,
     }
-}
+}}

@@ -169,9 +169,9 @@ impl<T: Item> SumTree<T> {
                 for tree in other_node.child_trees() {
                     self.push_tree(tree.clone());
                 }
-            } else if let Some(split_tree) = self.push_tree_recursive(other) {
+            } else { match self.push_tree_recursive(other) { Some(split_tree) => {
                 *self = Self::from_child_trees(vec![self.clone(), split_tree]);
-            }
+            } _ => {}}}
         }
     }
 

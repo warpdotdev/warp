@@ -524,7 +524,7 @@ impl BlockHeight {
 /// Delegate for `BlockList` that delegates the method to either the early output
 /// model (if between blocks) or the active block
 macro_rules! delegate {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         if $self.is_early_output() {
             EarlyOutput::handler($self).$method($( $arg ),*)
         } else {
@@ -537,7 +537,7 @@ macro_rules! delegate {
 /// block and optionally updates block heights if the active block's height was changed by the
 /// method.
 macro_rules! delegate_to_block {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         $self.active_block_mut().$method($( $arg ),*)
     };
 }
@@ -2626,7 +2626,7 @@ impl BlockList {
     pub fn possible_file_paths_at_point(
         &self,
         point: WithinBlock<Point>,
-    ) -> impl Iterator<Item = WithinBlock<PossiblePath>> {
+    ) -> impl Iterator<Item = WithinBlock<PossiblePath>> + use<> {
         let block_grid = if point.is_in_command_content() {
             self.blocks[point.block_index.0].prompt_and_command_grid()
         } else {

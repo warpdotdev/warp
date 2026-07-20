@@ -204,7 +204,7 @@ impl StandardizedPath {
 
     /// Returns an iterator over the ancestors of this path, starting with
     /// the path itself and ending at the root.
-    pub fn ancestors(&self) -> impl Iterator<Item = StandardizedPath> {
+    pub fn ancestors(&self) -> impl Iterator<Item = StandardizedPath> + use<> {
         let mut current = Some(self.clone());
         std::iter::from_fn(move || {
             let path = current.take()?;

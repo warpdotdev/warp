@@ -2459,7 +2459,7 @@ impl PaneGroup {
             pane.notebook_view(ctx).as_ref(ctx).selected_text(ctx)
         } else if let Some(pane) = self.downcast_pane_by_id::<AIDocumentPane>(focused_pane_id) {
             pane.document_view(ctx).as_ref(ctx).selected_text(ctx)
-        } else if let Some(terminal_view) = self.terminal_view_from_pane_id(focused_pane_id, ctx) {
+        } else { match self.terminal_view_from_pane_id(focused_pane_id, ctx) { Some(terminal_view) => {
             // NOTE: We currently don't have a way to track recency of selection events.
             // In lieu of this, we prefer selections to the input editor over the terminal view.
             // TODO(vkodithala): Once we have a way to track recency of selection events, we should use that instead.
@@ -2467,9 +2467,9 @@ impl PaneGroup {
                 .as_ref(ctx)
                 .selected_text_from_input(ctx)
                 .or_else(|| terminal_view.as_ref(ctx).selected_text(ctx))
-        } else {
+        } _ => {
             None
-        };
+        }}};
 
         text.filter(|text: &String| !text.is_empty())
     }
@@ -5169,14 +5169,14 @@ impl PaneGroup {
     fn close_active_pane_with_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
         if self.focused_pane_id(ctx).is_code_pane() {
             // If focused on a CodePane, close its active editor tab (optionally, the entire pane if it only has 1 tab).
-            if let Some(code_view) = self.code_view_from_pane_id(self.focused_pane_id(ctx), ctx) {
+            match self.code_view_from_pane_id(self.focused_pane_id(ctx), ctx) { Some(code_view) => {
                 code_view.update(ctx, |view, ctx| {
                     let index = view.active_tab_index();
                     view.handle_action(&CodeViewAction::RemoveTabAtIndex { index }, ctx);
                 });
-            } else {
+            } _ => {
                 self.close_pane_with_confirmation(self.focused_pane_id(ctx), ctx);
-            }
+            }}
         } else {
             self.close_pane_with_confirmation(self.focused_pane_id(ctx), ctx);
         }
@@ -5790,11 +5790,11 @@ impl PaneGroup {
             .pane_contents
             .keys()
             .find(|id| {
-                if let Some(terminal_view) = self.terminal_view_from_pane_id(**id, ctx) {
+                match self.terminal_view_from_pane_id(**id, ctx) { Some(terminal_view) => {
                     terminal_view_id == terminal_view.id()
-                } else {
+                } _ => {
                     false
-                }
+                }}
             })
             .cloned();
 
@@ -6104,11 +6104,11 @@ impl PaneGroup {
         // events so a follow-up run (which spawns a fresh VM after the previous one ends)
         // re-attaches the viewer to the new execution session. `create_cloud_mode_view`
         // does this for the compose path; shared-session viewers need it too.
-        if let Some(view_model) = terminal_view
+        match terminal_view
             .as_ref(ctx)
             .ambient_agent_view_model()
             .cloned()
-        {
+        { Some(view_model) => {
             // Upfront ambient viewer (attach-to-running / restore): the model already
             // exists at construction, so wire it immediately.
             crate::terminal::view::ambient_agent::wire_ambient_agent_session_events(
@@ -6116,7 +6116,7 @@ impl PaneGroup {
                 &view_model,
                 ctx,
             );
-        } else if enable_orchestration_polling {
+        } _ => if enable_orchestration_polling {
             // Link-join viewer: the model is created lazily at `SessionJoined` (see
             // `TerminalView::begin_viewing_ambient_session`), so wire it once it exists.
             // Gate on `enable_orchestration_polling` to mirror the `SessionJoined` model-
@@ -6147,7 +6147,7 @@ impl PaneGroup {
                     ctx,
                 );
             });
-        }
+        }}
 
         (terminal_view, terminal_manager)
     }
@@ -7973,12 +7973,12 @@ impl TypedActionView for PaneGroup {
         match action {
             Add(direction) => {
                 let chosen_shell = {
-                    if let Some(model) = self.active_session_terminal_model(ctx) {
+                    match self.active_session_terminal_model(ctx) { Some(model) => {
                         let model = model.lock();
                         model.shell_launch_state().available_shell()
-                    } else {
+                    } _ => {
                         None
-                    }
+                    }}
                 };
                 self.add_terminal_pane(*direction, chosen_shell, ctx);
             }

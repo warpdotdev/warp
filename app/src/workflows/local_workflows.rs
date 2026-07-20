@@ -96,7 +96,7 @@ impl LocalWorkflows {
         &mut self,
         working_directory: &Path,
         use_cache: UseCache,
-    ) -> impl Iterator<Item = &Workflow> {
+    ) -> impl Iterator<Item = &Workflow> + use<'_> {
         let has_cached_copy = self.project_workflows.contains_key(working_directory);
         if !has_cached_copy || use_cache == UseCache::No {
             let repo_workflows = load_project_workflows(working_directory);

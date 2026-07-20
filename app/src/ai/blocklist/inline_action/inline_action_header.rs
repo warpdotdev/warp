@@ -324,16 +324,16 @@ impl HeaderConfig {
             };
 
             // Wrap in EventHandler to allow right-click event propagation
-            if let Some(right_click_callback) = expansion_config.on_right_click.clone() {
+            match expansion_config.on_right_click.clone() { Some(right_click_callback) => {
                 return EventHandler::new(element)
                     .on_right_mouse_down(move |ctx, _, _| {
                         right_click_callback(ctx);
                         DispatchEventResult::PropagateToParent
                     })
                     .finish();
-            } else {
+            } _ => {
                 return element;
-            }
+            }}
         } else if let Some(InteractionMode::RightClickable(right_click_config)) =
             &self.interaction_mode
         {
@@ -353,7 +353,7 @@ impl HeaderConfig {
     }
 
     pub fn render(self, app: &AppContext) -> Box<dyn Element> {
-        if let Some(interaction_mode) = self.interaction_mode.clone() {
+        match self.interaction_mode.clone() { Some(interaction_mode) => {
             let appearance: &Appearance = Appearance::as_ref(app);
             match interaction_mode {
                 InteractionMode::ActionButtons {
@@ -396,8 +396,8 @@ impl HeaderConfig {
                 }
                 InteractionMode::RightClickable(_) => self.render_header(app, None),
             }
-        } else {
+        } _ => {
             self.render_header(app, None)
-        }
+        }}
     }
 }

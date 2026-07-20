@@ -42,7 +42,8 @@ fn local_claude_child_prompt_includes_oz_cli_messaging_instructions() {
 impl EnvVarGuard {
     fn set(key: &'static str, value: impl Into<OsString>) -> Self {
         let original = std::env::var_os(key);
-        std::env::set_var(key, value.into());
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(key, value.into()) };
         Self { key, original }
     }
 }
@@ -50,9 +51,11 @@ impl EnvVarGuard {
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         if let Some(original) = &self.original {
-            std::env::set_var(self.key, original);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(self.key, original) };
         } else {
-            std::env::remove_var(self.key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(self.key) };
         }
     }
 }

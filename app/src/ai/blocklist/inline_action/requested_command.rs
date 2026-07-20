@@ -1106,13 +1106,13 @@ impl RequestedCommandView {
     pub fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
         // Clear MCP content selection if it exists, else fall back to editor selection.
         self.mcp_content_selection_handle.clear();
-        if let Ok(mut mcp_selection) = self.mcp_content_selected_text.write() {
+        match self.mcp_content_selected_text.write() { Ok(mut mcp_selection) => {
             *mcp_selection = None;
-        } else if let Some(editor) = &self.editor {
+        } _ => if let Some(editor) = &self.editor {
             editor.update(ctx, |editor, ctx| {
                 editor.clear_selection(ctx);
             });
-        }
+        }}
     }
 
     /// Stores the structured MCP tool request data for JSON tree rendering.

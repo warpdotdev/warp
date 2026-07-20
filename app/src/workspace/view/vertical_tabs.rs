@@ -3307,25 +3307,25 @@ fn resolve_icon_with_status_variant(
         TypedPane::Terminal(terminal_pane) => {
             let terminal_view = terminal_pane.terminal_view(app);
             let terminal_view = terminal_view.as_ref(app);
-            if let Some(variant) = terminal_view_agent_icon_variant(terminal_view, app) {
+            match terminal_view_agent_icon_variant(terminal_view, app) { Some(variant) => {
                 variant
-            } else {
+            } _ => {
                 // Plain terminal: use foreground color per design spec
                 IconWithStatusVariant::Neutral {
                     icon: WarpIcon::Terminal,
                     icon_color: main_text,
                 }
-            }
+            }}
         }
         TypedPane::Code(_) => {
-            if let Some(icon_element) = icon_from_file_path(title, appearance) {
+            match icon_from_file_path(title, appearance) { Some(icon_element) => {
                 IconWithStatusVariant::NeutralElement { icon_element }
-            } else {
+            } _ => {
                 IconWithStatusVariant::Neutral {
                     icon: WarpIcon::Code2,
                     icon_color: sub_text,
                 }
-            }
+            }}
         }
         // Settings and environment management use the foreground color per design spec
         TypedPane::Settings | TypedPane::EnvironmentManagement => IconWithStatusVariant::Neutral {
@@ -4640,16 +4640,16 @@ fn render_summary_tab_item(
     let mut title_region = Flex::column()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Start);
-    if let Some(title_override) = render_title_override(
+    match render_title_override(
         &props,
         12.,
         main_text_color,
         ClipConfig::end(),
         appearance,
         app,
-    ) {
+    ) { Some(title_override) => {
         title_region.add_child(title_override);
-    } else if summary.primary_labels.is_empty() {
+    } _ => if summary.primary_labels.is_empty() {
         title_region.add_child(render_text_line(
             &props.title,
             main_text_color,
@@ -4693,7 +4693,7 @@ fn render_summary_tab_item(
                 .finish(),
             );
         }
-    }
+    }}
     let title_region = title_region.finish();
     if summary.has_unread_activity {
         text_col.add_child(
@@ -5119,11 +5119,11 @@ fn render_summary_branch_line(
     // Prefer the clickable PR badge (opens the PR in the browser) when we have both
     // the URL and a persistent hover handle for it; fall back to the passive badge
     // (label only) so the chip still renders even if either is missing.
-    if let (Some(pull_request_label), Some(pull_request_url), Some(mouse_state)) = (
+    match (
         entry.pull_request_label.as_ref(),
         entry.pull_request_url.as_ref(),
         pr_badge_mouse_state,
-    ) {
+    ) { (Some(pull_request_label), Some(pull_request_url), Some(mouse_state)) => {
         right_badges.add_child(render_terminal_pull_request_badge(
             pull_request_label.clone(),
             pull_request_url.clone(),
@@ -5132,13 +5132,13 @@ fn render_summary_branch_line(
             appearance,
         ));
         has_right_badges = true;
-    } else if let Some(pull_request_label) = &entry.pull_request_label {
+    } _ => if let Some(pull_request_label) = &entry.pull_request_label {
         right_badges.add_child(render_passive_terminal_pull_request_badge(
             pull_request_label,
             appearance,
         ));
         has_right_badges = true;
-    }
+    }}
     if has_right_badges {
         row.add_child(
             Container::new(right_badges.finish())
@@ -5532,7 +5532,7 @@ fn compute_tab_group_color_mode(
     let per_pane: HashMap<PaneId, Option<AnsiColorIdentifier>> = visible_pane_ids
         .iter()
         .map(|&pane_id| {
-            let color = if let Some(tv) = pane_group.terminal_view_from_pane_id(pane_id, app) {
+            let color = match pane_group.terminal_view_from_pane_id(pane_id, app) { Some(tv) => {
                 // Terminal pane: determine color from CWD.
                 tv.as_ref(app)
                     .canonical_session_pwd_if_local(app)
@@ -5541,7 +5541,7 @@ fn compute_tab_group_color_mode(
                             .color_for_directory(cwd.as_path())
                             .and_then(|c| c.ansi_color())
                     })
-            } else if let Some(code_view) = pane_group.code_view_from_pane_id(pane_id, app) {
+            } _ => { match pane_group.code_view_from_pane_id(pane_id, app) { Some(code_view) => {
                 // Code pane: determine color from the open file path using longest-prefix
                 // matching against configured directories, so e.g. warp-internal/code.rs
                 // inherits the color assigned to warp-internal.
@@ -5556,11 +5556,11 @@ fn compute_tab_group_color_mode(
                             .color_for_directory(&file_path)
                             .and_then(|c| c.ansi_color())
                     })
-            } else {
+            } _ => {
                 // Other non-terminal panes (notebook, workflow, etc.): fall back to the
                 // cached directory color from the tab's last active terminal.
                 tab.default_directory_color
-            };
+            }}}};
             (pane_id, color)
         })
         .collect();

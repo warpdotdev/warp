@@ -83,7 +83,7 @@ const RECONNECT_RETRY_STRATEGY: RetryOption = RetryOption::exponential(
 .with_jitter(0.2);
 
 macro_rules! sharer_info {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         log::info!(
             "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
@@ -95,7 +95,7 @@ macro_rules! sharer_info {
 }
 
 macro_rules! sharer_warn {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         log::warn!(
             "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
@@ -107,7 +107,7 @@ macro_rules! sharer_warn {
 }
 
 macro_rules! sharer_error {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         warp_errors::report_error!(
             anyhow::anyhow!("{}", format_args!($($arg)+)),

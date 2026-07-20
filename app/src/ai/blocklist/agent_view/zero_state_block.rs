@@ -715,8 +715,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
     if origin.is_cloud_agent() {
         return vec![];
     }
-    let mut body_items = if let Some(recent_conversations_section) =
-        render_recent_conversations_section(
+    let mut body_items = match render_recent_conversations_section(
             RecentConversationProps {
                 recent_conversations,
                 active_session,
@@ -724,9 +723,9 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
                 state_handles,
             },
             app,
-        ) {
+        ) { Some(recent_conversations_section) => {
         vec![recent_conversations_section]
-    } else {
+    } _ => {
         let mut body_items = vec![
             render_standard_message(
                 Message::new(vec![MessageItem::clickable(
@@ -799,7 +798,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
         }
 
         body_items
-    };
+    }};
 
     if should_show_init_callout {
         let appearance = Appearance::as_ref(app);

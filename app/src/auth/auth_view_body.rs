@@ -807,11 +807,11 @@ impl AuthViewBody {
         let mut contents = vec![logo, header, hint];
 
         let auth_token = Container::new(
-            if let Some(auth_token_input) = self.render_auth_token_input(appearance) {
+            match self.render_auth_token_input(appearance) { Some(auth_token_input) => {
                 auth_token_input
-            } else {
+            } _ => {
                 self.render_auth_token_suggest(ui_builder)
-            },
+            }},
         )
         .with_margin_top(AUTH_MODAL_GAP)
         .finish();

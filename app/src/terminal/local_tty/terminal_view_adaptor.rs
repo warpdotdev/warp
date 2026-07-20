@@ -132,7 +132,7 @@ pub(crate) fn create_terminal_view_surface(
     ctx: &mut AppContext,
 ) -> TerminalSurfaceResult<
     TerminalView,
-    impl FnOnce(&mut TerminalManager<TerminalView>, &ViewHandle<TerminalView>, &mut AppContext),
+    impl FnOnce(&mut TerminalManager<TerminalView>, &ViewHandle<TerminalView>, &mut AppContext) + use<>,
 > {
     let TerminalSurfaceInit {
         wakeups_rx,

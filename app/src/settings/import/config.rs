@@ -208,11 +208,11 @@ impl Config {
                         |_| dark.clone(),
                     );
 
-                    if let (Some(light), Some(dark)) = (light_written, dark_written) {
+                    match (light_written, dark_written) { (Some(light), Some(dark)) => {
                         Some(ThemeType::LightAndDark { light, dark })
-                    } else {
+                    } _ => {
                         None
-                    }
+                    }}
                 }
                 ThemeType::Single(normal) => {
                     let theme_yaml_file_name = format!("{}_theme.yaml", self.terminal_name);

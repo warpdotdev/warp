@@ -990,9 +990,9 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                         AIAgentOutputMessageType::Subagent(SubagentCall {
                             subagent_type:
                                 SubagentType::ConversationSearch {
-                                    ref query,
-                                    ref conversation_id,
-                                    ref agent_run_id,
+                                    query,
+                                    conversation_id,
+                                    agent_run_id,
                                 },
                             task_id: subagent_task_id,
                         }) => {

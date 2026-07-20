@@ -1630,18 +1630,18 @@ impl BlocklistAIController {
                     "a subagent is currently active"
                 }
             );
-        } else if let Some((event_inputs, task_id)) = OrchestrationEventService::handle(ctx)
+        } else { match OrchestrationEventService::handle(ctx)
             .update(ctx, |svc, ctx| {
                 svc.drain_events_for_request(conversation_id, ctx)
             })
-        {
+        { Some((event_inputs, task_id)) => {
             has_piggybacked_events = true;
             request_input
                 .input_messages
                 .entry(task_id)
                 .or_default()
                 .extend(event_inputs);
-        }
+        } _ => {}}}
 
         let result = self.send_request_input(
             request_input,

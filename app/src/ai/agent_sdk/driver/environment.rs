@@ -59,7 +59,7 @@ pub fn prepare_environment(
     harness: Harness,
     setup_events: SetupClientEventReporter,
     ctx: &mut ModelContext<TerminalDriver>,
-) -> impl Future<Output = Result<(), PrepareEnvironmentError>> {
+) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
     async move {
         let source_repos = environment.effective_repos();

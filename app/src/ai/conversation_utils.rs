@@ -26,15 +26,15 @@ pub fn delete_conversation(
                 let server_api = server_api.clone();
                 model_ctx.spawn(
                     async move {
-                        if let Err(e) = server_api
+                        match server_api
                             .delete_ai_conversation(token.clone())
                             .await
                             .context("Failed to delete conversation from cloud")
-                        {
+                        { Err(e) => {
                             report_error!(e);
-                        } else {
+                        } _ => {
                             log::info!("Successfully deleted conversation from cloud: {token}");
-                        }
+                        }}
                     },
                     |_, _, _| {},
                 );

@@ -106,7 +106,7 @@ impl TryFrom<Experiment> for ServerExperiment {
 
 #[macro_export]
 macro_rules! convert_to_server_experiment {
-    ($gql_type:expr) => {{
+    ($gql_type:expr_2021) => {{
         let mut acc = Vec::new();
         for a in $gql_type {
             // Note for server experiments we don't currently track on the client.
