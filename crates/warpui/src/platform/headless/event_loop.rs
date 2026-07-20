@@ -7,11 +7,8 @@ use std::sync::mpsc::TryRecvError;
 use std::sync::mpsc::{self, Receiver, SendError};
 
 #[cfg(target_os = "macos")]
-use core_foundation::base::{TCFType, kCFAllocatorDefault};
-#[cfg(target_os = "macos")]
-use core_foundation::runloop::{
-    CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext, CFRunLoopSourceCreate,
-    CFRunLoopSourceSignal, CFRunLoopWakeUp, kCFRunLoopDefaultMode,
+use objc2_core_foundation::{
+    CFRetained, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext, kCFRunLoopDefaultMode,
 };
 
 use crate::platform::app::{
@@ -82,8 +79,8 @@ pub(super) fn channel() -> (EventSender, EventReceiver) {
 
 #[cfg(target_os = "macos")]
 struct RunLoopSignal {
-    run_loop: CFRunLoop,
-    source: CFRunLoopSource,
+    run_loop: CFRetained<CFRunLoop>,
+    source: CFRetained<CFRunLoopSource>,
 }
 
 #[cfg(target_os = "macos")]
@@ -92,7 +89,7 @@ impl RunLoopSignal {
         objc2::MainThreadMarker::new()
             .expect("the macOS headless event loop must run on the process main thread");
 
-        let run_loop = CFRunLoop::get_current();
+        let run_loop = CFRunLoop::current().expect("the current thread must have a run loop");
         let mut context = CFRunLoopSourceContext {
             version: 0,
             info: std::ptr::null_mut(),
@@ -103,30 +100,21 @@ impl RunLoopSignal {
             hash: None,
             schedule: None,
             cancel: None,
-            perform: stop_run_loop,
+            perform: Some(stop_run_loop),
         };
         // SAFETY: Core Foundation copies the context during this call. The context has no
         // associated data, and its callback does not access the context pointer.
-        let source = unsafe {
-            CFRunLoopSource::wrap_under_create_rule(CFRunLoopSourceCreate(
-                kCFAllocatorDefault,
-                0,
-                &mut context,
-            ))
-        };
+        let source = unsafe { CFRunLoopSource::new(None, 0, &mut context) }
+            .expect("Core Foundation should have successfully created the run-loop source");
         // SAFETY: The source and mode are valid for the lifetime of the headless event loop.
-        run_loop.add_source(&source, unsafe { kCFRunLoopDefaultMode });
+        run_loop.add_source(Some(&source), unsafe { kCFRunLoopDefaultMode });
 
         Self { run_loop, source }
     }
 
     fn signal(&self) {
-        // SAFETY: Signaling a run-loop source and waking its run loop are thread-safe Core
-        // Foundation operations. Both objects remain retained by this value.
-        unsafe {
-            CFRunLoopSourceSignal(self.source.as_concrete_TypeRef());
-            CFRunLoopWakeUp(self.run_loop.as_concrete_TypeRef());
-        }
+        self.source.signal();
+        self.run_loop.wake_up();
     }
 }
 
@@ -141,8 +129,10 @@ unsafe impl Send for RunLoopSignal {}
 unsafe impl Sync for RunLoopSignal {}
 
 #[cfg(target_os = "macos")]
-extern "C" fn stop_run_loop(_info: *const std::ffi::c_void) {
-    CFRunLoop::get_current().stop();
+unsafe extern "C-unwind" fn stop_run_loop(_info: *mut std::ffi::c_void) {
+    CFRunLoop::current()
+        .expect("the run-loop source callback should be running on a thread with a run loop")
+        .stop();
 }
 
 /// Run a simple, blocking event loop that processes AppEvent messages until termination.
@@ -163,7 +153,7 @@ pub(super) fn run(
     #[cfg(target_os = "macos")]
     {
         'event_loop: loop {
-            CFRunLoop::run_current();
+            CFRunLoop::run();
             loop {
                 match receiver.receiver.try_recv() {
                     Ok(event) => {

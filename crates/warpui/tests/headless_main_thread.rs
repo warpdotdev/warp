@@ -11,13 +11,12 @@ fn main() {
 
     #[cfg(target_os = "macos")]
     {
-        if let Some(exact_index) = args.iter().position(|arg| arg == "--exact") {
-            if args
+        if let Some(exact_index) = args.iter().position(|arg| arg == "--exact")
+            && args
                 .get(exact_index + 1)
                 .is_some_and(|name| name != TEST_NAME)
-            {
-                return;
-            }
+        {
+            return;
         }
         macos::services_main_dispatch_queue();
     }
