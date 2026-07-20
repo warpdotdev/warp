@@ -18318,8 +18318,10 @@ impl TerminalView {
                 .map(|(_, uri)| uri);
             if let Some(uri) = uri {
                 self.open_hyperlink_uri(&uri, ctx);
+                return;
             }
-            return;
+            // No OSC 8 hyperlink at the clicked cell: fall through to the `highlighted_link`
+            // handler below so a regex-detected URL still opens on Cmd/Ctrl+click.
         }
 
         let Some(link) = self.highlighted_link.as_ref() else {
