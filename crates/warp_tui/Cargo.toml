@@ -38,6 +38,7 @@ anyhow.workspace = true
 async-channel.workspace = true
 async-fs.workspace = true
 base64.workspace = true
+blocking.workspace = true
 channel_versions.workspace = true
 clap.workspace = true
 command.workspace = true
@@ -55,6 +56,7 @@ pathfinder_color.workspace = true
 pathfinder_geometry.workspace = true
 rangemap.workspace = true
 serde_json.workspace = true
+shell-words = "1.1.0"
 similar.workspace = true
 string-offset.workspace = true
 strum.workspace = true
@@ -64,7 +66,7 @@ tokio.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 vec1.workspace = true
-warp = { workspace = true, features = ["tui"] }
+warp = { workspace = true, features = ["image_as_context", "tui"] }
 warp_channel_config.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true

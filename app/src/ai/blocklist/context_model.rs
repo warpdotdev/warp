@@ -50,6 +50,14 @@ pub enum AttachmentType {
     File,
 }
 
+/// Lightweight metadata for rendering a pending attachment without cloning its payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingAttachmentSummary {
+    pub index: usize,
+    pub attachment_type: AttachmentType,
+    pub file_name: String,
+}
+
 /// A pending attachment — either an image (base64 in memory) or a file (path reference).
 #[derive(Clone, Debug)]
 pub enum PendingAttachment {
@@ -276,6 +284,19 @@ impl BlocklistAIContextModel {
     /// Returns all pending attachments (images and files) for the next query.
     pub fn pending_attachments(&self) -> &[PendingAttachment] {
         &self.pending_attachments
+    }
+
+    /// Returns lightweight metadata for all pending attachments.
+    pub fn pending_attachment_summaries(&self) -> Vec<PendingAttachmentSummary> {
+        self.pending_attachments
+            .iter()
+            .enumerate()
+            .map(|(index, attachment)| PendingAttachmentSummary {
+                index,
+                attachment_type: attachment.attachment_type(),
+                file_name: attachment.file_name().to_owned(),
+            })
+            .collect()
     }
 
     /// Returns only the pending images for the next query.
