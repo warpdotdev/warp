@@ -1,19 +1,19 @@
 //! Rich TUI rendering for messages received from orchestration participants.
 
 use warp::tui_export::{
-    orchestrator_agent_id_for_conversation, resolve_orchestration_participant, AIConversationId,
-    BlocklistAIHistoryModel, ConversationStatus, MessageId, OrchestrationParticipantKind,
-    ReceivedMessageDisplay,
+    AIConversationId, BlocklistAIHistoryModel, ConversationStatus, MessageId,
+    OrchestrationParticipantKind, ReceivedMessageDisplay, orchestrator_agent_id_for_conversation,
+    resolve_orchestration_participant,
 };
 use warpui::SingletonEntity;
-use warpui_core::elements::tui::{
-    tui_collapsible, Modifier, TuiContainer, TuiElement, TuiStyle, TuiText,
-};
 use warpui_core::AppContext;
+use warpui_core::elements::tui::{
+    Modifier, TuiContainer, TuiElement, TuiStyle, TuiText, tui_collapsible,
+};
 
 use crate::agent_block::{CollapsibleSectionStates, TuiAIBlockAction};
 use crate::orchestrated_agent_identity_styling::{
-    assign_agent_identity_indices, stable_hash, AgentIdentity,
+    AgentIdentity, assign_agent_identity_indices, stable_hash,
 };
 use crate::tui_builder::TuiUiBuilder;
 

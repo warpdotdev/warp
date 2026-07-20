@@ -4,10 +4,11 @@ use std::rc::Rc;
 use warpui::App;
 
 use super::*;
+use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -17,7 +18,6 @@ use crate::terminal::input::models::query_model_picker_choices;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::LaunchMode;
 
 // -- DisableReason::should_clear_preference tests --
 
@@ -433,8 +433,10 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
     };
 
     // Custom-endpoint (BYOK) UUID id — not cloud-runnable.
-    assert!(!preferences
-        .is_cloud_runnable_oz_model_id(&LLMId::from("52941f14-1b74-4afa-8f02-cdd5243b5aa9")));
+    assert!(
+        !preferences
+            .is_cloud_runnable_oz_model_id(&LLMId::from("52941f14-1b74-4afa-8f02-cdd5243b5aa9"))
+    );
     // Local custom router — not cloud-runnable.
     assert!(
         !preferences.is_cloud_runnable_oz_model_id(&LLMId::from("custom-router:local:my-router"))

@@ -1,9 +1,7 @@
-use std::sync::mpsc;
-
 use futures::future::LocalBoxFuture;
 
 use super::delegate::{self, AppDelegate};
-use super::event_loop::{self, AppEvent};
+use super::event_loop;
 use super::windowing::WindowManager;
 use crate::integration::TestDriver;
 use crate::platform::app::TerminationResult;
@@ -34,10 +32,9 @@ impl App {
     ) -> TerminationResult {
         let App { callbacks, assets } = self;
 
-        let (sender, receiver) = mpsc::channel::<AppEvent>();
-
         // Mark this thread as the main thread for DispatchDelegate checks.
         delegate::mark_current_thread_as_main();
+        let (sender, receiver) = event_loop::channel();
 
         let platform_delegate = Box::new(AppDelegate::new(sender.clone()));
         let window_manager = Box::new(WindowManager::new(sender.clone()));

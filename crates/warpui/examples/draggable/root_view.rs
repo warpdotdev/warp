@@ -2,7 +2,7 @@ use std::any::Any;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warpui::elements::{
     AcceptedByDropTarget, Align, ConstrainedBox, Container, DragAxis, Draggable, DraggableState,
     DropTarget, DropTargetData, ParentElement, Rect, Stack,

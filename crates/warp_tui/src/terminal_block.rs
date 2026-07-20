@@ -8,13 +8,13 @@ use warp::tui_export::{
     Block, BlockGrid, BlockId, BlockList, GridHandler, TermMode, TerminalColorList, TerminalModel,
 };
 use warp_terminal::model::ansi::{Color, NamedColor};
-use warp_terminal::model::grid::cell::{Cell, Flags};
 use warp_terminal::model::grid::Dimensions as _;
+use warp_terminal::model::grid::cell::{Cell, Flags};
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     Color as TuiColor, Modifier, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
 };
-use warpui_core::AppContext;
 
 use crate::terminal_use::user_controls_running_command;
 

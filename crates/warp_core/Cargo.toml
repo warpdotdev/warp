@@ -1,6 +1,6 @@
 [package]
 name = "warp_core"
-edition = "2021"
+edition = "2024"
 authors = ["Warp Team <dev@warp.dev>"]
 publish.workspace = true
 license.workspace = true

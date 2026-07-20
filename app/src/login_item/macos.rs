@@ -61,9 +61,11 @@ pub(super) fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
                 false
             },
             |settings, app_added_as_login_item, ctx| {
-                report_if_error!(settings
-                    .app_added_as_login_item
-                    .set_value(app_added_as_login_item, ctx));
+                report_if_error!(
+                    settings
+                        .app_added_as_login_item
+                        .set_value(app_added_as_login_item, ctx)
+                );
             },
         );
     });

@@ -20,15 +20,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
-use warpui::color::ColorU;
 use warpui::r#async::Timer;
+use warpui::color::ColorU;
 use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{
-    duration_with_jitter, AppContext, Entity, EntityId, ModelContext, ModelHandle, RequestState,
-    SingletonEntity, WindowId,
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, RequestState, SingletonEntity,
+    WindowId, duration_with_jitter,
 };
 
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -44,18 +44,18 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::conversation_navigation::ConversationNavigationData;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::retry_strategies::{
-    is_transient_http_error, OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL_RETRY_STRATEGY,
+    OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL_RETRY_STRATEGY, is_transient_http_error,
 };
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::TaskListFilter;
 use crate::server::server_api::presigned_upload::HttpStatusError;
-use crate::server::server_api::ServerApiProvider;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::workspace::{RestoreConversationLayout, WorkspaceAction};
@@ -1448,29 +1448,27 @@ impl AgentConversationsModel {
             }
         }
 
-        if let Some(conversation_id) = entry.identity.local_conversation_id {
-            if active_views_model.is_conversation_open(conversation_id, app) {
-                if let Some(nav_data) = self
-                    .conversations
-                    .get(&conversation_id)
-                    .map(|metadata| &metadata.nav_data)
-                {
-                    return Some(WorkspaceAction::RestoreOrNavigateToConversation {
-                        conversation_id,
-                        window_id: nav_data.window_id,
-                        pane_view_locator: nav_data.pane_view_locator,
-                        terminal_view_id: nav_data.terminal_view_id,
-                        restore_layout,
-                    });
-                }
+        if let Some(conversation_id) = entry.identity.local_conversation_id
+            && active_views_model.is_conversation_open(conversation_id, app)
+        {
+            if let Some(nav_data) = self
+                .conversations
+                .get(&conversation_id)
+                .map(|metadata| &metadata.nav_data)
+            {
+                return Some(WorkspaceAction::RestoreOrNavigateToConversation {
+                    conversation_id,
+                    window_id: nav_data.window_id,
+                    pane_view_locator: nav_data.pane_view_locator,
+                    terminal_view_id: nav_data.terminal_view_id,
+                    restore_layout,
+                });
+            }
 
-                if let Some(terminal_view_id) =
-                    active_views_model.get_terminal_view_id_for_conversation(conversation_id, app)
-                {
-                    return Some(WorkspaceAction::FocusTerminalViewInWorkspace {
-                        terminal_view_id,
-                    });
-                }
+            if let Some(terminal_view_id) =
+                active_views_model.get_terminal_view_id_for_conversation(conversation_id, app)
+            {
+                return Some(WorkspaceAction::FocusTerminalViewInWorkspace { terminal_view_id });
             }
         }
 
@@ -1505,8 +1503,8 @@ impl AgentConversationsModel {
     }
 
     fn resolve_entry_copy_link(&self, entry: &AgentConversationEntry) -> Option<String> {
-        if let Some(task_id) = entry.identity.ambient_agent_task_id {
-            if let Some(session_link) = self.tasks.get(&task_id).and_then(|task| {
+        if let Some(task_id) = entry.identity.ambient_agent_task_id
+            && let Some(session_link) = self.tasks.get(&task_id).and_then(|task| {
                 task.has_active_execution()
                     .then(|| {
                         task.active_run_execution()
@@ -1514,9 +1512,9 @@ impl AgentConversationsModel {
                             .map(ToString::to_string)
                     })
                     .flatten()
-            }) {
-                return Some(session_link);
-            }
+            })
+        {
+            return Some(session_link);
         }
 
         entry

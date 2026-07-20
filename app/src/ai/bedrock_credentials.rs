@@ -15,13 +15,13 @@ use ai::api_keys::{ApiKeyManager, AwsCredentials, AwsCredentialsState};
 use anyhow::{Context as _, Result};
 use vec1::vec1;
 use warp_errors::report_error;
-use warp_managed_secrets::client::IdentityTokenOptions;
 use warp_managed_secrets::ManagedSecretManager;
+use warp_managed_secrets::client::IdentityTokenOptions;
 use warpui::{ModelSpawner, SingletonEntity};
 
 use super::agent_sdk::driver::AgentDriver;
 use super::aws_credentials::{
-    aws_role_session_name, sts_client, AWS_BEDROCK_STS_AUDIENCE, BEDROCK_IDENTITY_TOKEN_DURATION,
+    AWS_BEDROCK_STS_AUDIENCE, BEDROCK_IDENTITY_TOKEN_DURATION, aws_role_session_name, sts_client,
 };
 
 /// How long to wait between Bedrock credential refresh attempts — well ahead of the
@@ -77,8 +77,10 @@ async fn try_refresh(
                 .as_service_error()
                 .map(|e| e.to_string())
                 .unwrap_or_else(|| err.to_string());
-            report_error!(anyhow::Error::new(err)
-                .context("Bedrock OIDC refresh: STS AssumeRoleWithWebIdentity error"));
+            report_error!(
+                anyhow::Error::new(err)
+                    .context("Bedrock OIDC refresh: STS AssumeRoleWithWebIdentity error")
+            );
             anyhow::anyhow!("STS AssumeRoleWithWebIdentity failed: {detail}")
         })?
         .credentials

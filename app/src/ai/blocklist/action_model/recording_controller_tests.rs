@@ -95,9 +95,11 @@ fn conversation_finalization_only_matches_owner() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
-    assert!(controller
-        .claim_finalization_for_conversation(AIConversationId::new())
-        .is_none());
+    assert!(
+        controller
+            .claim_finalization_for_conversation(AIConversationId::new())
+            .is_none()
+    );
     assert!(matches!(
         controller.claim_finalization_for_conversation(owner),
         Some(FinalizationClaim::Claimed { .. })
@@ -110,16 +112,20 @@ fn matching_conversation_cancels_start_reservation() {
     let mut controller = RecordingController::new();
     controller.try_begin_start(owner).unwrap();
 
-    assert!(controller
-        .claim_finalization_for_conversation(AIConversationId::new())
-        .is_none());
+    assert!(
+        controller
+            .claim_finalization_for_conversation(AIConversationId::new())
+            .is_none()
+    );
     assert!(matches!(
         controller.try_begin_start(AIConversationId::new()),
         Err(StartRecordingControllerError::AlreadyInProgress)
     ));
-    assert!(controller
-        .claim_finalization_for_conversation(owner)
-        .is_none());
+    assert!(
+        controller
+            .claim_finalization_for_conversation(owner)
+            .is_none()
+    );
     assert!(controller.try_begin_start(AIConversationId::new()).is_ok());
 }
 

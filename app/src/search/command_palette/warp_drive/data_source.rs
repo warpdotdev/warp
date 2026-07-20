@@ -13,13 +13,13 @@ use crate::cloud_object::{
 use crate::drive::folders::CloudFolder;
 use crate::env_vars::CloudEnvVarCollection;
 use crate::notebooks::CloudNotebook;
+use crate::search::QueryFilter;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
 use crate::search::env_var_collections::fuzzy_match::FuzzyMatchEnvVarCollectionResult;
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::notebooks::fuzzy_match::FuzzyMatchNotebookResult;
 use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
-use crate::search::QueryFilter;
 use crate::server::ids::{ObjectUid, SyncId};
 use crate::settings::AISettings;
 use crate::workflows::CloudWorkflow;
@@ -553,11 +553,11 @@ mod full_text_searcher {
     };
     use crate::drive::folders::CloudFolder;
     use crate::env_vars::CloudEnvVarCollection;
-    use crate::notebooks::manager::NotebookManager;
     use crate::notebooks::CloudNotebook;
+    use crate::notebooks::manager::NotebookManager;
     use crate::search::command_palette::warp_drive::data_source::WarpDriveSearcher;
     use crate::search::command_palette::warp_drive::env_var_collection_search_item::{
-        EnvVarCollectionSearchItem, ENV_VAR_NAME_SEPARATOR,
+        ENV_VAR_NAME_SEPARATOR, EnvVarCollectionSearchItem,
     };
     use crate::search::command_palette::warp_drive::notebook_search_item::NotebookSearchItem;
     use crate::search::command_palette::warp_drive::workflow_search_item::WorkflowSearchItem;

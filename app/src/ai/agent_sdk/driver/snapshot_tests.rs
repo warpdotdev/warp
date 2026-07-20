@@ -1317,10 +1317,12 @@ fn declarations_writer_resolves_relative_paths_against_working_dir() {
     let paths = parsed_file_paths(&decl_path);
     assert_eq!(
         paths,
-        vec![workspace
-            .join("notes/relative.txt")
-            .to_string_lossy()
-            .into_owned()]
+        vec![
+            workspace
+                .join("notes/relative.txt")
+                .to_string_lossy()
+                .into_owned()
+        ]
     );
 }
 
@@ -1340,17 +1342,15 @@ fn declarations_writer_continues_after_per_path_write_failures() {
     rt.block_on(async {
         let handle =
             DeclarationsWriterHandle::new_at_path(decl_path.clone(), workspace.clone(), task_id);
-        handle.append(vec![workspace
-            .join("first.txt")
-            .to_string_lossy()
-            .into_owned()]);
+        handle.append(vec![
+            workspace.join("first.txt").to_string_lossy().into_owned(),
+        ]);
         handle.flush().await;
         // Replace the staged directory so the next append's open call can succeed.
         fs::remove_dir(&decl_path).unwrap();
-        handle.append(vec![workspace
-            .join("second.txt")
-            .to_string_lossy()
-            .into_owned()]);
+        handle.append(vec![
+            workspace.join("second.txt").to_string_lossy().into_owned(),
+        ]);
         handle.flush().await;
     });
 

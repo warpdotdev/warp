@@ -18,8 +18,8 @@ use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 use crate::code_review::diff_state::CommitChainMode;
 use crate::code_review::git_dialog::pr::show_pr_created_toast;
 use crate::code_review::git_dialog::{
-    render_branch_section, render_file_changes_box, should_send_git_ops_ai_request, show_toast,
-    user_facing_git_error, GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode,
+    GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode, render_branch_section,
+    render_file_changes_box, should_send_git_ops_ai_request, show_toast, user_facing_git_error,
 };
 use crate::code_review::telemetry_event::{
     CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
@@ -29,7 +29,7 @@ use crate::editor::{
     PropagateAndNoOpNavigationKeys, TextOptions,
 };
 use crate::ui_components::icons::Icon;
-use crate::util::git::{get_file_change_entries, FileChangeEntry, PrInfo};
+use crate::util::git::{FileChangeEntry, PrInfo, get_file_change_entries};
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 
 /// Commit-specific sub-actions, dispatched wrapped in `GitDialogAction::Commit`.

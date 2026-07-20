@@ -13,8 +13,8 @@
 
 use std::io::{self, Write};
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 
 const ESC: char = '\x1b';
 const BEL: char = '\x07';

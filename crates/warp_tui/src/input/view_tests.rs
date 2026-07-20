@@ -31,8 +31,8 @@ use warpui_core::{
 };
 
 use super::{
-    input_keymap_context, TuiInputAction, TuiInputView, TuiInputViewEvent,
-    INPUT_HANDLES_ESCAPE_FLAG,
+    INPUT_HANDLES_ESCAPE_FLAG, TuiInputAction, TuiInputView, TuiInputViewEvent,
+    input_keymap_context,
 };
 use crate::editor_element::{TuiEditorAction, TuiEditorElement};
 use crate::editor_interaction::TuiEditorCommand;
@@ -89,22 +89,28 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
     let closed = input_keymap_context(false, false, false);
     assert!(closed.set.contains("TuiInputView"));
     assert!(!closed.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
-    assert!(!closed
-        .set
-        .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG));
-    assert!(!closed
-        .set
-        .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG));
+    assert!(
+        !closed
+            .set
+            .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG)
+    );
+    assert!(
+        !closed
+            .set
+            .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)
+    );
 
     let open = input_keymap_context(true, true, true);
     assert!(open.set.contains("TuiInputView"));
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
-    assert!(open
-        .set
-        .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG));
-    assert!(open
-        .set
-        .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG));
+    assert!(
+        open.set
+            .contains(crate::keybindings::PLAN_TOGGLE_AVAILABLE_FLAG)
+    );
+    assert!(
+        open.set
+            .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)
+    );
 }
 
 fn add_suggestions_mode(
@@ -371,6 +377,17 @@ fn build_view_with_inline_menu(
     ModelHandle<TuiSlashCommandModel>,
     [SlashCommandId; 2],
 ) {
+    build_view_with_inline_menu_gate(ctx, Rc::new(Cell::new(true)))
+}
+
+fn build_view_with_inline_menu_gate(
+    ctx: &mut AppContext,
+    allowed_at_prompt: Rc<Cell<bool>>,
+) -> (
+    ViewHandle<TuiInputView>,
+    ModelHandle<TuiSlashCommandModel>,
+    [SlashCommandId; 2],
+) {
     ctx.add_singleton_model(|_| Appearance::mock());
     add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
@@ -411,6 +428,7 @@ fn build_view_with_inline_menu(
                 |_| false,
                 ctx,
             )
+            .with_inline_menu_actions_allowed(move |_| allowed_at_prompt.get())
         },
     );
     (view, menu_model, ids)
@@ -524,6 +542,51 @@ fn inline_menu_accept_dismisses_before_emitting_unchanged_payload() {
 }
 
 #[test]
+fn inline_menu_submit_is_blocked_until_prompt_is_ready() {
+    App::test((), |mut app| async move {
+        let (view, menu_model, ids, allowed_at_prompt, accepted) = app.update(|ctx| {
+            let allowed_at_prompt = Rc::new(Cell::new(false));
+            let (view, menu_model, ids) =
+                build_view_with_inline_menu_gate(ctx, allowed_at_prompt.clone());
+            let accepted = Rc::new(RefCell::new(Vec::new()));
+            let accepted_for_subscription = accepted.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiInputViewEvent::AcceptedSlashCommand(
+                    AcceptSlashCommandOrSavedPrompt::SlashCommand { id },
+                ) = event
+                {
+                    accepted_for_subscription.borrow_mut().push(*id);
+                }
+            });
+            (view, menu_model, ids, allowed_at_prompt, accepted)
+        });
+
+        app.update(|ctx| {
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+        });
+        app.read(|ctx| {
+            assert!(
+                accepted.borrow().is_empty(),
+                "bootstrap must not emit an accepted menu event"
+            );
+            assert!(
+                menu_model.as_ref(ctx).is_open(ctx),
+                "bootstrap must leave the menu untouched"
+            );
+        });
+
+        allowed_at_prompt.set(true);
+        app.update(|ctx| {
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+        });
+        app.read(|ctx| {
+            assert_eq!(accepted.borrow().as_slice(), &[ids[0]]);
+            assert!(!menu_model.as_ref(ctx).is_open(ctx));
+        });
+    });
+}
+
+#[test]
 fn model_menu_accept_emits_selected_id_and_stays_open_for_persistence() {
     App::test((), |mut app| async move {
         let (view, menu_model, id, accepted) = app.update(|ctx| {
@@ -571,11 +634,12 @@ fn escape_dismisses_menu_and_closed_menu_submit_falls_through() {
 
         app.update(|ctx| {
             assert!(!menu_model.as_ref(ctx).is_open(ctx));
-            assert!(view
-                .as_ref(ctx)
-                .keymap_context(ctx)
-                .set
-                .contains(INPUT_HANDLES_ESCAPE_FLAG));
+            assert!(
+                view.as_ref(ctx)
+                    .keymap_context(ctx)
+                    .set
+                    .contains(INPUT_HANDLES_ESCAPE_FLAG)
+            );
             type_str(&view, ctx, "prompt");
             dispatch(&view, ctx, &[TuiInputAction::Submit]);
         });
@@ -587,18 +651,29 @@ fn escape_dismisses_menu_and_closed_menu_submit_falls_through() {
 }
 
 #[test]
-fn multiline_paste_inserts_without_submitting_until_enter() {
+fn multiline_paste_emits_once_and_fallback_inserts_without_submitting() {
     App::test((), |mut app| async move {
-        let (view, submitted) = app.update(|ctx| {
+        let (view, pasted, submitted) = app.update(|ctx| {
             let view = build_view(ctx);
+            let pasted = Rc::new(RefCell::new(Vec::new()));
+            let pasted_for_subscription = pasted.clone();
             let submitted = Rc::new(RefCell::new(Vec::new()));
             let submitted_for_subscription = submitted.clone();
-            ctx.subscribe_to_view(&view, move |_, event, _| {
-                if let TuiInputViewEvent::Submitted(text) = event {
+            ctx.subscribe_to_view(&view, move |_, event, _| match event {
+                TuiInputViewEvent::Pasted(text) => {
+                    pasted_for_subscription.borrow_mut().push(text.clone());
+                }
+                TuiInputViewEvent::Submitted(text) => {
                     submitted_for_subscription.borrow_mut().push(text.clone());
                 }
+                TuiInputViewEvent::AcceptedSlashCommand(_)
+                | TuiInputViewEvent::AcceptedConversation(_)
+                | TuiInputViewEvent::AcceptedModel(_)
+                | TuiInputViewEvent::AcceptedMcp(_)
+                | TuiInputViewEvent::BackspaceAtEmptyInput
+                | TuiInputViewEvent::MoveFocusUp => {}
             });
-            (view, submitted)
+            (view, pasted, submitted)
         });
         let payload = "USER:\nhello\n\nAGENT:\nHi!\n";
 
@@ -606,13 +681,14 @@ fn multiline_paste_inserts_without_submitting_until_enter() {
             dispatch(
                 &view,
                 ctx,
-                &[TuiInputAction::Editor(TuiEditorAction::InsertText(
+                &[TuiInputAction::Editor(TuiEditorAction::PasteText(
                     payload.to_owned(),
                 ))],
             );
         });
         app.read(|ctx| {
-            assert_eq!(text(&view, ctx), payload);
+            assert_eq!(pasted.borrow().as_slice(), &[payload]);
+            assert_eq!(text(&view, ctx), "");
             assert!(
                 submitted.borrow().is_empty(),
                 "paste must not emit a submission"
@@ -620,9 +696,46 @@ fn multiline_paste_inserts_without_submitting_until_enter() {
         });
 
         app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.insert_pasted_text(payload, ctx));
             dispatch(&view, ctx, &[TuiInputAction::Submit]);
         });
         assert_eq!(submitted.borrow().as_slice(), &[payload]);
+    });
+}
+
+#[test]
+fn backspace_at_empty_input_emits_attachment_removal_event() {
+    App::test((), |mut app| async move {
+        let (view, events) = app.update(|ctx| {
+            let view = build_view(ctx);
+            let events = Rc::new(RefCell::new(0));
+            let events_for_subscription = events.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiInputViewEvent::BackspaceAtEmptyInput) {
+                    *events_for_subscription.borrow_mut() += 1;
+                }
+            });
+            (view, events)
+        });
+
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::Backspace)],
+            );
+        });
+        assert_eq!(*events.borrow(), 1);
+
+        app.update(|ctx| {
+            type_str(&view, ctx, "x");
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::Backspace)],
+            );
+        });
+        assert_eq!(*events.borrow(), 1);
     });
 }
 
@@ -691,13 +804,9 @@ fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
         assert_eq!(*requests.borrow(), 1);
 
         app.update(|ctx| {
-            dispatch(
-                &view,
-                ctx,
-                &[TuiInputAction::Editor(TuiEditorAction::InsertText(
-                    "first\nsecond".to_string(),
-                ))],
-            );
+            view.update(ctx, |view, ctx| {
+                view.insert_pasted_text("first\nsecond", ctx);
+            });
             dispatch(
                 &view,
                 ctx,
@@ -845,9 +954,11 @@ fn move_left_on_empty_buffer_opens_conversation_menu() {
                 4,
             );
             assert_eq!(lines[0].trim(), "Conversations");
-            assert!(lines
-                .iter()
-                .any(|line| line.trim() == "No conversations found"));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.trim() == "No conversations found")
+            );
             assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
         });
     });
@@ -1716,7 +1827,7 @@ fn wheel_scrolls_viewport_without_moving_cursor() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_lines(&view, ctx, 10); // 10 rows > 6-row viewport
-                                        // Typing leaves the cursor at the end, scrolled to the bottom.
+            // Typing leaves the cursor at the end, scrolled to the bottom.
             assert_eq!(scroll_offset(&view, ctx), 4);
             let cursor_before = view.as_ref(ctx).cursor_offset(ctx);
 

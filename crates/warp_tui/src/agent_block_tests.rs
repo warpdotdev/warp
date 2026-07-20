@@ -23,12 +23,12 @@ use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity};
+use warpui_core::elements::Fill as CoreFill;
 use warpui_core::elements::tui::{
     Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiEvent, TuiEventContext,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPosition,
     TuiSize,
 };
-use warpui_core::elements::Fill as CoreFill;
 use warpui_core::event::ModifiersState;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityId, EntityIdMap, TuiView, ViewContext, ViewHandle};
@@ -41,7 +41,7 @@ use crate::agent_block_sections::{
     completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
 };
 use crate::agent_message::agent_message_section_id;
-use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
+use crate::test_fixtures::{TestHostView, add_test_action_model_and_events};
 use crate::tui_plan_view::TuiPlanViewAction;
 use crate::tui_shell_command_view::TuiShellCommandViewAction;
 
@@ -691,9 +691,11 @@ fn keyboard_toggle_targets_latest_exposed_plan_in_message_order() {
             let Some(TuiToolCallView::Plan(second)) = block.action_views.get(&second_id) else {
                 panic!("second action has a plan child");
             };
-            assert!(render_tui_view_lines(first.as_ref(ctx), 40, 8, ctx)
-                .iter()
-                .any(|line| line.trim() == "first body"));
+            assert!(
+                render_tui_view_lines(first.as_ref(ctx), 40, 8, ctx)
+                    .iter()
+                    .any(|line| line.trim() == "first body")
+            );
             assert_eq!(
                 render_tui_view_lines(second.as_ref(ctx), 40, 8, ctx),
                 vec!["○ Create plan ▸"]
@@ -775,9 +777,10 @@ fn streamed_ask_user_question_payload_replaces_the_initial_empty_child_view() {
                 panic!("updated ask-question child view");
             };
             assert_ne!(view.id(), initial_view_id);
-            assert!(view
-                .as_ref(ctx)
-                .matches_action(&action_id, &ask_user_question_items("Which one?")));
+            assert!(
+                view.as_ref(ctx)
+                    .matches_action(&action_id, &ask_user_question_items("Which one?"))
+            );
         });
     });
 }
@@ -922,11 +925,13 @@ fn agent_block_preserves_and_renders_code_sections_in_order() {
                 TuiRect::new(0, 0, 40, 3),
                 app_ctx,
             );
-            assert!(frame
-                .buffer
-                .to_lines()
-                .iter()
-                .any(|line| line.contains("println!")));
+            assert!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .iter()
+                    .any(|line| line.contains("println!"))
+            );
 
             let rendered = render_block_lines(block, 40, app_ctx);
             assert_eq!(rendered.last().map(String::as_str), Some("visible"));
@@ -1497,9 +1502,11 @@ fn task_list_renders_header_and_status_glyph_rows() {
             // Cancelled: muted glyph, struck-through muted title.
             assert_eq!(frame.buffer[(2, 4)].fg, muted);
             assert_eq!(frame.buffer[(4, 4)].fg, muted);
-            assert!(frame.buffer[(4, 4)]
-                .modifier
-                .contains(Modifier::CROSSED_OUT));
+            assert!(
+                frame.buffer[(4, 4)]
+                    .modifier
+                    .contains(Modifier::CROSSED_OUT)
+            );
         });
     });
 }

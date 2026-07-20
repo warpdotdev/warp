@@ -1,7 +1,7 @@
 //! Authenticated terminal-session TUI surface.
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,29 +13,28 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
+    AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentPtyWriteMode, AIConversation,
+    AIConversationId, AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent,
+    AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
+    AgentInteractionMetadata, AgentViewEntryOrigin, BlockId, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
+    CLISubagentEvent, CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel,
+    ChangelogModelEvent, ChangelogRequestType, CloudConversationData, CommandExecutionSource,
+    ConversationFileExport, ConversationSelection, ConversationSelectionHandle,
+    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
+    GitRepoStatusModel, GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent,
+    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, ModelEvent, ParsedSlashCommandInput, PtyIntent,
+    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
+    ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
+    SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiMcpAction,
+    TuiMcpManager, TuiSlashCommand, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
+    TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
     block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
     export_conversation_markdown, prepare_conversation_block_restoration,
     record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
-    slash_command_selection_behavior, throttle, AIAgentActionId, AIAgentActionResultType,
-    AIAgentContext, AIAgentPtyWriteMode, AIConversation, AIConversationId,
-    AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent, AgentConversationEntryId,
-    AgentConversationListEntryState, AgentConversationsModel, AgentInteractionMetadata,
-    AgentViewEntryOrigin, BlockId, BlocklistAIActionEvent, BlocklistAIActionModel,
-    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController, CLISubagentEvent,
-    CLISubagentTarget, CancellationReason, ChangelogModel, ChangelogModelEvent,
-    ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
-    ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
-    ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
-    GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, ModelEvent,
-    ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
-    RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate,
-    SkillReference, SlashCommandDataSource as _, SlashCommandSelectionBehavior,
-    StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommand,
-    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
-    UserTakeOverReason, COMMAND_REGISTRY, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
-    WAKEUP_THROTTLE_PERIOD,
+    slash_command_selection_behavior, throttle,
 };
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
@@ -43,38 +42,44 @@ use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
+use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::tui::{
     TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
 use warpui_core::platform::TerminationMode;
-use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
 use crate::alt_screen_view::AltScreenElement;
+use crate::attachment_bar::{
+    FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
+    TuiAttachmentPasteDisposition,
+};
 use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
 use crate::conversation_selection::TuiConversationSelection;
 use crate::editor_interaction::TuiEditorCommand;
-use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
-use crate::inline_menu::{active_inline_menu, TuiInlineMenu, MAX_INLINE_MENU_ROWS};
+use crate::exit_confirmation::{CTRL_C_EXIT_WINDOW, ExitConfirmation};
+use crate::inline_menu::{MAX_INLINE_MENU_ROWS, TuiInlineMenu, active_inline_menu};
 use crate::input::view::TuiInputAction;
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
 use crate::keybindings::{
-    CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
-    PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME, TUI_BINDING_GROUP,
+    ATTACHMENTS_AVAILABLE_FLAG, CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME,
+    KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
+    TUI_BINDING_GROUP,
 };
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::orchestrated_agent_identity_styling::assign_agent_identity_indices;
 use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::orchestration_model::{TuiOrchestrationModel, TuiOrchestrationSnapshot};
+use crate::platform::reveal_path_in_file_manager;
 use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
@@ -85,14 +90,14 @@ use crate::tab_bar::{
 };
 use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
-    hide_agent_requested_command_from_top_level, terminal_use_conversation_to_resume,
-    terminal_use_interrupt_action, tui_input_target, TerminalUseInterruptAction, TuiInputTarget,
+    TerminalUseInterruptAction, TuiInputTarget, hide_agent_requested_command_from_top_level,
+    terminal_use_conversation_to_resume, terminal_use_interrupt_action, tui_input_target,
 };
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{
-    TuiCLISubagentView, HAND_BACK_KEY_BINDING, TAKE_CONTROL_KEY_BINDING,
+    HAND_BACK_KEY_BINDING, TAKE_CONTROL_KEY_BINDING, TuiCLISubagentView,
 };
 use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;
@@ -110,8 +115,11 @@ const ORCHESTRATION_TAB_LABEL_MAX_COLUMNS: u16 = 20;
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
+const STARTING_SHELL_HINT: &str = "Starting shell...";
 const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
 const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
+pub(crate) const SESSION_COMPOSER_OWNS_INPUT_FLAG: &str = "TuiSessionComposerOwnsInput";
+pub(crate) const PASTE_IMAGE_BINDING_NAME: &str = "tui:session:paste_image";
 
 /// Events emitted by the TUI terminal session surface.
 pub(crate) enum TuiTerminalSessionEvent {
@@ -166,6 +174,11 @@ const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model."
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
+const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
+
+fn log_bundle_success_message(path: &Path) -> String {
+    format!("Log bundle saved to {}", path.display())
+}
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
     (!input.trim().is_empty()).then_some(input)
@@ -263,12 +276,17 @@ pub(crate) enum TuiTerminalSessionAction {
     SelectFirstOrchestrationChild,
     /// Select the last child tab, excluding the orchestrator.
     SelectLastOrchestrationChild,
+    /// Move focus from the prompt input into the attachment bar.
+    FocusAttachments,
+    /// Read a raw image from the host clipboard and attach it to the next query.
+    PasteImageFromClipboard,
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
 pub(crate) struct TuiTerminalSessionView {
     transcript: ViewHandle<TuiTranscriptView>,
     input_view: ViewHandle<TuiInputView>,
+    attachment_bar: ViewHandle<TuiAttachmentBar>,
     inline_menus: Vec<TuiInlineMenu>,
     suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
@@ -374,6 +392,40 @@ pub(crate) fn init(app: &mut AppContext) {
         )
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-p"),
+        EditableBinding::new(
+            FOCUS_ATTACHMENTS_BINDING_NAME,
+            "Focus image attachments",
+            TuiTerminalSessionAction::FocusAttachments,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
+                & id!(ATTACHMENTS_AVAILABLE_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("tab"),
+        EditableBinding::new(
+            PASTE_IMAGE_BINDING_NAME,
+            "Paste an image from the clipboard",
+            TuiTerminalSessionAction::PasteImageFromClipboard,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
+                & id!(SESSION_COMPOSER_OWNS_INPUT_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-v"),
+        #[cfg(windows)]
+        EditableBinding::new(
+            PASTE_IMAGE_BINDING_NAME,
+            "Paste an image from the clipboard",
+            TuiTerminalSessionAction::PasteImageFromClipboard,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
+                & id!(SESSION_COMPOSER_OWNS_INPUT_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-v"),
     ]);
 
     // Tab navigation is user-remappable, unlike the reserved session-control
@@ -454,7 +506,17 @@ impl TuiTerminalSessionView {
 
     fn focus_current_owner(&mut self, ctx: &mut ViewContext<Self>) {
         match self.input_target() {
-            TuiInputTarget::Disabled | TuiInputTarget::Pty => {
+            TuiInputTarget::Disabled => {
+                if let Some(blocker) = self.active_blocking_child(ctx) {
+                    self.orchestration_tabs_focused = false;
+                    ctx.focus(&blocker);
+                } else if self.orchestration_tabs_focused {
+                    ctx.focus_self();
+                } else {
+                    ctx.focus(&self.input_view);
+                }
+            }
+            TuiInputTarget::Pty => {
                 self.orchestration_tabs_focused = false;
                 ctx.focus_self();
             }
@@ -928,11 +990,13 @@ impl TuiTerminalSessionView {
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
         let transcript_for_input = transcript.clone();
+        let terminal_model_for_input = model.clone();
         let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
         let orchestration_tab_bar_for_input = orchestration_tab_bar.clone();
+        let input_editor_for_input = input_editor_model.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
             TuiInputView::new(
-                input_editor_model,
+                input_editor_for_input,
                 input_mode_for_input_view,
                 suggestions_mode_for_input,
                 inline_menus_for_input,
@@ -940,7 +1004,26 @@ impl TuiTerminalSessionView {
                 move |ctx| orchestration_tab_bar_for_input.as_ref(ctx).has_tabs(),
                 ctx,
             )
+            .with_inline_menu_actions_allowed(move |_| {
+                let terminal_model = terminal_model_for_input.lock();
+                tui_input_target(&terminal_model).agent_editor_owns_input()
+            })
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
+        });
+        let attachment_model = ctx.add_model(|ctx| {
+            TuiAttachmentModel::new(
+                context_model.clone(),
+                ai_input_model.clone(),
+                input_editor_model,
+                active_session.clone(),
+                terminal_surface_id,
+                ctx,
+            )
+        });
+        let attachment_bar =
+            ctx.add_typed_action_tui_view(|ctx| TuiAttachmentBar::new(attachment_model, ctx));
+        ctx.subscribe_to_view(&attachment_bar, |view, _, event, ctx| {
+            view.handle_attachment_bar_event(event, ctx);
         });
 
         ctx.subscribe_to_view(&transcript, |view, _, event, ctx| match event {
@@ -962,6 +1045,11 @@ impl TuiTerminalSessionView {
 
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
             TuiInputViewEvent::Submitted(text) => view.handle_submitted(text.clone(), ctx),
+            TuiInputViewEvent::Pasted(text) => view.handle_pasted(text.clone(), ctx),
+            TuiInputViewEvent::BackspaceAtEmptyInput => {
+                view.attachment_bar
+                    .update(ctx, |bar, ctx| bar.remove_selected(ctx));
+            }
             TuiInputViewEvent::AcceptedSlashCommand(action) => {
                 view.handle_accepted_slash_command(action, ctx);
             }
@@ -1079,7 +1167,7 @@ impl TuiTerminalSessionView {
                 view.update_process_input_focus(ctx);
                 ctx.notify();
             }
-            ModelEvent::BootstrapPrecmdDone => {
+            ModelEvent::VisibleBootstrapBlock | ModelEvent::BootstrapPrecmdDone => {
                 view.update_process_input_focus(ctx);
                 ctx.notify();
             }
@@ -1196,6 +1284,7 @@ impl TuiTerminalSessionView {
         Self {
             transcript,
             input_view,
+            attachment_bar,
             inline_menus,
             suggestions_mode,
             conversation_menu,
@@ -1834,6 +1923,36 @@ impl TuiTerminalSessionView {
         }
     }
 
+    fn handle_pasted(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        let disposition = self
+            .attachment_bar
+            .update(ctx, |bar, ctx| bar.try_attach_paste(text.clone(), ctx));
+        if disposition == TuiAttachmentPasteDisposition::NotHandled {
+            self.input_view
+                .update(ctx, |input, ctx| input.insert_pasted_text(&text, ctx));
+        }
+    }
+
+    fn handle_attachment_bar_event(
+        &mut self,
+        event: &TuiAttachmentBarEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            TuiAttachmentBarEvent::AbortInputDetection => self.abort_input_detection(ctx),
+            TuiAttachmentBarEvent::RequestInputDetection => self.schedule_input_detection(ctx),
+            TuiAttachmentBarEvent::RestorePastedText(text) => {
+                self.input_view
+                    .update(ctx, |input, ctx| input.insert_pasted_text(text, ctx));
+            }
+            TuiAttachmentBarEvent::ShowHint(text) => {
+                self.show_transient_hint(text.clone(), ctx);
+            }
+            TuiAttachmentBarEvent::ReturnFocus => ctx.focus(&self.input_view),
+        }
+        ctx.notify();
+    }
+
     /// Displays `text` in the footer's hint slot for the transient-hint
     /// duration, then reverts to the persistent content.
     fn show_transient_hint(&mut self, text: String, ctx: &mut ViewContext<Self>) {
@@ -2027,28 +2146,28 @@ impl TuiTerminalSessionView {
                         }),
                 );
         }
-        if let Some(stats) = git_stats {
-            if stats.total_additions > 0 || stats.total_deletions > 0 {
-                footer = footer.child(TuiText::new(" • ").with_style(muted).truncate().finish());
+        if let Some(stats) = git_stats
+            && (stats.total_additions > 0 || stats.total_deletions > 0)
+        {
+            footer = footer.child(TuiText::new(" • ").with_style(muted).truncate().finish());
+            if stats.total_additions > 0 {
+                footer = footer.child(
+                    TuiText::new(format!("+{}", stats.total_additions))
+                        .with_style(builder.diff_added_style())
+                        .truncate()
+                        .finish(),
+                );
+            }
+            if stats.total_deletions > 0 {
                 if stats.total_additions > 0 {
-                    footer = footer.child(
-                        TuiText::new(format!("+{}", stats.total_additions))
-                            .with_style(builder.diff_added_style())
-                            .truncate()
-                            .finish(),
-                    );
+                    footer = footer.child(TuiText::new(" ").truncate().finish());
                 }
-                if stats.total_deletions > 0 {
-                    if stats.total_additions > 0 {
-                        footer = footer.child(TuiText::new(" ").truncate().finish());
-                    }
-                    footer = footer.child(
-                        TuiText::new(format!("-{}", stats.total_deletions))
-                            .with_style(builder.diff_removed_style())
-                            .truncate()
-                            .finish(),
-                    );
-                }
+                footer = footer.child(
+                    TuiText::new(format!("-{}", stats.total_deletions))
+                        .with_style(builder.diff_removed_style())
+                        .truncate()
+                        .finish(),
+                );
             }
         }
         footer
@@ -2251,12 +2370,10 @@ impl TuiTerminalSessionView {
         let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
             controller.send_user_query_in_conversation(prompt.clone(), conversation_id, None, ctx)
         });
-        if dispatched {
-            if let Some(block_id) = active_long_running_block_id {
-                self.cli_subagent_controller.update(ctx, |controller, ctx| {
-                    controller.set_latest_instruction(block_id, prompt, ctx);
-                });
-            }
+        if dispatched && let Some(block_id) = active_long_running_block_id {
+            self.cli_subagent_controller.update(ctx, |controller, ctx| {
+                controller.set_latest_instruction(block_id, prompt, ctx);
+            });
         }
     }
 
@@ -2508,6 +2625,35 @@ impl TuiTerminalSessionView {
                 record_static_slash_command_accepted(command.name, true, ctx);
                 ctx.terminate_app(TerminationMode::ForceTerminate, None);
             }
+            TuiSlashCommand::ViewLogs => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                ctx.spawn(
+                    async move {
+                        tokio::task::spawn_blocking(|| {
+                            let path = warp_logging::create_log_bundle_zip()?;
+                            reveal_path_in_file_manager(&path);
+                            Ok::<_, anyhow::Error>(path)
+                        })
+                        .await
+                    },
+                    |me, result, ctx| match result {
+                        Ok(Ok(path)) => {
+                            me.show_success_hint(log_bundle_success_message(&path), ctx);
+                        }
+                        Ok(Err(error)) => {
+                            report_error!(error.context("Failed to create TUI log bundle"));
+                            me.show_transient_hint(LOG_BUNDLE_FAILED_HINT.to_owned(), ctx);
+                        }
+                        Err(error) => {
+                            report_error!(
+                                anyhow::Error::new(error).context("TUI log bundle task failed")
+                            );
+                            me.show_transient_hint(LOG_BUNDLE_FAILED_HINT.to_owned(), ctx);
+                        }
+                    },
+                );
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
             TuiSlashCommand::CreateNewProject => {
                 let Some(query) = argument
                     .map(|argument| argument.trim())
@@ -2687,6 +2833,7 @@ impl TuiView for TuiTerminalSessionView {
             self.transcript.id(),
             self.input_view.id(),
             self.orchestration_tab_bar.id(),
+            self.attachment_bar.id(),
         ]
     }
 
@@ -2706,6 +2853,14 @@ impl TuiView for TuiTerminalSessionView {
         }
         if self.keyboard_enhancement_supported {
             context.set.insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
+        }
+        if self.input_target().agent_editor_owns_input()
+            && !self.suggestions_mode.as_ref(ctx).mode().is_visible()
+        {
+            context.set.insert(SESSION_COMPOSER_OWNS_INPUT_FLAG);
+            if self.attachment_bar.as_ref(ctx).should_render(ctx) {
+                context.set.insert(ATTACHMENTS_AVAILABLE_FLAG);
+            }
         }
         context
     }
@@ -2782,6 +2937,18 @@ impl TuiView for TuiTerminalSessionView {
         // input model is never written to, so its draft/cursor/selection/
         // scroll survive untouched.
         let blocker_active = self.active_blocking_child(ctx).is_some();
+        if !blocker_active && matches!(input_target, TuiInputTarget::Disabled) {
+            content = content.child(
+                TuiContainer::new(
+                    TuiText::new(STARTING_SHELL_HINT)
+                        .with_style(builder.muted_text_style())
+                        .truncate()
+                        .finish(),
+                )
+                .with_padding_top(1)
+                .finish(),
+            );
+        }
 
         // While the selected conversation is in progress (the GUI warping
         // indicator's core condition), the animated warping indicator sits
@@ -2839,8 +3006,11 @@ impl TuiView for TuiTerminalSessionView {
                 }
             }
         }
-        if !blocker_active && input_target.agent_editor_owns_input() {
-            if let Some(menu) = inline_menu {
+        if !blocker_active
+            && (input_target.agent_editor_owns_input()
+                || matches!(input_target, TuiInputTarget::Disabled))
+        {
+            if let (true, Some(menu)) = (input_target.agent_editor_owns_input(), inline_menu) {
                 content = content.child(
                     TuiConstrainedBox::new(menu)
                         .with_max_rows(MAX_INLINE_MENU_ROWS)
@@ -2852,6 +3022,17 @@ impl TuiView for TuiTerminalSessionView {
             } else {
                 builder.accent_border_style()
             };
+            if self.attachment_bar.as_ref(ctx).should_render(ctx) {
+                content = content.child(
+                    TuiConstrainedBox::new(
+                        TuiContainer::new(TuiChildView::new(&self.attachment_bar).finish())
+                            .with_padding_x(1)
+                            .finish(),
+                    )
+                    .with_max_rows(1)
+                    .finish(),
+                );
+            }
             content = content.child(
                 TuiConstrainedBox::new(
                     TuiContainer::new(TuiChildView::new(&self.input_view).finish())
@@ -2862,7 +3043,10 @@ impl TuiView for TuiTerminalSessionView {
                 .with_max_rows(MAX_INPUT_TEXT_ROWS + 2)
                 .finish(),
             );
-            let footer = if self.orchestration_tabs_focused {
+            let footer = if matches!(input_target, TuiInputTarget::Disabled) {
+                self.render_footer(orchestration_tabs_available, ctx)
+                    .finish()
+            } else if self.orchestration_tabs_focused {
                 self.render_orchestration_tab_footer(&builder)
             } else {
                 self.render_footer(orchestration_tabs_available, ctx)
@@ -2954,6 +3138,15 @@ impl TypedActionView for TuiTerminalSessionView {
             TuiTerminalSessionAction::TogglePlan => {
                 self.transcript
                     .update(ctx, |transcript, ctx| transcript.toggle_latest_plan(ctx));
+            }
+            TuiTerminalSessionAction::FocusAttachments => {
+                if self.attachment_bar.as_ref(ctx).should_render(ctx) {
+                    ctx.focus(&self.attachment_bar);
+                }
+            }
+            TuiTerminalSessionAction::PasteImageFromClipboard => {
+                self.attachment_bar
+                    .update(ctx, |bar, ctx| bar.paste_image_from_clipboard(ctx));
             }
         }
     }

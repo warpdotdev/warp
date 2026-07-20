@@ -3,11 +3,11 @@
 use warp::{TuiLoginModel, TuiLoginPhase};
 use warpui::SingletonEntity as _;
 use warpui_core::elements::tui::{TuiChildView, TuiElement};
-use warpui_core::keymap::macros::*;
 use warpui_core::keymap::FixedBinding;
+use warpui_core::keymap::macros::*;
 use warpui_core::platform::TerminationMode;
 use warpui_core::{
-    keymap, AppContext, Entity, EntityId, TuiView, TypedActionView, ViewContext, ViewHandle,
+    AppContext, Entity, EntityId, TuiView, TypedActionView, ViewContext, ViewHandle, keymap,
 };
 
 use crate::keybindings::TUI_BINDING_GROUP;

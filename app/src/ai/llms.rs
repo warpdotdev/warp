@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
 pub use ai::LLMId;
+use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
 use anyhow::Context as _;
 use parking_lot::FairMutex;
-use serde::{de, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
@@ -16,8 +16,8 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::custom_model_routers::{self, CustomModelRouter, ModelConfigError};
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::AISettings;
@@ -855,12 +855,11 @@ impl LLMPreferences {
     ) -> &LLMInfo {
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
-            if let Some(llm_id) = raw_override {
-                if let Some(llm_info) =
+            if let Some(llm_id) = raw_override
+                && let Some(llm_info) =
                     self.model_info_for_id(&self.models_by_feature.agent_mode, llm_id, app)
-                {
-                    return llm_info;
-                }
+            {
+                return llm_info;
             }
         }
 
@@ -981,7 +980,7 @@ impl LLMPreferences {
     pub fn get_base_llm_choices_for_agent_mode(
         &self,
         app: &AppContext,
-    ) -> impl Iterator<Item = &LLMInfo> {
+    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
         // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         self.models_by_feature
@@ -999,7 +998,10 @@ impl LLMPreferences {
     }
 
     /// Returns the set of LLMs available for coding.
-    pub fn get_coding_llm_choices(&self, app: &AppContext) -> impl Iterator<Item = &LLMInfo> {
+    pub fn get_coding_llm_choices(
+        &self,
+        app: &AppContext,
+    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
         // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         self.models_by_feature
@@ -1016,7 +1018,10 @@ impl LLMPreferences {
     }
 
     /// Returns the set of LLMs available for CLI agent.
-    pub fn get_cli_agent_llm_choices(&self, app: &AppContext) -> impl Iterator<Item = &LLMInfo> {
+    pub fn get_cli_agent_llm_choices(
+        &self,
+        app: &AppContext,
+    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
         // Don't show admin-disabled models in the dropdown
         self.get_cli_agent_available()
             .choices
@@ -1221,10 +1226,10 @@ impl LLMPreferences {
         let mut models = Vec::new();
         let mut seen = HashSet::new();
         for id in [base_id, coding_id] {
-            if let Some(entry) = self.custom_router_proto_entry(id) {
-                if seen.insert(entry.config_key.clone()) {
-                    models.push(entry);
-                }
+            if let Some(entry) = self.custom_router_proto_entry(id)
+                && seen.insert(entry.config_key.clone())
+            {
+                models.push(entry);
             }
         }
         api::request::settings::CustomModelRouters { routers: models }
@@ -1624,14 +1629,13 @@ impl LLMPreferences {
     }
 
     pub fn mark_new_choices_popup_as_shown(&self, view_id: EntityId) {
-        if let Some(update) = self.last_update.as_ref() {
-            if matches!(
+        if let Some(update) = self.last_update.as_ref()
+            && matches!(
                 &*update.popup_visibility_state.lock(),
                 UpdatePopupVisibilityState::WaitingToBeShown
-            ) {
-                *update.popup_visibility_state.lock() =
-                    UpdatePopupVisibilityState::Visible(view_id);
-            }
+            )
+        {
+            *update.popup_visibility_state.lock() = UpdatePopupVisibilityState::Visible(view_id);
         }
     }
 
@@ -1858,14 +1862,13 @@ impl LLMPreferences {
                             profiles.set_cli_agent_model(profile_id, None, ctx);
                         }
                     }
-                    if let Some(preferred_llm_id) = &profile.data().computer_use_model {
-                        if self
+                    if let Some(preferred_llm_id) = &profile.data().computer_use_model
+                        && self
                             .get_computer_use_available()
                             .usable_info_for_id(preferred_llm_id, ctx)
                             .is_none()
-                        {
-                            profiles.set_computer_use_model(profile_id, None, ctx);
-                        }
+                    {
+                        profiles.set_computer_use_model(profile_id, None, ctx);
                     }
                 }
             }

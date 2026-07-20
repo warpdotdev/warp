@@ -1,6 +1,6 @@
 [package]
 authors = ["Warp Team <dev@warp.dev>"]
-edition = "2021"
+edition = "2024"
 name = "warpui_extras"
 version = "0.0.0"
 publish.workspace = true

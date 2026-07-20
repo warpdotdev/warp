@@ -28,11 +28,11 @@ use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::outline::RepoOutlines;
 use crate::code_review::github_repo_model::GitHubRepoModel;
+use crate::terminal::TerminalModel;
 use crate::terminal::event::{BlockCompletedEvent, BlockType};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::terminal::TerminalModel;
 use crate::util::git::{PrInfo, RepositoryInfo};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -48,6 +48,14 @@ pub struct PendingFile {
 pub enum AttachmentType {
     Image,
     File,
+}
+
+/// Lightweight metadata for rendering a pending attachment without cloning its payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingAttachmentSummary {
+    pub index: usize,
+    pub attachment_type: AttachmentType,
+    pub file_name: String,
 }
 
 /// A pending attachment — either an image (base64 in memory) or a file (path reference).
@@ -278,6 +286,19 @@ impl BlocklistAIContextModel {
         &self.pending_attachments
     }
 
+    /// Returns lightweight metadata for all pending attachments.
+    pub fn pending_attachment_summaries(&self) -> Vec<PendingAttachmentSummary> {
+        self.pending_attachments
+            .iter()
+            .enumerate()
+            .map(|(index, attachment)| PendingAttachmentSummary {
+                index,
+                attachment_type: attachment.attachment_type(),
+                file_name: attachment.file_name().to_owned(),
+            })
+            .collect()
+    }
+
     /// Returns only the pending images for the next query.
     pub fn pending_images(&self) -> Vec<&ImageContext> {
         self.pending_attachments
@@ -405,11 +426,10 @@ impl BlocklistAIContextModel {
             if FeatureFlag::AgentViewBlockContext.is_enabled() {
                 for block_id in &self.auto_attached_agent_view_user_block_ids {
                     // Skip if already in pending_context_block_ids to avoid duplicates
-                    if !self.pending_context_block_ids.contains(block_id) {
-                        if let Some(block_context) = self.transform_block_to_context(block_id, true)
-                        {
-                            context.push(block_context);
-                        }
+                    if !self.pending_context_block_ids.contains(block_id)
+                        && let Some(block_context) = self.transform_block_to_context(block_id, true)
+                    {
+                        context.push(block_context);
                     }
                 }
             }
@@ -455,14 +475,14 @@ impl BlocklistAIContextModel {
         let pwd = block_metadata
             .current_working_directory()
             .map(|s| PathBuf::from(s.to_owned()));
-        if let Some(session_id) = block_metadata.session_id() {
-            if let Some(active_session) = sessions.as_ref(ctx).get(session_id) {
-                self.update_directory_context(
-                    pwd.map(|p| p.to_string_lossy().to_string()),
-                    active_session.home_dir().map(|sq| sq.to_owned()),
-                    ctx,
-                );
-            }
+        if let Some(session_id) = block_metadata.session_id()
+            && let Some(active_session) = sessions.as_ref(ctx).get(session_id)
+        {
+            self.update_directory_context(
+                pwd.map(|p| p.to_string_lossy().to_string()),
+                active_session.home_dir().map(|sq| sq.to_owned()),
+                ctx,
+            );
         }
     }
 
@@ -832,6 +852,7 @@ impl BlocklistAIContextModel {
         AIAgentContext::Repository {
             name: repository_info.name.clone(),
             owner: repository_info.owner.clone(),
+            host: repository_info.host.clone(),
         }
     }
 
@@ -846,6 +867,7 @@ impl BlocklistAIContextModel {
             state: pr_info.state.clone(),
             draft: pr_info.draft,
             base_branch: pr_info.base_branch.clone(),
+            url: pr_info.url.clone(),
         })
     }
 

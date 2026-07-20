@@ -26,9 +26,9 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::time::Duration;
 
-use anyhow::{bail, Context as _};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use anyhow::{Context as _, bail};
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 // `std::time::Instant` is disallowed (no wasm support); `instant::Instant` is a
 // drop-in that re-exports the std type on native targets.
 use instant::Instant;
@@ -261,7 +261,7 @@ fn wait_for_callback(listener: &TcpListener, timeout: Duration) -> anyhow::Resul
                 std::thread::sleep(POLL_INTERVAL);
             }
             Err(e) => {
-                return Err(anyhow::Error::new(e).context("Grok OAuth callback accept failed"))
+                return Err(anyhow::Error::new(e).context("Grok OAuth callback accept failed"));
             }
         }
     }

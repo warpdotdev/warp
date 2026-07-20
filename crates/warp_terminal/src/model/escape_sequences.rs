@@ -4,9 +4,9 @@ use lazy_static::lazy_static;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::OperatingSystem;
 
+use super::TermMode;
 use super::indexing::Point;
 use super::mouse::{MouseAction, MouseButton, MouseState};
-use super::TermMode;
 
 mod kitty_keyboard_protocol;
 
@@ -148,7 +148,7 @@ pub const BRACKETED_PASTE_END: &[u8] = &[C0::ESC, b'[', b'2', b'0', b'1', b'~'];
 
 #[allow(non_snake_case)]
 pub mod EscCodes {
-    use super::{ModeProvider, TermMode, C0, C1};
+    use super::{C0, C1, ModeProvider, TermMode};
 
     // Arrows-related escape codes
     pub const ARROW_UP: u8 = b'A';

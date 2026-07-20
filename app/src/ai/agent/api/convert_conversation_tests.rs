@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use chrono::Utc;
 use warp_multi_agent_api as api;
 
-use crate::ai::agent::api::convert_conversation::*;
 use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::api::convert_conversation::*;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversationId, ServerAIConversationMetadata,
 };
@@ -886,19 +886,18 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
     let mut found_successful = 0;
 
     for input in &second_exchange.input {
-        if let crate::ai::agent::AIAgentInput::ActionResult { result, .. } = input {
-            if let crate::ai::agent::AIAgentActionResultType::RequestCommandOutput(command_result) =
+        if let crate::ai::agent::AIAgentInput::ActionResult { result, .. } = input
+            && let crate::ai::agent::AIAgentActionResultType::RequestCommandOutput(command_result) =
                 &result.result
-            {
-                match command_result {
-                    crate::ai::agent::RequestCommandOutputResult::CancelledBeforeExecution => {
-                        found_cancelled = true;
-                    }
-                    crate::ai::agent::RequestCommandOutputResult::Completed { .. } => {
-                        found_successful += 1;
-                    }
-                    _ => {}
+        {
+            match command_result {
+                crate::ai::agent::RequestCommandOutputResult::CancelledBeforeExecution => {
+                    found_cancelled = true;
                 }
+                crate::ai::agent::RequestCommandOutputResult::Completed { .. } => {
+                    found_successful += 1;
+                }
+                _ => {}
             }
         }
     }

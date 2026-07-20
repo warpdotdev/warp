@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::fmt;
 use std::io::{self, IsTerminal as _};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use comfy_table::Cell;
 use inquire::{Confirm, InquireError, Select};
@@ -21,9 +21,9 @@ use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::output::{self, TableFormat};
+use crate::ServerApiProvider;
 use crate::server::ids::ApiKeyUid;
 use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::ServerApiProvider;
 
 /// Run API key-related commands.
 pub fn run(
@@ -112,7 +112,7 @@ impl ApiKeyCommandRunner {
                         ));
                     }
                     GenerateApiKeyResult::Unknown => {
-                        return Err(anyhow!("failed to create API key"))
+                        return Err(anyhow!("failed to create API key"));
                     }
                 };
                 print_created_api_key(result, output_format, json_output)?;

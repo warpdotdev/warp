@@ -37,6 +37,35 @@ fn test_config_local_dir_path() {
 }
 
 #[test]
+fn test_gui_app_id_maps_oss_tui_to_oss_gui() {
+    let gui_app_id = gui_app_id_for_channel(Channel::Oss, AppId::new("dev", "warp", "WarpTui"));
+
+    assert_eq!(gui_app_id.to_string(), "dev.warp.WarpOss");
+}
+
+#[test]
+fn test_gui_config_and_mcp_paths_resolve_explicit_sources() {
+    let home_dir = home_dir().expect("Should be able to compute home directory");
+    let gui_config_dir = gui_config_local_dir().expect("GUI config path should resolve");
+
+    cfg_if::cfg_if! {
+        if #[cfg(target_os = "macos")] {
+            assert_eq!(gui_config_dir, home_dir.join(".warp-oss"));
+        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
+            assert_eq!(gui_config_dir, home_dir.join(".config/warp-oss"));
+        } else if #[cfg(windows)] {
+            assert_eq!(
+                gui_config_dir,
+                home_dir.join("AppData\\Local\\warp\\WarpOss\\config")
+            );
+        } else {
+            unimplemented!("Need to update tests for current platform!");
+        }
+    }
+
+    assert_eq!(gui_mcp_config_file_path(), warp_home_mcp_config_file_path());
+}
+#[test]
 fn test_warp_home_config_dir_path() {
     let home_dir = home_dir().expect("Should be able to compute home directory");
     let expected_dir_name = match ChannelState::data_profile() {

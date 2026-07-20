@@ -15,9 +15,9 @@ use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType, BlockId,
     BlocklistAIActionModel, RequestCommandOutputResult, TerminalModel,
 };
-use warpui_core::elements::tui::{tui_collapsible, Modifier, TuiChildView, TuiElement, TuiFlex};
-use warpui_core::elements::MouseStateHandle;
 use warpui_core::r#async::Timer;
+use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{Modifier, TuiChildView, TuiElement, TuiFlex, tui_collapsible};
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
@@ -26,7 +26,7 @@ use crate::agent_block_sections::render_fallback_tool_call_section;
 use crate::terminal_block::TerminalBlockElement;
 use crate::terminal_use::user_controls_running_command;
 use crate::tool_call_labels::{
-    tool_call_display_state, tool_call_label, CommandBlockState, ResolvedCommandBlock,
+    CommandBlockState, ResolvedCommandBlock, tool_call_display_state, tool_call_label,
 };
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};

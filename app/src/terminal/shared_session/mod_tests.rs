@@ -8,15 +8,15 @@ use warp_core::features::FeatureFlag;
 use warpui::r#async::executor::Background;
 use warpui::units::Lines;
 
-use super::{decode_scrollback, SharedSessionScrollbackType};
+use super::{SharedSessionScrollbackType, decode_scrollback};
 use crate::assert_lines_approx_eq;
 use crate::channel::ChannelState;
+use crate::terminal::TerminalModel;
 use crate::terminal::color::List;
 use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::block::{BlockId, BlockState, SerializedBlock};
 use crate::terminal::model::test_utils::block_size;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::TerminalModel;
 use crate::themes::default_themes::dark_theme;
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 

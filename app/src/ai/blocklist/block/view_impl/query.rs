@@ -14,10 +14,10 @@ use warpui::ui_components::chip::Chip;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity};
 
-use super::common::{render_query_text, render_user_avatar, FindContext};
+use super::common::{FindContext, render_query_text, render_user_avatar};
+use crate::ai::blocklist::AttachmentType;
 use crate::ai::blocklist::block::view_impl::common::UserQueryProps;
 use crate::ai::blocklist::block::{AIBlockAction, DetectedLinksState, SecretRedactionState};
-use crate::ai::blocklist::AttachmentType;
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;

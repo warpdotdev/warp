@@ -1,15 +1,15 @@
 use itertools::Itertools;
 use unicode_width::UnicodeWidthChar;
 
+use crate::terminal::SizeInfo;
 use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::ansi::{self, Handler};
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::cell::Flags;
-use crate::terminal::model::grid::grid_handler::PerformResetGridChecks;
 use crate::terminal::model::grid::Dimensions as _;
+use crate::terminal::model::grid::grid_handler::PerformResetGridChecks;
 use crate::terminal::model::index::{VisiblePoint, VisibleRow};
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::SizeInfo;
 
 const MAX_SCROLL_LIMIT: usize = 1000;
 
