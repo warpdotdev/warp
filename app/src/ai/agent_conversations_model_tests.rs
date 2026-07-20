@@ -16,11 +16,10 @@ use super::entry::{
 use super::query::{DEFAULT_RESULT_COUNT, MAX_SEARCH_RESULTS};
 use super::{
     AgentConversationsModel, AgentConversationsModelEvent, AgentManagementFilters,
-    AgentRunDisplayStatus, ArtifactFilter, CloudConversationMetadataLoadState,
-    ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter,
-    MAX_PERSONAL_TASKS, MAX_TEAM_TASKS, OwnerFilter, RtcTaskRefreshThrottleState, StatusFilter,
-    TaskFetchError, TaskFetchState, query_conversation_entries,
-    record_earliest_rtc_task_refresh_timestamp,
+    AgentRunDisplayStatus, ArtifactFilter, ConversationMetadata, ConversationUpdateKind,
+    EnvironmentFilter, HarnessFilter, InitialConversationLoadState, MAX_PERSONAL_TASKS,
+    MAX_TEAM_TASKS, OwnerFilter, RtcTaskRefreshThrottleState, StatusFilter, TaskFetchError,
+    TaskFetchState, query_conversation_entries, record_earliest_rtc_task_refresh_timestamp,
 };
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
@@ -43,7 +42,7 @@ use crate::server::ids::ServerId;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 use crate::test_util::settings::initialize_history_persistence_for_tests;
-use crate::workspace::WorkspaceAction;
+use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
 
 /// Creates a test task with specified creator UID and updated_at time
 fn create_test_task(
@@ -665,8 +664,7 @@ fn create_test_model() -> AgentConversationsModel {
         in_flight_poll_abort_handle: None,
         next_poll_abort_handle: None,
         active_data_consumers_per_window: HashMap::new(),
-        has_finished_initial_load: false,
-        cloud_conversation_metadata_load_state: CloudConversationMetadataLoadState::Available,
+        initial_load_state: InitialConversationLoadState::LoadingLocal,
         task_fetch_state: Default::default(),
         rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
         dirty_since: None,
@@ -674,11 +672,31 @@ fn create_test_model() -> AgentConversationsModel {
 }
 
 #[test]
+fn local_conversation_sync_finishes_initial_load_without_starting_cloud_load() {
+    App::test((), |mut app| async move {
+        let _interactive_management_guard =
+            FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
+        add_entry_projection_test_models(&mut app);
+        let model = app.add_singleton_model(|_| create_test_model());
+
+        model.update(&mut app, |model, ctx| model.sync_conversations(ctx));
+
+        model.read(&app, |model, _| {
+            assert!(!model.is_loading());
+            assert_eq!(
+                model.initial_load_state,
+                InitialConversationLoadState::WaitingForCloud
+            );
+        });
+    });
+}
+
+#[test]
 fn cloud_conversation_metadata_reports_failed_load() {
     let mut model = create_test_model();
     assert!(!model.cloud_conversation_metadata_load_failed());
 
-    model.cloud_conversation_metadata_load_state = CloudConversationMetadataLoadState::Failed;
+    model.initial_load_state = InitialConversationLoadState::CloudFailed;
     assert!(model.cloud_conversation_metadata_load_failed());
 }
 
@@ -866,6 +884,7 @@ fn add_entry_projection_test_models(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
+    app.add_singleton_model(|_| WorkspaceRegistry::new());
 }
 
 fn mock_server_metadata() -> ServerMetadata {

@@ -1293,6 +1293,31 @@ pub struct UpdateQuakeModeEventArg {
     active_window_id: Option<WindowId>,
 }
 
+fn refresh_user_after_iap_access(ctx: &mut AppContext) {
+    let iap_manager = IapManager::handle(ctx);
+    if !iap_manager.as_ref(ctx).is_enabled() || iap_manager.as_ref(ctx).has_valid_token() {
+        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
+            auth_manager.refresh_user(ctx);
+        });
+        return;
+    }
+
+    let mut refresh_started = false;
+    ctx.subscribe_to_model(&iap_manager, move |iap_manager, event, ctx| {
+        if refresh_started
+            || !matches!(event, IapManagerEvent::StateChanged)
+            || !iap_manager.as_ref(ctx).has_valid_token()
+        {
+            return;
+        }
+        refresh_started = true;
+        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
+            auth_manager.refresh_user(ctx);
+        });
+    });
+    iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
+}
+
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 pub(crate) fn initialize_app(
     launch_mode: &LaunchMode,
@@ -1751,15 +1776,6 @@ pub(crate) fn initialize_app(
     let user_is_logged_in = auth_state.is_logged_in();
 
     if user_is_logged_in {
-        // Skip refresh_user for CLI mode — the CLI handles auth refresh in
-        // ensure_auth_state so it can detect invalid credentials before running
-        // a command.
-        if !matches!(launch_mode, LaunchMode::CommandLine { .. }) {
-            AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-                auth_manager.refresh_user(ctx);
-            });
-        }
-
         // Set the first frame callback to record the app's startup time.
         // This is only sent for logged-in users so that new users don't skew performance metrics.
         let is_screen_reader_enabled = ctx.is_screen_reader_enabled();
@@ -2262,6 +2278,13 @@ pub(crate) fn initialize_app(
             _ => {}
         };
     });
+
+    // CLI commands establish IAP access and refresh auth in their dispatch path so they can
+    // surface failures synchronously. Interactive clients wait for IAP here before refreshing
+    // their persisted user, since the refresh itself calls the IAP-gated warp-server.
+    if user_is_logged_in && !matches!(launch_mode, LaunchMode::CommandLine { .. }) {
+        refresh_user_after_iap_access(ctx);
+    }
 
     // Add a singleton model that holds the current prompt configuration.
     ctx.add_singleton_model(Prompt::new);
