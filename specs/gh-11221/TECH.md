@@ -63,6 +63,8 @@ Extend the existing GUI integration coverage at [`test_ctrl_tab_session_switchin
 - Preserve the existing slow-release assertions for forward, reverse, and wraparound behavior (PRODUCT 2–4, 13).
 - Add a same-frame regression step that dispatches `CustomAction::CycleNextSession` and returns `Event::ModifierKeyChanged { ControlLeft, Released }` from one `with_event_fn` callback, before the next rendered frame can mount the palette. Assert that the expected MRU session is focused and `Workspace::is_palette_open()` is false (PRODUCT 5–7).
 - Repeat the same-frame case with `CtrlTabBehavior::CycleMostRecentTab` and assert tab activation rather than pane/session activation (PRODUCT 1, 5, 14).
+- Create two windows, dispatch the same-frame cycle-and-release sequence only to one window, and assert that it commits and closes there without changing the other window's active destination or Ctrl+Tab interaction state (PRODUCT 14).
+- Hold both physical Control keys, release one while the other remains pressed, and assert that no destination is committed and the switcher stays open; then release the remaining Control key and assert exactly one commit and a closed switcher (PRODUCT 8).
 - Cover reverse direction with `CyclePrevSession` and Control release in the same frame (PRODUCT 3–5).
 - Close the switcher before emitting a Control release and assert no navigation occurs (PRODUCT 10, 12).
 - Exercise the one-destination case and assert the switcher closes without changing the active destination (PRODUCT 11).
