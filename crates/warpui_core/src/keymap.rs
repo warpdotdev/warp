@@ -337,8 +337,8 @@ impl schemars::JsonSchema for Keystroke {
         std::borrow::Cow::Borrowed("Keystroke")
     }
 
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        gen.subschema_for::<String>()
+    fn json_schema(sgen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        sgen.subschema_for::<String>()
     }
 }
 

@@ -1683,14 +1683,14 @@ impl VimFSA {
     fn dot_repeat_text_mut(&mut self) -> Option<&mut String> {
         match &mut self.dot_repeat_event {
             Some(VimEvent {
-                event_type: VimEventType::InsertText { ref mut text, .. },
+                event_type: VimEventType::InsertText { text, .. },
                 ..
             })
             | Some(VimEvent {
                 event_type:
                     VimEventType::Operation {
                         operator: VimOperator::Change,
-                        replacement_text: ref mut text,
+                        replacement_text: text,
                         ..
                     },
                 ..

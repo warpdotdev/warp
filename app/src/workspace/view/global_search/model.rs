@@ -417,8 +417,9 @@ impl GlobalSearch {
             roots_display
         );
 
+        let patterns = &[pattern];
         let stream =
-            warp_ripgrep::search::search_streaming(&[pattern], &roots, ignore_case, multiline)?;
+            warp_ripgrep::search::search_streaming(patterns, &roots, ignore_case, multiline)?;
         futures::pin_mut!(stream);
 
         let mut total_match_count: usize = 0;

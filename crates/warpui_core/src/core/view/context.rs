@@ -503,7 +503,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     ///
     /// TODO(vorporeal): Determine how best to eliminate this function and move
     ///     the relevant logic into `spawn()`.
-    fn spawn_local<S, F, U>(&mut self, future: S, callback: F) -> impl Future<Output = ()>
+    fn spawn_local<S, F, U>(&mut self, future: S, callback: F) -> impl Future<Output = ()> + use<S, F, U, T>
     where
         S: 'static + Future,
         F: 'static + FnOnce(&mut T, S::Output, &mut ViewContext<T>) -> U,

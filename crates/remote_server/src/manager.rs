@@ -2769,7 +2769,7 @@ impl RemoteServerManager {
         session_id: SessionId,
         path: String,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Option<RemoteNavigationResult>> {
+    ) -> impl Future<Output = Option<RemoteNavigationResult>> + use<> {
         use futures::future::ready;
 
         match self.navigate_to_directory_impl(session_id, path, ctx) {

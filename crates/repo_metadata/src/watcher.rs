@@ -324,7 +324,7 @@ impl DirectoryWatcher {
         directory_paths: Vec<StandardizedPath>,
         gitignores: Vec<Gitignore>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Result<(), RepoMetadataError>> {
+    ) -> impl Future<Output = Result<(), RepoMetadataError>> + use<> {
         let futures: Vec<_> = directory_paths
             .into_iter()
             .map(|path| self.start_watching_directory(&path, gitignores.clone(), ctx))
@@ -347,7 +347,7 @@ impl DirectoryWatcher {
         directory_path: &StandardizedPath,
         gitignores: Vec<Gitignore>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Result<(), RepoMetadataError>> {
+    ) -> impl Future<Output = Result<(), RepoMetadataError>> + use<> {
         let local_path = directory_path.to_local_path();
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {

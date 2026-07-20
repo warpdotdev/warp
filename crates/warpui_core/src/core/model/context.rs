@@ -276,7 +276,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         &mut self,
         future: S,
         callback: F,
-    ) -> impl Future<Output = ()>
+    ) -> impl Future<Output = ()> + use<S, F, U, T>
     where
         S: 'static + Future,
         F: 'static + FnOnce(&mut T, S::Output, &mut ModelContext<T>) -> U,

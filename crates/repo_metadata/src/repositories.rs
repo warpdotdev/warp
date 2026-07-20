@@ -66,7 +66,7 @@ impl DetectedRepositories {
         source: RepoDetectionSource,
         remote_detect: Option<F>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Option<LocalOrRemotePath>> {
+    ) -> impl Future<Output = Option<LocalOrRemotePath>> + use<F> {
         match remote_detect {
             None => {
                 // Local detection path.
@@ -93,7 +93,7 @@ impl DetectedRepositories {
         active_directory: &str,
         source: RepoDetectionSource,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Option<PathBuf>> {
+    ) -> impl Future<Output = Option<PathBuf>> + use<> {
         #[cfg(feature = "local_fs")]
         {
             use futures::channel::oneshot;

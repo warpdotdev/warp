@@ -263,7 +263,7 @@ pub fn filter_tool_call_results_from_messages<'a>(
     messages
         .map(|msg| {
             let mut filtered_msg = msg.clone();
-            if let Some(message::Message::ToolCallResult(ref tool_result)) = &msg.message {
+            if let Some(message::Message::ToolCallResult(tool_result)) = &msg.message {
                 filtered_msg.message = Some(message::Message::ToolCallResult(
                     filter_tool_call_result(tool_result),
                 ));

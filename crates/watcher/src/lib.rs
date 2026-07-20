@@ -180,7 +180,7 @@ impl BulkFilesystemWatcher {
 
     /// Stop watching a path. The returned future resolves once the path is fully unregistered.
     /// Awaiting the future is *not* required for the path to be unregistered.
-    pub fn unregister_path(&mut self, path: &Path) -> impl Future<Output = Result<()>> {
+    pub fn unregister_path(&mut self, path: &Path) -> impl Future<Output = Result<()>> + use<> {
         let (tx, rx) = oneshot::channel();
         let send_result = self.tx.send(BackgroundFileWatcherCommand::RemovePath {
             path: path.to_path_buf(),
@@ -205,7 +205,7 @@ impl BulkFilesystemWatcher {
         path: &Path,
         watch_filter: WatchFilter,
         recursive_mode: RecursiveMode,
-    ) -> impl Future<Output = Result<()>> {
+    ) -> impl Future<Output = Result<()>> + use<> {
         let (tx, rx) = oneshot::channel();
         let send_result = self.tx.send(BackgroundFileWatcherCommand::AddPath {
             path: path.to_path_buf(),
