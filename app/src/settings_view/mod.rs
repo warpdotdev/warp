@@ -290,6 +290,7 @@ use crate::util::bindings::custom_tag_to_keystroke;
 impl Display for SettingsSection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            SettingsSection::Account => write!(f, "Profile"),
             SettingsSection::BillingAndUsage => write!(f, "Billing and usage"),
             SettingsSection::Keybindings => write!(f, "Keyboard shortcuts"),
             SettingsSection::SharedBlocks => write!(f, "Shared blocks"),
@@ -382,7 +383,8 @@ impl FromStr for SettingsSection {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "About" => Ok(Self::About),
-            "Account" => Ok(Self::Account),
+            // This page was called "Account" at one point, keep for backward compatibility.
+            "Account" | "Profile" => Ok(Self::Account),
             "AI" => Ok(Self::AI),
             "MCP Servers" => Ok(Self::MCPServers),
             "Billing and usage" => Ok(Self::BillingAndUsage),
