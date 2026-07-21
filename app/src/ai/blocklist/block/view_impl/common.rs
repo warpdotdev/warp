@@ -3036,6 +3036,10 @@ pub struct FailedOutputProps<'a> {
     pub error: &'a RenderableAIError,
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
     pub subscribe_button_handle: &'a MouseStateHandle,
+    /// Mouse state handle for the secondary "Connect an API key" (BYOK) button
+    /// shown alongside the primary upgrade/subscribe CTA on the out-of-credits
+    /// error block.
+    pub connect_api_key_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
@@ -3059,16 +3063,20 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             user_display_message,
         } => {
             if let Some(message) = user_display_message {
-                if should_show_subscribe_cta(app) {
-                    return render_out_of_credits_error(
-                        message,
-                        props.subscribe_button_handle,
-                        props.is_ai_input_enabled,
-                        props.icon_right_margin,
-                        app,
-                    );
-                }
-                format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
+                // Both Free-plan users (no AI included) and paid users who have
+                // exhausted their credits render the structured out-of-credits
+                // block: a header, the server-provided body, and up to two CTA
+                // buttons (primary upgrade/subscribe + secondary BYOK). The copy
+                // variant is selected by plan tier per the approved direction.
+                return render_out_of_credits_error(
+                    message,
+                    out_of_credits_copy(is_user_on_paid_plan(app)),
+                    props.subscribe_button_handle,
+                    props.connect_api_key_button_handle,
+                    props.is_ai_input_enabled,
+                    props.icon_right_margin,
+                    app,
+                );
             } else {
                 let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
                 let formatted_next_refresh_time = ai_request_usage_model
@@ -3176,12 +3184,49 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
         .finish()
 }
 
-/// Whether to show the out-of-credits CTAs: only for non-paid users. Paid users and the
-/// enterprise spend-limit variant of this message fall back to plain text.
-fn should_show_subscribe_cta(app: &AppContext) -> bool {
+/// Whether the current user is on a paid plan (used to pick the out-of-credits
+/// copy variant). Returns `false` when no workspace is present (e.g. solo/free
+/// users), matching the existing `should_show_subscribe_cta` semantics.
+fn is_user_on_paid_plan(app: &AppContext) -> bool {
     UserWorkspaces::as_ref(app)
         .current_workspace()
-        .is_none_or(|workspace| !workspace.billing_metadata.is_user_on_paid_plan())
+        .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan())
+}
+
+/// Copy shown for the out-of-credits failed-output block, per the approved copy
+/// direction (APP-4897). The header and primary CTA label differ between
+/// Free-plan users (no AI included) and paid users who have exhausted their
+/// credits; the secondary "Connect an API key" CTA is shared.
+///
+/// This is a pure data selection so it can be unit-tested without an
+/// `AppContext` — the paid/unpaid branch is the meaningful behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OutOfCreditsCopy {
+    header: &'static str,
+    primary_cta_label: &'static str,
+    secondary_cta_label: &'static str,
+}
+
+const OUT_OF_CREDITS_HEADER_FREE: &str = "Unlock AI in Warp";
+const OUT_OF_CREDITS_HEADER_PAID: &str = "You're out of AI credits";
+const OUT_OF_CREDITS_PRIMARY_CTA_FREE: &str = "Start using AI";
+const OUT_OF_CREDITS_PRIMARY_CTA_PAID: &str = "Get more AI";
+const OUT_OF_CREDITS_SECONDARY_CTA: &str = "Connect an API key";
+
+fn out_of_credits_copy(is_paid: bool) -> OutOfCreditsCopy {
+    if is_paid {
+        OutOfCreditsCopy {
+            header: OUT_OF_CREDITS_HEADER_PAID,
+            primary_cta_label: OUT_OF_CREDITS_PRIMARY_CTA_PAID,
+            secondary_cta_label: OUT_OF_CREDITS_SECONDARY_CTA,
+        }
+    } else {
+        OutOfCreditsCopy {
+            header: OUT_OF_CREDITS_HEADER_FREE,
+            primary_cta_label: OUT_OF_CREDITS_PRIMARY_CTA_FREE,
+            secondary_cta_label: OUT_OF_CREDITS_SECONDARY_CTA,
+        }
+    }
 }
 
 /// Builds an out-of-credits CTA button, styled like the invalid-API-key error's button.
@@ -3216,10 +3261,18 @@ fn out_of_credits_cta_button(
         .with_cursor(Some(Cursor::PointingHand))
 }
 
-/// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
+/// Renders the out-of-credits failure block: alert icon + a prominent header, the
+/// server-provided body message, and up to two CTA buttons — a primary
+/// upgrade/subscribe button and a secondary "Connect an API key" (BYOK) button
+/// shown only when BYO API key is enabled for the current user.
+///
+/// `copy` selects the header + primary CTA label by plan tier (Free vs paid),
+/// per the approved copy direction for APP-4897.
 fn render_out_of_credits_error(
     message: &str,
-    subscribe_button_handle: &MouseStateHandle,
+    copy: OutOfCreditsCopy,
+    primary_button_handle: &MouseStateHandle,
+    connect_api_key_button_handle: &MouseStateHandle,
     is_ai_input_enabled: bool,
     icon_right_margin: f32,
     app: &AppContext,
@@ -3241,8 +3294,10 @@ fn render_out_of_credits_error(
     .with_margin_right(icon_right_margin)
     .finish();
 
+    // Header (e.g. "Unlock AI in Warp" / "You're out of AI credits") on its own
+    // line, followed by the server-provided body message.
     let text = Text::new(
-        format!("{ERROR_APOLOGY_TEXT}\n\n{message}"),
+        format!("{}\n\n{}", copy.header, message),
         appearance.monospace_font_family(),
         appearance.monospace_font_size(),
     )
@@ -3260,12 +3315,36 @@ fn render_out_of_credits_error(
     })
     .finish();
 
-    let subscribe_button = out_of_credits_cta_button("Subscribe", subscribe_button_handle, app)
-        .build()
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
-        })
-        .finish();
+    let primary_button =
+        out_of_credits_cta_button(copy.primary_cta_label, primary_button_handle, app)
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
+            })
+            .finish();
+
+    // The secondary "Connect an API key" CTA is only shown when BYO API key is
+    // enabled for the current user (matching the prompt-alert BYOK gate).
+    let byo_api_key_enabled = UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app);
+
+    let mut button_row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_main_axis_alignment(MainAxisAlignment::Start)
+        .with_spacing(8.)
+        .with_child(primary_button);
+    if byo_api_key_enabled {
+        let connect_api_key_button =
+            out_of_credits_cta_button(copy.secondary_cta_label, connect_api_key_button_handle, app)
+                .build()
+                .on_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
+                        search_query: "api".to_string(),
+                        section: Some(SettingsSection::WarpAgent),
+                    });
+                })
+                .finish();
+        button_row = button_row.with_child(connect_api_key_button);
+    }
 
     Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -3277,15 +3356,9 @@ fn render_out_of_credits_error(
                 .finish(),
         )
         .with_child(
-            Container::new(
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Min)
-                    .with_main_axis_alignment(MainAxisAlignment::Start)
-                    .with_child(subscribe_button)
-                    .finish(),
-            )
-            .with_margin_left(icon_size(app) + icon_right_margin)
-            .finish(),
+            Container::new(button_row.finish())
+                .with_margin_left(icon_size(app) + icon_right_margin)
+                .finish(),
         )
         .finish()
 }

@@ -177,6 +177,9 @@ pub fn init(app: &mut AppContext) {
 struct StateHandles {
     invalid_api_key_button_handle: MouseStateHandle,
     subscribe_button_handle: MouseStateHandle,
+    /// Mouse state handle for the secondary "Connect an API key" (BYOK) button
+    /// shown alongside the primary CTA on the out-of-credits error block.
+    connect_api_key_button_handle: MouseStateHandle,
     debug_copy_button_handle: MouseStateHandle,
     submit_issue_button_handle: MouseStateHandle,
     query_selection_handle: SelectionHandle,
@@ -1206,6 +1209,9 @@ impl View for CLISubagentView {
                             .state_handles
                             .invalid_api_key_button_handle,
                         subscribe_button_handle: &self.state_handles.subscribe_button_handle,
+                        connect_api_key_button_handle: &self
+                            .state_handles
+                            .connect_api_key_button_handle,
                         aws_bedrock_credentials_error_view: None,
                         icon_right_margin: AVATAR_RIGHT_MARGIN,
                     },

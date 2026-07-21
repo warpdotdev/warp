@@ -15,8 +15,9 @@ use super::{
     CollapsibleElementState, CollapsibleExpansionState, VisualMarkdownLightboxCollection,
     collect_visual_markdown_lightbox_collection, compute_visual_section_width,
     image_tooltip_handles_for_group, inline_image_source_label,
-    is_supported_blocklist_image_source, lightbox_trigger_for_section, query_prefix_highlight_len,
-    render_scrollable_collapsible_content, text_sections_with_indices, warping_footer_height,
+    is_supported_blocklist_image_source, lightbox_trigger_for_section, out_of_credits_copy,
+    query_prefix_highlight_len, render_scrollable_collapsible_content, text_sections_with_indices,
+    warping_footer_height,
 };
 #[cfg(feature = "local_fs")]
 use super::{ResolvedBlocklistImageSources, blocklist_image_asset_source};
@@ -367,4 +368,32 @@ fn is_supported_blocklist_image_source_covers_common_local_formats() {
     // Non-image extensions stay rejected.
     assert!(!is_supported_blocklist_image_source("doc.pdf"));
     assert!(!is_supported_blocklist_image_source("notes.md"));
+}
+
+/// The out-of-credits failed-output block must select its header + primary CTA
+/// copy by plan tier, per the approved copy direction for APP-4897:
+/// - Free-plan users (no AI included) see "Unlock AI in Warp" + "Start using AI".
+/// - Paid users who have exhausted their credits see "You're out of AI credits"
+///   + "Get more AI".
+/// Both variants share the secondary "Connect an API key" CTA. The paid/unpaid
+/// branch is the meaningful behavior; the copy strings themselves are the
+/// approved wording, so this test guards against an accidental revert or a
+/// mismatch between the two variants.
+#[test]
+fn out_of_credits_copy_selects_header_and_primary_cta_by_plan_tier() {
+    let free_copy = out_of_credits_copy(false);
+    assert_eq!(free_copy.header, "Unlock AI in Warp");
+    assert_eq!(free_copy.primary_cta_label, "Start using AI");
+    assert_eq!(free_copy.secondary_cta_label, "Connect an API key");
+
+    let paid_copy = out_of_credits_copy(true);
+    assert_eq!(paid_copy.header, "You're out of AI credits");
+    assert_eq!(paid_copy.primary_cta_label, "Get more AI");
+    assert_eq!(paid_copy.secondary_cta_label, "Connect an API key");
+
+    // The two variants must differ on the header and primary CTA (the whole
+    // point of branching by plan tier) and share the secondary CTA.
+    assert_ne!(free_copy.header, paid_copy.header);
+    assert_ne!(free_copy.primary_cta_label, paid_copy.primary_cta_label);
+    assert_eq!(free_copy.secondary_cta_label, paid_copy.secondary_cta_label);
 }

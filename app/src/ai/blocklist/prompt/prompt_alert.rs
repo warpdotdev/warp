@@ -21,17 +21,24 @@ const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PERCENTAGE: f32 = 0.5;
 
 const NO_CONNECTION_PRIMARY_TEXT: &str = "No internet connection";
 const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PRIMARY_TEXT: &str = "";
-const ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT: &str = "At Limit -";
+const ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT: &str = "Unlock AI in Warp";
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT: &str = "Restricted due to payment issue";
-const OUT_OF_REQUESTS_PRIMARY_TEXT: &str = "Out of credits";
+const OUT_OF_REQUESTS_PRIMARY_TEXT: &str = "You're out of AI credits";
 
-const ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT: &str = "Sign up for more AI credits";
+/// CTA for the anonymous soft gate: the user still has some requests left, so the
+/// chip is a gentle nudge to upgrade. Uses the approved Free-plan header copy as
+/// the action label since the soft gate has no primary text.
+const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_ACTION_TEXT: &str = "Unlock AI in Warp";
+/// CTA for the anonymous hard gate: the user is fully blocked, so the action
+/// points them at the sign-up flow.
+const ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_ACTION_TEXT: &str = "Sign up for more AI credits";
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_ACTION_TEXT: &str = "Manage billing";
 const OVERAGES_TOGGLEABLE_BUT_NOT_ENABLED_ACTION_TEXT: &str = "Enable premium overages";
 const MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT: &str = "Increase monthly spend limit";
-const UPGRADE_TEXT: &str = "Upgrade";
-const COMPARE_PLANS_TEXT: &str = "Compare plans";
 const CONTACT_SUPPORT_TEXT: &str = "Contact support";
+/// Unified upgrade CTA for the out-of-credits request-limit chip, per the
+/// approved copy direction for paid users who have exhausted their credits.
+const GET_MORE_AI_TEXT: &str = "Get more AI";
 const NON_ADMIN_CONTACT_ADMIN_TEXT: &str = ", contact a team admin";
 const NON_ADMIN_ASK_ADMIN_TO_ENABLE_OVERAGES_TEXT: &str = ", ask a team admin to enable overages";
 const NON_ADMIN_ASK_ADMIN_TO_INCREASE_OVERAGES_TEXT: &str =
@@ -235,11 +242,17 @@ impl PromptAlertView {
 
         match state {
             PromptAlertState::NoConnection => {}
-            PromptAlertState::AnonymousUserRequestLimitSoftGate
-            | PromptAlertState::AnonymousUserRequestLimitHardGate => {
+            PromptAlertState::AnonymousUserRequestLimitSoftGate => {
                 text_fragments.push(FormattedTextFragment::plain_text("  "));
                 text_fragments.push(FormattedTextFragment::hyperlink_action(
-                    ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT,
+                    ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_ACTION_TEXT,
+                    PromptAlertAction::SignUpClickedForAnonymousUser,
+                ));
+            }
+            PromptAlertState::AnonymousUserRequestLimitHardGate => {
+                text_fragments.push(FormattedTextFragment::plain_text("  "));
+                text_fragments.push(FormattedTextFragment::hyperlink_action(
+                    ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_ACTION_TEXT,
                     PromptAlertAction::SignUpClickedForAnonymousUser,
                 ));
             }
@@ -292,17 +305,13 @@ impl PromptAlertView {
                 text_fragments.push(FormattedTextFragment::plain_text("  "));
                 if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
+                        // Approved copy: unify the upgrade CTA to "Get more AI" for the
+                        // out-of-credits chip, regardless of admin/non-admin branching.
                         let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
-                        let upgrade_text = if !has_admin_permissions {
-                            COMPARE_PLANS_TEXT
-                        } else if team.billing_metadata.can_upgrade_to_build_plan() {
-                            "Upgrade to Build"
-                        } else {
-                            UPGRADE_TEXT
-                        };
-
-                        text_fragments
-                            .push(FormattedTextFragment::hyperlink(upgrade_text, upgrade_url));
+                        text_fragments.push(FormattedTextFragment::hyperlink(
+                            GET_MORE_AI_TEXT,
+                            upgrade_url,
+                        ));
                     } else {
                         text_fragments.push(FormattedTextFragment::hyperlink(
                             CONTACT_SUPPORT_TEXT,
@@ -312,17 +321,10 @@ impl PromptAlertView {
                 } else {
                     let user_id = auth_state.user_id().unwrap_or_default();
                     let upgrade_url = UserWorkspaces::upgrade_link(user_id);
-                    let label =
-                        if let Some(workspace) = UserWorkspaces::as_ref(app).current_workspace() {
-                            if workspace.billing_metadata.can_upgrade_to_build_plan() {
-                                "Upgrade to Build"
-                            } else {
-                                UPGRADE_TEXT
-                            }
-                        } else {
-                            UPGRADE_TEXT
-                        };
-                    text_fragments.push(FormattedTextFragment::hyperlink(label, upgrade_url));
+                    text_fragments.push(FormattedTextFragment::hyperlink(
+                        GET_MORE_AI_TEXT,
+                        upgrade_url,
+                    ));
                 }
                 if UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app) {
                     text_fragments.push(FormattedTextFragment::plain_text(" or "));
