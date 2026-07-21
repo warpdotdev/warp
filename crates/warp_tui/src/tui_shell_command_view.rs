@@ -208,6 +208,7 @@ impl TuiShellCommandView {
         }
         self.action = action;
         self.output_streaming = output_streaming;
+        self.invalidate_layout(ctx);
     }
 
     pub(super) fn active_permission_prompt(

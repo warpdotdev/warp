@@ -342,7 +342,11 @@ impl TuiView for TuiPermissionPrompt {
 
     fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
         let mut context = Self::default_keymap_context();
-        if self.is_active(app) {
+        let body_editor_focused = self
+            .body_editor
+            .as_ref()
+            .is_some_and(|editor| editor.as_ref(app).is_focused());
+        if self.is_active(app) && !body_editor_focused {
             context.set.insert(PERMISSION_PROMPT_ACTIVE);
         }
         context

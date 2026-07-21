@@ -168,6 +168,36 @@ fn finishing_command_editing_selects_yes_without_executing() {
 }
 
 #[test]
+fn streamed_action_refresh_invalidates_layout() {
+    App::test((), |mut app| async move {
+        let action = command_action("action-1", "echo original");
+        let view = add_shell_view(
+            &mut app,
+            action.clone(),
+            Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
+        );
+        let layout_invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = layout_invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&view, move |_, event, _| match event {
+                TuiShellCommandViewEvent::LayoutChanged => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+                TuiShellCommandViewEvent::BlockingStateChanged
+                | TuiShellCommandViewEvent::ReplacementGuidanceSubmitted(_) => {}
+            });
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.command_was_edited = true;
+            view.update_action(action, true, ctx);
+        });
+
+        assert_eq!(layout_invalidations.get(), 1);
+    });
+}
+
+#[test]
 fn terminal_block_is_collapsed_by_default_and_expands_inline() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());

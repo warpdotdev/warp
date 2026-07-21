@@ -1415,6 +1415,7 @@ impl TuiAIBlock {
                 TuiToolCallView::ShellCommand(view) => view.as_ref(app).is_expanded(),
                 TuiToolCallView::AskQuestion(_)
                 | TuiToolCallView::FileEdits(_)
+                | TuiToolCallView::Generic(_)
                 | TuiToolCallView::Plan(_)
                 | TuiToolCallView::OrchestrationBlock(_) => false,
             })

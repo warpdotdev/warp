@@ -124,7 +124,7 @@ fn leading_editor_participates_in_selector_focus_cycle() {
             );
             assert_eq!(prompt.selector.as_ref(ctx).highlighted_index(), None);
             assert!(
-                prompt
+                !prompt
                     .keymap_context(ctx)
                     .set
                     .contains(PERMISSION_PROMPT_ACTIVE)
