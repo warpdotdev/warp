@@ -195,10 +195,9 @@ impl AIExecutionProfilesModel {
                 .is_value_explicitly_set()
         {
             let mut profiles = ExecutionProfilesConfig::default();
-            profiles.insert(
-                ExecutionProfileId::default_profile(),
-                super::create_default_from_legacy_settings(ctx),
-            );
+            let mut default_profile = super::create_default_from_legacy_settings(ctx);
+            default_profile.execute_commands = ActionPermission::AgentDecides;
+            profiles.insert(ExecutionProfileId::default_profile(), default_profile);
             if let Err(error) = AISettings::handle(ctx).update(ctx, |settings, ctx| {
                 settings.execution_profiles.set_value(profiles.clone(), ctx)
             }) {

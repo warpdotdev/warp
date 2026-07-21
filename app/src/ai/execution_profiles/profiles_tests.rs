@@ -8,7 +8,7 @@ use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, ExecutionProfileId,
-    WriteToPtyPermission,
+    WriteToPtyPermission, create_default_from_legacy_settings,
 };
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::user::TEST_USER_UID;
@@ -119,6 +119,116 @@ fn collection_with_profile(
         },
     );
     profiles
+}
+
+#[test]
+fn tui_missing_collection_seeds_agent_decides_for_execute_commands() {
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_for_test());
+
+        let expected_legacy_seed = app.read(create_default_from_legacy_settings);
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(
+                &LaunchMode::Tui {
+                    mount: Box::new(|_| {}),
+                    api_key: None,
+                },
+                ctx,
+            )
+        });
+
+        profile_model.read(&app, |model, ctx| {
+            let profile_info = model.default_profile(ctx);
+            let profile = profile_info.data();
+            assert_eq!(
+                profile.command_allowlist,
+                expected_legacy_seed.command_allowlist
+            );
+            assert_eq!(
+                profile.command_denylist,
+                expected_legacy_seed.command_denylist
+            );
+            assert_eq!(
+                profile.execute_commands,
+                ActionPermission::AgentDecides,
+                "a fresh TUI profile should let the agent decide whether to execute commands"
+            );
+            assert_eq!(profile.name, expected_legacy_seed.name);
+            assert_eq!(
+                profile.directory_allowlist,
+                expected_legacy_seed.directory_allowlist
+            );
+            assert_eq!(profile.read_files, expected_legacy_seed.read_files);
+            assert_eq!(
+                profile.apply_code_diffs,
+                expected_legacy_seed.apply_code_diffs
+            );
+            assert_eq!(profile.write_to_pty, expected_legacy_seed.write_to_pty);
+            assert_eq!(
+                profile.mcp_permissions,
+                expected_legacy_seed.mcp_permissions
+            );
+        });
+    })
+}
+
+#[test]
+fn tui_explicit_collection_preserves_execute_commands() {
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_for_test());
+        let explicit_profile = AIExecutionProfile {
+            name: "Explicit TUI profile".to_string(),
+            is_default_profile: true,
+            execute_commands: ActionPermission::AlwaysAsk,
+            ..Default::default()
+        };
+        app.update(|ctx| {
+            let mut profiles = crate::ai::execution_profiles::ExecutionProfilesConfig::default();
+            profiles.insert(ExecutionProfileId::default_profile(), explicit_profile);
+            AISettings::handle(ctx)
+                .update(ctx, |settings, ctx| {
+                    settings.execution_profiles.set_value(profiles, ctx)
+                })
+                .unwrap();
+        });
+
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(
+                &LaunchMode::Tui {
+                    mount: Box::new(|_| {}),
+                    api_key: None,
+                },
+                ctx,
+            )
+        });
+
+        profile_model.read(&app, |model, ctx| {
+            assert_eq!(
+                model.default_profile(ctx).data().execute_commands,
+                ActionPermission::AlwaysAsk
+            );
+        });
+    })
+}
+
+#[test]
+fn gui_default_execute_commands_remains_always_ask() {
+    let _guard = FeatureFlag::FileBackedExecutionProfiles.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_for_test());
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+
+        profile_model.read(&app, |model, ctx| {
+            assert_eq!(
+                model.default_profile(ctx).data().execute_commands,
+                ActionPermission::AlwaysAsk,
+                "the GUI/legacy default must remain conservative"
+            );
+        });
+    })
 }
 
 /// Regression test for the onboarding autonomy bug where
