@@ -46,11 +46,20 @@ impl UseComputerExecutor {
         };
 
         let labels = computer_use::overlay_labels_for(&request.actions, &request.action_summary);
-        if !labels.is_empty() {
+        let meaningful = computer_use::is_meaningful_action_group(&request.actions);
+        // Reserve a group start (pending) for meaningful calls so the recording's
+        // post-stop smart cut keeps the call's real action window at 1x and drops
+        // only blocked/thinking gaps. A pointer-only group commits with empty
+        // labels; a wait-only/no-op batch (e.g. a screenshot-only `Wait(0)`) is
+        // not meaningful and is ignored. The finish offset is captured from the
+        // returned capture start instant when the actor future returns.
+        let recording_started_at = if meaningful {
             RecordingController::handle(ctx).update(ctx, |controller, _| {
-                controller.record_action(conversation_id, labels);
-            });
-        }
+                controller.begin_action_group(conversation_id, labels)
+            })
+        } else {
+            None
+        };
 
         let actions = request.actions.clone();
         let screenshot_params = request.screenshot_params;
@@ -68,7 +77,7 @@ impl UseComputerExecutor {
         actor.set_background_session_owner(Some(conversation_id.to_string()));
         ActionExecution::new_async(
             async move {
-                match actor
+                let result = match actor
                     .perform_actions(
                         &actions,
                         computer_use::Options {
@@ -80,9 +89,32 @@ impl UseComputerExecutor {
                 {
                     Ok(result) => UseComputerResult::Success(result),
                     Err(error) => UseComputerResult::Error(error),
-                }
+                };
+                // Capture the finish offset immediately after the complete
+                // sequential batch (including any explicit waits and the
+                // post-action screenshot) returns, measured against the
+                // recording's capture start instant.
+                let finish_offset = recording_started_at
+                    .and_then(|started| instant::Instant::now().checked_duration_since(started));
+                (result, finish_offset)
             },
-            |res, _ctx| AIAgentActionResultType::UseComputer(res),
+            move |(result, finish_offset), ctx| {
+                if meaningful {
+                    RecordingController::handle(ctx).update(ctx, |controller, _| match result {
+                        UseComputerResult::Success(_) => {
+                            if let Some(finish_offset) = finish_offset {
+                                controller.commit_action_group(conversation_id, finish_offset);
+                            } else {
+                                controller.discard_action_group(conversation_id);
+                            }
+                        }
+                        UseComputerResult::Error(_) | UseComputerResult::Cancelled => {
+                            controller.discard_action_group(conversation_id);
+                        }
+                    });
+                }
+                AIAgentActionResultType::UseComputer(result)
+            },
         )
     }
 

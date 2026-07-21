@@ -88,20 +88,24 @@ impl StartRecordingExecutor {
                     .filter(|&s| s > 1)
                     .map(|s| s as f32)
                     .unwrap_or(defaults.playback_speed_multiplier);
+                let resolved_frame_rate = if frame_rate > 0 {
+                    frame_rate
+                } else {
+                    defaults.frame_rate
+                };
                 let config = computer_use::RecordingConfig {
-                    frame_rate: if frame_rate > 0 {
-                        frame_rate
-                    } else {
-                        defaults.frame_rate
-                    },
+                    frame_rate: resolved_frame_rate,
                     max_duration: max_duration.unwrap_or(defaults.max_duration),
                     max_size_bytes: max_size_bytes.unwrap_or(defaults.max_size_bytes),
                     playback_speed_multiplier,
                     target,
                 };
-                recorder.start(config).await
+                // Carry the resolved frame rate to the completion callback so the
+                // controller can store it for the post-stop smart cut's one-frame
+                // minimum, even though it is not echoed back to the server.
+                (recorder.start(config).await, resolved_frame_rate)
             },
-            move |result, ctx| match result {
+            move |(result, frame_rate), ctx| match result {
                 Ok(handle) => {
                     let recording_id = Uuid::new_v4().to_string();
                     let started_at = SystemTime::now();
@@ -109,7 +113,12 @@ impl StartRecordingExecutor {
                     let height_px = handle.height() as i32;
                     let controller = RecordingController::handle(ctx);
                     controller.update(ctx, |controller, _| {
-                        controller.finish_start(recording_id.clone(), conversation_id, handle);
+                        controller.finish_start(
+                            recording_id.clone(),
+                            conversation_id,
+                            handle,
+                            frame_rate,
+                        );
                     });
                     #[cfg(not(target_family = "wasm"))]
                     controller.update(ctx, |_controller, ctx| {
