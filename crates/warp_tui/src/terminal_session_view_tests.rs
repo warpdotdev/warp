@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{rc::Rc, time::Duration};
 
 use instant::Instant;
 use warp::appearance::Appearance;
@@ -10,6 +10,7 @@ use warp::tui_export::{
     SizeInfo, SizeUpdate, TranscriptScope, export_conversation_markdown,
     register_tui_session_view_test_singletons, slash_commands,
 };
+use warpui_core::event::ModifiersState;
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -19,8 +20,8 @@ use warpui::{
 use warpui_core::r#async::Timer;
 use warpui_core::elements::tui::{
     Color, TuiBuffer, TuiBufferExt, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement,
-    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
-    TuiStyle, TuiText,
+    TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint,
+    TuiRect, TuiScene, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::keymap::{Context, Keystroke, Trigger};
 use warpui_core::presenter::tui::TuiPresenter;
@@ -92,6 +93,218 @@ fn inline_menu_padding_preserves_result_capacity() {
             assert!(lines[0].trim().is_empty());
             assert_eq!(&lines[1..], menu_rows);
         });
+    });
+}
+
+fn mouse_moved(x: u16, y: u16) -> TuiEvent {
+    TuiEvent::MouseMoved {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState::default(),
+        is_synthetic: false,
+    }
+}
+
+fn left_mouse_down(x: u16, y: u16) -> TuiEvent {
+    TuiEvent::LeftMouseDown {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState::default(),
+        click_count: 1,
+        is_first_mouse: false,
+    }
+}
+
+fn left_mouse_up(x: u16, y: u16) -> TuiEvent {
+    TuiEvent::LeftMouseUp {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState::default(),
+    }
+}
+
+/// Renders the session view's element tree outside the presenter so the test
+/// can dispatch mouse events against the retained element + scene. Child views
+/// (transcript/input/attachment bar) are absent from `rendered_views`, so they
+/// lay out zero-size; the footer — part of the session view's own tree —
+/// renders with the clickable model label.
+fn render_retained_session(
+    app: &App,
+    view: &ViewHandle<super::TuiTerminalSessionView>,
+    width: u16,
+    height: u16,
+) -> (Box<dyn TuiElement>, Rc<TuiScene>, TuiBuffer) {
+    app.read(|ctx| {
+        let mut element = ctx
+            .render_tui_view(view.window_id(ctx), view.id())
+            .expect("session view should render");
+        let mut rendered_views = EntityIdMap::default();
+        let mut layout_ctx = TuiLayoutContext {
+            rendered_views: &mut rendered_views,
+        };
+        let size = element.layout(
+            TuiConstraint::loose(TuiSize::new(width, height)),
+            &mut layout_ctx,
+            ctx,
+        );
+        element.after_layout(&mut layout_ctx, ctx);
+        let area = TuiRect::new(0, 0, size.width.min(width), size.height.min(height));
+        let mut buffer = TuiBuffer::empty(area);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        {
+            let mut surface = TuiPaintSurface::new(&mut buffer);
+            element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+        }
+        let scene = Rc::new(paint_ctx.scene.clone());
+        (element, scene, buffer)
+    })
+}
+
+/// Dispatches `event` into the retained session element tree with the session
+/// view as the action origin, returning whether the tree handled it.
+fn dispatch_session_event(
+    app: &App,
+    view: &ViewHandle<super::TuiTerminalSessionView>,
+    element: &mut Box<dyn TuiElement>,
+    scene: Rc<TuiScene>,
+    event: &TuiEvent,
+) -> bool {
+    app.read(|ctx| {
+        let mut rendered_views = EntityIdMap::default();
+        let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+        event_ctx.set_origin_view(Some(view.id()));
+        element.dispatch_event(event, &mut event_ctx, ctx)
+    })
+}
+
+/// Locates the footer's active-model label in the rendered buffer, returning
+/// the (column, row) of its first cell. Counts chars (not bytes) so multi-byte
+/// glyphs earlier in the footer row don't shift the column.
+fn model_label_position(buffer: &TuiBuffer, model_name: &str) -> (u16, u16) {
+    let lines = buffer.to_lines();
+    for (row, line) in lines.iter().enumerate() {
+        if let Some(byte_offset) = line.find(model_name) {
+            let col = line[..byte_offset].chars().count() as u16;
+            return (col, row as u16);
+        }
+    }
+    panic!(
+        "model label {:?} not found in rendered footer:\n{}",
+        model_name,
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn open_model_menu_action_opens_the_inline_model_menu() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.read(&app, |view, ctx| {
+            assert!(
+                !view.model_menu.as_ref(ctx).is_open(ctx),
+                "model menu should start closed"
+            );
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::OpenModelMenu, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert!(
+                view.model_menu.as_ref(ctx).is_open(ctx),
+                "OpenModelMenu action should open the inline model menu"
+            );
+        });
+    });
+}
+
+#[test]
+fn footer_model_label_is_a_bounded_click_target() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        // Force the bootstrap (Disabled) state so the footer — and its
+        // clickable model label — render deterministically.
+        view.update(&mut app, |view, _| {
+            view.terminal_model.lock().block_list_mut().reinit_shell();
+        });
+
+        let model_name = view.read(&app, |view, ctx| {
+            LLMPreferences::as_ref(ctx)
+                .get_active_base_model(ctx, Some(view.terminal_surface_id))
+                .display_name
+                .clone()
+        });
+        let (mut element, scene, buffer) = render_retained_session(&app, &view, 80, 40);
+        let (label_col, label_row) = model_label_position(&buffer, &model_name);
+        let inside = (label_col + 1, label_row);
+        let outside = (0, label_row);
+
+        assert!(!view.read(&app, |v, _| {
+            v.model_label_hover.lock().unwrap().is_hovered()
+        }));
+        // Hovering onto the label marks the retained handle as hovered.
+        dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &mouse_moved(inside.0, inside.1),
+        );
+        assert!(view.read(&app, |v, _| {
+            v.model_label_hover.lock().unwrap().is_hovered()
+        }));
+        // Hovering back off (into the left footer slot) clears it.
+        dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &mouse_moved(outside.0, outside.1),
+        );
+        assert!(!view.read(&app, |v, _| {
+            v.model_label_hover.lock().unwrap().is_hovered()
+        }));
+
+        // A press inside the label arms the pending click and is consumed.
+        assert!(dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &left_mouse_down(inside.0, inside.1)
+        ));
+        assert!(view.read(&app, |v, _| {
+            v.model_label_hover.lock().unwrap().is_clicked()
+        }));
+        // Releasing inside disarms (the click handler dispatches OpenModelMenu).
+        assert!(dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &left_mouse_up(inside.0, inside.1)
+        ));
+        assert!(!view.read(&app, |v, _| {
+            v.model_label_hover.lock().unwrap().is_clicked()
+        }));
+
+        // A press outside the label does not arm and is not consumed.
+        assert!(!dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &left_mouse_down(outside.0, outside.1)
+        ));
+        assert!(!view.read(&app, |v, _| {
+            v.model_label_hover.lock().unwrap().is_clicked()
+        }));
+        // A following release outside does not fire a click.
+        assert!(!dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &left_mouse_up(outside.0, outside.1)
+        ));
     });
 }
 
@@ -754,7 +967,12 @@ fn footer_renders_agent_sections_left_aligned() {
             let row = render_status_footer_row(
                 FooterSegments {
                     shell_mode: false,
-                    model_name: Some("TestModel".to_owned()),
+                    model_label: Some(
+                        TuiText::new("TestModel")
+                            .with_style(builder.primary_text_style())
+                            .truncate()
+                            .finish(),
+                    ),
                     cwd: Some("/home/user/warp".to_owned()),
                     branch: Some("main".to_owned()),
                     usage: Some(usage),
@@ -818,7 +1036,12 @@ fn footer_renders_bash_sections_without_model_or_usage() {
             let row = render_status_footer_row(
                 FooterSegments {
                     shell_mode: true,
-                    model_name: Some("TestModel".to_owned()),
+                    model_label: Some(
+                        TuiText::new("TestModel")
+                            .with_style(builder.primary_text_style())
+                            .truncate()
+                            .finish(),
+                    ),
                     cwd: Some("/home/user/warp".to_owned()),
                     branch: Some("main".to_owned()),
                     usage: Some(usage),

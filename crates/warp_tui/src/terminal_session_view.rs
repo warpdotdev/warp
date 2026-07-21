@@ -44,8 +44,10 @@ use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
+use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiText,
+    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiSize,
+    TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
@@ -197,8 +199,8 @@ struct FooterSegments {
     /// Whether the input is in `!` shell mode: the shell-mode indicator leads
     /// the row and the model/usage segments are hidden.
     shell_mode: bool,
-    /// The active base model's display name. Hidden in shell mode.
-    model_name: Option<String>,
+    /// The clickable active-model label. Hidden in shell mode.
+    model_label: Option<Box<dyn TuiElement>>,
     /// The session's compacted working directory. Part of the combined
     /// cwd/branch section.
     cwd: Option<String>,
@@ -226,8 +228,9 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
     let mut row = TuiFlex::row();
     let mut has_segment = false;
 
-    // First segment: the shell-mode indicator (shell mode) or the model name
-    // (agent mode). Shell mode hides the model segment so the indicator leads.
+    // First segment: the shell-mode indicator (shell mode) or the clickable
+    // model label (agent mode). Shell mode hides the model segment so the
+    // indicator leads.
     if segments.shell_mode {
         row = row.child(
             TuiText::new(SHELL_MODE_HINT)
@@ -236,13 +239,8 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
                 .finish(),
         );
         has_segment = true;
-    } else if let Some(model_name) = segments.model_name {
-        row = row.child(
-            TuiText::new(model_name)
-                .with_style(builder.primary_text_style())
-                .truncate()
-                .finish(),
-        );
+    } else if let Some(model_label) = segments.model_label {
+        row = row.child(model_label);
         has_segment = true;
     }
 
@@ -363,6 +361,9 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Click on the footer's usage entry: flips the persisted credits⇄cost
     /// display-mode setting.
     ToggleUsageDisplay,
+    /// Click on the footer's active-model label: opens the inline model
+    /// picker (the same menu `/model` surfaces).
+    OpenModelMenu,
     /// Raw user bytes to forward to the foreground PTY process.
     ForwardUserPtyBytes(Vec<u8>),
     /// Ctrl-d while the prompt is focused: exit the TUI immediately when the
@@ -417,6 +418,10 @@ pub(crate) struct TuiTerminalSessionView {
     exit_confirmation: ExitConfirmation,
     /// Credits⇄cost display state for the footer's clickable usage entry.
     usage_toggle: UsageToggle,
+    /// Hover state for the footer's clickable active-model label, owned here
+    /// (not created inline during render) so it survives element-tree rebuilds
+    /// — the same `MouseStateHandle` pattern as [`UsageToggle`].
+    model_label_hover: MouseStateHandle,
     keyboard_enhancement_supported: bool,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
@@ -1394,6 +1399,7 @@ impl TuiTerminalSessionView {
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
             usage_toggle: UsageToggle::default(),
+            model_label_hover: MouseStateHandle::default(),
             keyboard_enhancement_supported,
             ai_context_model: context_model,
             ai_input_model,
@@ -2157,14 +2163,40 @@ impl TuiTerminalSessionView {
 
         // Normal left-aligned sectioned status row.
         let git_metadata = self.git_status_metadata(ctx);
-        let model_name = if shell_mode {
+        let model_label = if shell_mode {
             None
         } else {
+            let model_name = LLMPreferences::as_ref(ctx)
+                .get_active_base_model(ctx, Some(self.terminal_surface_id))
+                .display_name
+                .clone();
+            // The active-model label is clickable: a left click opens the
+            // inline model picker (the same menu `/model` surfaces). The hover
+            // state lives on a retained [`MouseStateHandle`] so it survives
+            // element-tree rebuilds, and the click dispatches a typed action
+            // since the element pass only has an immutable [`AppContext`] —
+            // mirroring the usage entry.
+            let model_label_hovered = self
+                .model_label_hover
+                .lock()
+                .is_ok_and(|state| state.is_hovered());
+            let model_label_style = if model_label_hovered {
+                builder.primary_text_style()
+            } else {
+                builder.muted_text_style()
+            };
             Some(
-                LLMPreferences::as_ref(ctx)
-                    .get_active_base_model(ctx, Some(self.terminal_surface_id))
-                    .display_name
-                    .clone(),
+                TuiHoverable::new(
+                    self.model_label_hover.clone(),
+                    TuiText::new(model_name)
+                        .with_style(model_label_style)
+                        .truncate()
+                        .finish(),
+                )
+                .on_click(|event_ctx, _| {
+                    event_ctx.dispatch_typed_action(TuiTerminalSessionAction::OpenModelMenu);
+                })
+                .finish(),
             )
         };
         let cwd = self
@@ -2202,7 +2234,7 @@ impl TuiTerminalSessionView {
         render_status_footer_row(
             FooterSegments {
                 shell_mode,
-                model_name,
+                model_label,
                 cwd,
                 branch,
                 usage,
@@ -2257,6 +2289,14 @@ impl TuiTerminalSessionView {
                 report_error!("failed to persist the TUI usage display mode: {error:#}");
             }
         });
+    }
+
+    /// Opens the inline model picker from the footer's active-model label —
+    /// the same menu `/model` surfaces. [`TuiModelMenuModel::open`] preserves
+    /// the `try_open`/active-menu arbitration and the existing
+    /// acceptance/persistence flow.
+    fn open_model_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        self.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
     }
 
     /// The selected conversation's accumulated usage totals, or `None` (entry
@@ -3200,6 +3240,7 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.hand_back_terminal_use_control(ctx)
             }
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
+            TuiTerminalSessionAction::OpenModelMenu => self.open_model_menu(ctx),
             TuiTerminalSessionAction::FocusDefaultInteractionTarget => {
                 self.set_orchestration_tab_focus(false, ctx)
             }
