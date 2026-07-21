@@ -1491,6 +1491,10 @@ pub enum BlockItem {
         source: String,
         asset_source: AssetSource,
         config: ImageBlockConfig,
+        /// Persists hover state across re-layouts so the alt-text tooltip's
+        /// hover tracking is stable, mirroring [`BlockItem::TaskList`] and
+        /// [`HiddenBlockConfig`].
+        mouse_state: MouseStateHandle,
     },
     Table(Box<LaidOutTable>),
     TrailingNewLine(Cursor),

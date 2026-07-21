@@ -917,7 +917,11 @@ impl<V: EditorView> RichTextElement<V> {
                     } => RenderableTemporaryBlock::new(item, *decoration, text_decoration.clone())
                         .finish(),
                     BlockItem::HorizontalRule(_) => HorizontalRule::new(item).finish(),
-                    BlockItem::Image { .. } => RenderableImage::new(item).finish(),
+                    BlockItem::Image {
+                        alt_text,
+                        mouse_state,
+                        ..
+                    } => RenderableImage::new(item, alt_text.clone(), mouse_state.clone()).finish(),
                     BlockItem::Table { .. } => RenderableTable::new(item).finish(),
                     BlockItem::TrailingNewLine(_) => Empty::new(item).finish(),
                     BlockItem::Hidden(config) => {

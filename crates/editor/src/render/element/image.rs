@@ -1,15 +1,20 @@
+use warp_core::ui::appearance::Appearance;
 use warpui_core::elements::{
-    CacheOption, ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, Image, ParentElement,
-    Text,
+    CacheOption, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, Image,
+    MouseStateHandle, ParentAnchor, ParentElement, Text,
 };
 use warpui_core::geometry::vector::vec2f;
-use warpui_core::{Element, SizeConstraint};
+use warpui_core::{Element, SingletonEntity, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
 use crate::extract_block;
 use crate::render::element::paint::{CursorData, CursorDisplayType};
 use crate::render::model::viewport::ViewportItem;
 use crate::render::model::{BlockItem, RenderState, RichTextStyles};
+
+/// Gap between the image and its alt-text tooltip, matching the hidden-section
+/// tooltip's vertical offset from its anchor.
+const TOOLTIP_OFFSET: f32 = 4.;
 
 /// Text shown alongside the broken-image glyph when an image fails to load.
 /// Prefers the image's alt text; falls back to a generic notice when the alt
@@ -60,6 +65,11 @@ fn broken_image_placeholder(alt_text: &str, styles: &RichTextStyles) -> Box<dyn 
 
 pub struct RenderableImage {
     viewport_item: ViewportItem,
+    /// The image's alt text, shown as a hover tooltip. Empty when the source
+    /// markdown gave no alt text, in which case no tooltip is attached.
+    alt_text: String,
+    /// Persists hover state across re-layouts so tooltip hover tracking is stable.
+    mouse_state: MouseStateHandle,
     // TODO: The AssetCache does not currently support automatic eviction of assets when they are
     // dropped. We should consider implementing a mechanism to unload images when they are no longer
     // visible or referenced.
@@ -67,9 +77,15 @@ pub struct RenderableImage {
 }
 
 impl RenderableImage {
-    pub fn new(viewport_item: ViewportItem) -> Self {
+    pub fn new(
+        viewport_item: ViewportItem,
+        alt_text: String,
+        mouse_state: MouseStateHandle,
+    ) -> Self {
         Self {
             viewport_item,
+            alt_text,
+            mouse_state,
             image_element: None,
         }
     }
@@ -87,24 +103,44 @@ impl RenderableBlock for RenderableImage {
         app: &warpui_core::AppContext,
     ) {
         let content = model.content();
-        let (asset_source, config, alt_text) = extract_block!(
+        let (asset_source, config) = extract_block!(
             self.viewport_item,
             content,
-            (_block, BlockItem::Image { asset_source, config, alt_text, .. }) => (asset_source.clone(), *config, alt_text.clone())
+            (_block, BlockItem::Image { asset_source, config, .. }) => (asset_source.clone(), *config)
         );
 
-        let placeholder = broken_image_placeholder(&alt_text, model.styles());
+        let placeholder = broken_image_placeholder(&self.alt_text, model.styles());
 
         let size = vec2f(config.width.as_f32(), config.height.as_f32());
-        let mut image = Image::new(asset_source, CacheOption::BySize)
+        let image = Image::new(asset_source, CacheOption::BySize)
             .contain()
             .first_frame_preview()
-            .on_load_failure(placeholder);
+            .on_load_failure(placeholder)
+            .finish();
+
+        // Show the alt text on hover so it's reachable without loading the image
+        // (and remains available for the broken-image placeholder). Use the
+        // overlay variant so the tooltip escapes the editor's viewport clip, and
+        // anchor it below the image, mirroring the hidden-section tooltip.
+        let mut element: Box<dyn Element> = if self.alt_text.trim().is_empty() {
+            image
+        } else {
+            Appearance::as_ref(app)
+                .ui_builder()
+                .overlay_tool_tip_on_element(
+                    self.alt_text.clone(),
+                    self.mouse_state.clone(),
+                    image,
+                    ParentAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                    vec2f(0., TOOLTIP_OFFSET),
+                )
+        };
 
         let constraint = SizeConstraint::new(vec2f(0., 0.), size);
-        image.layout(constraint, ctx, app);
+        element.layout(constraint, ctx, app);
 
-        self.image_element = Some(Box::new(image));
+        self.image_element = Some(element);
     }
 
     fn paint(
@@ -151,6 +187,30 @@ impl RenderableBlock for RenderableImage {
                 CursorData::default(),
                 model.styles(),
             );
+        }
+    }
+
+    fn after_layout(
+        &mut self,
+        ctx: &mut warpui_core::AfterLayoutContext,
+        app: &warpui_core::AppContext,
+    ) {
+        if let Some(ref mut image_element) = self.image_element {
+            image_element.after_layout(ctx, app);
+        }
+    }
+
+    fn dispatch_event(
+        &mut self,
+        _model: &RenderState,
+        event: &warpui_core::event::DispatchedEvent,
+        ctx: &mut warpui_core::EventContext,
+        app: &warpui_core::AppContext,
+    ) -> bool {
+        if let Some(ref mut image_element) = self.image_element {
+            image_element.dispatch_event(event, ctx, app)
+        } else {
+            false
         }
     }
 }
