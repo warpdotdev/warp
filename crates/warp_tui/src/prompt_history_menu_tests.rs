@@ -3,7 +3,7 @@
 //! acceptance, and empty states.
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
-use warp::tui_export::BlocklistAIHistoryModel;
+use warp::tui_export::blocklist_ai_history_model_with_queries;
 use warp_editor::model::CoreEditorModel;
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
@@ -27,7 +27,7 @@ fn setup(
 ) {
     ctx.add_singleton_model(|_| Appearance::mock());
     ctx.add_singleton_model(|_| {
-        BlocklistAIHistoryModel::mock_with_ai_queries(
+        blocklist_ai_history_model_with_queries(
             prompts.iter().map(|prompt| (*prompt).to_owned()).collect(),
         )
     });

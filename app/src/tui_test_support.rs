@@ -2,25 +2,28 @@
 
 use ai::api_keys::ApiKeyManager;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+use chrono::{Duration, Local};
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{ModelContext, SingletonEntity as _};
 
 use crate::LaunchMode;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::AIAgentAction;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{AIAgentAction, AIAgentExchangeId};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::blocklist::history_model::AIQueryHistoryOutputStatus;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{
-    BlocklistAIActionModel, BlocklistAIHistoryModel, BlocklistAIPermissions, QueuedQueryModel,
+    BlocklistAIActionModel, BlocklistAIHistoryModel, BlocklistAIPermissions, PersistedAIInput,
+    PersistedAIInputType, QueuedQueryModel,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -34,6 +37,31 @@ use crate::settings::{AISettings, PrivacySettings, init_and_register_user_prefer
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::user_config::WarpConfig;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+
+/// Builds a history model with persisted AI queries for TUI tests.
+pub fn blocklist_ai_history_model_with_queries(queries: Vec<String>) -> BlocklistAIHistoryModel {
+    let start_time = Local::now();
+    let persisted_queries = queries
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| PersistedAIInput {
+            exchange_id: AIAgentExchangeId::new(),
+            conversation_id: AIConversationId::new(),
+            start_ts: start_time + Duration::milliseconds(index as i64),
+            inputs: vec![PersistedAIInputType::Query {
+                text,
+                context: Default::default(),
+                referenced_attachments: Default::default(),
+            }],
+            output_status: AIQueryHistoryOutputStatus::Completed,
+            working_directory: None,
+            model_id: LLMId::from("test-model"),
+            coding_model_id: LLMId::from("test-model"),
+        })
+        .collect();
+
+    BlocklistAIHistoryModel::new(persisted_queries, Vec::new(), &[])
+}
 
 /// Queues an action as the active confirmation request for a TUI view test.
 pub fn queue_tui_permission_action(

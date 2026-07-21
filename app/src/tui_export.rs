@@ -203,7 +203,8 @@ pub use crate::tui::{
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::tui_test_support::{
-    queue_tui_permission_action, register_tui_session_view_test_singletons,
+    blocklist_ai_history_model_with_queries, queue_tui_permission_action,
+    register_tui_session_view_test_singletons,
 };
 pub use crate::util::image::{
     MAX_IMAGE_COUNT_FOR_QUERY, MAX_IMAGE_SIZE_BYTES, MIME_SNIFF_BYTES, ProcessImageResult,

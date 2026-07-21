@@ -14,7 +14,7 @@ use warp::settings::AISettingsChangedEvent;
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIHistoryModel, BlocklistAIInputModel,
     ConversationSelectionEvent, InputConfig, InputModePolicy, InputType, LLMId, PolicyConfigUpdate,
-    SlashCommandId, SlashCommandMixer,
+    SlashCommandId, SlashCommandMixer, blocklist_ai_history_model_with_queries,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
@@ -159,7 +159,7 @@ fn build_view_with_prompt_history(
     ctx.add_singleton_model(|_| Appearance::mock());
     add_test_semantic_selection(ctx);
     ctx.add_singleton_model(|_| {
-        BlocklistAIHistoryModel::mock_with_ai_queries(
+        blocklist_ai_history_model_with_queries(
             prompts.iter().map(|prompt| (*prompt).to_owned()).collect(),
         )
     });
