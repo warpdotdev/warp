@@ -2065,10 +2065,10 @@ impl TuiTerminalSessionView {
         })
     }
 
-    /// Builds the status footer under the input box. The row is left-aligned
-    /// with ` │ `-separated sections: in agent mode `[model] │ [cwd ↬ branch]
-    /// │ [usage] │ [+N -M]`, and in shell mode `[shell mode] │ [cwd ↬ branch]
-    /// │ [+N -M]` (model and usage hidden). A replacing hint — the ctrl-c exit
+    /// Builds the status footer under the input box. The row is left-aligned:
+    /// in agent mode `[model] [cwd ↬ branch] • [usage] • [+N -M]`, and in shell
+    /// mode `[shell mode] [cwd ↬ branch] • [+N -M]` (model and usage hidden).
+    /// A replacing hint — the ctrl-c exit
     /// confirmation while armed, the conversation-list loading hint, an active
     /// transient notice, or the `Shift + ↑ sub-agents` orchestration callout
     /// in agent mode — occupies the whole row instead; shell mode wins over

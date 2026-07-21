@@ -683,8 +683,8 @@ fn footer_conversations_callout_no_longer_renders() {
             "no conversations-callout glyph remains: {row}"
         );
         assert!(
-            row.contains('│'),
-            "the sectioned status row renders in place of the callout: {row}"
+            row.starts_with("auto (cost-efficient) "),
+            "the model-led status row renders in place of the callout: {row}"
         );
     });
 }
