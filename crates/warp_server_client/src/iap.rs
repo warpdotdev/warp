@@ -167,6 +167,25 @@ impl IapState {
         };
     }
 
+    /// Discards a credential that the server rejected while retaining the
+    /// surrounding refresh/failure state. Unlike proactive refreshes, reactive
+    /// refreshes must not keep attaching the previous token to new requests.
+    fn invalidate_rejected_token(&self) {
+        let mut state = self.inner.write().expect("IAP state lock poisoned");
+        *state = match &*state {
+            IapCredentialsState::Missing | IapCredentialsState::Loaded(_) => {
+                IapCredentialsState::Missing
+            }
+            IapCredentialsState::Refreshing { .. } => {
+                IapCredentialsState::Refreshing { previous: None }
+            }
+            IapCredentialsState::Failed { message, .. } => IapCredentialsState::Failed {
+                message: message.clone(),
+                previous: None,
+            },
+        };
+    }
+
     fn set_loaded(&self, cached: CachedToken) {
         *self.inner.write().expect("IAP state lock poisoned") = IapCredentialsState::Loaded(cached);
     }
@@ -278,11 +297,28 @@ impl IapManager {
     }
 
     pub fn handle_challenge(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        state.invalidate_rejected_token();
+        if self.managed_mint.is_some() {
+            cache::invalidate();
+        }
         self.consecutive_failures = 0;
-        self.start_refresh(ctx);
+        ctx.emit(IapManagerEvent::StateChanged);
+        ctx.notify();
+        self.start_refresh_with_cache_policy(false, ctx);
     }
 
     pub fn start_refresh(&mut self, ctx: &mut ModelContext<Self>) {
+        self.start_refresh_with_cache_policy(true, ctx);
+    }
+
+    fn start_refresh_with_cache_policy(
+        &mut self,
+        allow_cached_token: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -295,7 +331,7 @@ impl IapManager {
         // only refresh path that works in a sandboxed Oz runner, which ships
         // without gcloud.
         if let Some(mint) = self.managed_mint.clone() {
-            self.start_wif_refresh(state, mint, ctx);
+            self.start_wif_refresh(state, mint, allow_cached_token, ctx);
             return;
         }
 
@@ -348,12 +384,13 @@ impl IapManager {
         &mut self,
         state: Arc<IapState>,
         mint: ManagedIapMint,
+        allow_cached_token: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         // Fast path: reuse a fresh IAP token cache. This is actually required by
         // child processes when the main process spawns a child oz sub-process...
         // i.e. GCP SDK calling `oz federate issue-token --audience warp-cloud-agent-otel`
-        if let Some(cached) = cache::read() {
+        if allow_cached_token && let Some(cached) = cache::read() {
             let expires_at = cached.expires_at;
             state.set_loaded(cached);
             ctx.emit(IapManagerEvent::StateChanged);
@@ -803,6 +840,14 @@ mod cache {
         }
     }
 
+    pub(super) fn invalidate() {
+        match std::fs::remove_file(cache_path()) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => log::warn!("Failed to remove rejected IAP token cache: {err}"),
+        }
+    }
+
     fn write_atomic(token: &str) -> std::io::Result<()> {
         use std::io::Write as _;
 
@@ -832,6 +877,8 @@ mod cache {
     }
 
     pub(super) fn write(_token: &str) {}
+
+    pub(super) fn invalidate() {}
 }
 
 #[cfg(test)]
