@@ -496,6 +496,57 @@ impl UiBuilder {
         )
     }
 
+    /// Like `overlay_tool_tip_on_element`, but anchors the tooltip at the mouse
+    /// pointer rather than at the hovered element's rect. The tooltip's top-left
+    /// is placed at the cursor position captured when hover began (see
+    /// [`MouseState::hover_position`]), nudged by `pointer_offset` (a small
+    /// below-right nudge is conventional so the pointer doesn't cover the text).
+    ///
+    /// This is a position-at-show affordance, not a cursor follower: the
+    /// `Hoverable` only rebuilds on hover-state changes, so the tooltip stays put
+    /// as the pointer moves within the element. It renders as an overlay (escapes
+    /// parent clips) and is repositioned to stay within the window on both axes.
+    /// If no pointer snapshot is available (e.g. hover was entered synthetically
+    /// without a recorded position), it falls back to anchoring below the
+    /// element's bottom-left, matching the element-anchored variant.
+    pub fn overlay_tool_tip_at_pointer(
+        &self,
+        label: String,
+        mouse_state_handle: MouseStateHandle,
+        element: Box<dyn Element>,
+        pointer_offset: Vector2F,
+    ) -> Box<dyn Element> {
+        Hoverable::new(mouse_state_handle, |state| {
+            let mut stack = Stack::new().with_child(element);
+            if state.is_hovered() {
+                let tool_tip = self.tool_tip(label).build().finish();
+                let offset = match state.hover_position() {
+                    // Pointer-relative: `hover_position` is already the cursor
+                    // offset from the element's (parent's) top-left, so anchoring
+                    // the tooltip's top-left to the parent's top-left plus that
+                    // offset places it at the cursor.
+                    Some(pointer) => OffsetPositioning::offset_from_parent(
+                        pointer + pointer_offset,
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                    // Fallback: element-anchored below the bottom-left, mirroring
+                    // `overlay_tool_tip_on_element`.
+                    None => OffsetPositioning::offset_from_parent(
+                        vec2f(0., pointer_offset.y().abs()),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::BottomLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                };
+                stack.add_positioned_overlay_child(tool_tip, offset);
+            }
+            stack.finish()
+        })
+        .finish()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn styled_tool_tip_on_element_internal(
         &self,

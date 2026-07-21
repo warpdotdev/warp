@@ -927,6 +927,156 @@ fn test_overlay_tooltip_does_not_reserve_layout_space_on_hover() {
     });
 }
 
+/// Below-right nudge applied to the pointer in [`HoverPointerTooltipView`],
+/// mirroring the image alt-text tooltip's `TOOLTIP_POINTER_OFFSET`.
+fn tooltip_pointer_offset() -> Vector2F {
+    vec2f(12., 16.)
+}
+
+/// A view mirroring the `overlay_tool_tip_at_pointer` composition used by the
+/// image alt-text tooltip: a [`Hoverable`] wrapping a [`Stack`] whose in-flow
+/// child is a sized base element, plus — when hovered — a tooltip added via
+/// [`Stack::add_positioned_overlay_child`] anchored at the *pointer* rather than
+/// the base's rect. The pointer-relative offset comes from
+/// [`MouseState::hover_position`], reduced to plain [`Rect`] children so it needs
+/// no theme/appearance setup.
+struct HoverPointerTooltipView {
+    mouse_state: MouseStateHandle,
+}
+
+impl HoverPointerTooltipView {
+    fn new() -> Self {
+        Self {
+            mouse_state: Default::default(),
+        }
+    }
+}
+
+impl Entity for HoverPointerTooltipView {
+    type Event = String;
+}
+
+impl crate::core::View for HoverPointerTooltipView {
+    fn render<'a>(&self, _: &AppContext) -> Box<dyn Element> {
+        Hoverable::new(self.mouse_state.clone(), |state: &MouseState| {
+            let base = ConstrainedBox::new(Rect::new().finish())
+                .with_width(tooltip_base_size().x())
+                .with_height(tooltip_base_size().y())
+                .finish();
+
+            let mut stack = Stack::new().with_child(base);
+
+            if state.is_hovered() {
+                let tooltip = ConstrainedBox::new(Rect::new().finish())
+                    .with_width(tooltip_overlay_size().x())
+                    .with_height(tooltip_overlay_size().y())
+                    .finish();
+                // Position at the captured pointer offset (plus the nudge),
+                // exactly as `overlay_tool_tip_at_pointer` does.
+                let offset = state
+                    .hover_position()
+                    .map(|pointer| pointer + tooltip_pointer_offset())
+                    .unwrap_or_default();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        offset,
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
+            }
+
+            stack.finish()
+        })
+        .finish()
+    }
+
+    fn ui_name() -> &'static str {
+        "HoverPointerTooltipView"
+    }
+}
+
+impl TypedActionView for HoverPointerTooltipView {
+    type Action = ();
+}
+
+/// Pins that the pointer-anchored tooltip lands at the mouse coordinate, not at
+/// the element's rect.
+///
+/// The base sits at the window origin, so `MouseState::hover_position` (the
+/// cursor relative to the element's origin) equals the raw cursor position. A
+/// tooltip anchored at that position must appear at `cursor + nudge` — distinct
+/// from where an element-rect-anchored tooltip (below the base's bottom edge)
+/// would sit. This locks the "derives from mouse coords" contract against a
+/// regression back to element-anchoring.
+#[test]
+fn test_overlay_tooltip_positions_at_mouse_pointer() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            HoverPointerTooltipView::new()
+        });
+
+        // Frame 1: lay the view out so the Hoverable records a paint origin.
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+
+        // Hover at a point that is inside the base but not at its corner, so the
+        // pointer coordinate is unambiguously distinct from any element-rect
+        // anchor (top/bottom-left corners).
+        let cursor = vec2f(30., 25.);
+        let presenter = app
+            .presenter(window_id)
+            .expect("Test window should have a presenter after the first frame.");
+        app.update(|ctx| {
+            ctx.simulate_window_event(
+                Event::MouseMoved {
+                    position: cursor,
+                    cmd: false,
+                    shift: false,
+                    is_synthetic: false,
+                },
+                window_id,
+                presenter,
+            );
+        });
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+
+        // The tooltip must float in the overlay layer at the cursor plus the
+        // below-right nudge — not at the base's bottom-left.
+        let overlay_bounds = read_scene(app, window_id, |scene| {
+            scene
+                .layers()
+                .skip(scene.layer_count() - scene.overlay_layer_count())
+                .flat_map(|layer| layer.rects.iter().map(|r| r.bounds))
+                .collect::<Vec<RectF>>()
+        });
+
+        let expected_tooltip =
+            RectF::new(cursor + tooltip_pointer_offset(), tooltip_overlay_size());
+        assert!(
+            overlay_bounds.contains(&expected_tooltip),
+            "Tooltip should float at the pointer position {expected_tooltip:?}, \
+             got overlay rects {overlay_bounds:?}"
+        );
+
+        // Guard against silent regression to element-rect anchoring: the
+        // element-anchored position (base bottom-left + gap) must NOT be where
+        // the tooltip landed.
+        let element_anchored = RectF::new(
+            vec2f(0., tooltip_base_size().y() + TOOLTIP_GAP),
+            tooltip_overlay_size(),
+        );
+        assert!(
+            !overlay_bounds.contains(&element_anchored),
+            "Tooltip must not be anchored to the element rect at {element_anchored:?}; \
+             it should track the pointer"
+        );
+    });
+}
+
 /// Read the last-rendered scene for `window_id` and project it with `f`.
 fn read_scene<T>(app: &mut App, window_id: WindowId, f: impl FnOnce(&Scene) -> T) -> T {
     let presenter_ref = app

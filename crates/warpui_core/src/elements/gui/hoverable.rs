@@ -81,6 +81,18 @@ pub struct MouseState {
     /// This property is _not_ delayed by hover delays.
     is_mouse_over_element: bool,
 
+    /// The cursor position at the moment hover began, expressed relative to the
+    /// element's own top-left origin (so it can be used directly as a
+    /// parent-relative offset when positioning hover affordances at the
+    /// pointer). [`None`] whenever the element is not hovered.
+    ///
+    /// This is a snapshot taken on hover-in, not a live cursor tracker: the
+    /// `Hoverable` only re-runs its build closure on hover-state transitions, so
+    /// intra-element mouse moves do not update it. Affordances that want to sit
+    /// at the pointer (rather than at the element rect) read this in their build
+    /// closure.
+    hover_position: Option<Vector2F>,
+
     /// Keep track of whether the last event changing the hover
     /// state is a synthetic mouse move. If there are two consecutive
     /// events that both want to alter the hover state, we stop the
@@ -138,8 +150,17 @@ impl MouseState {
         self.is_mouse_over_element
     }
 
+    /// The cursor position captured when hover began, relative to the element's
+    /// top-left origin, or [`None`] when the element is not hovered. Usable as a
+    /// parent-relative offset to position a hover affordance at the pointer. See
+    /// the field docs for the snapshot-vs-live-tracking distinction.
+    pub fn hover_position(&self) -> Option<Vector2F> {
+        self.hover_position
+    }
+
     pub fn reset_hover_state(&mut self) {
         self.is_hovered = false;
+        self.hover_position = None;
     }
 
     /// Fully clear interaction state. Useful when a click triggers navigation or focus changes,
@@ -151,6 +172,7 @@ impl MouseState {
         // Clear hover states so hover styles/tooltips don't persist
         self.is_hovered = false;
         self.is_mouse_over_element = false;
+        self.hover_position = None;
         // Treat the next synthetic hover as a no-op (avoids instant re-hover during layout)
         self.last_event_is_synthetic_hover = true;
         // Cancel any pending hover timers
@@ -548,6 +570,18 @@ impl Hoverable {
             return false;
         }
         self.state().is_hovered = is_hovered;
+
+        // Snapshot the pointer for affordances that position at the cursor. Store
+        // it relative to the element's own origin so it can serve as a
+        // parent-relative offset in a hover-built child; clear it on hover-out.
+        // `self.origin` is populated at paint time and shares the event's screen
+        // coordinate space.
+        let hover_position = if is_hovered {
+            self.origin.map(|origin| position - origin.xy())
+        } else {
+            None
+        };
+        self.state().hover_position = hover_position;
 
         // We should only handle this event if not both the previous and current instance of the state change
         // is triggered by a synthetic mouse event. This is to prevent infinite loops when a child element

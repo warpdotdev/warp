@@ -1,9 +1,9 @@
 use warp_core::ui::appearance::Appearance;
 use warpui_core::elements::{
-    CacheOption, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, Image,
-    MouseStateHandle, ParentAnchor, ParentElement, Text,
+    CacheOption, ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, Image,
+    MouseStateHandle, ParentElement, Text,
 };
-use warpui_core::geometry::vector::vec2f;
+use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::{Element, SingletonEntity, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
@@ -12,9 +12,12 @@ use crate::render::element::paint::{CursorData, CursorDisplayType};
 use crate::render::model::viewport::ViewportItem;
 use crate::render::model::{BlockItem, RenderState, RichTextStyles};
 
-/// Gap between the image and its alt-text tooltip, matching the hidden-section
-/// tooltip's vertical offset from its anchor.
-const TOOLTIP_OFFSET: f32 = 4.;
+/// Below-right nudge of the alt-text tooltip from the mouse pointer, so the
+/// cursor sits just above-left of the tooltip's top-left corner rather than
+/// covering its text. Mirrors the conventional pointer-anchored tooltip offset.
+fn tooltip_pointer_offset() -> Vector2F {
+    vec2f(12., 16.)
+}
 
 /// Whether an image should carry an alt-text hover tooltip. Only images with
 /// non-empty (non-whitespace) alt text do: an image without alt text is
@@ -130,17 +133,16 @@ impl RenderableBlock for RenderableImage {
         // Show the alt text on hover so it's reachable without loading the image
         // (and remains available for the broken-image placeholder). Use the
         // overlay variant so the tooltip escapes the editor's viewport clip, and
-        // anchor it below the image, mirroring the hidden-section tooltip.
+        // anchor it at the mouse pointer so it reads as a cursor tooltip rather
+        // than a caption pinned to the image's bounds.
         let mut element: Box<dyn Element> = if image_has_tooltip(&self.alt_text) {
             Appearance::as_ref(app)
                 .ui_builder()
-                .overlay_tool_tip_on_element(
+                .overlay_tool_tip_at_pointer(
                     self.alt_text.clone(),
                     self.mouse_state.clone(),
                     image,
-                    ParentAnchor::BottomLeft,
-                    ChildAnchor::TopLeft,
-                    vec2f(0., TOOLTIP_OFFSET),
+                    tooltip_pointer_offset(),
                 )
         } else {
             image
