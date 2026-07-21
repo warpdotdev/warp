@@ -3,9 +3,8 @@ use warp::appearance::Appearance;
 use warp::settings::TuiUsageDisplayMode;
 use warp::tui_export::{
     AIConversationId, AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel,
-    ConversationStatus, ConversationUsageTotals, Harness, InputType, PtyIntent,
-    PtyIntentEvent, SizeInfo, SizeUpdate, export_conversation_markdown,
-    register_tui_session_view_test_singletons,
+    ConversationStatus, ConversationUsageTotals, Harness, InputType, PtyIntent, PtyIntentEvent,
+    SizeInfo, SizeUpdate, export_conversation_markdown, register_tui_session_view_test_singletons,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
