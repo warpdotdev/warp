@@ -301,11 +301,7 @@ fn detect_system_locale() -> String {
             .or_else(|| std::env::var("LC_CTYPE").ok().filter(|s| !s.is_empty()))
             .or_else(|| std::env::var("LANG").ok().filter(|s| !s.is_empty()))
         {
-            let tag = lang
-                .split('.')
-                .next()
-                .unwrap_or("en")
-                .replace('_', "-");
+            let tag = lang.split('.').next().unwrap_or("en").replace('_', "-");
             if !tag.is_empty() {
                 return tag;
             }

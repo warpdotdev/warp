@@ -1498,8 +1498,7 @@ fn render_grid_with_ligatures<'a>(
                         CharOrStr::Char(c) if decompose_sara_am(c).is_some() => {
                             string_builder.append_placeholder(col);
                             if skip_sara_am_at != Some(col) {
-                                let (_, sara_aa) =
-                                    decompose_sara_am(c).expect("checked by guard");
+                                let (_, sara_aa) = decompose_sara_am(c).expect("checked by guard");
                                 deferred_str_cells.push((
                                     col,
                                     cell_colors.foreground_color,

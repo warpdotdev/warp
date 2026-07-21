@@ -229,7 +229,10 @@ fn test_attributed_string_builder_byte_indexed_cell_map() {
 
     let data = builder.build();
 
-    assert_eq!(data.line, "สวัสดี", "appended chars must round-trip into the line");
+    assert_eq!(
+        data.line, "สวัสดี",
+        "appended chars must round-trip into the line"
+    );
     assert_eq!(
         data.line.len(),
         18,

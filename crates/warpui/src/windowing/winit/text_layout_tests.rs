@@ -763,7 +763,10 @@ fn thai_consonants_layout_non_zero_width() -> Result<()> {
         f32::MAX,
         crate::text_layout::ClipConfig::default(),
     );
-    assert!(line.width > 0.0, "Thai consonants must produce non-zero width");
+    assert!(
+        line.width > 0.0,
+        "Thai consonants must produce non-zero width"
+    );
     Ok(())
 }
 
@@ -823,11 +826,17 @@ fn mixed_ascii_thai_records_missing_glyphs() -> Result<()> {
         f32::MAX,
         crate::text_layout::ClipConfig::default(),
     );
-    assert!(line.width > 0.0, "mixed ASCII+Thai line must have positive width");
+    assert!(
+        line.width > 0.0,
+        "mixed ASCII+Thai line must have positive width"
+    );
     // Roboto doesn't cover Thai, so the Thai codepoints end up in
     // chars_with_missing_glyphs and trigger async fallback font loading.
     let missing = &line.chars_with_missing_glyphs;
-    assert!(!missing.is_empty(), "expected Thai chars to be recorded as missing glyphs");
+    assert!(
+        !missing.is_empty(),
+        "expected Thai chars to be recorded as missing glyphs"
+    );
     for &ch in missing {
         assert!(
             ('\u{0E00}'..='\u{0E7F}').contains(&ch),
