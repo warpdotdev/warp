@@ -1,7 +1,8 @@
 use warpui::color::ColorU;
 use warpui::elements::{
-    resizable_state_handle, Container, CrossAxisAlignment, DragBarSide, Flex, MainAxisAlignment,
-    MainAxisSize, ParentElement, Rect, Resizable, ResizableStateHandle, Shrinkable, Stack, Text,
+    Container, CrossAxisAlignment, DragBarSide, Flex, MainAxisAlignment, MainAxisSize,
+    ParentElement, Rect, Resizable, ResizableStateHandle, Shrinkable, Stack, Text,
+    resizable_state_handle,
 };
 use warpui::fonts::FamilyId;
 use warpui::{

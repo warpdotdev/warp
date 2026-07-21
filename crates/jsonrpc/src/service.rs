@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::channel::oneshot;
 use futures::lock::Mutex as AsyncMutex;
 use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
 use serde_json::Value;
+use serde_json::value::RawValue;
 use warp_errors::report_error;
 use warpui_core::r#async::executor::Background;
 
@@ -287,13 +287,13 @@ impl JsonRpcService {
         notification_subscriptions: &AsyncMutex<HashMap<String, Subscription>>,
     ) {
         let subs = notification_subscriptions.lock().await;
-        if let Some(subscription) = subs.get(method) {
-            if let Err(e) = subscription.try_send(ServerNotificationEvent {
+        if let Some(subscription) = subs.get(method)
+            && let Err(e) = subscription.try_send(ServerNotificationEvent {
                 method: method.to_string(),
                 params,
-            }) {
-                report_error!(anyhow::Error::new(e).context("Failed to send notification"));
-            }
+            })
+        {
+            report_error!(anyhow::Error::new(e).context("Failed to send notification"));
         }
     }
 

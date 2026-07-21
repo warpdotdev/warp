@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 
 use super::{osc52_sequences, tmux_passthrough, write_osc52_sequences};
 

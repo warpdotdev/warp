@@ -16,9 +16,9 @@ use warpui::{
 use crate::appearance::Appearance;
 use crate::editor::{self, EditorView, SingleLineEditorOptions, TextOptions};
 use crate::settings_view::features_page::render_group;
-use crate::settings_view::settings_page::{render_body_item, LocalOnlyIconState, ToggleState};
-use crate::undo_close::settings::UndoCloseEnabled;
+use crate::settings_view::settings_page::{LocalOnlyIconState, ToggleState, render_body_item};
 use crate::undo_close::UndoCloseSettings;
+use crate::undo_close::settings::UndoCloseEnabled;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Action {

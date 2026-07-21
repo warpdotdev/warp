@@ -5,24 +5,24 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai::diff_validation::{
-    fuzzy_match_diffs, fuzzy_match_v4a_diffs, parse_line_numbers, DiffDelta, DiffType, ParsedDiff,
-    SearchAndReplace, V4AHunk,
+    DiffDelta, DiffType, ParsedDiff, SearchAndReplace, V4AHunk, fuzzy_match_diffs,
+    fuzzy_match_v4a_diffs, parse_line_numbers,
 };
 use anyhow::Result;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use lazy_static::lazy_static;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng as _};
+use rand::{Rng as _, thread_rng};
 use warp_core::features::FeatureFlag;
 use warp_core::platform::SessionPlatform;
 use warp_core::settings::ToggleableSetting;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::CLAUDE_ORANGE;
-use warp_core::ui::theme::color::internal_colors::{fg_overlay_6, neutral_1, neutral_4};
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors::{fg_overlay_6, neutral_1, neutral_4};
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_errors::report_error;
@@ -52,6 +52,7 @@ use crate::ai::agent::icons::{self, yellow_stop_icon};
 use crate::ai::agent::{
     AIAgentActionId, AIIdentifiers, FileEdit, RequestFileEditsResult, ServerOutputId,
 };
+use crate::ai::blocklist::RequestedEditResolution;
 use crate::ai::blocklist::action_model::{
     AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel,
     EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent, EditResolvedEvent, EditStats,
@@ -61,7 +62,7 @@ use crate::ai::blocklist::diff_storage::{
     DiffStorage, DiffStorageHelper, FileSnapshot, RegisteredDiffStorage, SaveFuture,
     UpdatedFileState,
 };
-use crate::ai::blocklist::diff_types::{changed_lines_from_op, DiffSessionType, FileDiff};
+use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff, changed_lines_from_op};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::inline_action_header::INLINE_ACTION_HORIZONTAL_PADDING;
 use crate::ai::blocklist::inline_action::inline_action_icons::{
@@ -69,13 +70,12 @@ use crate::ai::blocklist::inline_action::inline_action_icons::{
 };
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
 use crate::ai::blocklist::view_util::render_provider_icon_button;
-use crate::ai::blocklist::RequestedEditResolution;
-use crate::ai::mcp::{mcp_provider_from_file_path, MCPProvider};
+use crate::ai::mcp::{MCPProvider, mcp_provider_from_file_path};
 use crate::ai::paths::host_native_absolute_path;
 use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
 use crate::ai::skills::{
-    icon_override_for_skill_name, render_skill_button, skill_path_from_location, SkillManager,
-    SkillOpenOrigin, SkillReference, SkillTelemetryEvent,
+    SkillManager, SkillOpenOrigin, SkillReference, SkillTelemetryEvent,
+    icon_override_for_skill_name, render_skill_button, skill_path_from_location,
 };
 use crate::code::diff_viewer::{DiffViewer, DisplayMode};
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
@@ -84,28 +84,28 @@ use crate::code::inline_diff::{InlineDiffView, InlineDiffViewEvent};
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
 use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::{view, PaneId};
+use crate::pane_group::pane::{PaneId, view};
 use crate::pane_group::{BackingView, PaneEvent};
 use crate::server::telemetry::{
     AgentModeCodeFileNavigationSource, ToggleCodeSuggestionsSettingSource,
 };
 use crate::settings::AISettings;
-use crate::terminal::input::SET_INPUT_MODE_AGENT_ACTION_NAME;
 use crate::terminal::ShellLaunchData;
+use crate::terminal::input::SET_INPUT_MODE_AGENT_ACTION_NAME;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, KeystrokeSource, NakedTheme,
 };
 use crate::view_components::compactible_action_button::{
-    render_compact_and_regular_button_rows, CompactibleActionButton, RenderCompactibleActionButton,
-    MEDIUM_SIZE_SWITCH_THRESHOLD, XLARGE_SIZE_SWITCH_THRESHOLD,
+    CompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD, RenderCompactibleActionButton,
+    XLARGE_SIZE_SWITCH_THRESHOLD, render_compact_and_regular_button_rows,
 };
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
-use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
 const REQUESTED_EDIT_CANCEL_LABEL: &str = "Cancel";
 const REQUESTED_EDIT_REFINE_LABEL: &str = "Refine";
@@ -427,14 +427,13 @@ impl CodeDiffView {
         if is_passive {
             self.accept_split_button_menu.update(ctx, |menu, ctx| {
                 menu.set_items(
-                    vec![MenuItemFields::new_multiline(
-                        SUGGESTED_EDIT_ACCEPT_AND_CONTINUE_LABEL,
-                        2,
-                    )
-                    .with_on_select_action(
-                        CodeDiffViewAction::AcceptPassiveDiffAndContinueWithAgent,
-                    )
-                    .into_item()],
+                    vec![
+                        MenuItemFields::new_multiline(SUGGESTED_EDIT_ACCEPT_AND_CONTINUE_LABEL, 2)
+                            .with_on_select_action(
+                                CodeDiffViewAction::AcceptPassiveDiffAndContinueWithAgent,
+                            )
+                            .into_item(),
+                    ],
                     ctx,
                 );
             });

@@ -4,7 +4,7 @@ use virtual_fs::VirtualFS;
 
 use super::SerializedCodebaseIndex;
 use crate::index::full_source_code_embedding::merkle_tree::{
-    construct_test_merkle_tree, MerkleTree,
+    MerkleTree, construct_test_merkle_tree,
 };
 
 #[test]

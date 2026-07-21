@@ -146,6 +146,7 @@ pub enum CLIAgent {
     OpenCode,
     Copilot,
     Pi,
+    OhMyPi,
     Auggie,
     CursorCli,
     Goose,
@@ -168,6 +169,7 @@ impl CLIAgent {
             CLIAgent::OpenCode => "opencode",
             CLIAgent::Copilot => "copilot",
             CLIAgent::Pi => "pi",
+            CLIAgent::OhMyPi => "omp",
             CLIAgent::Auggie => "auggie",
             CLIAgent::CursorCli => "agent",
             CLIAgent::Goose => "goose",
@@ -216,6 +218,7 @@ impl CLIAgent {
             CLIAgent::OpenCode => "OpenCode",
             CLIAgent::Copilot => "Copilot",
             CLIAgent::Pi => "Pi",
+            CLIAgent::OhMyPi => "oh-my-pi",
             CLIAgent::Auggie => "Auggie",
             CLIAgent::CursorCli => "Cursor",
             CLIAgent::Goose => "Goose",
@@ -237,6 +240,7 @@ impl CLIAgent {
             CLIAgent::OpenCode => Some(Icon::OpenCodeLogo),
             CLIAgent::Copilot => Some(Icon::CopilotLogo),
             CLIAgent::Pi => Some(Icon::PiLogo),
+            CLIAgent::OhMyPi => Some(Icon::OhMyPiLogo),
             CLIAgent::Auggie => Some(Icon::AuggieLogo),
             CLIAgent::CursorCli => Some(Icon::CursorLogo),
             CLIAgent::Goose => Some(Icon::GooseLogo),
@@ -271,6 +275,7 @@ impl CLIAgent {
             CLIAgent::Copilot => &[SkillProvider::Agents, SkillProvider::Copilot],
             CLIAgent::Droid => &[SkillProvider::Droid, SkillProvider::Agents],
             CLIAgent::Pi => &[SkillProvider::Agents],
+            CLIAgent::OhMyPi => &[SkillProvider::Agents],
             CLIAgent::Auggie => &[SkillProvider::Agents],
             CLIAgent::CursorCli => &[SkillProvider::Agents],
             CLIAgent::Goose => &[SkillProvider::Agents],
@@ -299,7 +304,7 @@ impl CLIAgent {
     pub fn supports_bash_mode(&self) -> bool {
         matches!(
             self,
-            CLIAgent::Claude | CLIAgent::Codex | CLIAgent::OpenCode
+            CLIAgent::Claude | CLIAgent::Codex | CLIAgent::OpenCode | CLIAgent::OhMyPi
         )
     }
 
@@ -314,6 +319,7 @@ impl CLIAgent {
             CLIAgent::OpenCode => Some(OPENCODE_COLOR),
             CLIAgent::Copilot => Some(COPILOT_COLOR),
             CLIAgent::Pi => Some(PI_COLOR),
+            CLIAgent::OhMyPi => Some(PI_COLOR),
             CLIAgent::Auggie => Some(AUGGIE_COLOR),
             CLIAgent::CursorCli => Some(CURSOR_COLOR),
             CLIAgent::Goose => Some(GOOSE_COLOR),
@@ -328,9 +334,11 @@ impl CLIAgent {
     /// Agents with light brand colors use a dark icon for contrast.
     pub fn brand_icon_color(&self) -> ColorU {
         match self {
-            CLIAgent::Pi | CLIAgent::Auggie | CLIAgent::Droid | CLIAgent::Antigravity => {
-                ColorU::new(0, 0, 0, 255)
-            }
+            CLIAgent::Pi
+            | CLIAgent::OhMyPi
+            | CLIAgent::Auggie
+            | CLIAgent::Droid
+            | CLIAgent::Antigravity => ColorU::new(0, 0, 0, 255),
             _ => ColorU::white(),
         }
     }
@@ -413,8 +421,9 @@ impl CLIAgent {
     }
 
     /// Returns whether `command` launches Warp's own headless TUI (`warp_tui`) —
-    /// e.g. `warp-tui`, `warp-tui-oss`, an absolute/relative path to either
-    /// (`target/debug/warp-tui`), or the `./script/run-tui` dev launcher.
+    /// e.g. `warp`, the legacy `warp-tui` alias, `warp-tui-oss`, an
+    /// absolute/relative path to one of those, or the `./script/run-tui` dev
+    /// launcher.
     ///
     /// This mirrors [`Self::detect`] (which decides when to show the CLI agent
     /// footer), but callers use it to *hide* the "Use agent" footer for the Warp
@@ -429,7 +438,7 @@ impl CLIAgent {
         // Match on the executable's file name so absolute/relative paths work
         // (e.g. `/path/to/warp-tui`, `./target/debug/warp-tui`).
         let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(&first_word);
-        matches!(basename, "warp-tui" | "warp-tui-oss" | "run-tui")
+        matches!(basename, "warp" | "warp-tui" | "warp-tui-oss" | "run-tui")
     }
 }
 
@@ -600,6 +609,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::OpenCode => CLIAgentType::OpenCode,
             CLIAgent::Copilot => CLIAgentType::Copilot,
             CLIAgent::Pi => CLIAgentType::Pi,
+            CLIAgent::OhMyPi => CLIAgentType::OhMyPi,
             CLIAgent::Auggie => CLIAgentType::Auggie,
             CLIAgent::CursorCli => CLIAgentType::Cursor,
             CLIAgent::Goose => CLIAgentType::Goose,

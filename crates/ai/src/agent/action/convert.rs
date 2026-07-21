@@ -6,16 +6,17 @@ use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
+use crate::agent::FileLocations;
 use crate::agent::action::{
-    AIAgentActionType, AIAgentPtyWriteMode, CommentSide, FileEdit, InsertReviewComment,
-    InsertedCommentLine, InsertedCommentLocation, ReadFilesRequest, SearchCodebaseRequest,
+    AIAgentActionType, AIAgentPtyWriteMode, CommentSide, CreateDocumentsRequest, DocumentDiff,
+    DocumentToCreate, EditDocumentsRequest, FileEdit, InsertReviewComment, InsertedCommentLine,
+    InsertedCommentLocation, ReadDocumentsRequest, ReadFilesRequest, SearchCodebaseRequest,
     ShellCommandDelay, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
 use crate::agent::action_result::{AnyFileContent, FileContext};
 use crate::agent::convert::ToolToAIAgentActionError;
-use crate::agent::FileLocations;
 use crate::diff_validation::{ParsedDiff, V4AHunk};
-use crate::document::AIDocumentId;
+use crate::document::{AIDocumentId, DEFAULT_PLANNING_DOCUMENT_TITLE};
 
 impl From<api::message::tool_call::RunShellCommand> for AIAgentActionType {
     fn from(value: api::message::tool_call::RunShellCommand) -> Self {
@@ -333,7 +334,6 @@ impl From<warp_multi_agent_api::AnyFileContent> for FileContext {
 
 impl From<api::message::tool_call::ReadDocuments> for AIAgentActionType {
     fn from(value: api::message::tool_call::ReadDocuments) -> Self {
-        use crate::agent::action::ReadDocumentsRequest;
         AIAgentActionType::ReadDocuments(ReadDocumentsRequest {
             document_ids: value
                 .documents
@@ -346,7 +346,6 @@ impl From<api::message::tool_call::ReadDocuments> for AIAgentActionType {
 
 impl From<api::message::tool_call::EditDocuments> for AIAgentActionType {
     fn from(value: api::message::tool_call::EditDocuments) -> Self {
-        use crate::agent::action::{DocumentDiff, EditDocumentsRequest};
         AIAgentActionType::EditDocuments(EditDocumentsRequest {
             diffs: value
                 .diffs
@@ -367,7 +366,6 @@ impl From<api::message::tool_call::EditDocuments> for AIAgentActionType {
 
 impl From<api::message::tool_call::CreateDocuments> for AIAgentActionType {
     fn from(value: api::message::tool_call::CreateDocuments) -> Self {
-        use crate::agent::action::{CreateDocumentsRequest, DocumentToCreate};
         AIAgentActionType::CreateDocuments(CreateDocumentsRequest {
             documents: value
                 .new_documents
@@ -375,9 +373,7 @@ impl From<api::message::tool_call::CreateDocuments> for AIAgentActionType {
                 .map(|doc| DocumentToCreate {
                     content: doc.content,
                     title: if doc.title.is_empty() {
-                        // DO NOT SUBMIT
-                        // crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE.to_string()
-                        "".to_string()
+                        DEFAULT_PLANNING_DOCUMENT_TITLE.to_owned()
                     } else {
                         doc.title
                     },
@@ -503,10 +499,19 @@ impl From<api::message::tool_call::RequestComputerUse> for AIAgentActionType {
     }
 }
 
-impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
-    fn from(value: api::message::tool_call::StartRecording) -> Self {
+impl TryFrom<api::message::tool_call::StartRecording> for AIAgentActionType {
+    type Error = ToolToAIAgentActionError;
+
+    fn try_from(value: api::message::tool_call::StartRecording) -> Result<Self, Self::Error> {
         let limits = value.limits;
-        AIAgentActionType::StartRecording {
+        // Only carry values > 1 (0 means unset; 1 means real-time).
+        let playback_speed_multiplier =
+            (value.playback_speed_multiplier > 1).then_some(value.playback_speed_multiplier);
+        let window = match convert_recording_target(value.target)? {
+            Some(target @ computer_use::Target::Window { .. }) => Some(target),
+            Some(computer_use::Target::Screen) | None => None,
+        };
+        Ok(AIAgentActionType::StartRecording {
             frame_rate: value.frame_rate.max(0) as u32,
             max_duration: limits
                 .as_ref()
@@ -518,7 +523,9 @@ impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
                 .filter(|&bytes| bytes > 0)
                 .map(|bytes| bytes as u64),
             summary: (!value.summary.trim().is_empty()).then_some(value.summary),
-        }
+            playback_speed_multiplier,
+            window,
+        })
     }
 }
 
@@ -578,6 +585,25 @@ fn convert_computer_use_target(
             Err(_) => computer_use::Target::Screen,
         },
         Some(ApiTarget::Screen(_)) | None => computer_use::Target::Screen,
+    }
+}
+
+fn convert_recording_target(
+    target: Option<api::message::tool_call::ComputerUseTarget>,
+) -> Result<Option<computer_use::Target>, ToolToAIAgentActionError> {
+    use api::message::tool_call::computer_use_target::Target as ApiTarget;
+    match target.and_then(|t| t.target) {
+        Some(ApiTarget::Window(window)) => {
+            let window_id = window.window_id.parse::<u32>().map_err(|_| {
+                ToolToAIAgentActionError::InvalidRecordingWindowId(window.window_id.clone())
+            })?;
+            Ok(Some(computer_use::Target::Window {
+                window_id,
+                pid: window.pid,
+            }))
+        }
+        Some(ApiTarget::Screen(_)) => Ok(Some(computer_use::Target::Screen)),
+        None => Ok(None),
     }
 }
 

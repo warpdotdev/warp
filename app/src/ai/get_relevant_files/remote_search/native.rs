@@ -13,8 +13,8 @@ use ::ai::index::full_source_code_embedding::{
 use ::ai::index::locations::CodeContextLocation;
 use itertools::Itertools;
 use remote_server::proto::{
-    file_context_proto, FragmentMetadata as ProtoFragmentMetadata, LineRange, ReadFileContextFile,
-    ReadFileContextRequest, ReadFileContextResponse,
+    FragmentMetadata as ProtoFragmentMetadata, LineRange, ReadFileContextFile,
+    ReadFileContextRequest, ReadFileContextResponse, file_context_proto,
 };
 use string_offset::ByteOffset;
 use warpui::{AppContext, ModelContext, SingletonEntity};
@@ -24,7 +24,7 @@ use crate::ai::agent::{
 };
 use crate::ai::blocklist::SessionContext;
 use crate::ai::codebase_auto_indexing::{
-    should_use_codebase_indexing, CodebaseAutoIndexingSurface,
+    CodebaseAutoIndexingSurface, should_use_codebase_indexing,
 };
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 use crate::remote_server::codebase_index_model::{

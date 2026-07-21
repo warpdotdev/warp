@@ -69,6 +69,60 @@ fn transcript_view_renders_terminal_blocks_from_canonical_order() {
 }
 
 #[test]
+fn agent_block_lookup_uses_canonical_transcript_order() {
+    App::test((), |mut app| async move {
+        let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let model_for_view = terminal_model.clone();
+        let (action_model, model_events) = add_test_action_model_and_events(&mut app);
+        let (_, transcript) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |ctx| {
+                    TuiTranscriptView::new(
+                        EntityId::new(),
+                        model_for_view,
+                        action_model,
+                        &model_events,
+                        ctx,
+                    )
+                },
+            )
+        });
+        let (first, second) = transcript.update(&mut app, |view, ctx| {
+            (
+                append_test_agent_block(
+                    view,
+                    AIConversationId::new(),
+                    AIAgentExchangeId::new(),
+                    AIBlockOutputStatus::Pending,
+                    ctx,
+                ),
+                append_test_agent_block(
+                    view,
+                    AIConversationId::new(),
+                    AIAgentExchangeId::new(),
+                    AIBlockOutputStatus::Pending,
+                    ctx,
+                ),
+            )
+        });
+
+        transcript.read(&app, |view, _| {
+            assert_eq!(
+                view.agent_blocks_in_canonical_order()
+                    .into_iter()
+                    .map(|block| block.id())
+                    .collect::<Vec<_>>(),
+                vec![first, second]
+            );
+        });
+    });
+}
+
+#[test]
 fn transcript_clear_event_removes_only_named_conversations() {
     App::test((), |mut app| async move {
         let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));

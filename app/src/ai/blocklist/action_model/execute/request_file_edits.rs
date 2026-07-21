@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use ai::diff_validation::AIRequestedCodeDiff;
 use apply_diff_model::ApplyDiffModel;
 use diff_application::DiffApplicationError;
-pub(crate) use diff_application::{apply_edits, FileReadResult};
+pub(crate) use diff_application::{FileReadResult, apply_edits};
+use futures::FutureExt;
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
-use futures::FutureExt;
 use itertools::Itertools;
 pub(crate) use telemetry::MalformedFinalLineProxyEvent;
 #[allow(unused_imports)]
@@ -20,7 +20,7 @@ pub use telemetry::{
     EditReceivedEvent, EditResolvedEvent, EditStats, RequestFileEditsFormatKind,
     RequestFileEditsTelemetryEvent,
 };
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use warp_core::send_telemetry_from_ctx;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
@@ -34,9 +34,9 @@ use crate::ai::blocklist::diff_storage::RegisteredDiffStorage;
 use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff};
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestedEditResolution};
 use crate::ai::paths::host_native_absolute_path;
-use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
-use crate::{safe_warn, BlocklistAIHistoryModel};
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::{BlocklistAIHistoryModel, safe_warn};
 
 pub struct RequestFileEditsExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -136,7 +136,7 @@ impl RequestFileEditsExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput {
             action:
                 AIAgentAction {

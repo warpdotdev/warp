@@ -9,7 +9,7 @@ use warpui::platform::Cursor;
 
 use super::{AIBlockAction, TextLocation};
 use crate::ai::agent::{AIAgentOutput, AIAgentTextSection, AgentOutputText};
-use crate::terminal::model::secrets::{SecretLevel, SecretsRegex, SECRETS_REGEX};
+use crate::terminal::model::secrets::{SECRETS_REGEX, SecretLevel, SecretsRegex};
 
 pub const SECRET_REDACTION_REPLACEMENT_CHARACTER: &str = "*";
 

@@ -1,6 +1,6 @@
 use ai::agent::action_result::AIAgentActionResultType;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -36,7 +36,7 @@ impl UseComputerExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput {
             action,
             conversation_id,
@@ -63,6 +63,9 @@ impl UseComputerExecutor {
         // it inside the future would run it on a background executor thread and abort with a
         // libdispatch main-thread assertion. This mirrors `request_computer_use.rs`.
         let mut actor = computer_use::create_actor();
+        // Tag this session's background-window activations with the owning conversation so its
+        // teardown (on completion or cancellation) only tears down this conversation's windows.
+        actor.set_background_session_owner(Some(conversation_id.to_string()));
         ActionExecution::new_async(
             async move {
                 match actor

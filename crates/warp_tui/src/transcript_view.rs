@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    should_show_task_in_blocklist, AIAgentActionId, AIAgentExchangeId, AIBlockModelImpl,
-    AIConversationId, BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationBlockRestorationPlan,
-    ModelEventDispatcher, RichContentItem, RichContentType, TerminalModel,
+    AIAgentActionId, AIAgentExchangeId, AIBlockModelImpl, AIConversationId, BlockHeightItem,
+    BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, ConversationBlockRestorationPlan, ModelEventDispatcher,
+    RichContentItem, RichContentType, TerminalModel, should_show_task_in_blocklist,
 };
 use warp_core::semantic_selection::SemanticSelection;
 use warpui_core::elements::tui::{
@@ -22,8 +22,8 @@ use warpui_core::{
     ViewContext, ViewHandle,
 };
 
-use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
-use super::terminal_block::should_render_terminal_block;
+use super::agent_block::{TuiAIBlock, TuiAIBlockEvent, TuiBlockingChild};
+use super::terminal_block::{block_content_rows, should_render_terminal_block};
 use super::tui_block_list_viewport_source::{
     AgentBlockRegistry, CLISubagentBlockRegistry, TuiBlockListViewportSource,
 };
@@ -57,6 +57,13 @@ pub(crate) const TRANSCRIPT_BLOCK_SPACING: BlockSpacing = BlockSpacing {
 pub(super) enum TuiTranscriptViewEvent {
     SelectionStarted,
     SelectionEnded(String),
+    /// An agent block's blocking child changed state; the session surface
+    /// re-derives the active blocker (input replacement).
+    BlockingStateChanged,
+    PermissionReplacementGuidanceSubmitted {
+        conversation_id: AIConversationId,
+        text: String,
+    },
 }
 
 /// Selection actions originating from the transcript's element tree.
@@ -257,10 +264,10 @@ impl TuiTranscriptView {
                 ..
             } => {
                 let mut conversation_ids = cleared_conversation_ids.clone();
-                if let Some(active_conversation_id) = active_conversation_id {
-                    if !conversation_ids.contains(active_conversation_id) {
-                        conversation_ids.push(*active_conversation_id);
-                    }
+                if let Some(active_conversation_id) = active_conversation_id
+                    && !conversation_ids.contains(active_conversation_id)
+                {
+                    conversation_ids.push(*active_conversation_id);
                 }
                 for conversation_id in conversation_ids {
                     self.remove_conversation(conversation_id, ctx);
@@ -286,20 +293,67 @@ impl TuiTranscriptView {
     }
 
     /// Whether the transcript has no visible content: no agent block and no
-    /// terminal block it would render (per [`should_render_terminal_block`];
-    /// the idle prompt block awaiting the first command doesn't count). The
-    /// session view fills the transcript slot with the zero state exactly
-    /// while this holds.
+    /// terminal block that satisfies a lifecycle and content-row guard
+    /// (per [`should_render_terminal_block`] and [`block_content_rows`]).
+    /// A terminal block is counted only when it is restored
+    /// (`BootstrapStage::RestoreBlocks`), done with bootstrap
+    /// (`PostBootstrapPrecmd`), or currently executing (not yet finished), AND
+    /// has at least one displayed command or output row. Unfinished bootstrap
+    /// blocks (e.g. a `ScriptExecution` startup interaction) count so that PTY
+    /// input can reach them while they run; once finished they stop suppressing
+    /// the zero state. The session view fills the transcript slot with the zero
+    /// state exactly while this holds.
     pub(super) fn is_empty(&self) -> bool {
         if !self.agent_blocks.borrow().is_empty() || !self.cli_subagent_blocks.borrow().is_empty() {
             return false;
         }
         let model = self.model.lock();
         let block_list = model.block_list();
-        !block_list
-            .blocks()
-            .iter()
-            .any(|block| should_render_terminal_block(block, block_list))
+        !block_list.blocks().iter().any(|block| {
+            should_render_terminal_block(block, block_list)
+                && (block.is_restored() || block.bootstrap_stage().is_done() || !block.finished())
+                && !block_content_rows(block).is_empty()
+        })
+    }
+
+    fn agent_blocks_in_canonical_order(&self) -> Vec<ViewHandle<TuiAIBlock>> {
+        let view_ids = {
+            let model = self.model.lock();
+            model
+                .block_list()
+                .block_heights()
+                .cursor::<(), ()>()
+                .filter_map(|item| match item {
+                    BlockHeightItem::RichContent(item) if !item.should_hide => Some(item.view_id),
+                    BlockHeightItem::Block(_)
+                    | BlockHeightItem::Gap(_)
+                    | BlockHeightItem::RestoredBlockSeparator { .. }
+                    | BlockHeightItem::InlineBanner { .. }
+                    | BlockHeightItem::SubshellSeparator { .. }
+                    | BlockHeightItem::RichContent(_) => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let agent_blocks = self.agent_blocks.borrow();
+        view_ids
+            .into_iter()
+            .filter_map(|view_id| agent_blocks.get(&view_id).cloned())
+            .collect()
+    }
+
+    pub(super) fn toggle_latest_plan(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        for block in self.agent_blocks_in_canonical_order().into_iter().rev() {
+            if block.update(ctx, |block, ctx| block.toggle_latest_plan(ctx)) {
+                return true;
+            }
+        }
+        false
+    }
+    pub(super) fn has_toggleable_plan(&self, ctx: &AppContext) -> bool {
+        self.agent_blocks_in_canonical_order()
+            .into_iter()
+            .rev()
+            .any(|block| block.as_ref(ctx).has_exposed_plan(ctx))
     }
 
     /// Returns the view id of the agent block rendering `exchange_id`, if any.
@@ -360,6 +414,21 @@ impl TuiTranscriptView {
                     .block_list_mut()
                     .mark_rich_content_dirty(view_id);
                 ctx.notify();
+            }
+            TuiAIBlockEvent::BlockingStateChanged => {
+                ctx.emit(TuiTranscriptViewEvent::BlockingStateChanged);
+                ctx.notify();
+            }
+            TuiAIBlockEvent::ReplacementGuidanceSubmitted {
+                conversation_id,
+                text,
+            } => {
+                ctx.emit(
+                    TuiTranscriptViewEvent::PermissionReplacementGuidanceSubmitted {
+                        conversation_id: *conversation_id,
+                        text: text.clone(),
+                    },
+                );
             }
         });
         self.agent_blocks.borrow_mut().insert(view_id, view);
@@ -525,6 +594,16 @@ impl TuiTranscriptView {
                 .remove_rich_content(view_id);
         }
         ctx.notify();
+    }
+
+    /// The front-of-queue blocking interaction across this transcript's
+    /// agent blocks, if any. A pure query over the shared action queue; the
+    /// session surface derives input visibility and focus from it.
+    pub(super) fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
+        self.agent_blocks
+            .borrow()
+            .values()
+            .find_map(|block| block.as_ref(ctx).active_blocking_child(ctx))
     }
 
     /// Clears persistent selection owned by the transcript.

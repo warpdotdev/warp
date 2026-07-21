@@ -24,10 +24,10 @@ use crate::completer::{
     GeneratorContext, LocationType, MatchStrategy, MatchedSuggestion, Suggestion, SuggestionType,
 };
 use crate::meta::{Span, Spanned};
-use crate::parsers::hir::{self, ShellCommand};
 use crate::parsers::ArgumentError::{
     MissingMandatoryPositional, MissingValueForName, UnexpectedArgument,
 };
+use crate::parsers::hir::{self, ShellCommand};
 use crate::parsers::{ClassifiedCommand, ParseError, ParseErrorReason, ParsedToken};
 use crate::signatures::{
     self, Argument, ArgumentValue, Command, GeneratorCompletionContext, GeneratorFn,

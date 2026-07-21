@@ -8,8 +8,8 @@ use warp_util::path::EscapeChar;
 use warpui::App;
 
 use super::{
-    build_diff_hunk_prompt, build_review_prompt, build_selection_line_range_prompt,
-    build_selection_substring_prompt, CLIAgent, UBER_TEAM_UID,
+    CLIAgent, UBER_TEAM_UID, build_diff_hunk_prompt, build_review_prompt,
+    build_selection_line_range_prompt, build_selection_substring_prompt,
 };
 use crate::ai::agent::{AgentReviewCommentBatch, DiffSetHunk};
 use crate::code::buffer_location::LocalOrRemotePath;
@@ -265,6 +265,7 @@ fn test_detect_known_agents() {
                 ("goose", CLIAgent::Goose),
                 ("vibe", CLIAgent::Vibe),
                 ("agy", CLIAgent::Antigravity),
+                ("omp", CLIAgent::OhMyPi),
             ] {
                 assert_eq!(
                     CLIAgent::detect(command, None, None, ctx),
@@ -352,6 +353,12 @@ fn test_detect_with_alias() {
                 CLIAgent::detect("c --help", None, Some(&map), ctx),
                 Some(CLIAgent::Claude),
             );
+
+            let map = aliases(&[("o", "omp")]);
+            assert_eq!(
+                CLIAgent::detect("o", None, Some(&map), ctx),
+                Some(CLIAgent::OhMyPi),
+            );
         });
     });
 }
@@ -392,6 +399,10 @@ fn test_detect_with_env_var_prefix() {
                     ctx,
                 ),
                 Some(CLIAgent::OpenCode),
+            );
+            assert_eq!(
+                CLIAgent::detect("FOO=1 omp", Some(EscapeChar::Backslash), None, ctx,),
+                Some(CLIAgent::OhMyPi),
             );
         });
     });
@@ -560,8 +571,14 @@ fn test_detect_aifx_agent_run_claude_wrong_team() {
 }
 
 #[test]
+fn test_oh_my_pi_supports_bash_mode() {
+    assert!(CLIAgent::OhMyPi.supports_bash_mode());
+}
+
+#[test]
 fn test_command_is_warp_tui_matches_binaries_and_launchers() {
     // Direct binary names.
+    assert!(CLIAgent::command_is_warp_tui("warp", None));
     assert!(CLIAgent::command_is_warp_tui("warp-tui", None));
     assert!(CLIAgent::command_is_warp_tui("warp-tui-oss", None));
     // The dev launcher script.
@@ -577,10 +594,7 @@ fn test_command_is_warp_tui_matches_binaries_and_launchers() {
         None
     ));
     // With arguments and leading whitespace.
-    assert!(CLIAgent::command_is_warp_tui(
-        "  warp-tui --resume abc",
-        None
-    ));
+    assert!(CLIAgent::command_is_warp_tui("  warp --resume abc", None));
 }
 
 #[test]
@@ -588,7 +602,7 @@ fn test_command_is_warp_tui_with_env_var_prefix() {
     // Env-var assignments before the command are skipped when an escape char is
     // provided (mirrors `CLIAgent::detect`).
     assert!(CLIAgent::command_is_warp_tui(
-        "WARP_API_KEY=secret warp-tui",
+        "WARP_API_KEY=secret warp",
         Some(EscapeChar::Backslash),
     ));
 }

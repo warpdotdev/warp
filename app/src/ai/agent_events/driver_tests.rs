@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::stream::{self, BoxStream};
 use futures::StreamExt;
+use futures::stream::{self, BoxStream};
 use warp_errors::AnyhowErrorExt as _;
 
 use super::*;

@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 
 use anyhow::Result;
+use onboarding::OnboardingIntention;
 use onboarding::callout::{
     OnboardingCalloutView, OnboardingCalloutViewEvent, OnboardingKeybindings,
 };
-use onboarding::OnboardingIntention;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use rust_embed::RustEmbed;
@@ -19,8 +19,8 @@ use warpui_core::fonts::{Cache, FamilyId, Weight};
 use warpui_core::prelude::CrossAxisAlignment;
 use warpui_core::ui_components::components::UiComponent;
 use warpui_core::{
-    platform, AddWindowOptions, AppContext, AssetProvider, Element, Entity, SingletonEntity as _,
-    TypedActionView, View, ViewContext, ViewHandle,
+    AddWindowOptions, AppContext, AssetProvider, Element, Entity, SingletonEntity as _,
+    TypedActionView, View, ViewContext, ViewHandle, platform,
 };
 
 #[derive(Clone, Copy, RustEmbed)]

@@ -1,11 +1,10 @@
 use std::mem::ManuallyDrop;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, OnceLock};
 use std::thread;
 
 use parking_lot::Mutex;
 
-use super::event_loop::AppEvent;
+use super::event_loop::{AppEvent, EventSender};
 use crate::clipboard::InMemoryClipboard;
 use crate::notification::{NotificationSendError, RequestPermissionsOutcome};
 use crate::platform::{self, Cursor};
@@ -26,11 +25,11 @@ pub(super) fn mark_current_thread_as_main() {
 pub struct AppDelegate {
     clipboard: InMemoryClipboard,
     cursor_shape: Mutex<Cursor>,
-    event_sender: Sender<AppEvent>,
+    event_sender: EventSender,
 }
 
 impl AppDelegate {
-    pub(super) fn new(event_sender: Sender<AppEvent>) -> Self {
+    pub(super) fn new(event_sender: EventSender) -> Self {
         Self {
             clipboard: InMemoryClipboard::default(),
             cursor_shape: Mutex::new(Cursor::Arrow),
@@ -192,7 +191,7 @@ impl platform::Delegate for AppDelegate {
 }
 
 struct DispatchDelegate {
-    event_sender: Sender<AppEvent>,
+    event_sender: EventSender,
 }
 
 impl platform::DispatchDelegate for DispatchDelegate {

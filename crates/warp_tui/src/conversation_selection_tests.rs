@@ -10,7 +10,7 @@ use warp::tui_export::{
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{App, EntityId, ModelHandle};
 
-use super::{classify_conversation_list_entry, TuiConversationSelection};
+use super::{TuiConversationSelection, classify_conversation_list_entry};
 
 #[test]
 fn tui_list_policy_classifies_selected_terminal_and_unavailable_entries() {
@@ -251,10 +251,10 @@ fn tui_selection_reconciles_split_and_removed_selection() {
         let replacement_tx = std::cell::RefCell::new(Some(replacement_tx));
         app.update(|ctx| {
             ctx.subscribe_to_model(&selection, move |_, event, _| {
-                if matches!(event, ConversationSelectionEvent::Activated { .. }) {
-                    if let Some(tx) = replacement_tx.borrow_mut().take() {
-                        let _ = tx.send(());
-                    }
+                if matches!(event, ConversationSelectionEvent::Activated { .. })
+                    && let Some(tx) = replacement_tx.borrow_mut().take()
+                {
+                    let _ = tx.send(());
                 }
             });
         });
@@ -322,7 +322,7 @@ fn tui_restoration_wins_over_deferred_replacement() {
 }
 
 #[test]
-fn tui_new_conversation_preserves_pending_autoexecute_override() {
+fn tui_new_conversations_respect_the_active_execution_profile() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
@@ -343,10 +343,12 @@ fn tui_new_conversation_preserves_pending_autoexecute_override() {
             .expect("TUI conversation creation should succeed");
 
         history.read(&app, |history, _| {
-            assert!(history
-                .conversation(&conversation_id)
-                .expect("conversation should exist")
-                .autoexecute_any_action());
+            assert!(
+                !history
+                    .conversation(&conversation_id)
+                    .expect("conversation should exist")
+                    .autoexecute_any_action()
+            );
         });
     });
 }

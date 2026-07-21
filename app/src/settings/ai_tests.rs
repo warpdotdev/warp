@@ -361,9 +361,11 @@ fn test_toolbar_command_map_matched_agent() {
         map.insert("^custom-tool".to_string(), String::new());
 
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
-            report_if_error!(settings
-                .cli_agent_footer_enabled_commands
-                .set_value(ToolbarCommandMap::new(map), ctx));
+            report_if_error!(
+                settings
+                    .cli_agent_footer_enabled_commands
+                    .set_value(ToolbarCommandMap::new(map), ctx)
+            );
         });
 
         app.read(|ctx| {

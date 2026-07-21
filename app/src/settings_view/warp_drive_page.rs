@@ -10,16 +10,16 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
-    id, Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, id,
 };
 
 use super::settings_page::{
-    render_body_item, AdditionalInfo, MatchData, PageType, SettingsPageMeta,
-    SettingsPageViewHandle, SettingsWidget,
+    AdditionalInfo, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    render_body_item,
 };
 use super::{
-    flags, LocalOnlyIconState, SettingActionPairContexts, SettingActionPairDescriptions,
-    SettingsAction, SettingsSection, ToggleSettingActionPair, ToggleState,
+    LocalOnlyIconState, SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction,
+    SettingsSection, ToggleSettingActionPair, ToggleState, flags,
 };
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
@@ -38,18 +38,20 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     builder: fn(SettingsAction) -> T,
 ) {
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::custom(
-            SettingActionPairDescriptions::new("Enable Warp Drive", "Disable Warp Drive"),
-            builder(SettingsAction::WarpDrive(
-                WarpDriveSettingsPageAction::ToggleShowWarpDrive,
-            )),
-            SettingActionPairContexts::new(
-                context.clone() & !id!(flags::ENABLE_WARP_DRIVE) & !id!("IsAnonymousUser"),
-                context.clone() & id!(flags::ENABLE_WARP_DRIVE) & !id!("IsAnonymousUser"),
-            ),
-            None,
-        )
-        .with_enabled(|| FeatureFlag::OpenWarpNewSettingsModes.is_enabled())],
+        vec![
+            ToggleSettingActionPair::custom(
+                SettingActionPairDescriptions::new("Enable Warp Drive", "Disable Warp Drive"),
+                builder(SettingsAction::WarpDrive(
+                    WarpDriveSettingsPageAction::ToggleShowWarpDrive,
+                )),
+                SettingActionPairContexts::new(
+                    context.clone() & !id!(flags::ENABLE_WARP_DRIVE) & !id!("IsAnonymousUser"),
+                    context.clone() & id!(flags::ENABLE_WARP_DRIVE) & !id!("IsAnonymousUser"),
+                ),
+                None,
+            )
+            .with_enabled(|| FeatureFlag::OpenWarpNewSettingsModes.is_enabled()),
+        ],
         app,
     );
 }

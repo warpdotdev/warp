@@ -86,6 +86,8 @@ mod tracing;
 mod tui;
 #[cfg(feature = "tui")]
 pub mod tui_export;
+#[cfg(all(feature = "tui", any(test, feature = "test-util")))]
+mod tui_test_support;
 mod ui_components;
 mod undo_close;
 mod uri;
@@ -133,13 +135,13 @@ pub mod settings_view;
 pub mod tab_configs;
 pub mod terminal;
 pub mod themes;
-use ::ai::index::full_source_code_embedding::manager::{
-    CodebaseIndexManager, CodebaseIndexManagerConfig,
-};
+use ::ai::index::DEFAULT_SYNC_REQUESTS_PER_MIN;
 #[cfg(feature = "local_fs")]
 use ::ai::index::full_source_code_embedding::SnapshotStorage;
 use ::ai::index::full_source_code_embedding::SyncTask;
-use ::ai::index::DEFAULT_SYNC_REQUESTS_PER_MIN;
+use ::ai::index::full_source_code_embedding::manager::{
+    CodebaseIndexManager, CodebaseIndexManagerConfig,
+};
 use ::ai::project_context::model::ProjectContextModel;
 pub use ai::agent::todos::AIAgentTodoList;
 pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
@@ -155,12 +157,12 @@ use auth::auth_manager::AuthManager;
 use auth::auth_state::{AuthState, AuthStateProvider};
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
-use code_review::git_repo_model::GitRepoModels;
 use code_review::GlobalCodeReviewModel;
+use code_review::git_repo_model::GitRepoModels;
 use quit_warning::UnsavedStateSummary;
 #[cfg(feature = "local_fs")]
 use repo_metadata::{
-    repositories::DetectedRepositories, watcher::DirectoryWatcher, RepoMetadataModel,
+    RepoMetadataModel, repositories::DetectedRepositories, watcher::DirectoryWatcher,
 };
 use server::network_log_pane_manager::NetworkLogPaneManager;
 use server::telemetry::context_provider::AppTelemetryContextProvider;
@@ -200,7 +202,7 @@ use std::sync::Arc;
 use ::settings::{Setting, ToggleableSetting};
 #[cfg(feature = "local_tty")]
 use anyhow::Context;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use appearance::{Appearance, AppearanceManager};
 use channel::ChannelState;
 use interval_timer::IntervalTimer;
@@ -208,7 +210,7 @@ use itertools::Itertools;
 #[cfg(feature = "integration_tests")]
 pub use persistence::testing as sqlite_testing;
 #[cfg(feature = "plugin_host")]
-pub use plugin::{run_plugin_host, PLUGIN_HOST_FLAG};
+pub use plugin::{PLUGIN_HOST_FLAG, run_plugin_host};
 use referral_theme_status::ReferralThemeStatus;
 use server::server_api::ServerApiProvider;
 use settings::{ExtraMetaKeys, PrivacySettings};
@@ -217,9 +219,9 @@ use shellexpand::tilde;
 use terminal::input;
 use terminal::session_settings::SessionSettings;
 use url::Url;
-use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 // Re-export the debounce function to simplify imports.
 pub use warp_core::r#async::debounce;
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 // Re-export the send_telemetry_from_ctx macro at the crate root level
 pub use warp_core::send_telemetry_from_app_ctx;
 pub use warp_core::send_telemetry_from_ctx;
@@ -234,8 +236,8 @@ use warp_server_client::iap::{IapManager, IapManagerEvent, IapState, ManagedIapM
 use warp_server_client::network_logging::NetworkLogModel;
 use warpui::integration::TestDriver;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
-use warpui::platform::app::{ApproveTerminateResult, TerminationRequestSource};
 use warpui::platform::TerminationMode;
+use warpui::platform::app::{ApproveTerminateResult, TerminationRequestSource};
 use warpui::windowing::state::ApplicationStage;
 use warpui::{App, AppContext, Event, SingletonEntity, WindowId};
 use window_settings::WindowSettings;
@@ -243,10 +245,11 @@ use workflows::manager::WorkflowManager;
 use workspace::sync_inputs::SyncedInputState;
 
 use self::features::FeatureFlag;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::blocklist::RecordingController;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::document::ai_document_model::AIDocumentModel;
@@ -257,7 +260,6 @@ use crate::ai::mcp::{MCPGalleryManager, TemplatableMCPServerManager};
 use crate::ai::outline::RepoOutlines;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
-use crate::ai::AIRequestUsageModel;
 use crate::antivirus::AntivirusInfo;
 use crate::app_state::AppState;
 use crate::autoupdate::{AutoupdateState, RelaunchModel};
@@ -270,23 +272,23 @@ use crate::code::global_buffer_model::GlobalBufferModel;
 use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager;
 use crate::context_chips::prompt::Prompt;
 use crate::default_terminal::DefaultTerminal;
-use crate::drive::export::ExportManager;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::export::ExportManager;
 use crate::env_vars::manager::EnvVarCollectionManager;
 use crate::experiments::ImprovedPaletteSearch;
 pub use crate::global_resource_handles::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 use crate::gpu_state::GPUState;
 use crate::network::NetworkStatus;
+use crate::notebooks::CloudNotebook;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::manager::NotebookManager;
-use crate::notebooks::CloudNotebook;
 use crate::notification::NotificationContext;
 use crate::palette::PaletteMode;
-use crate::persistence::model::AgentConversationData;
 use crate::persistence::PersistenceWriter;
+use crate::persistence::model::AgentConversationData;
 use crate::projects::ProjectManagementModel;
 use crate::root_view::{
-    quake_mode_window_id, quake_mode_window_is_open, OpenFromRestoredArg, OpenPath,
+    OpenFromRestoredArg, OpenPath, quake_mode_window_id, quake_mode_window_is_open,
 };
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -302,8 +304,8 @@ use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::settings::cloud_preferences_syncer::initialize_cloud_preferences_syncer;
 use crate::settings::manager::SettingsManager;
 use crate::settings::{AISettings, AccessibilitySettings, ScrollSettings, SelectionSettings};
-use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::settings_view::DisplayCount;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -317,7 +319,7 @@ use crate::undo_close::UndoCloseStack;
 use crate::user_config::WarpConfig;
 use crate::util::bindings::is_binding_cross_platform;
 use crate::vim_registers::VimRegisters;
-use crate::warp_managed_paths_watcher::{ensure_warp_watch_roots_exist, WarpManagedPathsWatcher};
+use crate::warp_managed_paths_watcher::{WarpManagedPathsWatcher, ensure_warp_watch_roots_exist};
 use crate::workflows::aliases::WorkflowAliases;
 use crate::workflows::local_workflows::LocalWorkflows;
 use crate::workspace::{
@@ -507,7 +509,7 @@ impl LaunchMode {
     /// Add an URL to open. Only supported for [`LaunchMode::App`]
     #[allow(dead_code)]
     fn add_url(&mut self, url: Url) {
-        if let LaunchMode::App { ref mut args, .. } = self {
+        if let LaunchMode::App { args, .. } = self {
             args.urls.push(url);
         }
     }
@@ -648,7 +650,7 @@ impl LaunchMode {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub(crate) fn new_for_unit_test() -> Self {
         LaunchMode::Test {
             driver: Box::new(None),
@@ -682,11 +684,11 @@ fn apply_extra_meta_keys(event: &mut Event, extra_metas: ExtraMetaKeys) {
 }
 
 fn apply_scroll_multiplier(event: &mut Event, app: &AppContext) {
-    if let Event::ScrollWheel { delta, precise, .. } = event {
-        if !*precise {
-            let scroll_multiplier = *ScrollSettings::as_ref(app).mouse_scroll_multiplier.value();
-            *delta *= scroll_multiplier;
-        }
+    if let Event::ScrollWheel { delta, precise, .. } = event
+        && !*precise
+    {
+        let scroll_multiplier = *ScrollSettings::as_ref(app).mouse_scroll_multiplier.value();
+        *delta *= scroll_multiplier;
     }
 }
 
@@ -716,22 +718,22 @@ pub fn run() -> Result<()> {
     // `WARP_*` env-var equivalents) so shipped builds can't be redirected away from their
     // baked-in server URLs. See `Channel::allows_server_url_overrides`.
     if ChannelState::channel().allows_server_url_overrides() {
-        if let Some(url) = args.server_root_url() {
-            if let Err(e) = ChannelState::override_server_root_url(url.to_owned()) {
-                eprintln!("Error: Invalid server root URL: {e:#}");
-            }
+        if let Some(url) = args.server_root_url()
+            && let Err(e) = ChannelState::override_server_root_url(url.to_owned())
+        {
+            eprintln!("Error: Invalid server root URL: {e:#}");
         }
 
-        if let Some(url) = args.ws_server_url() {
-            if let Err(e) = ChannelState::override_ws_server_url(url.to_owned()) {
-                eprintln!("Error: Invalid websocket server URL: {e:#}");
-            }
+        if let Some(url) = args.ws_server_url()
+            && let Err(e) = ChannelState::override_ws_server_url(url.to_owned())
+        {
+            eprintln!("Error: Invalid websocket server URL: {e:#}");
         }
 
-        if let Some(url) = args.session_sharing_server_url() {
-            if let Err(e) = ChannelState::override_session_sharing_server_url(url.to_owned()) {
-                eprintln!("Error: Invalid session sharing server URL: {e:#}");
-            }
+        if let Some(url) = args.session_sharing_server_url()
+            && let Err(e) = ChannelState::override_session_sharing_server_url(url.to_owned())
+        {
+            eprintln!("Error: Invalid session sharing server URL: {e:#}");
         }
     }
 
@@ -1155,8 +1157,8 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        use warpui::platform::mac::AppExt;
         use warpui::AssetProvider as _;
+        use warpui::platform::mac::AppExt;
 
         let activate_on_launch = !launch_mode.is_integration_test()
             || std::env::var("WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS").is_ok();
@@ -1289,6 +1291,31 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
 pub struct UpdateQuakeModeEventArg {
     active_window_id: Option<WindowId>,
+}
+
+fn refresh_user_after_iap_access(ctx: &mut AppContext) {
+    let iap_manager = IapManager::handle(ctx);
+    if !iap_manager.as_ref(ctx).is_enabled() || iap_manager.as_ref(ctx).has_valid_token() {
+        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
+            auth_manager.refresh_user(ctx);
+        });
+        return;
+    }
+
+    let mut refresh_started = false;
+    ctx.subscribe_to_model(&iap_manager, move |iap_manager, event, ctx| {
+        if refresh_started
+            || !matches!(event, IapManagerEvent::StateChanged)
+            || !iap_manager.as_ref(ctx).has_valid_token()
+        {
+            return;
+        }
+        refresh_started = true;
+        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
+            auth_manager.refresh_user(ctx);
+        });
+    });
+    iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
 }
 
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
@@ -1729,10 +1756,10 @@ pub(crate) fn initialize_app(
     // Rewrite recognized Warp web URLs (sessions, Drive, settings, home) into local
     // intent URLs when possible so they open directly in the desktop app.
     ctx.set_before_open_url(|url_str, _ctx| {
-        if let Ok(url) = Url::parse(url_str) {
-            if let Some(intent) = maybe_rewrite_web_url_to_intent(&url) {
-                return intent.to_string();
-            }
+        if let Ok(url) = Url::parse(url_str)
+            && let Some(intent) = maybe_rewrite_web_url_to_intent(&url)
+        {
+            return intent.to_string();
         }
         url_str.to_owned()
     });
@@ -1749,15 +1776,6 @@ pub(crate) fn initialize_app(
     let user_is_logged_in = auth_state.is_logged_in();
 
     if user_is_logged_in {
-        // Skip refresh_user for CLI mode — the CLI handles auth refresh in
-        // ensure_auth_state so it can detect invalid credentials before running
-        // a command.
-        if !matches!(launch_mode, LaunchMode::CommandLine { .. }) {
-            AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-                auth_manager.refresh_user(ctx);
-            });
-        }
-
         // Set the first frame callback to record the app's startup time.
         // This is only sent for logged-in users so that new users don't skew performance metrics.
         let is_screen_reader_enabled = ctx.is_screen_reader_enabled();
@@ -2261,6 +2279,13 @@ pub(crate) fn initialize_app(
         };
     });
 
+    // CLI commands establish IAP access and refresh auth in their dispatch path so they can
+    // surface failures synchronously. Interactive clients wait for IAP here before refreshing
+    // their persisted user, since the refresh itself calls the IAP-gated warp-server.
+    if user_is_logged_in && !matches!(launch_mode, LaunchMode::CommandLine { .. }) {
+        refresh_user_after_iap_access(ctx);
+    }
+
     // Add a singleton model that holds the current prompt configuration.
     ctx.add_singleton_model(Prompt::new);
 
@@ -2577,7 +2602,7 @@ pub(crate) fn app_callbacks(
             );
 
             // Don't show dialog on integration test. Machine can't press buttons.
-            if !is_integration_test && summary.should_display_warning(ctx) {
+            if !is_integration_test && summary.save_unsaved_code_and_should_warn(ctx) {
                 let shown = summary
                     .dialog()
                     .on_confirm(move |ctx| {
@@ -2635,7 +2660,7 @@ pub(crate) fn app_callbacks(
 
             let summary = UnsavedStateSummary::for_app(ctx);
             // Don't show dialog on integration test. Machine can't press buttons.
-            if !is_integration_test && summary.should_display_warning(ctx) {
+            if !is_integration_test && summary.save_unsaved_code_and_should_warn(ctx) {
                 let shown = summary
                     .dialog()
                     .on_confirm(|ctx| ctx.terminate_app(TerminationMode::ForceTerminate, None))
@@ -2651,9 +2676,11 @@ pub(crate) fn app_callbacks(
         })),
         on_disable_warning_modal: Some(Box::new(move |ctx| {
             GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
-                report_if_error!(general_settings
-                    .show_warning_before_quitting
-                    .toggle_and_save_value(ctx));
+                report_if_error!(
+                    general_settings
+                        .show_warning_before_quitting
+                        .toggle_and_save_value(ctx)
+                );
             });
             send_telemetry_from_app_ctx!(TelemetryEvent::QuitModalDisabled, ctx);
         })),
@@ -2669,19 +2696,19 @@ pub(crate) fn app_callbacks(
                 {
                     // Ensure the window ID exists, if so dispatch an action to focus
                     // the correct pane.
-                    if ctx.window_ids().contains(&window_id) {
-                        if let Some(root_view_id) = ctx.root_view_id(window_id) {
-                            ctx.dispatch_action(
-                                window_id,
-                                &[root_view_id],
-                                "root_view:handle_notification_click",
-                                &PaneViewLocator {
-                                    pane_group_id,
-                                    pane_id,
-                                },
-                                log::Level::Info,
-                            );
-                        }
+                    if ctx.window_ids().contains(&window_id)
+                        && let Some(root_view_id) = ctx.root_view_id(window_id)
+                    {
+                        ctx.dispatch_action(
+                            window_id,
+                            &[root_view_id],
+                            "root_view:handle_notification_click",
+                            &PaneViewLocator {
+                                pane_group_id,
+                                pane_id,
+                            },
+                            log::Level::Info,
+                        );
                     }
                 }
             }
@@ -2770,12 +2797,12 @@ fn focus_running_window_and_show_native_modal(
             .expect("already checked len > 0")
     });
     ctx.windows().show_window_and_focus_app(window_id_to_focus);
-    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id_to_focus) {
-        if let Some(handle) = workspaces.first() {
-            handle.update(ctx, |view, ctx| {
-                view.show_native_modal(dialog_with_callbacks, ctx);
-            });
-        }
+    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id_to_focus)
+        && let Some(handle) = workspaces.first()
+    {
+        handle.update(ctx, |view, ctx| {
+            view.show_native_modal(dialog_with_callbacks, ctx);
+        });
     }
 }
 
@@ -2816,18 +2843,18 @@ fn on_close_app_cancelled(open_navigation_palette: bool, ctx: &mut AppContext) {
     windowing_model.show_window_and_focus_app(window_id_to_focus);
 
     // open the nav palette in the selected window
-    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id_to_focus) {
-        if let Some(handle) = workspaces.first() {
-            ctx.dispatch_typed_action_for_view(
-                window_id_to_focus,
-                handle.id(),
-                &WorkspaceAction::OpenPalette {
-                    mode: PaletteMode::Navigation,
-                    source: PaletteSource::QuitModal,
-                    query: Some("running".to_owned()),
-                },
-            );
-        }
+    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id_to_focus)
+        && let Some(handle) = workspaces.first()
+    {
+        ctx.dispatch_typed_action_for_view(
+            window_id_to_focus,
+            handle.id(),
+            &WorkspaceAction::OpenPalette {
+                mode: PaletteMode::Navigation,
+                source: PaletteSource::QuitModal,
+                query: Some("running".to_owned()),
+            },
+        );
     }
 }
 
@@ -2861,18 +2888,18 @@ fn on_close_window_cancelled(
     // if we haven't returned early, it means open_navigation_palette is true as the
     // user pressed the modal button for opening the navigation palette to show their
     // running processes
-    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-        if let Some(handle) = workspaces.first() {
-            ctx.dispatch_typed_action_for_view(
-                window_id,
-                handle.id(),
-                &WorkspaceAction::OpenPalette {
-                    mode: PaletteMode::Navigation,
-                    source: PaletteSource::QuitModal,
-                    query: Some("running".to_owned()),
-                },
-            );
-        }
+    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+        && let Some(handle) = workspaces.first()
+    {
+        ctx.dispatch_typed_action_for_view(
+            window_id,
+            handle.id(),
+            &WorkspaceAction::OpenPalette {
+                mode: PaletteMode::Navigation,
+                source: PaletteSource::QuitModal,
+                query: Some("running".to_owned()),
+            },
+        );
     }
 }
 

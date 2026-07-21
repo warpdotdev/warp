@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use async_io::block_on;
 use command::blocking::Command;
 use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use regex::Regex;
 use warp_core::command::ExitCode;
 #[cfg(windows)]

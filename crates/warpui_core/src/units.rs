@@ -51,7 +51,7 @@ impl Lines {
     }
 
     pub fn as_f64(&self) -> f64 {
-        self.0 .0
+        self.0.0
     }
 
     pub fn max(self, other: Self) -> Self {

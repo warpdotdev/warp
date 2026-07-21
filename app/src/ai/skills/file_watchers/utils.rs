@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
-    home_skills_path, parse_skill, provider_parent_directory_for_skills_root, read_skills,
-    ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, SkillProvider, home_skills_path, parse_skill,
+    provider_parent_directory_for_skills_root, read_skills,
 };
 use anyhow::Error;
 use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};

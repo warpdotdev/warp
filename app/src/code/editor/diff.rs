@@ -15,7 +15,7 @@ use string_offset::CharOffset;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
 use warp_editor::content::edit::TemporaryBlock;
 use warp_editor::content::version::BufferVersion;
-use warp_editor::multiline::{AnyMultilineString, MultilineStr, MultilineString, LF};
+use warp_editor::multiline::{AnyMultilineString, LF, MultilineStr, MultilineString};
 use warp_editor::render::model::{Decoration, LineCount, LineDecoration};
 use warpui::{Entity, ModelContext};
 
@@ -494,16 +494,15 @@ impl DiffModel {
     /// Convert a line index in the base version of the text to an editor line location.
     pub fn base_line_index_to_line_location(&self, index: usize) -> Option<EditorLineLocation> {
         for (line_range, change) in self.status.change_mapping.iter() {
-            if let ChangeType::Replacement { replaced_range, .. } = change {
-                if replaced_range.contains(&index) {
-                    return Some(EditorLineLocation::Removed {
-                        // Subtracting 1 as the diff is currently represented as attaching to the _previous line_.
-                        line_number: LineCount::from(line_range.start),
-                        line_range: LineCount::from(line_range.start)
-                            ..LineCount::from(line_range.end),
-                        index: index - replaced_range.start,
-                    });
-                }
+            if let ChangeType::Replacement { replaced_range, .. } = change
+                && replaced_range.contains(&index)
+            {
+                return Some(EditorLineLocation::Removed {
+                    // Subtracting 1 as the diff is currently represented as attaching to the _previous line_.
+                    line_number: LineCount::from(line_range.start),
+                    line_range: LineCount::from(line_range.start)..LineCount::from(line_range.end),
+                    index: index - replaced_range.start,
+                });
             }
         }
 

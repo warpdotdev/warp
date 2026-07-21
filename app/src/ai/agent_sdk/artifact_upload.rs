@@ -4,7 +4,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use blocking::unblock;
 use warp_cli::artifact::UploadArtifactArgs;
 
@@ -12,14 +12,14 @@ use super::common::parse_ambient_task_id;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::ServerAIConversationMetadata;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::{
     AIClient, CreateFileArtifactUploadRequest, CreateFileArtifactUploadResponse,
     FileArtifactRecord, FileArtifactUploadTargetInfo,
 };
 use crate::server::server_api::harness_support::FileUploadBody;
 use crate::server::server_api::presigned_upload::upload_file_to_target;
-use crate::server::server_api::ServerApi;
-use crate::util::image::{infer_mime_type, MIME_SNIFF_BYTES};
+use crate::util::image::{MIME_SNIFF_BYTES, infer_mime_type};
 
 const OZ_RUN_ID_ENV_VAR: &str = "OZ_RUN_ID";
 

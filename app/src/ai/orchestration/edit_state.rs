@@ -98,14 +98,12 @@ impl OrchestrationConfigState {
         let is_local = !self.execution_mode.is_remote();
         // Pre-fill environment with the last-selected one when switching
         // to Cloud.
-        if is_remote {
-            if let RunAgentsExecutionMode::Remote { environment_id, .. } = &self.execution_mode {
-                if environment_id.is_empty() {
-                    if let Some(default_env) = default_environment_id {
-                        self.set_environment_id(default_env);
-                    }
-                }
-            }
+        if is_remote
+            && let RunAgentsExecutionMode::Remote { environment_id, .. } = &self.execution_mode
+            && environment_id.is_empty()
+            && let Some(default_env) = default_environment_id
+        {
+            self.set_environment_id(default_env);
         }
         self.reset_model_if_invalid(
             fallback_base_model_id,
@@ -131,18 +129,17 @@ impl OrchestrationConfigState {
             self.sanitize_for_local_execution();
         }
         // Reset model if it disappeared from the harness's catalog.
-        if !model_is_valid(&self.model_id, &self.harness_type, is_local) {
-            if let Some(first_id) = default_model_id(&self.harness_type) {
-                self.model_id = first_id;
-            }
+        if !model_is_valid(&self.model_id, &self.harness_type, is_local)
+            && let Some(first_id) = default_model_id(&self.harness_type)
+        {
+            self.model_id = first_id;
         }
         // Drop any `Named(_)` selection whose secret no longer exists.
         if let (Some(names), AuthSecretSelection::Named(name)) =
             (loaded_secret_names, &self.auth_secret_selection)
+            && !names.iter().any(|n| n == name)
         {
-            if !names.iter().any(|n| n == name) {
-                self.auth_secret_selection = AuthSecretSelection::Unset;
-            }
+            self.auth_secret_selection = AuthSecretSelection::Unset;
         }
         // Re-seed `Unset` from persisted settings. Leaves `Inherit` alone.
         // Uses the full selection resolver so a prior explicit Inherit is

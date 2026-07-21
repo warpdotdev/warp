@@ -4,8 +4,8 @@ use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Container, OffsetPositioning, ParentAnchor, ParentElement as _,
@@ -285,23 +285,18 @@ impl ModelSelector {
             .value()
             .get(harness.config_name())
             .cloned();
-        if let Some(saved) = saved {
-            if HarnessAvailabilityModel::as_ref(ctx)
+        if let Some(saved) = saved
+            && HarnessAvailabilityModel::as_ref(ctx)
                 .models_for(harness)
                 .is_some_and(|models| {
                     models.iter().any(|m| {
                         m.id == saved.model_id && m.reasoning_level == saved.reasoning_level
                     })
                 })
-            {
-                ambient_model.update(ctx, |model, ctx| {
-                    model.set_harness_model_selection(
-                        Some(saved.model_id),
-                        saved.reasoning_level,
-                        ctx,
-                    );
-                });
-            }
+        {
+            ambient_model.update(ctx, |model, ctx| {
+                model.set_harness_model_selection(Some(saved.model_id), saved.reasoning_level, ctx);
+            });
         }
     }
 
@@ -671,20 +666,20 @@ impl TypedActionView for ModelSelector {
                 reasoning_level,
             } => {
                 let is_default = model_id.is_empty();
-                if let Some(ambient_agent_model) = self.ambient_agent_model.clone() {
-                    if ambient_agent_model.as_ref(ctx).selected_harness() == *harness {
-                        ambient_agent_model.update(ctx, |model, ctx| {
-                            model.set_harness_model_selection(
-                                (!is_default).then(|| model_id.clone()),
-                                if is_default {
-                                    None
-                                } else {
-                                    reasoning_level.clone()
-                                },
-                                ctx,
-                            );
-                        });
-                    }
+                if let Some(ambient_agent_model) = self.ambient_agent_model.clone()
+                    && ambient_agent_model.as_ref(ctx).selected_harness() == *harness
+                {
+                    ambient_agent_model.update(ctx, |model, ctx| {
+                        model.set_harness_model_selection(
+                            (!is_default).then(|| model_id.clone()),
+                            if is_default {
+                                None
+                            } else {
+                                reasoning_level.clone()
+                            },
+                            ctx,
+                        );
+                    });
                 }
                 // Persist the selection per-harness to settings for next time.
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {

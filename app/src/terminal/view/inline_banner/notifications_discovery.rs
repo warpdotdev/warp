@@ -1,11 +1,11 @@
 use serde::Serialize;
+use warpui::Element;
 use warpui::elements::MouseStateHandle;
 use warpui::notification::RequestPermissionsOutcome;
-use warpui::Element;
 
 use super::{
-    render_inline_block_list_banner, InlineBannerButtonState, InlineBannerCloseButton,
-    InlineBannerContent, InlineBannerStyle, InlineBannerTextButton, InlineBannerTextButtonVariant,
+    InlineBannerButtonState, InlineBannerCloseButton, InlineBannerContent, InlineBannerStyle,
+    InlineBannerTextButton, InlineBannerTextButtonVariant, render_inline_block_list_banner,
 };
 use crate::appearance::Appearance;
 use crate::terminal::session_settings::NotificationsMode;

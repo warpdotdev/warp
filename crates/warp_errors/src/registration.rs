@@ -25,7 +25,7 @@ pub trait RegisteredError {}
 pub trait AnyErrorRegistration: Sync {
     // Returns true if
     fn downcast_and_is_actionable(&self, error: &(dyn std::error::Error + 'static))
-        -> Option<bool>;
+    -> Option<bool>;
 }
 
 /// Adapter for statically registering all [`ErrorExt`] implementations.

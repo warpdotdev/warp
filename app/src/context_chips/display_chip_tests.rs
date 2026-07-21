@@ -1,10 +1,10 @@
 use super::{
-    truncate_from_beginning, CreateGitBranch, GitBranch, GitBranchTrackingStatus, GitLineChanges,
+    CreateGitBranch, GitBranch, GitBranchTrackingStatus, GitLineChanges, truncate_from_beginning,
 };
 use crate::context_chips::display_chip::PromptChipShellCommand;
 use crate::context_chips::display_menu::GenericMenuItem;
 use crate::context_chips::git_branch_on_click::GitBranchOnClickValue;
-use crate::context_chips::{github_pr_display_text_from_url, ContextChipKind};
+use crate::context_chips::{ContextChipKind, github_pr_display_text_from_url};
 use crate::ui_components::icons::Icon;
 
 #[test]

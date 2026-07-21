@@ -1,8 +1,8 @@
-use super::action_log::{self, ActionLog, ACTION_LOG_KEY};
-use super::artifacts::{self, TestArtifacts, ARTIFACTS_KEY};
-use super::overlay::{OverlayLog, OVERLAY_LOG_KEY};
-use super::step::{run_step, AssertionOutcome, StepDataMap, TestStep};
-use super::video_recorder::{self, VideoRecorder, VIDEO_RECORDER_KEY};
+use super::action_log::{self, ACTION_LOG_KEY, ActionLog};
+use super::artifacts::{self, ARTIFACTS_KEY, TestArtifacts};
+use super::overlay::{OVERLAY_LOG_KEY, OverlayLog};
+use super::step::{AssertionOutcome, StepDataMap, TestStep, run_step};
+use super::video_recorder::{self, VIDEO_RECORDER_KEY, VideoRecorder};
 use super::{RootDir, TestSetupUtils};
 
 const RUNTIME_TAG_FAILED_STEP_GROUP_NAME: &str = "failed_step_group_name";
@@ -14,21 +14,21 @@ use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use anyhow::Context as _;
 use futures::{Future, FutureExt};
 use instant::{Duration, Instant};
 use warp_errors::report_error;
 
-use crate::integration::step::PersistedDataMap;
-use crate::platform::TerminationMode;
 use crate::r#async::FutureExt as _;
 #[cfg(feature = "integration_tests")]
 use crate::r#async::Timer;
+use crate::integration::step::PersistedDataMap;
+use crate::platform::TerminationMode;
 use crate::{App, WindowId};
 
 pub type SetupFn = Box<dyn FnMut(&mut TestSetupUtils) + 'static>;
@@ -376,10 +376,9 @@ impl TestDriver {
                     .active_window()
                     .and_then(|id| windows.platform_window(id))
                     .map(|window| window.as_ctx().backing_scale_factor())
-            }) {
-                if let Some(overlay_log) = super::overlay::get_overlay_log_mut(step_data_map) {
-                    overlay_log.set_scale_factor(scale);
-                }
+            }) && let Some(overlay_log) = super::overlay::get_overlay_log_mut(step_data_map)
+            {
+                overlay_log.set_scale_factor(scale);
             }
         }
 
@@ -467,25 +466,24 @@ impl TestDriver {
             step_data_map.remove::<_, OverlayLog>(OVERLAY_LOG_KEY);
         if let Some(recorder) = video_recorder::get_recorder_mut(step_data_map) {
             recorder.stop_recording();
-            if recorder.frame_count() > 0 {
-                if let Some(ref dir) = artifacts_dir {
-                    let output = dir.join("recording.mp4");
-                    if let Err(e) = recorder.finalize(&output, overlay_log.as_ref()) {
-                        report_error!(e.context("VideoRecorder: finalization failed"));
-                    }
+            if recorder.frame_count() > 0
+                && let Some(ref dir) = artifacts_dir
+            {
+                let output = dir.join("recording.mp4");
+                if let Err(e) = recorder.finalize(&output, overlay_log.as_ref()) {
+                    report_error!(e.context("VideoRecorder: finalization failed"));
                 }
             }
         }
 
         if let Some(ref dir) = artifacts_dir {
             let log_output = dir.join("recording.log");
-            if let Some(action_log) = action_log::get_action_log(step_data_map) {
-                if let Err(e) = action_log
+            if let Some(action_log) = action_log::get_action_log(step_data_map)
+                && let Err(e) = action_log
                     .write_to_file(&log_output)
                     .context("ActionLog: finalization failed")
-                {
-                    report_error!(e);
-                }
+            {
+                report_error!(e);
             }
         }
     }
@@ -517,7 +515,9 @@ impl TestDriver {
                 Err(e) => report_error!(e),
             }
         } else {
-            log::debug!("RUNTIME_TAGS_OUTPUT_FILE environment variable not set, skipping runtime tags export");
+            log::debug!(
+                "RUNTIME_TAGS_OUTPUT_FILE environment variable not set, skipping runtime tags export"
+            );
         }
     }
 

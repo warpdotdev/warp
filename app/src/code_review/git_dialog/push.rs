@@ -11,18 +11,18 @@ use std::collections::HashMap;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
+use warpui::ViewContext;
 use warpui::elements::{
     Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Text,
 };
 use warpui::platform::Cursor;
-use warpui::ViewContext;
 
 use crate::code::editor::{add_color, remove_color};
 use crate::code_review::git_dialog::{
-    render_branch_section, render_chevron_icon, render_file_list, show_toast,
-    user_facing_git_error, GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode,
+    GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode, render_branch_section,
+    render_chevron_icon, render_file_list, show_toast, user_facing_git_error,
 };
 use crate::code_review::telemetry_event::{
     CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
@@ -59,11 +59,7 @@ pub(super) fn new_state(publish: bool, commits: Vec<Commit>) -> PushState {
 }
 
 pub(super) fn confirm_label(publish: bool) -> &'static str {
-    if publish {
-        "Publish"
-    } else {
-        "Push"
-    }
+    if publish { "Publish" } else { "Push" }
 }
 
 pub(super) fn confirm_icon(publish: bool) -> Icon {

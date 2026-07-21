@@ -2,22 +2,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Local;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_editor::editor::NavigationKey;
 use warp_errors::report_error;
+use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    resizable_state_handle, Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, DispatchEventResult, DragBarSide, Element, Empty, EventHandler, Fill, Flex,
-    HyperlinkUrl, Icon, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-    ParentAnchor, ParentElement, PositionedElementAnchor, PositionedElementOffsetBounds, Radius,
-    Resizable, ResizableStateHandle, SavePosition, Shrinkable, Stack, Text,
+    Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, DragBarSide, Element, Empty, EventHandler, Fill, Flex, HyperlinkUrl, Icon,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
+    ResizableStateHandle, SavePosition, Shrinkable, Stack, Text, resizable_state_handle,
 };
 use warpui::fonts::Properties;
 use warpui::keymap::{EditableBinding, FixedBinding};
 use warpui::platform::Cursor;
 use warpui::presenter::ChildView;
-use warpui::r#async::Timer;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
@@ -28,10 +28,10 @@ use warpui::{
 use super::execution_context::WarpAiExecutionContext;
 use super::requests::{Event as RequestsEvent, RequestStatus, Requests};
 use super::transcript::{Transcript, TranscriptEvent};
-use super::utils::{render_prepared_response_button, render_request_limit_info, TranscriptPart};
+use super::utils::{TranscriptPart, render_prepared_response_button, render_request_limit_info};
 use super::{
-    AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AI_ASSISTANT_SVG_PATH,
-    ASK_AI_ASSISTANT_TEXT, PROMPT_CHARACTER_LIMIT,
+    AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AI_ASSISTANT_SVG_PATH,
+    ASK_AI_ASSISTANT_TEXT, AskAIType, PROMPT_CHARACTER_LIMIT,
 };
 use crate::appearance::Appearance;
 use crate::editor::{
@@ -39,13 +39,13 @@ use crate::editor::{
 };
 use crate::input_suggestions::{Event as InputSuggestionsEvent, InputSuggestions};
 use crate::send_telemetry_from_ctx;
-use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::ai::AIClient;
 use crate::server::telemetry::{TelemetryEvent, WarpAIActionType};
-use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_WARP_AI_WIDTH};
+use crate::terminal::resizable_data::{DEFAULT_WARP_AI_WIDTH, ModalType, ResizableData};
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
-use crate::util::bindings::{cmd_or_ctrl_shift, CustomAction};
+use crate::util::bindings::{CustomAction, cmd_or_ctrl_shift};
 use crate::workspace::{ActiveSession, TAB_BAR_HEIGHT};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -456,10 +456,9 @@ impl AIAssistantPanelView {
                     .input_suggestions_view
                     .as_ref(ctx)
                     .get_selected_item_text()
+                    && selected_text == self.editor.as_ref(ctx).buffer_text(ctx)
                 {
-                    if selected_text == self.editor.as_ref(ctx).buffer_text(ctx) {
-                        return;
-                    }
+                    return;
                 }
                 self.input_suggestions_mode = InputSuggestionsMode::Closed;
             }

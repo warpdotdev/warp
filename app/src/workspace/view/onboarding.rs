@@ -13,7 +13,7 @@ use crate::terminal::view::{
     AgentOnboardingVersion, OnboardingIntention, OnboardingVersion, TerminalAction,
 };
 use crate::workspace::Workspace;
-use crate::{terminal, FeatureFlag};
+use crate::{FeatureFlag, terminal};
 
 /// Configuration for starting the agent onboarding tutorial.
 #[derive(Debug, Clone)]
