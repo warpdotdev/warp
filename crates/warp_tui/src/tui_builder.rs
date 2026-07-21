@@ -329,6 +329,7 @@ impl TuiUiBuilder {
         TuiStyle::default()
             .fg(cell_color(self.base_background()))
             .bg(cell_color(self.warp_theme.foreground()))
+            .remove_modifier(Modifier::REVERSED)
     }
 
     /// The deterministic agent identity palette for this theme. See

@@ -35,6 +35,7 @@ struct FakeContent {
     logical_text: Rc<RefCell<Option<String>>>,
     /// Selection spans passed to `selection_logical_text`, for assertions.
     logical_requests: Rc<RefCell<Vec<TuiSelectionSpan>>>,
+    style: TuiStyle,
 }
 
 impl FakeContent {
@@ -45,6 +46,7 @@ impl FakeContent {
             widths: Rc::new(RefCell::new(Vec::new())),
             logical_text: Rc::new(RefCell::new(None)),
             logical_requests: Rc::new(RefCell::new(Vec::new())),
+            style: TuiStyle::default(),
         }
     }
 
@@ -52,6 +54,11 @@ impl FakeContent {
     /// selection (the logical-sourcing path), instead of the per-row fallback.
     fn with_logical_text(self, text: impl Into<String>) -> Self {
         *self.logical_text.borrow_mut() = Some(text.into());
+        self
+    }
+
+    fn with_style(mut self, style: TuiStyle) -> Self {
+        self.style = style;
         self
     }
 
@@ -70,7 +77,11 @@ impl FakeContent {
             if item_bottom > window.scroll_top && item_top < viewport_bottom {
                 visible_items.push(TuiVisibleViewportItem {
                     origin_y: item_top,
-                    element: Box::new(TuiText::new(item.lines.join("\n")).truncate()),
+                    element: Box::new(
+                        TuiText::new(item.lines.join("\n"))
+                            .with_style(self.style)
+                            .truncate(),
+                    ),
                 });
             }
             origin_y = item_bottom;
@@ -219,7 +230,10 @@ fn viewport_with_state(
 }
 
 fn viewport_selection_style() -> TuiStyle {
-    TuiStyle::default().fg(Color::Black).bg(Color::White)
+    TuiStyle::default()
+        .fg(Color::Black)
+        .bg(Color::White)
+        .remove_modifier(Modifier::REVERSED)
 }
 
 /// Verifies viewport geometry is unavailable until layout establishes it.
@@ -590,7 +604,8 @@ fn scrolling_down_pins_to_bottom_without_overscrolling() {
 #[test]
 fn selectable_viewport_highlights_and_copies_linear_rows() {
     App::test((), |app| async move {
-        let content = FakeContent::new(vec![fake_item(1, 3)]);
+        let content = FakeContent::new(vec![fake_item(1, 3)])
+            .with_style(TuiStyle::default().add_modifier(Modifier::REVERSED));
         let state = TuiViewportedListState::new_at_end();
         let selection_style = viewport_selection_style();
         let viewport = viewport_with_state(state.clone(), content);
