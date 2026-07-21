@@ -244,12 +244,15 @@ the existing third-party path; N4 replaces that).
      `LoginPurpose` exhaustively).
    - Copy for `AccountFirst` on `LoginStep::SelectAuthPathway`:
      - Title: `Create an account`
-     - Subheading 1: `Access AI, run cloud agents, collaborate with teammates, and sync settings across devices`
-     - Subheading 2: `Use your work email if you have one. You may already have access to premium features through your organization`
+     - Subheading: `Access AI, run cloud agents, collaborate with teammates, and sync settings across devices`
+     - Bordered work-email callout using the theme accent and lightbulb icon:
+       - Title: `Use your work email if you have one`
+       - Body: `Signing in with a work email helps us find your teammates and may unlock special offers.`
      - Keep the existing TOS/Privacy links and the theme-matched right panel.
    - Buttons for `AccountFirst`: `Back` (returns to Theme — root_view/onboarding view wiring),
      `Skip` (label `Skip`; **bypasses** `ShowSkipDialog` and directly runs the
-     `handle_login_later()` path → emits `LoginSlideEvent::LoginLaterConfirmed`), `Continue`
+     `handle_login_later()` path → emits `LoginSlideEvent::LoginLaterConfirmed`; do not render the
+     Command-Enter shortcut badge next to this button), `Continue`
      (existing `start_login()`; enter-key binding stays).
    - `LoginStep::BrowserOpen` ("Sign in on your browser to continue"), manual URL copy, and pasted
      token handling are reused untouched.

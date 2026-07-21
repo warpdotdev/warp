@@ -15,10 +15,10 @@ use warp_core::ui::theme::color::internal_colors;
 use warpui::actions::StandardAction;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Align, CacheOption, ChildAnchor, ClippedScrollStateHandle, Container, CornerRadius,
-    CrossAxisAlignment, Dismiss, Fill, Flex, FormattedTextElement, HighlightedHyperlink, Image,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
+    Align, Border, CacheOption, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Dismiss, Fill, Flex, FormattedTextElement,
+    HighlightedHyperlink, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
 };
 use warpui::fonts::Weight;
 use warpui::keymap::{FixedBinding, Keystroke};
@@ -96,31 +96,32 @@ impl LoginSlideSource {
 }
 
 impl LoginPurpose {
-    fn copy(self) -> (&'static str, &'static str, Option<&'static str>) {
+    fn copy(self) -> (&'static str, &'static str) {
         match self {
             LoginPurpose::WarpDrive => (
                 "Get started with Warp Drive",
                 "Connect your account to save and share notebooks, workflows, and more across devices.",
-                None,
             ),
             LoginPurpose::WarpAgent => (
                 "Get started with AI",
                 "Connect your account to enable AI-powered planning, coding, and automation.",
-                None,
             ),
             LoginPurpose::ThirdParty => (
                 "Create an account",
                 "Create a Warp account to enable AI-powered planning, coding, and automations.",
-                None,
             ),
             LoginPurpose::AccountFirst => (
                 "Create an account",
                 "Access AI, run cloud agents, collaborate with teammates, and sync settings across devices",
-                Some(
-                    "Use your work email if you have one. You may already have access to premium features through your organization",
-                ),
             ),
         }
+    }
+
+    fn work_email_callout_copy(self) -> Option<(&'static str, &'static str)> {
+        matches!(self, LoginPurpose::AccountFirst).then_some((
+            "Use a work email to find teammates",
+            "Signing in with a work email helps us find your teammates and may unlock special offers.",
+        ))
     }
 }
 
@@ -615,7 +616,8 @@ impl LoginSlideView {
         let sub_text_color = internal_colors::text_sub(theme, theme.background().into_solid());
         let ui_builder = appearance.ui_builder();
 
-        let (title_text, subtitle_text, secondary_subtitle_text) = self.login_purpose().copy();
+        let login_purpose = self.login_purpose();
+        let (title_text, subtitle_text) = login_purpose.copy();
         let title = FormattedTextElement::from_str(title_text, appearance.ui_font_family(), 36.)
             .with_color(internal_colors::text_main(
                 theme,
@@ -632,14 +634,6 @@ impl LoginSlideView {
                 .with_alignment(TextAlignment::Left)
                 .with_line_height_ratio(1.0)
                 .finish();
-        let secondary_subtitle = secondary_subtitle_text.map(|text| {
-            FormattedTextElement::from_str(text, appearance.ui_font_family(), 16.)
-                .with_color(sub_text_color)
-                .with_weight(Weight::Normal)
-                .with_alignment(TextAlignment::Left)
-                .with_line_height_ratio(1.0)
-                .finish()
-        });
 
         // TOS and Privacy links
         let disclaimer_styles = UiComponentStyles {
@@ -716,16 +710,77 @@ impl LoginSlideView {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(title)
             .with_child(Container::new(subtitle).with_margin_top(16.).finish());
-        if let Some(secondary_subtitle) = secondary_subtitle {
+        if let Some((callout_title, callout_body)) = login_purpose.work_email_callout_copy() {
             header = header.with_child(
-                Container::new(secondary_subtitle)
-                    .with_margin_top(12.)
-                    .finish(),
+                Container::new(Self::render_work_email_callout(
+                    appearance,
+                    callout_title,
+                    callout_body,
+                ))
+                .with_margin_top(28.)
+                .finish(),
             );
         }
         let header = header.with_child(disclaimers).finish();
 
         vec![header]
+    }
+
+    fn render_work_email_callout(
+        appearance: &Appearance,
+        title: &'static str,
+        body: &'static str,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let background = theme.background().into_solid();
+        let icon = ConstrainedBox::new(Icon::Lightbulb.to_warpui_icon(theme.accent()).finish())
+            .with_width(20.)
+            .with_height(20.)
+            .finish();
+        let title = appearance
+            .ui_builder()
+            .paragraph(title)
+            .with_style(UiComponentStyles {
+                font_color: Some(internal_colors::text_main(theme, background)),
+                font_size: Some(16.),
+                font_weight: Some(Weight::Medium),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        let body = appearance
+            .ui_builder()
+            .paragraph(body)
+            .with_style(UiComponentStyles {
+                font_color: Some(internal_colors::text_sub(theme, background)),
+                font_size: Some(14.),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        let copy = Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(title)
+            .with_child(Container::new(body).with_margin_top(4.).finish())
+            .finish();
+
+        Container::new(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(icon)
+                .with_child(
+                    Shrinkable::new(1., Container::new(copy).with_margin_left(12.).finish())
+                        .finish(),
+                )
+                .finish(),
+        )
+        .with_vertical_padding(16.)
+        .with_horizontal_padding(16.)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(10.)))
+        .with_border(Border::all(1.).with_border_fill(theme.accent()))
+        .finish()
     }
 
     fn render_select_auth_bottom_nav(&self, appearance: &Appearance) -> Box<dyn Element> {

@@ -17,9 +17,13 @@ fn account_first_copy_matches_product_spec() {
         (
             "Create an account",
             "Access AI, run cloud agents, collaborate with teammates, and sync settings across devices",
-            Some(
-                "Use your work email if you have one. You may already have access to premium features through your organization",
-            ),
         )
+    );
+    assert_eq!(
+        LoginPurpose::AccountFirst.work_email_callout_copy(),
+        Some((
+            "Use your work email if you have one",
+            "Signing in with a work email helps us find your teammates and may unlock special offers.",
+        ))
     );
 }
