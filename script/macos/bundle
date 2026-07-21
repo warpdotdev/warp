@@ -667,6 +667,13 @@ elif [[ "$ARTIFACT" == "tui" ]]; then
     echo "Copying .dSYM into $OUT_DIR/$WARP_BIN.dSYM"
     cp -HR "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" "$OUT_DIR/"
   fi
+  # Preserve the dSYM above, then remove local symbols from the distributed
+  # executable before it is signed. This keeps external crash symbolication
+  # intact while substantially reducing both installed and download size.
+  if [[ $DEBUG != true ]]; then
+    echo "Stripping local symbols from $OUT_DIR/$WARP_BIN"
+    strip -x "$OUT_DIR/$WARP_BIN"
+  fi
 
   # Ship bundled skills + settings schema next to the binary. The standalone TUI
   # resolves this `resources/` dir relative to its own executable at runtime.

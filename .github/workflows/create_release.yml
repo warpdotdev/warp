@@ -601,6 +601,22 @@ jobs:
           name: release-macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
 
+      - name: Set up Sentry CLI
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        with:
+          token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
+          organization: warpdotdev
+          project: ${{ steps.get-config.outputs.sentry_project }}
+
+      - name: Upload debugging symbols to Sentry
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        run: |
+          script/sentry_upload_dif.sh
+        shell: bash
+        env:
+          DEBUG_FILE_OR_FOLDER_PATH: ${{ steps.bundle_tui.outputs.dsym_path }}
+
   release_linux_x86:
     name: Build Release (Linux x86_64)
     runs-on: namespace-profile-ubuntu-20-04
