@@ -3046,7 +3046,7 @@ impl AgentDriver {
                 .map_err(|_| AgentDriverError::ProfileError(profile.clone()))?;
             let sync_id = SyncId::ServerId(server_id);
             AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
-                if let Some(profile_id) = model.get_profile_id_by_sync_id(&sync_id) {
+                if let Some(profile_id) = model.get_profile_id_by_sync_id(&sync_id, ctx) {
                     model.set_active_profile(terminal_id, profile_id, ctx);
                 } else {
                     return Err(AgentDriverError::ProfileError(profile.clone()));

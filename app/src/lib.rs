@@ -1312,17 +1312,23 @@ fn refresh_user_after_iap_access(ctx: &mut AppContext) {
     }
 
     let mut refresh_started = false;
-    ctx.subscribe_to_model(&iap_manager, move |iap_manager, event, ctx| {
-        if refresh_started
-            || !matches!(event, IapManagerEvent::StateChanged)
-            || !iap_manager.as_ref(ctx).has_valid_token()
-        {
-            return;
+    ctx.subscribe_to_model(&iap_manager, move |iap_manager, event, ctx| match event {
+        IapManagerEvent::StateChanged => {
+            if refresh_started || !iap_manager.as_ref(ctx).has_valid_token() {
+                return;
+            }
+            refresh_started = true;
+            AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
+                auth_manager.refresh_user(ctx);
+            });
         }
-        refresh_started = true;
-        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-            auth_manager.refresh_user(ctx);
-        });
+        IapManagerEvent::AccessUnavailable => {
+            report_error!("Staging IAP access unavailable before startup user refresh");
+        }
+        IapManagerEvent::RefreshFailed {
+            message: _,
+            is_first_failure_of_streak: _,
+        } => {}
     });
     iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
 }
