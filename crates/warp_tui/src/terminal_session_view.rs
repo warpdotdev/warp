@@ -2600,8 +2600,8 @@ impl TuiTerminalSessionView {
     }
 
     /// Fills the accepted prompt-history prompt into the input and submits it
-    /// immediately, matching the GUI's accept-a-prompt-from-history behavior
-    /// (PRODUCT.md invariant 16). The menu has already closed itself.
+    /// immediately, matching the GUI's accept-a-prompt-from-history behavior.
+    /// The menu has already closed itself.
     fn handle_accepted_prompt_history(&mut self, text: String, ctx: &mut ViewContext<Self>) {
         self.input_view.update(ctx, |input, ctx| {
             input.set_text(&text, ctx);

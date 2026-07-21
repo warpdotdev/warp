@@ -766,6 +766,7 @@ fn multiline_paste_emits_once_and_fallback_inserts_without_submitting() {
                 | TuiInputViewEvent::AcceptedConversation(_)
                 | TuiInputViewEvent::AcceptedModel(_)
                 | TuiInputViewEvent::AcceptedMcp(_)
+                | TuiInputViewEvent::AcceptedPromptHistory(_)
                 | TuiInputViewEvent::BackspaceAtEmptyInput
                 | TuiInputViewEvent::MoveFocusUp => {}
             });
@@ -2326,7 +2327,8 @@ fn prompt_history_rows(
 }
 
 /// Up with the caret on the first visual row opens the prompt-history menu,
-/// unconditionally (no feature flag), listing prompts oldest-first.
+/// unconditionally (no feature flag), listing prompts oldest-first and
+/// immediately previewing the newest prompt.
 #[test]
 fn up_on_first_row_opens_prompt_history_menu() {
     App::test((), |mut app| async move {
@@ -2346,6 +2348,7 @@ fn up_on_first_row_opens_prompt_history_menu() {
                 prompt_history_rows(&menu, ctx),
                 vec!["deploy the app".to_owned(), "run the tests".to_owned()]
             );
+            assert_eq!(text(&view, ctx), "run the tests");
         });
     });
 }
@@ -2420,17 +2423,11 @@ fn escape_closes_prompt_history_and_restores_typed_buffer() {
             assert!(menu.as_ref(ctx).is_open(ctx));
             (view, menu)
         });
-        app.update(|ctx| {
-            // Navigate to preview a prompt into the input buffer.
-            dispatch(
-                &view,
-                ctx,
-                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp)],
-            );
-            assert_ne!(
+        app.read(|ctx| {
+            assert_eq!(
                 text(&view, ctx),
-                "deploy",
-                "selecting a prompt previews it into the input"
+                "deploy beta",
+                "opening previews the initially selected prompt"
             );
         });
         app.update(|ctx| {
@@ -2444,7 +2441,7 @@ fn escape_closes_prompt_history_and_restores_typed_buffer() {
 }
 
 /// Previewing via selection updates the input buffer but keeps filtering against
-/// the typed query, not the previewed text (PRODUCT.md invariant 14).
+/// the typed query, not the previewed text.
 #[test]
 fn preview_on_select_keeps_query_stable() {
     App::test((), |mut app| async move {
@@ -2500,7 +2497,7 @@ fn preview_on_select_keeps_query_stable() {
 
 /// Preview and restore are undo-agnostic: after arrowing through previews and
 /// restoring, a subsequent Undo does not step back into an intermediate preview
-/// state (PRODUCT.md invariant 15).
+/// state.
 #[test]
 fn preview_and_restore_do_not_leave_undoable_states() {
     App::test((), |mut app| async move {
@@ -2552,7 +2549,7 @@ fn preview_and_restore_do_not_leave_undoable_states() {
 }
 
 /// Enter with a highlighted prompt fills the input and emits the accept event
-/// carrying that prompt (PRODUCT.md invariant 16).
+/// carrying that prompt.
 #[test]
 fn submit_accepts_highlighted_prompt_history_entry() {
     App::test((), |mut app| async move {

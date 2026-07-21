@@ -25,7 +25,7 @@ The open state owns:
 - the original input buffer restored on dismissal;
 - the typed query, held separately from preview text so arrow navigation does not change filtering.
 
-The model subscribes to editor content and `BlocklistAIHistoryModel` changes while open. Selection previews replace the editor buffer and reset its undo stack. Escape and Down past the newest row close the menu and restore the original buffer. Enter returns the selected prompt for immediate submission. Empty history and filtered-to-empty results produce explicit status rows.
+The model subscribes to editor content and `BlocklistAIHistoryModel` changes while open. On open, the default newest selection is immediately previewed, matching the GUI; subsequent selection previews also replace the editor buffer and reset its undo stack. Escape, Down past the newest row, and Down from an empty result set close the menu and restore the original buffer. Enter returns the selected prompt for immediate submission. Empty history and filtered-to-empty results produce explicit status rows.
 ### Input and session integration
 Add `PromptHistory` to `TuiInputSuggestionsMode` and implement `TuiInlineMenuHandle` for the prompt-history model. Extend the type-erased inline-menu interface with direct opening so `TuiInputView` can open any registered menu by mode without retaining concrete model handles.
 
@@ -39,8 +39,8 @@ Determine the visual row through the char-cell display lattice so soft-wrapped i
 In `TuiTerminalSessionView`, construct and register the menu with the existing inline menus. Handle `AcceptedPromptHistory` by filling the selected text and passing it to the existing submission path.
 ## Testing and validation
 - `app/src/terminal/history/up_arrow_tests.rs`: ordering, newest-occurrence de-duplication, ignored prompts, and blank-prompt exclusion.
-- `crates/warp_tui/src/prompt_history_menu_tests.rs`: population, default selection, preview, restoration, acceptance, empty states, selection reconciliation, and render-to-lines output.
-- `crates/warp_tui/src/input/view_tests.rs`: first-visual-row opening, lower-row cursor movement, shell-mode suppression, stable filtering during previews, undo isolation, Escape restoration, and Enter acceptance.
+- `crates/warp_tui/src/prompt_history_menu_tests.rs`: population, default selection and initial preview, restoration, acceptance, Down dismissal from empty results, selection reconciliation, and render-to-lines output.
+- `crates/warp_tui/src/input/view_tests.rs`: first-visual-row opening and initial preview, lower-row cursor movement, shell-mode suppression, stable filtering during previews, undo isolation, Escape restoration, and Enter acceptance.
 - Run the full `warp_tui` test suite and `./script/format`.
 - Run `./script/run-tui` and verify opening, filtering, preview, acceptance, and dismissal in a real terminal.
 ## Risks and mitigations

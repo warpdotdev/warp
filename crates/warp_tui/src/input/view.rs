@@ -19,7 +19,6 @@
 //! visual-row kill edits on `CodeEditorModel`. What stays here is input policy:
 //! prompt-only keybindings, submit, inline menus, and shell mode.
 //!
-//! See `specs/tui-input-view/TECH.md` for the full keybinding table.
 
 use std::ops::Range;
 use std::rc::Rc;
@@ -133,7 +132,7 @@ pub enum TuiInputViewEvent {
 
 /// Prompt policy plus shared editor actions dispatched to [`TuiInputView`].
 ///
-/// Each variant corresponds to one or more keybindings from the spec keybinding table.
+/// Each variant corresponds to one or more keybindings.
 #[derive(Debug, Clone)]
 pub enum TuiInputAction {
     /// Apply input emitted by the shared editor element.

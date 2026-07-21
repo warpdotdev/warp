@@ -1,6 +1,6 @@
 //! Tests for [`TuiPromptHistoryMenuModel`]: population/ordering/dedupe, default
-//! selection, prefix filtering, buffer snapshot/restore, acceptance, and empty
-//! states (PRODUCT.md invariants 8-13, 16, 18, 22).
+//! selection and initial preview, prefix filtering, buffer snapshot/restore,
+//! acceptance, and empty states.
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp::tui_export::BlocklistAIHistoryModel;
@@ -86,13 +86,14 @@ fn open_populates_ordered_deduped_rows_excluding_whitespace() {
 }
 
 #[test]
-fn open_defaults_selection_to_last_row() {
+fn open_selects_and_previews_last_row() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
-            let (_input, menu) = setup(ctx, &["first", "second", "third"]);
+            let (input, menu) = setup(ctx, &["first", "second", "third"]);
             menu.update(ctx, |m, ctx| m.open(ctx));
             let snapshot = menu.as_ref(ctx).snapshot(ctx).expect("menu is open");
             assert_eq!(snapshot.selected_index, Some(2));
+            assert_eq!(buffer_text(&input, ctx), "third");
         });
     });
 }
@@ -119,9 +120,7 @@ fn dismiss_restores_the_original_buffer() {
             let (input, menu) = setup(ctx, &["deploy the app"]);
             set_text(&input, "de", ctx);
             menu.update(ctx, |m, ctx| m.open(ctx));
-            // Preview a prompt into the buffer, then dismiss.
-            menu.update(ctx, |m, ctx| m.select_previous(ctx));
-            assert_ne!(buffer_text(&input, ctx), "de");
+            assert_eq!(buffer_text(&input, ctx), "deploy the app");
             menu.update(ctx, |m, ctx| m.dismiss(ctx));
 
             assert!(!menu.as_ref(ctx).is_open(ctx));
@@ -160,6 +159,34 @@ fn empty_history_shows_explicit_empty_state() {
     });
 }
 
+#[test]
+fn down_dismisses_empty_history() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (input, menu) = setup(ctx, &[]);
+            menu.update(ctx, |m, ctx| m.open(ctx));
+            menu.update(ctx, |m, ctx| m.select_next(ctx));
+
+            assert!(!menu.as_ref(ctx).is_open(ctx));
+            assert_eq!(buffer_text(&input, ctx), "");
+        });
+    });
+}
+
+#[test]
+fn down_dismisses_filtered_to_empty_history_and_restores_query() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (input, menu) = setup(ctx, &["deploy the app"]);
+            set_text(&input, "no match", ctx);
+            menu.update(ctx, |m, ctx| m.open(ctx));
+            menu.update(ctx, |m, ctx| m.select_next(ctx));
+
+            assert!(!menu.as_ref(ctx).is_open(ctx));
+            assert_eq!(buffer_text(&input, ctx), "no match");
+        });
+    });
+}
 #[test]
 fn open_menu_renders_prompt_history_surface_to_lines() {
     App::test((), |mut app| async move {

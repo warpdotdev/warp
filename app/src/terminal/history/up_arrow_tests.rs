@@ -3,7 +3,7 @@
 use warpui::{App, EntityId};
 
 use super::prompt_history_for_terminal_view;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::history_model::mock_history_model_with_prompts;
 use crate::suggestions::ignored_suggestions_model::{IgnoredSuggestionsModel, SuggestionType};
 
 /// Asserts that querying a history seeded with `prompts` (oldest-first) yields
@@ -13,7 +13,7 @@ fn assert_prompt_history(prompts: &[&str], expected: &[&str]) {
     let expected: Vec<String> = expected.iter().map(|entry| (*entry).to_owned()).collect();
     App::test((), |app| async move {
         let terminal_surface_id = EntityId::new();
-        app.add_singleton_model(move |_| BlocklistAIHistoryModel::mock_with_ai_queries(prompts));
+        app.add_singleton_model(move |_| mock_history_model_with_prompts(prompts));
         app.read(|ctx| {
             let texts: Vec<String> = prompt_history_for_terminal_view(terminal_surface_id, ctx)
                 .into_iter()
@@ -49,7 +49,7 @@ fn prompt_history_excludes_ignored_prompts() {
         .collect();
     App::test((), |app| async move {
         let terminal_surface_id = EntityId::new();
-        app.add_singleton_model(move |_| BlocklistAIHistoryModel::mock_with_ai_queries(prompts));
+        app.add_singleton_model(move |_| mock_history_model_with_prompts(prompts));
         app.add_singleton_model(|_| {
             IgnoredSuggestionsModel::new(vec![(
                 "delete the cache".to_owned(),

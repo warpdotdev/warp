@@ -40,7 +40,7 @@ enum TuiPromptHistoryMenuState {
         original_buffer: String,
         /// The user's typed search query. Held separately from the input buffer
         /// so selection previews (which overwrite the buffer) do not change what
-        /// the list filters against (PRODUCT.md invariant 14).
+        /// the list filters against.
         query: String,
     },
 }
@@ -107,7 +107,8 @@ impl TuiPromptHistoryMenuModel {
     }
 
     /// Opens the menu, snapshotting the current input as both the restorable
-    /// original buffer and the initial search query.
+    /// original buffer and the initial search query, then previews the default
+    /// selection.
     pub(crate) fn open(&mut self, ctx: &mut ModelContext<Self>) {
         if self.has_open_state() {
             return;
@@ -127,6 +128,7 @@ impl TuiPromptHistoryMenuModel {
             query,
         };
         self.refresh_rows(ctx);
+        self.preview_selection(ctx);
     }
 
     /// Closes the menu and restores the buffer the user had before opening it.
@@ -157,17 +159,17 @@ impl TuiPromptHistoryMenuModel {
     }
 
     /// Moves selection toward newer prompts and previews the highlighted one.
-    /// Moving down past the newest row closes the menu and restores the buffer
-    /// (PRODUCT.md invariant 20).
+    /// Moving down past the newest row, or from an empty list, closes the menu
+    /// and restores the buffer.
     pub(crate) fn select_next(&mut self, ctx: &mut ModelContext<Self>) {
-        let at_last_row = match &self.state {
+        let should_dismiss = match &self.state {
             TuiPromptHistoryMenuState::Open { list, .. } => {
                 let count = list.rows().len();
-                count > 0 && list.selected_index() == Some(count - 1)
+                count == 0 || list.selected_index() == Some(count - 1)
             }
             TuiPromptHistoryMenuState::Closed => return,
         };
-        if at_last_row {
+        if should_dismiss {
             self.dismiss(ctx);
             return;
         }
@@ -181,7 +183,7 @@ impl TuiPromptHistoryMenuModel {
     /// Accepts the current selection, closing the menu and returning the text to
     /// submit. With a highlighted prompt that is its text; with an empty or
     /// filtered-to-nothing list it is the current input, so Enter behaves as a
-    /// normal submit (PRODUCT.md invariants 16, 17).
+    /// normal submit.
     pub(crate) fn accept_selected(&mut self, ctx: &mut ModelContext<Self>) -> Option<String> {
         if !self.is_open(ctx) {
             return None;
@@ -310,7 +312,7 @@ impl TuiPromptHistoryMenuModel {
     ///
     /// The write is undo-agnostic: after replacing the text we reset the buffer's
     /// undo stack so preview and restore never leave undoable intermediate states
-    /// the user could Ctrl+Z into (PRODUCT.md invariant 15). This mirrors the
+    /// the user could Ctrl+Z into. This mirrors the
     /// GUI's `set_buffer_text_ignoring_undo`; the TUI's `CodeEditorModel` has no
     /// ephemeral overlay, so we clear the stack instead.
     fn set_input_text(&self, text: &str, ctx: &mut ModelContext<Self>) {
