@@ -2420,6 +2420,10 @@ impl RootView {
                 self.focus(ctx);
                 ctx.notify();
             }
+            AgentOnboardingEvent::OfferSetUpLaterSelected { .. } => {
+                // N3 only defines the reusable offer UI. N4 routes this event
+                // through typed entitlement application and final completion.
+            }
             AgentOnboardingEvent::AppBecameActive => {
                 // fetch the models / workspace metadata when the user tabs/intents back
                 // into the app during onboarding after potentially upgrading

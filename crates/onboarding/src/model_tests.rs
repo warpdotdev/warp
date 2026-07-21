@@ -8,9 +8,14 @@ use crate::model::{
     AiSetupChoice, NoAiConfirmationSource, OnboardingAuthState, OnboardingStateModel,
     OnboardingStep, SelectedSettings,
 };
+use crate::slides::OfferVariant;
 
 fn add_test_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
     app.update(MockTelemetryContextProvider::register);
+    add_model(app)
+}
+
+fn add_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
     app.add_model(|_| {
         OnboardingStateModel::new(
             Vec::new(),
@@ -44,6 +49,32 @@ fn account_first_path_is_linear_and_reversible() {
 
         model.update(&mut app, |model, ctx| model.back(ctx));
         assert_eq!(step(&app, &model), OnboardingStep::Intro);
+    });
+}
+
+#[test]
+fn post_auth_offer_entry_supports_both_variants_without_navigation() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    App::test((), |mut app| async move {
+        app.update(MockTelemetryContextProvider::register);
+        for variant in [OfferVariant::HeadStart, OfferVariant::ChooseHowToStart] {
+            let model = add_model(&mut app);
+            model.update(&mut app, |model, ctx| {
+                model.show_post_auth_offer(variant, ctx);
+            });
+
+            assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
+            model.read(&app, |model, _| {
+                assert_eq!(model.offer_variant(), variant);
+                assert_eq!(model.progress(), (0, 0));
+            });
+
+            model.update(&mut app, |model, ctx| {
+                model.back(ctx);
+                model.next(ctx);
+            });
+            assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
+        }
     });
 }
 
