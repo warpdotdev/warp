@@ -47,7 +47,10 @@ how much of the orchestrator runs sandboxless in Node today and to map the gap.
    spike exposes an alternate entrypoint that builds the real `clap::Command`
    and parses a JS-provided argv (`agent_run_from_argv`) or a JSON config
    (`agent_run_from_config`) — exactly what `from_env` does on native targets,
-   sourced from the JS caller instead of `std::env::args()`.
+   sourced from the JS caller instead of `std::env::args()`. The best-effort
+   metadata parser accepts both `--flag value` and `--flag=value` long-option
+   forms (matching clap), and the returned `argv` redacts any `--api-key`
+   value (`<redacted>`) so the key is never echoed back through the result.
 4. **The runtime supports outbound networking.** `http_get` makes a real
    `fetch` from inside the WASM module and returns the response — the same
    `fetch` primitive the browser wasm build's `http_client` uses, driven here
@@ -119,7 +122,9 @@ node crates/warp_cli_wasm/harness/run.mjs target/wasm-cli-pkg/warp_cli_wasm.js h
 ```
 
 The harness calls `agent_run_from_config`, `agent_run_from_argv`, and `http_get`,
-printing the parsed `agent run` command (as JSON) and the HTTP response.
+printing the parsed `agent run` command (as JSON) and the HTTP response. It
+redacts any `--api-key` value before logging argv, and exits with a non-zero
+status if `http_get` fails, so a broken networking path can't look successful.
 
 ## Findings — what worked, what needed shims
 

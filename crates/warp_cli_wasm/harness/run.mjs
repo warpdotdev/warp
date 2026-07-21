@@ -40,6 +40,29 @@ function show(label, json) {
   }
 }
 
+// Redact any `--api-key` value before logging argv, so a real WARP_API_KEY is
+// never written to terminal/CI output. Handles both `--api-key value` and
+// `--api-key=value` forms (the Rust parser accepts both; only the *logged*
+// copy is redacted — the raw value is still passed to the wasm module).
+function redactArgv(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--api-key") {
+      out.push(arg);
+      if (i + 1 < argv.length) {
+        out.push("<redacted>");
+        i++;
+      }
+    } else if (arg.startsWith("--api-key=")) {
+      out.push("--api-key=<redacted>");
+    } else {
+      out.push(arg);
+    }
+  }
+  return out;
+}
+
 // 1. agent_run_from_config — equivalent to:
 //    oz-dev agent run --prompt hello --api-key="$WARP_API_KEY"
 const config = {
@@ -67,19 +90,29 @@ const argv = [
   "--output-format",
   "json",
 ];
-console.log("\n[harness] calling agent_run_from_argv with argv:", argv);
+console.log("\n[harness] calling agent_run_from_argv with argv:", redactArgv(argv));
 const result2 = wasm.agent_run_from_argv(JSON.stringify(argv));
 show("agent_run_from_argv result", result2);
 
 // 3. http_get — outbound HTTP request from inside the WASM module.
 console.log(`\n[harness] calling http_get("${pingUrl}") from inside the WASM module...`);
+let httpOk = false;
 try {
   const result3 = await wasm.http_get(pingUrl);
   console.log("=== http_get result ===");
   console.log(result3);
+  httpOk = true;
 } catch (err) {
   console.log("=== http_get failed ===");
   console.log(String(err));
 }
 
 console.log("\n[harness] done. The warp_cli layer executed inside a Node-hosted WASM module.");
+
+// The harness is the spike's networking verification signal, so a failed
+// http_get must surface as a non-zero exit status — otherwise automation can
+// report a broken HTTP path as passing.
+if (!httpOk) {
+  console.error("[harness] http_get failed; exiting with status 1.");
+  process.exit(1);
+}

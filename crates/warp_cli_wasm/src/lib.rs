@@ -38,10 +38,9 @@
 //! findings writeup for the gap analysis.
 
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::*;
-
 use warp_cli::agent::{AgentCommand, OutputFormat, RunAgentArgs};
 use warp_cli::{Args, CliCommand, GlobalOptions};
+use wasm_bindgen::prelude::*;
 
 /// Configuration handed in from the JS harness when an argv is awkward to build.
 ///
@@ -78,7 +77,9 @@ fn default_harness() -> String {
 /// evidence for the spike.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedAgentRun {
-    /// The equivalent argv that was parsed.
+    /// The equivalent argv that was parsed, with any `--api-key` value
+    /// redacted (`<redacted>` for the separated form, `--api-key=<redacted>`
+    /// for the `=`-joined form) so the raw key is never echoed back.
     pub argv: Vec<String>,
     /// The prompt that was parsed.
     pub prompt: String,
@@ -163,6 +164,24 @@ fn build_argv(config: &AgentRunConfig) -> Vec<String> {
     argv
 }
 
+/// Split a long option (`--flag` or `--flag=value`) into its flag name and any
+/// inline value. Returns `("--flag", Some(value))` for `--flag=value`,
+/// `("--flag", None)` for `--flag`, and `("", None)` for anything that isn't a
+/// long option (short flags, values, positional args). clap accepts both the
+/// separated (`--flag value`) and `=`-joined (`--flag=value`) long-option
+/// forms, so the best-effort metadata parser below mirrors that.
+fn split_long_flag(arg: &str) -> (String, Option<String>) {
+    let rest = match arg.strip_prefix("--") {
+        Some(rest) if !rest.is_empty() && !rest.starts_with('-') => rest,
+        _ => return (String::new(), None),
+    };
+    if let Some((flag, value)) = rest.split_once('=') {
+        (format!("--{flag}"), Some(value.to_string()))
+    } else {
+        (format!("--{rest}"), None)
+    }
+}
+
 fn config_from_argv(argv: &[String]) -> AgentRunConfig {
     let mut config = AgentRunConfig {
         prompt: String::new(),
@@ -173,36 +192,90 @@ fn config_from_argv(argv: &[String]) -> AgentRunConfig {
     };
     let mut iter = argv.iter().skip(1);
     while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--prompt" | "-p" => {
-                if let Some(v) = iter.next() {
-                    config.prompt = v.clone();
+        // `-p value` — short form, separated only.
+        if arg == "-p" {
+            if let Some(v) = iter.next() {
+                config.prompt = v.clone();
+            }
+            continue;
+        }
+        // `--flag value` or `--flag=value` — long forms (clap accepts both).
+        let (flag, inline_value) = split_long_flag(arg);
+        if flag.is_empty() {
+            continue;
+        }
+        // Only consume the following argv element for flags we recognize as
+        // value-taking, so an unknown long flag is skipped in place rather than
+        // swallowing its neighbor (preserving the original best-effort
+        // parser's behavior for args the spike doesn't model).
+        let value: Option<String> = if matches!(
+            flag.as_str(),
+            "--prompt" | "--api-key" | "--server-root-url" | "--output-format" | "--harness"
+        ) {
+            inline_value.or_else(|| iter.next().cloned())
+        } else {
+            None
+        };
+        match flag.as_str() {
+            "--prompt" => {
+                if let Some(v) = value {
+                    config.prompt = v;
                 }
             }
             "--api-key" => {
-                if let Some(v) = iter.next() {
-                    config.api_key = Some(v.clone());
+                if let Some(v) = value {
+                    config.api_key = Some(v);
                 }
             }
             "--server-root-url" => {
-                if let Some(v) = iter.next() {
-                    config.server_root_url = Some(v.clone());
+                if let Some(v) = value {
+                    config.server_root_url = Some(v);
                 }
             }
             "--output-format" => {
-                if let Some(v) = iter.next() {
-                    config.output_format = v.clone();
+                if let Some(v) = value {
+                    config.output_format = v;
                 }
             }
             "--harness" => {
-                if let Some(v) = iter.next() {
-                    config.harness = v.clone();
+                if let Some(v) = value {
+                    config.harness = v;
                 }
             }
             _ => {}
         }
     }
     config
+}
+
+/// Return a copy of `argv` with any `--api-key` value replaced by
+/// `<redacted>`. Handles both the separated (`--api-key value`) and
+/// `=`-joined (`--api-key=value`) long-option forms clap accepts, so the raw
+/// key is never echoed back through the `ParsedAgentRun` result — the
+/// `has_api_key` field carries only the boolean, and the doc claim that the
+/// key value is never returned then holds.
+fn redact_api_key_in_argv(argv: &[String]) -> Vec<String> {
+    let mut redacted: Vec<String> = Vec::with_capacity(argv.len());
+    let mut i = 0;
+    while i < argv.len() {
+        let arg = &argv[i];
+        if arg == "--api-key" {
+            redacted.push(arg.clone());
+            if i + 1 < argv.len() {
+                redacted.push("<redacted>".to_string());
+                i += 2;
+            } else {
+                i += 1;
+            }
+        } else if arg.starts_with("--api-key=") {
+            redacted.push("--api-key=<redacted>".to_string());
+            i += 1;
+        } else {
+            redacted.push(arg.clone());
+            i += 1;
+        }
+    }
+    redacted
 }
 
 fn parse_agent_run(argv: &[String], config: &AgentRunConfig) -> Result<ParsedAgentRun, String> {
@@ -248,7 +321,7 @@ fn parse_agent_run(argv: &[String], config: &AgentRunConfig) -> Result<ParsedAge
     );
 
     Ok(ParsedAgentRun {
-        argv: argv.to_vec(),
+        argv: redact_api_key_in_argv(argv),
         prompt: config.prompt.clone(),
         harness: config.harness.clone(),
         output_format: config.output_format.clone(),
@@ -349,3 +422,7 @@ fn fetch_text(
         Ok(format!("status: {status}\nbody[0..200]: {snippet}"))
     })
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
