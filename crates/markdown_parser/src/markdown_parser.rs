@@ -1063,16 +1063,42 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 /// This is a no-op if the last fragment does not end with a newline from a
 /// hard line break.
 fn strip_trailing_hard_break(fragments: &mut Vec<FormattedTextFragment>) {
-    let Some(last) = fragments.last_mut() else {
-        return;
-    };
-    let trimmed_ws = last
-        .text
-        .trim_end_matches(|c: char| c.is_whitespace() && c != '\n');
-    if !trimmed_ws.ends_with('\n') {
+    let mut trailing_ws_end = fragments.len();
+    for i in (0..fragments.len()).rev() {
+        let frag = &fragments[i];
+        if frag.styles == FormattedTextStyles::default()
+            && frag
+                .text
+                .chars()
+                .all(|c| c.is_whitespace() && c != '\n')
+        {
+            trailing_ws_end = i;
+        } else {
+            break;
+        }
+    }
+
+    if trailing_ws_end == 0 {
         return;
     }
-    last.text.truncate(trimmed_ws.len() - 1);
+
+    let should_strip = {
+        let last_content = &fragments[trailing_ws_end - 1].text;
+        let trimmed = last_content.trim_end_matches(|c: char| c.is_whitespace() && c != '\n');
+        trimmed.ends_with('\n')
+    };
+
+    if !should_strip {
+        return;
+    }
+
+    fragments.truncate(trailing_ws_end);
+    let last = fragments.last_mut().unwrap();
+    let trimmed_len = last
+        .text
+        .trim_end_matches(|c: char| c.is_whitespace() && c != '\n')
+        .len();
+    last.text.truncate(trimmed_len - 1);
     if last.text.is_empty() {
         fragments.pop();
     }
