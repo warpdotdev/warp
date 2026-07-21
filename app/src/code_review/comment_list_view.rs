@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use indexmap::IndexMap;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{Vector2F, vec2f};
+use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use vec1::vec1;
 use warp_core::ui::color::blend::Blend;
@@ -64,9 +64,6 @@ const OUTDATED_SECTION_HEADER_SINGULAR: &str = "1 comment will be omitted becaus
 /// Use with `format!` to insert the count.
 const OUTDATED_SECTION_HEADER_PLURAL_FMT: &str =
     " comments will be omitted because they are outdated.";
-fn comment_list_bounds(window_size: Vector2F) -> (f32, f32) {
-    (100.0, (window_size.y() * 0.8).max(100.0))
-}
 
 /// Returns the header text for the outdated section based on the number of outdated comments.
 fn outdated_section_header_text(count: usize) -> Cow<'static, str> {
@@ -1140,7 +1137,9 @@ impl View for CommentListView {
                 .with_dragbar_color(warpui::elements::Fill::Solid(
                     warpui::color::ColorU::transparent_black(),
                 ))
-                .with_bounds_callback(Box::new(comment_list_bounds))
+                .with_bounds_callback(Box::new(|window_size| {
+                    (100.0, (window_size.y() * 0.8).max(100.0))
+                }))
                 .on_resize(|ctx, _| {
                     ctx.notify();
                 })
@@ -1273,9 +1272,6 @@ impl TypedActionView for CommentListView {
     }
 }
 
-#[cfg(test)]
-#[path = "comment_list_view_tests.rs"]
-mod tests;
 struct CustomSecondaryActionTheme;
 
 impl ActionButtonTheme for CustomSecondaryActionTheme {

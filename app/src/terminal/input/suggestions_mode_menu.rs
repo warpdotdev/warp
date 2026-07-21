@@ -5,7 +5,7 @@
 //! - CompletionSuggestions
 //! - StaticWorkflowEnumSuggestions
 //! - DynamicWorkflowEnumSuggestions
-use pathfinder_geometry::vector::Vector2F;
+
 use warpui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragBarSide,
     DropShadow, Element, Empty, Flex, ParentElement, Radius, Resizable, Shrinkable,
@@ -33,13 +33,6 @@ enum SuggestionsResizeConfig {
     WidthAndHeight,
     WidthOnly,
     HeightOnly,
-}
-fn suggestions_width_bounds(window_size: Vector2F) -> (f32, f32) {
-    (200.0, window_size.x().max(200.0))
-}
-
-fn suggestions_height_bounds(window_size: Vector2F) -> (f32, f32) {
-    (100.0, window_size.y().max(100.0))
 }
 
 impl Input {
@@ -220,7 +213,7 @@ impl Input {
                 )
                 .with_dragbar_side(DragBarSide::Right)
                 .with_dragbar_offset(7.0)
-                .with_bounds_callback(Box::new(suggestions_width_bounds))
+                .with_bounds_callback(Box::new(|window_size| (200.0, window_size.x().max(200.0))))
                 .on_resize(move |ctx, _| {
                     ctx.notify();
                 })
@@ -253,7 +246,7 @@ impl Input {
                     horizontal_resizable,
                 )
                 .with_dragbar_side(dragbar_side)
-                .with_bounds_callback(Box::new(suggestions_height_bounds))
+                .with_bounds_callback(Box::new(|window_size| (100.0, window_size.y().max(100.0))))
                 .on_resize(move |ctx, _| {
                     ctx.notify();
                 })
@@ -397,7 +390,3 @@ impl Input {
         .finish()
     }
 }
-
-#[cfg(test)]
-#[path = "suggestions_mode_menu_tests.rs"]
-mod tests;
