@@ -384,6 +384,25 @@ fn footer_falls_back_to_conversations_callout() {
 }
 
 #[test]
+fn footer_does_not_render_credit_actions() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        let lines = render_session(&mut app, &view, 80, 40);
+        assert!(
+            lines.iter().all(|line| {
+                !line.contains("Out of credits")
+                    && !line.contains("Compare plans")
+                    && !line.contains("Use your own API keys")
+            }),
+            "credit actions belong to the failed transcript block:\n{}",
+            lines.join("\n")
+        );
+    });
+}
+
+#[test]
 fn transient_footer_hint_replaces_conversations_callout() {
     App::test((), |mut app| async move {
         app.update(|ctx| {

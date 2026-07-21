@@ -17,16 +17,18 @@ use parking_lot::FairMutex;
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId,
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIBlockModel,
-    AIConversationId, BlockId, BlocklistAIActionEvent, BlocklistAIActionModel,
-    BlocklistAIHistoryModel, CancellationReason, MessageId, ModelEvent, ModelEventDispatcher,
-    ReceivedMessageDisplay, SummarizationType, TerminalModel, TodoOperation, TodoStatus,
+    AIBlockModelHelper, AIBlockOutputStatus, AIConversationId, BlockId, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIHistoryModel, CancellationReason, FailedOutputPresentation,
+    MessageId, ModelEvent, ModelEventDispatcher, ReceivedMessageDisplay, SummarizationType,
+    TerminalModel, TodoOperation, TodoStatus, failed_output_presentation,
+    should_show_failed_output_usage_notice,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiContainer, TuiElement,
-    TuiFlex, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiRect,
-    TuiScreenPosition, TuiSelectionSpan, TuiSize, TuiText,
+    TuiFlex, TuiHoverable, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiParentElement,
+    TuiRect, TuiScreenPosition, TuiSelectionSpan, TuiSize, TuiText,
 };
 use warpui_core::{
     AppContext, Entity, EntityId, EntityIdMap, ModelHandle, TuiView, TypedActionView, ViewContext,
@@ -52,6 +54,9 @@ use crate::tui_markdown::{
 };
 use crate::tui_permission_prompt::TuiPermissionPrompt;
 use crate::tui_plan_view::{TuiPlanView, TuiPlanViewEvent};
+const PLANS_URL: &str = "https://www.warp.dev/pricing";
+const BYOK_DOCS_URL: &str =
+    "https://docs.warp.dev/agent-platform/inference/bring-your-own-api-key/";
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct TuiCodeBlockKey {
@@ -122,6 +127,8 @@ enum TuiAIBlockSection {
     },
     /// A message delivered by another agent in the orchestration.
     AgentMessage(ReceivedMessageDisplay),
+    Failure(FailedOutputPresentation),
+    UsageNotice,
 }
 
 /// Per-message UI state for collapsible sections (thinking blocks,
@@ -174,6 +181,127 @@ impl CollapsibleSectionStates {
             .or_default()
             .hover_state
             .clone()
+    }
+}
+
+fn render_failure_section(
+    presentation: &FailedOutputPresentation,
+    compare_plans_hover_state: &MouseStateHandle,
+    byok_hover_state: &MouseStateHandle,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
+    let builder = TuiUiBuilder::from_app(app);
+    let error_style = builder.error_text_style();
+    let body_style = builder.muted_text_style();
+    match presentation {
+        FailedOutputPresentation::Message(message)
+        | FailedOutputPresentation::AwsBedrockCredentialsExpiredOrInvalid {
+            fallback_message: message,
+        } => TuiText::from_spans([
+            ("⚠ ".to_owned(), error_style),
+            (message.clone(), body_style),
+        ])
+        .finish(),
+        FailedOutputPresentation::InvalidApiKey { title, detail } => TuiText::from_spans([
+            ("⚠ ".to_owned(), error_style),
+            (
+                (*title).to_owned(),
+                error_style.add_modifier(Modifier::BOLD),
+            ),
+            ("\n  ".to_owned(), body_style),
+            (detail.clone(), body_style),
+        ])
+        .finish(),
+        FailedOutputPresentation::OutOfCredits {
+            title,
+            detail,
+            can_use_own_api_keys,
+        } => {
+            let primary_style = builder.primary_text_style();
+            let link_style = primary_style.add_modifier(Modifier::UNDERLINED);
+            let compare_plans = TuiHoverable::new(
+                compare_plans_hover_state.clone(),
+                TuiText::new("Compare plans")
+                    .with_style(link_style)
+                    .finish(),
+            )
+            .on_click(|_, app| app.open_url(PLANS_URL))
+            .finish();
+            let mut actions = TuiFlex::row()
+                .child(TuiText::new("  ").with_style(primary_style).finish())
+                .child(compare_plans);
+            if *can_use_own_api_keys {
+                actions = actions
+                    .child(
+                        TuiText::new("  or  ")
+                            .with_style(builder.muted_text_style())
+                            .finish(),
+                    )
+                    .child(
+                        TuiHoverable::new(
+                            byok_hover_state.clone(),
+                            TuiText::new("Use your own API keys")
+                                .with_style(link_style)
+                                .finish(),
+                        )
+                        .on_click(|_, app| app.open_url(BYOK_DOCS_URL))
+                        .finish(),
+                    );
+            }
+            TuiFlex::column()
+                .child(
+                    TuiText::from_spans([
+                        ("!".to_owned(), error_style.add_modifier(Modifier::BOLD)),
+                        (" ".to_owned(), primary_style.add_modifier(Modifier::BOLD)),
+                        ((*title).to_owned(), primary_style),
+                    ])
+                    .finish(),
+                )
+                .child(
+                    TuiText::new(format!("  {detail}"))
+                        .with_style(primary_style)
+                        .finish(),
+                )
+                .child(TuiText::new(" ").finish())
+                .child(actions.finish())
+                .finish()
+        }
+        FailedOutputPresentation::ContextWindowExceeded { message } => TuiText::from_spans([
+            ("× ".to_owned(), error_style),
+            (message.clone(), body_style),
+        ])
+        .finish(),
+    }
+}
+
+fn render_usage_notice(app: &AppContext) -> Box<dyn TuiElement> {
+    TuiText::new("This response won't count towards your usage.")
+        .with_style(TuiUiBuilder::from_app(app).muted_text_style())
+        .finish()
+}
+
+fn failure_text(presentation: &FailedOutputPresentation) -> String {
+    match presentation {
+        FailedOutputPresentation::Message(message)
+        | FailedOutputPresentation::AwsBedrockCredentialsExpiredOrInvalid {
+            fallback_message: message,
+        }
+        | FailedOutputPresentation::ContextWindowExceeded { message } => message.clone(),
+        FailedOutputPresentation::OutOfCredits {
+            title,
+            detail,
+            can_use_own_api_keys,
+        } => {
+            let actions = if *can_use_own_api_keys {
+                "Compare plans  or  Use your own API keys"
+            } else {
+                "Compare plans"
+            };
+            format!("{title}\n  {detail}\n\n  {actions}")
+        }
+        FailedOutputPresentation::InvalidApiKey { title, detail } => {
+            format!("{title}\n{detail}")
+        }
     }
 }
 
@@ -258,6 +386,8 @@ pub(super) struct TuiAIBlock {
     /// Per-message UI state for this exchange's collapsible sections
     /// (thinking blocks and task lists).
     collapsible_states: CollapsibleSectionStates,
+    compare_plans_hover_state: MouseStateHandle,
+    byok_hover_state: MouseStateHandle,
     /// Every tool-call action id seen in this exchange's output, maintained by
     /// [`Self::sync_action_views`]. Mirrors the GUI `AIBlock`'s
     /// `requested_action_ids` so per-action-event lookups are a cheap set
@@ -299,6 +429,8 @@ impl TuiAIBlock {
             action_model: action_model.clone(),
             terminal_model,
             collapsible_states: Default::default(),
+            compare_plans_hover_state: MouseStateHandle::default(),
+            byok_hover_state: MouseStateHandle::default(),
             action_ids: HashSet::new(),
             action_views: HashMap::new(),
             code_block_views: HashMap::new(),
@@ -1079,6 +1211,13 @@ impl TuiAIBlock {
                 )
             }
             TuiAIBlockSection::AgentMessage(_) => return None,
+            TuiAIBlockSection::Failure(presentation) => render_failure_section(
+                presentation,
+                &self.compare_plans_hover_state,
+                &self.byok_hover_state,
+                app,
+            ),
+            TuiAIBlockSection::UsageNotice => render_usage_notice(app),
         })
     }
     fn rich_text_sections(message_id: &MessageId, text: &AIAgentText) -> Vec<TuiRichTextSection> {
@@ -1113,6 +1252,7 @@ impl TuiAIBlock {
     /// preserving message order so reasoning interleaves with plain-text output.
     fn sections(&self, app: &AppContext) -> Vec<TuiAIBlockSection> {
         let mut sections = Vec::new();
+        let status = self.block_model.status(app);
         let input = self
             .block_model
             .inputs_to_render(app)
@@ -1124,7 +1264,7 @@ impl TuiAIBlock {
         }
 
         // Walk output messages in order so tool-call rows interleave with text.
-        if let Some(output) = self.block_model.status(app).output_to_render() {
+        if let Some(output) = status.output_to_render() {
             let output = output.get();
             for message in &output.messages {
                 match &message.message {
@@ -1212,7 +1352,53 @@ impl TuiAIBlock {
             }
         }
 
+        if self.block_model.request_type(app).is_active()
+            && let AIBlockOutputStatus::Failed { error, .. } = &status
+            && let Some(presentation) = failed_output_presentation(error, app)
+        {
+            let is_out_of_credits =
+                matches!(presentation, FailedOutputPresentation::OutOfCredits { .. });
+            sections.push(TuiAIBlockSection::Failure(presentation));
+            if !is_out_of_credits
+                && should_show_failed_output_usage_notice(
+                    error,
+                    self.block_model
+                        .is_latest_visible_exchange_in_root_task(app),
+                    self.has_expanded_last_requested_command(app),
+                    self.block_model.is_restored(),
+                )
+            {
+                sections.push(TuiAIBlockSection::UsageNotice);
+            }
+        }
+
         sections
+    }
+
+    fn has_expanded_last_requested_command(&self, app: &AppContext) -> bool {
+        let status = self.block_model.status(app);
+        let Some(output) = status.output_to_render() else {
+            return false;
+        };
+        let action_id = output.get().messages.iter().rev().find_map(|message| {
+            let AIAgentOutputMessageType::Action(action) = &message.message else {
+                return None;
+            };
+            matches!(
+                &action.action,
+                AIAgentActionType::RequestCommandOutput { .. }
+            )
+            .then(|| action.id.clone())
+        });
+        action_id
+            .and_then(|action_id| self.action_views.get(&action_id))
+            .is_some_and(|view| match view {
+                TuiToolCallView::ShellCommand(view) => view.as_ref(app).is_expanded(),
+                TuiToolCallView::AskQuestion(_)
+                | TuiToolCallView::FileEdits(_)
+                | TuiToolCallView::Plan(_)
+                | TuiToolCallView::OrchestrationBlock(_) => false,
+            })
     }
 
     fn markdown_palette(app: &AppContext, muted: bool) -> TuiMarkdownPalette {
@@ -1408,6 +1594,13 @@ impl TuiAIBlock {
                     self.conversation_id,
                     app,
                 ),
+                TuiAIBlockSection::Failure(presentation) => render_failure_section(
+                    presentation,
+                    &self.compare_plans_hover_state,
+                    &self.byok_hover_state,
+                    app,
+                ),
+                TuiAIBlockSection::UsageNotice => render_usage_notice(app),
             };
 
             // One row of bottom padding separates sections; the last section
@@ -1473,6 +1666,10 @@ fn section_logical_text(section: &TuiAIBlockSection) -> Option<String> {
         | TuiAIBlockSection::TodoList { .. }
         | TuiAIBlockSection::CompletedTodos { .. }
         | TuiAIBlockSection::AgentMessage(_) => None,
+        TuiAIBlockSection::Failure(presentation) => Some(failure_text(presentation)),
+        TuiAIBlockSection::UsageNotice => {
+            Some("This response won't count towards your usage.".to_owned())
+        }
     }
 }
 
