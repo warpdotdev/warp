@@ -21,9 +21,10 @@ computes a horizontal `visible_left..visible_right` span before delegating to
   (`glyph.width`), not a measurement of where that glyph's ink actually stops
   drawing.
 - `paint_run_background` takes `visible_left`/`visible_right` as already-computed
-  screen-space bounds and paints a `RectF` of width
+  screen-space bounds and paints a `RectF` (`text_rect` construction in
+  `crates/warpui_core/src/text_layout.rs`). Before this fix its width was
   `(visible_right - visible_left) + 2. * block_padding` at
-  `visible_left - 2. * block_padding` (`crates/warpui_core/src/text_layout.rs:1401-1405`).
+  `visible_left - 2. * block_padding`.
   Expanding the rect's right edge (`origin.x() + width`) shows this is **not**
   symmetric: `(visible_left - 2·block_padding) + (visible_right - visible_left) +
   2·block_padding = visible_right` exactly — the `2·block_padding` term cancels out
@@ -32,8 +33,8 @@ computes a horizontal `visible_left..visible_right` span before delegating to
   **left-only** kerning-compensation offset, not a symmetric one, despite reading
   like a per-edge inset at first glance. This is a second, independent asymmetry
   from the one this issue targets (which comes from `glyph.width`/advance itself,
-  below) — see "Interaction with the legacy `block_padding` offset" for how the two
-  compose.
+  below) — see "Interaction with the legacy `block_padding` offset" for how this fix
+  compensates it out for chips while leaving it untouched for non-chip runs.
 
 ### What `glyph.width` actually measures
 
@@ -64,10 +65,43 @@ winit/cosmic-text path), so the advance-based bug — and any fix at the
 `warpui_core::text_layout` layer — is platform-uniform; no per-platform branching is
 required in the fix.
 
+## Scope: the chip-family predicate
+
+The ink-edge geometry below is applied **only to chip-family runs**, not to every
+backgrounded/bordered run. The predicate is an explicit, named method on `TextStyle`:
+
+```rust
+/// A run is a "chip" iff it carries BOTH a border and a background color.
+pub fn is_chip(&self) -> bool {
+    self.border.is_some() && self.background_color.is_some()
+}
+```
+
+This is exact for the chip family and legible about intent:
+
+- The inline-code chip is the only `TextStyle` run that sets both a border and a
+  background together (`crates/editor/src/render/layout.rs:190-201`, under
+  `is_inline_code()`). Nothing else in the repo sets a `TextBorder` on a text run.
+- **kbd keycaps** (`` <kbd> ``, PR #13916, pending) render by reusing the inline-code
+  chip's styling — border + background — so they satisfy `is_chip()` automatically and
+  compose with this fix when they land, with no further change. kbd keycaps are where
+  the left/right asymmetry was first noticed.
+- Non-chip runs are excluded by construction: background-only runs (search-match
+  highlights, the `formatted_text_element` background-only inline-code path) and any
+  border-only style are **not** chips, so they keep the legacy advance-based geometry
+  and the legacy `block_padding` left shift, untouched.
+
+`paint_run_background` computes `let is_chip = run.styles.is_chip();` once and gates
+both the ink-edge substitution and the `block_padding` horizontal compensation on it.
+The caller gate in `paint_internal` still fires for `border.is_some() ||
+background_color.is_some()` (every such run still needs a background painted and its
+visible span walked); only the *geometry* inside `paint_run_background` is
+chip-scoped.
+
 ## The chosen fix: derive chip edges from glyph ink, not advance
 
-The chip's horizontal edges are computed from the true **ink** of the visible
-first/last glyphs, plus a fixed design padding:
+For chip-family runs, the chip's horizontal edges are computed from the true **ink**
+of the visible first/last glyphs, plus an **equal** fixed design padding:
 
 ```
 background_left  = first_visible_glyph.ink_left  - pad
@@ -81,58 +115,59 @@ background/border rectangle; glyph draw positions
 (`glyph.position_along_baseline`), `Glyph.width`, and `caret_positions` are never
 touched (product spec Success Criteria #2 and #3).
 
-### Interaction with the legacy `block_padding` offset (composes, does not replace)
+### Interaction with the legacy `block_padding` offset (replaced for chips; legacy math untouched elsewhere)
 
-The ink-derived edges are substituted for `visible_left`/`visible_right` as *local*
-values immediately before the existing `block_padding` math runs unchanged
-(`crates/warpui_core/src/text_layout.rs:1362-1368` reassigns `visible_left`/
-`visible_right`; the `text_rect` construction that consumes them at
-`text_layout.rs:1401-1405` is untouched):
+The legacy rect construction shifts the rect's **left** edge outward by
+`2 * block_padding` and leaves the right edge unshifted — a left-only asymmetry
+independent of the advance-vs-ink bug. The algebra, kept here as evidence:
 
 ```
-visible_left  = ink_left_of(first_visible_glyph)  - CODE_CHIP_INK_PADDING_RATIO * font_size
-visible_right = ink_right_of(last_visible_glyph)  + CODE_CHIP_INK_PADDING_RATIO * font_size
-# ... then, unchanged from before this fix:
 rect.origin.x = visible_left  - 2 * block_padding
 rect.width    = (visible_right - visible_left) + 2 * block_padding
 # ⇒ rect's right edge = rect.origin.x + rect.width = visible_right   (block_padding cancels)
 # ⇒ rect's left edge  = visible_left - 2 * block_padding             (block_padding does NOT cancel)
 ```
 
-So the fix **composes with** the legacy `block_padding` offset; it does not replace,
-bypass, or otherwise adjust it. Concretely, for inline code (which always has
-`run.styles.border.is_some()`, so `block_padding = font_size / 10.` is nonzero):
+`block_padding` (`font_size / 10.` when a border is present) therefore adds `2 *
+block_padding` (`= font_size / 5`, ≈1.08px at a 13px font) of extra gap on the left
+only. On its own this would leave the left ink gap `font_size / 5` wider than the
+right, even with ink-anchored edges.
 
-- The **right** edge is exactly `ink_right + CODE_CHIP_INK_PADDING_RATIO * font_size`
-  — pure ink-edge geometry, `block_padding` has zero effect (it cancels out of the
-  right edge algebraically, as shown above).
-- The **left** edge is `ink_left - CODE_CHIP_INK_PADDING_RATIO * font_size - 2 *
-  block_padding`, i.e. `ink_left - font_size/12 - font_size/5` at the values in this
-  spec — a further `font_size / 5` (≈1.08px at a 13px font) beyond the intended ink
-  padding, entirely from the pre-existing, uncorrected `block_padding` behavior.
+**For chip-family runs, this fix compensates that left shift out** so the padding is
+literally equal on both sides. Concretely, in `paint_run_background`:
 
-**This means the promised "equal ink padding on both sides" (Goal 1 / Success
-Criterion 1) is not fully achieved by the ink-edge fix alone**: the *advance-vs-ink*
-asymmetry this issue targets is eliminated (both edges are now ink-anchored plus a
-fixed pad), but the *pre-existing, unrelated* `block_padding` left-only skew survives
-underneath it, unadjusted. The net left edge is `font_size / 5` further left than the
-net right edge is right, for any bordered inline-code chip.
+```
+is_chip = run.styles.is_chip()
 
-This residual is small (~1px at typical UI font sizes) and strictly *less* than the
-advance-vs-ink gap this issue removes (which was on the order of a full right-side
-bearing, several pixels for many fonts) — so the fix is a strict visual improvement,
-not a regression. But it is **not** the "left edge does not move / right edge reads
-equal to left" outcome implied by Goal 2 and Success Criterion 1 taken literally: the
-left edge was already `2 * block_padding` further from the ink than the right edge
-before this fix, and remains so after it. Callers of `paint_run_background` do not
-have a lever to fix this within the scope of this change, because `block_padding`'s
-left-only application predates GH13914 and is unrelated to advance-vs-ink; correcting
-it is out of scope here (see Follow-ups) — but the open question it raises (should
-`block_padding` apply to both edges, e.g. `rect.width` also gaining a `-
-2·block_padding`-equivalent on the right, or should the right edge explicitly add
-`+ block_padding` to match) needs an explicit maintainer decision, since either
-resolution changes the border's visual footprint for every bordered/backgrounded run
-in the codebase, not just inline code.
+# ink-edge substitution (chip only):
+visible_left  = ink_left_of(first_visible_glyph)  - CODE_CHIP_INK_PADDING_RATIO * font_size   # if is_chip
+visible_right = ink_right_of(last_visible_glyph)  + CODE_CHIP_INK_PADDING_RATIO * font_size   # if is_chip
+
+# horizontal block_padding, zeroed for chips:
+horizontal_block_padding = if is_chip { 0 } else { block_padding }
+rect.origin.x = visible_left  - 2 * horizontal_block_padding
+rect.width    = (visible_right - visible_left) + 2 * horizontal_block_padding
+```
+
+- **Chip:** `horizontal_block_padding == 0`, so the rect spans exactly
+  `[visible_left, visible_right] = [ink_left - pad, ink_right + pad]`. Left gap ==
+  right gap == `pad`. The `font_size / 5` left residual is gone. (The **vertical**
+  `2 * block_padding` insets on `rect_top` and height are unchanged — this fix only
+  touches the horizontal application; the border's top/bottom air is preserved.)
+- **Non-chip bordered/backgrounded run:** `horizontal_block_padding == block_padding`
+  and no ink substitution runs, so the rect is exactly the legacy
+  `[visible_left - 2*block_padding, visible_right]` over advance edges — byte-for-byte
+  the pre-fix geometry. The legacy left shift is deliberately preserved here; changing
+  it globally would alter the visual footprint of every bordered/backgrounded run, so
+  we scope the compensation to chips via the predicate.
+
+**Net result:** the "equal ink padding on both sides" promise (Goal 1 / Success
+Criterion 1) is achieved outright for chips — both the advance-vs-ink asymmetry and
+the `block_padding` left residual are eliminated. As the intended consequence, a
+chip's left edge **tightens** by `2 * block_padding` (≈1px) versus today (product
+spec Goal 2 / Success Criterion 2); this is stated as intended behavior, not a
+regression, and is smaller than the several-pixel advance gap the fix removes on the
+right. Non-chip runs are unchanged.
 
 ### Per-glyph ink IS derivable cross-platform (the key finding)
 
@@ -189,14 +224,17 @@ call-site plumbing beyond the paint path is required.
 ### The fixed padding constant
 
 `pad = font_size / 12` (`CODE_CHIP_INK_PADDING_RATIO`). It is a single, well-
-commented, easily-tunable constant, chosen to approximate a typical monospace left-
-side bearing so that `ink_left - pad` lands near the old advance-based left edge —
-i.e. the fix preserves the chip's current left-edge appearance (product spec
-Success Criterion #2) and reads as "the right edge got tightened," not "the chip was
-redesigned." Unlike the earlier advance-fraction heuristic, this constant is *not*
-standing in for a missing measurement (the ink edges are exact); mis-tuning it only
-changes the uniform padding, and can never re-introduce the left/right asymmetry.
-The exact fraction is a maintainer taste question (product spec Open Question #1).
+commented, easily-tunable constant applied **equally** to both ink edges. It is a
+pure design value — "how much air around the code" — and does **not** do any
+left-edge-preservation duty: because the equal-padding fix compensates the legacy
+`block_padding` left shift out for chips, `pad` is no longer calibrated to land near
+any old advance-based edge. Unlike the earlier advance-fraction heuristic, this
+constant is *not* standing in for a missing measurement (the ink edges are exact);
+mis-tuning it only changes the uniform padding, and can never re-introduce the
+left/right asymmetry. The exact fraction is a maintainer taste question (product spec
+Open Question #1). Note the deliberate consequence: with the left shift compensated
+out, the chip's left edge sits ~1px (`2 * block_padding`) tighter than today — see
+"Interaction with the legacy `block_padding` offset."
 
 ### RTL / edge-glyph identification
 
@@ -282,11 +320,13 @@ assertion).
   other, only how each run's own rect is positioned. There is no cross-run "sawtooth"
   because each chip's edges come from its own glyphs' ink (this supersedes the
   earlier advance-shift approach, which accepted a sawtooth trade-off — now moot).
-- **Perf.** The extra `glyph_raster_bounds` calls are only for backgrounded/bordered
-  runs (inline code), and only for the first and last visible glyph of each such run.
-  The result is cached in `FontCache` keyed by `(GlyphKey, scale)`; the drawn glyphs
-  are rasterized anyway, so the bounds are typically already computed. The cost is
-  bounded and does not touch the common (non-backgrounded) text hot path.
+- **Perf.** The extra `glyph_raster_bounds` calls are only for chip-family runs
+  (`is_chip()` — inline code today), and only for the first and last visible glyph of
+  each such run. Non-chip backgrounded/bordered runs skip the ink lookups entirely
+  (the `if is_chip` branch is not taken). The result is cached in `FontCache` keyed by
+  `(GlyphKey, scale)`; the drawn glyphs are rasterized anyway, so the bounds are
+  typically already computed. The cost is bounded and does not touch the common
+  (non-backgrounded) text hot path.
 
 ## The second render surface: TUI Markdown (`warp_tui`) — unaffected
 
@@ -311,23 +351,36 @@ because that surface does not use this paint path at all:
   surface going through `RichTextStyleContext::style_and_font`
   (`crates/editor/src/render/layout.rs:165-214`) shares this single code path and is
   fixed by the same change.
-- **Conclusion:** the fix, scoped to `warpui_core::text_layout::Line`, reaches every
-  consumer of `TextStyle::background_color`/`TextStyle::border` uniformly (including
-  the `editor` crate's Markdown inline-code rendering), but does **not** reach
-  `warp_tui`, which renders through a separate cell-grid `ratatui` path. No change to
-  `warp_tui` is proposed or required (see product spec Non-goals).
+- **Conclusion:** the fix lives in `warpui_core::text_layout::Line` but its ink-edge
+  geometry is gated on the chip-family predicate (`TextStyle::is_chip`), so it reaches
+  the `editor` crate's Markdown inline-code chip (and future kbd keycaps) and **no
+  other** `TextStyle::background_color`/`TextStyle::border` consumer — background-only
+  highlights and any border-only style keep their existing geometry. It also does
+  **not** reach `warp_tui`, which renders through a separate cell-grid `ratatui` path.
+  No change to `warp_tui` is proposed or required (see product spec Non-goals).
 
 ## Testing and validation
 
 - **Update `test_run_background_clamped_to_visible_glyph_span`** to the ink-edge
-  geometry: with ink-bearing glyphs, the painted rect's left/right come from the
-  first/last *visible* glyph's ink (± `pad`), and the right edge must still be
-  bounded to the visible glyph span (not the full run width) — the truncation-
-  clamping invariant this test pins must still hold.
-- **New unit test — ink edges used, not advance:** a mid-line single-glyph chip
-  whose painted left edge is `ink_left - pad` and right edge is `ink_right + pad`,
-  with the right edge proven strictly less than the advance endpoint
-  (`glyph_x + advance`) — i.e. the trailing advance bearing is trimmed.
+  geometry, using **chip-family styling** (border + background, via the `chip_style()`
+  test helper, so `is_chip()` is true and the ink path fires): the painted rect's
+  left/right come from the first/last *visible* glyph's ink (± `pad`), and the right
+  edge must still be bounded to the visible glyph span (not the full run width) — the
+  truncation-clamping invariant this test pins must still hold.
+- **New unit test — ink edges used, not advance, with equal padding:** a mid-line
+  single-glyph chip whose painted left edge is `ink_left - pad` and right edge is
+  `ink_right + pad`, with the right edge proven strictly less than the advance
+  endpoint (`glyph_x + advance`) — i.e. the trailing advance bearing is trimmed. This
+  test also asserts the **equal-padding** invariant directly: `left_gap == right_gap
+  == pad`, where `left_gap = ink_left − min_x` and `right_gap = max_x − ink_right`
+  (product spec Success Criterion 1).
+- **New unit test — non-chip keeps legacy geometry:** a background-only run (no
+  border → not a chip) with an ink-bearing glyph must paint over the padded
+  **advance** edges, not glyph ink — proving the ink path did not fire and the legacy
+  geometry is preserved for non-chip runs (product spec Success Criterion 2).
+- **New unit test — `is_chip` predicate:** `TextStyle::is_chip` is true only for
+  border + background together, and false for border-only, background-only, and plain
+  runs (product spec Success Criterion 7).
 - **New unit test — zero-ink fallback:** a zero-ink edge glyph (whitespace) yields
   advance-edge ± `pad`, confirming the chip does not collapse.
 - **New unit test — first/last glyph specifically:** a two-glyph run confirms the
@@ -343,8 +396,8 @@ because that surface does not use this paint path at all:
   characters (`` `foo.bar()` ``, `` `x;` ``) beside wide-ink-ending spans
   (`` `foo_bar` ``) and confirm right-side padding now equals left-side padding, on
   both macOS and a Linux/winit build (also check the macOS AA residual, Open
-  Question #2). Confirm the left edge did not visibly move (the padding calibration
-  target). Check dark and light themes.
+  Question #2). Confirm the left edge **tightened** by ~1px (the intended
+  equal-padding consequence), not that it stayed put. Check dark and light themes.
 - `cargo fmt` and `cargo clippy --workspace --all-targets --all-features --tests
   -- -D warnings` must pass, per `CONTRIBUTING.md`.
 - `cargo nextest run -p warpui_core -p warp_editor` (CI parity) must pass with the
@@ -352,17 +405,17 @@ because that surface does not use this paint path at all:
 
 ## Follow-ups
 
-- **`block_padding` left-only asymmetry (new, found while speccing this fix — not
-  fixed here).** As detailed in "Interaction with the legacy `block_padding`
+- **`block_padding` left-only asymmetry — fixed for chips here; still open for
+  non-chip runs.** As detailed in "Interaction with the legacy `block_padding`
   offset" above, `block_padding` (`font_size / 10.` when a border is present) only
-  ever offsets the rect's *left* edge — it algebraically cancels out of the right
-  edge in the existing `text_rect` construction
-  (`crates/warpui_core/src/text_layout.rs:1401-1405`). This predates GH13914 and is
-  independent of the advance-vs-ink bug this issue fixes, but it means a bordered
-  inline-code chip's left padding is `font_size / 5` (≈1px at 13px) wider than its
-  right padding even after this fix lands. Needs a maintainer decision on whether to
-  apply `block_padding` to both edges (and the resulting visual footprint change for
-  every bordered/backgrounded run, not just inline code) before it's addressed.
+  offsets the rect's *left* edge (it cancels out of the right edge algebraically).
+  This fix compensates it out **for chip-family runs**, so chips now have equal
+  padding. The left-only shift is still present for every **non-chip**
+  bordered/backgrounded run (none exist in the repo today beyond chips, but the code
+  path is shared). Whether to also equalize `block_padding` for non-chip runs — and
+  accept the visual-footprint change that would bring to any future non-chip
+  bordered run — remains a maintainer decision, deliberately deferred to keep this
+  fix's blast radius scoped to the chip family.
 - If the ~1px macOS rasterizer AA residual (Open Question #2) ever proves visually
   significant, add a design-space per-glyph ink path (CoreText
   `CTFontGetBoundingRectsForGlyphs` to match the Linux ttf-parser outline semantics),
