@@ -386,8 +386,8 @@ pub(crate) enum TuiTerminalSessionAction {
     NavigateOrchestrationTabs(TuiOrchestrationTabNavigationAction),
     /// Move focus from the prompt input into the attachment bar.
     FocusAttachments,
-    /// Read a raw image from the host clipboard and attach it to the next query.
-    PasteImageFromClipboard,
+    /// Paste host clipboard text or attach image data and image paths.
+    PasteFromClipboard,
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -518,8 +518,8 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_key_binding("tab"),
         EditableBinding::new(
             PASTE_IMAGE_BINDING_NAME,
-            "Paste an image from the clipboard",
-            TuiTerminalSessionAction::PasteImageFromClipboard,
+            "Paste from the clipboard",
+            TuiTerminalSessionAction::PasteFromClipboard,
         )
         .with_context_predicate(
             (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
@@ -530,8 +530,8 @@ pub(crate) fn init(app: &mut AppContext) {
         #[cfg(windows)]
         EditableBinding::new(
             PASTE_IMAGE_BINDING_NAME,
-            "Paste an image from the clipboard",
-            TuiTerminalSessionAction::PasteImageFromClipboard,
+            "Paste from the clipboard",
+            TuiTerminalSessionAction::PasteFromClipboard,
         )
         .with_context_predicate(
             (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
@@ -3328,9 +3328,9 @@ impl TypedActionView for TuiTerminalSessionView {
                     ctx.focus(&self.attachment_bar);
                 }
             }
-            TuiTerminalSessionAction::PasteImageFromClipboard => {
+            TuiTerminalSessionAction::PasteFromClipboard => {
                 self.attachment_bar
-                    .update(ctx, |bar, ctx| bar.paste_image_from_clipboard(ctx));
+                    .update(ctx, |bar, ctx| bar.paste_from_clipboard(ctx));
             }
         }
     }
