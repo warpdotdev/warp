@@ -21,6 +21,16 @@ use crate::orchestrated_agent_identity_styling::{AgentIdentity, agent_identity_p
 use crate::tab_bar::TuiTabBarStyles;
 use crate::terminal_background::probed_colors;
 
+#[derive(Clone, Copy)]
+pub(crate) struct CloudRunMarkStyles {
+    pub(crate) base: TuiStyle,
+    pub(crate) light: TuiStyle,
+    pub(crate) lighter: TuiStyle,
+    pub(crate) bright: TuiStyle,
+    pub(crate) brightest: TuiStyle,
+    pub(crate) ansi_bright: TuiStyle,
+}
+
 /// Theme-derived styles and components for the TUI, mirroring the GUI's
 /// `UiBuilder` (minus fonts, which terminal cells don't have). Cheap to
 /// construct per render via [`TuiUiBuilder::from_app`].
@@ -126,6 +136,25 @@ impl TuiUiBuilder {
     pub(crate) fn link_text_style(&self) -> TuiStyle {
         TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
     }
+
+    pub(crate) fn cloud_run_mark_styles(&self) -> CloudRunMarkStyles {
+        let blue = ThemeFill::from(self.warp_theme.terminal_colors().normal.blue);
+        let foreground = self.warp_theme.foreground();
+        let blend = |opacity| {
+            TuiStyle::default().fg(cell_color(blue.blend(&foreground.with_opacity(opacity))))
+        };
+        CloudRunMarkStyles {
+            base: TuiStyle::default().fg(cell_color(blue)),
+            light: blend(25),
+            lighter: blend(50),
+            bright: blend(80),
+            brightest: blend(90),
+            ansi_bright: TuiStyle::default().fg(cell_color(ThemeFill::from(
+                self.warp_theme.terminal_colors().bright.blue,
+            ))),
+        }
+    }
+
     /// Blue command-name text used by the slash-command menu and recognized
     /// slash-command prefixes in the input.
     pub(crate) fn slash_command_text_style(&self) -> TuiStyle {

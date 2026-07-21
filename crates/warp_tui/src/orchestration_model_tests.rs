@@ -518,12 +518,17 @@ fn remote_child_session_is_navigable_and_projects_lifecycle() {
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 view.as_ref(ctx).render(ctx),
-                TuiRect::new(0, 0, 80, 12),
+                TuiRect::new(0, 0, 112, 24),
                 ctx,
             );
             let lines = frame.buffer.to_lines();
-            assert!(lines.iter().any(|line| line.contains("Tab or ← →")));
-            assert!(lines.iter().all(|line| !line.contains("Shift + ↓")));
+            assert_eq!(
+                lines.last().map(|line| line.trim()),
+                Some(
+                    "Tab or ← → to navigate | Shift + ← → to go to start/end | ↓ to send a \
+                     message  Ctrl+C to kill sub-agent"
+                )
+            );
         });
 
         app.update(|ctx| {

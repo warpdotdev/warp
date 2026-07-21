@@ -184,9 +184,13 @@ pub(crate) fn render_cloud_orchestration_tab_footer(builder: &TuiUiBuilder) -> B
     let muted = builder.muted_text_style();
     TuiText::from_spans([
         ("Tab or ← →".to_string(), primary),
-        (" to navigate  ".to_string(), muted),
+        (" to navigate | ".to_string(), muted),
         ("Shift + ← →".to_string(), primary),
-        (" to go to start/end".to_string(), muted),
+        (" to go to start/end | ".to_string(), muted),
+        ("↓".to_string(), primary),
+        (" to send a message  ".to_string(), muted),
+        ("Ctrl+C ".to_string(), primary),
+        ("to kill sub-agent".to_string(), muted),
     ])
     .truncate()
     .finish()

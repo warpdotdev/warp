@@ -5,7 +5,7 @@ use warpui::SingletonEntity as _;
 use warpui_core::r#async::Timer;
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiContainer, TuiElement, TuiEventHandler, TuiFlex, TuiText,
+    Modifier, TuiChildView, TuiContainer, TuiElement, TuiEventHandler, TuiFlex, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding};
@@ -43,7 +43,7 @@ struct CloudRunDisplayState {
     status: ConversationStatus,
     status_label: String,
     detail: Option<String>,
-    link_label: Option<&'static str>,
+    link_instruction: Option<&'static str>,
     link_url: Option<String>,
 }
 
@@ -209,7 +209,7 @@ impl TuiCloudRunView {
                 status: ConversationStatus::InProgress,
                 status_label: "Starting cloud run…".to_string(),
                 detail: None,
-                link_label: None,
+                link_instruction: None,
                 link_url: None,
             },
             TuiCloudRunStartup::Blocked(blocker) => CloudRunDisplayState {
@@ -221,14 +221,14 @@ impl TuiCloudRunView {
                     "{} Authenticate, then run the orchestration request again.",
                     blocker.message()
                 )),
-                link_label: Some("Click the link or hit Enter to authenticate:"),
+                link_instruction: Some("to authenticate or click the link below"),
                 link_url: Some(blocker.primary_url().to_string()),
             },
             TuiCloudRunStartup::Failed(failure) => CloudRunDisplayState {
                 status: ConversationStatus::Error,
                 status_label: "Cloud run failed to start".to_string(),
                 detail: Some(failure.message().to_string()),
-                link_label: None,
+                link_instruction: None,
                 link_url: None,
             },
             TuiCloudRunStartup::Spawned => {
@@ -253,7 +253,7 @@ impl TuiCloudRunView {
                     status: status.clone(),
                     status_label: status_label.to_string(),
                     detail: None,
-                    link_label: Some("Click the link or hit Enter to view cloud run here:"),
+                    link_instruction: Some("to view or click the link below"),
                     link_url: state.run_url().map(str::to_string),
                 }
             }
@@ -278,6 +278,68 @@ impl TuiCloudRunView {
         });
         ctx.notify();
     }
+}
+
+fn render_cloud_agent_mark(builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+    let styles = builder.cloud_run_mark_styles();
+    TuiFlex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .child(
+            TuiText::from_spans([
+                ("*".to_string(), styles.brightest),
+                ("*".to_string(), styles.bright),
+                ("*".to_string(), styles.lighter),
+                ("*".to_string(), styles.ansi_bright),
+                ("*⟡○".to_string(), styles.lighter),
+                ("○".to_string(), styles.bright),
+                ("*".to_string(), styles.brightest),
+            ])
+            .truncate()
+            .finish(),
+        )
+        .child(
+            TuiText::from_spans([
+                ("***".to_string(), styles.brightest),
+                ("**".to_string(), styles.lighter),
+                ("**⚬⚬⚬⚬⚬*".to_string(), styles.light),
+                ("*".to_string(), styles.lighter),
+                ("***".to_string(), styles.brightest),
+            ])
+            .truncate()
+            .finish(),
+        )
+        .child(
+            TuiText::from_spans([
+                ("****○○*⚬⚬⚬".to_string(), styles.base),
+                ("◌⟡◌".to_string(), styles.lighter),
+                ("⚬⚬⚬*○○****".to_string(), styles.base),
+            ])
+            .truncate()
+            .finish(),
+        )
+        .child(
+            TuiText::from_spans([
+                ("**◌◌".to_string(), styles.base),
+                ("*○○".to_string(), styles.lighter),
+                ("⚬⚬⚬○○⚬⚬".to_string(), styles.base),
+                ("⚬○○⟡".to_string(), styles.lighter),
+                ("◌◌**".to_string(), styles.base),
+            ])
+            .truncate()
+            .finish(),
+        )
+        .child(
+            TuiText::from_spans([
+                ("*".to_string(), styles.brightest),
+                ("○○".to_string(), styles.lighter),
+                ("⟡****".to_string(), styles.base),
+                ("**".to_string(), styles.lighter),
+                ("*".to_string(), styles.brightest),
+            ])
+            .truncate()
+            .finish(),
+        )
+        .finish()
 }
 
 #[cfg(test)]
@@ -308,16 +370,23 @@ impl TuiView for TuiCloudRunView {
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(ctx);
         let display_state = self.display_state(ctx);
+        let status_style = conversation_status_glyph_style(&display_state.status, &builder);
         let mut content = TuiFlex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .child(
+                TuiContainer::new(render_cloud_agent_mark(&builder))
+                    .with_padding_bottom(2)
+                    .finish(),
+            )
             .child(
                 TuiText::from_spans([
                     (
                         format!("{} ", conversation_status_glyph(&display_state.status)),
-                        conversation_status_glyph_style(&display_state.status, &builder),
+                        status_style.add_modifier(Modifier::BOLD),
                     ),
-                    (display_state.status_label, builder.primary_text_style()),
+                    (display_state.status_label, status_style),
                 ])
+                .truncate()
                 .finish(),
             );
         if let Some(detail) = display_state.detail {
@@ -327,18 +396,32 @@ impl TuiView for TuiCloudRunView {
                     .finish(),
             );
         }
-        if let (Some(label), Some(url)) = (display_state.link_label, display_state.link_url.clone())
-        {
+        if let (Some(instruction), Some(url)) = (
+            display_state.link_instruction,
+            display_state.link_url.clone(),
+        ) {
             let click_url = url.clone();
             content = content
                 .child(
-                    TuiText::new(label)
-                        .with_style(builder.muted_text_style())
-                        .finish(),
+                    TuiText::from_spans([
+                        ("Press ".to_string(), builder.muted_text_style()),
+                        (
+                            "enter".to_string(),
+                            builder.primary_text_style().add_modifier(Modifier::BOLD),
+                        ),
+                        (format!(" {instruction}"), builder.muted_text_style()),
+                    ])
+                    .truncate()
+                    .finish(),
                 )
-                .child(self.link.render(url, ctx, move |event_ctx, _| {
-                    event_ctx.dispatch_typed_action(TuiCloudRunAction::OpenUrl(click_url.clone()));
-                }));
+                .child(
+                    TuiContainer::new(self.link.render(url, ctx, move |event_ctx, _| {
+                        event_ctx
+                            .dispatch_typed_action(TuiCloudRunAction::OpenUrl(click_url.clone()));
+                    }))
+                    .with_padding_top(1)
+                    .finish(),
+                );
         }
         let body = centered_in_viewport(content.finish());
         let body = if let Some(url) = display_state.link_url {

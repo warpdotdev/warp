@@ -19,19 +19,17 @@ impl TuiLink {
         on_open: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
     ) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
+        let style = builder.muted_text_style();
         let is_hovered = self
             .hover_state
             .lock()
             .is_ok_and(|state| state.is_hovered());
         let style = if is_hovered {
-            builder
-                .primary_text_style()
+            style
                 .add_modifier(Modifier::BOLD)
                 .add_modifier(Modifier::UNDERLINED)
         } else {
-            builder
-                .primary_text_style()
-                .add_modifier(Modifier::UNDERLINED)
+            style.add_modifier(Modifier::UNDERLINED)
         };
         TuiHoverable::new(
             self.hover_state.clone(),
