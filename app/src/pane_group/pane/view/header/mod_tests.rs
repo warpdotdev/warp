@@ -13,9 +13,9 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::menu::MenuItemFields;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneId, PaneView};
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::server::server_api::ServerApiProvider;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -151,9 +151,11 @@ fn test_overflow_menu_items() {
         let overflow_menu = header.read(&app, |header, _ctx| header.overflow_menu.to_owned());
 
         let menu_item_label = "Increment counter";
-        let menu_items = vec![MenuItemFields::new(menu_item_label)
-            .with_on_select_action(TestViewAction::IncrementCounter)
-            .into_item()];
+        let menu_items = vec![
+            MenuItemFields::new(menu_item_label)
+                .with_on_select_action(TestViewAction::IncrementCounter)
+                .into_item(),
+        ];
 
         // Set the menu items and open the menu.
         header.update(&mut app, |header, ctx| {

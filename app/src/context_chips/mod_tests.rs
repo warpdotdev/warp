@@ -9,8 +9,8 @@
 //! (label blended over the chip surface) — what the user actually sees.
 
 use warp_core::ui::color::blend::Blend;
-use warp_core::ui::color::contrast::{high_enough_contrast, MinimumAllowedContrast};
-use warp_core::ui::theme::{mock_terminal_colors, Details, Fill, WarpTheme};
+use warp_core::ui::color::contrast::{MinimumAllowedContrast, high_enough_contrast};
+use warp_core::ui::theme::{Details, Fill, WarpTheme, mock_terminal_colors};
 use warpui::color::ColorU;
 
 use super::readable_chip_label_color;

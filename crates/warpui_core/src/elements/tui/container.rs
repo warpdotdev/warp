@@ -227,10 +227,10 @@ impl TuiElement for TuiContainer {
         if area.is_empty() {
             return;
         }
-        if self.background.is_some() || self.border {
-            if let Some(bounds) = self.bounds() {
-                ctx.scene.record_hit_rect(bounds);
-            }
+        if (self.background.is_some() || self.border)
+            && let Some(bounds) = self.bounds()
+        {
+            ctx.scene.record_hit_rect(bounds);
         }
 
         if let Some(background) = self.background {

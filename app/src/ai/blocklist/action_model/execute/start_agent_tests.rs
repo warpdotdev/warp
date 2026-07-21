@@ -9,8 +9,8 @@ use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, RenderableAIError,
     StartAgentExecutionMode, StartAgentResult,
 };
-use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 
@@ -705,9 +705,11 @@ fn parallel_dispatch_keeps_two_pendings_distinguishable_by_request_id() {
         executor.read(&app, |executor, _| {
             assert_eq!(executor.pending.len(), 2, "both pendings should be live");
             assert!(executor.pending.contains_key(&FIRST_REQUEST_ID));
-            assert!(executor
-                .pending
-                .contains_key(&StartAgentRequestId::from_raw_for_test(1)));
+            assert!(
+                executor
+                    .pending
+                    .contains_key(&StartAgentRequestId::from_raw_for_test(1))
+            );
         });
     });
 }
@@ -1039,6 +1041,8 @@ fn execute_returns_error_when_remote_opencode_harness_is_requested() {
                 harness_type: "opencode".to_string(),
                 title: String::new(),
                 auth_secret_name: None,
+                runner_id: String::new(),
+                agent_identity_uid: None,
             },
         );
 

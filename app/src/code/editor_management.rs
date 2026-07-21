@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
 
 use ai::skills::SkillReference;
@@ -65,7 +65,7 @@ impl CodeEditorStatus {
     pub fn editors_in_tab<'a>(
         tab: &ViewHandle<PaneGroup>,
         app: &'a AppContext,
-    ) -> impl Iterator<Item = Self> + 'a {
+    ) -> impl Iterator<Item = Self> + 'a + use<'a> {
         tab.as_ref(app)
             .code_panes(app)
             .map(move |(_, editor)| Self::editor_status(&editor, app))

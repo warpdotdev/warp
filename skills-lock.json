@@ -13,6 +13,12 @@
       "skillPath": ".agents/skills/check-impl-against-spec/SKILL.md",
       "computedHash": "c624f1667b3161022647ce8a55cb12ea781f9c85bfa0ea2dc3e17f7b1056d294"
     },
+    "complain": {
+      "source": "warpdotdev/common-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/complain/SKILL.md",
+      "computedHash": "a3b8c766daa0713c209522f6885309314c4699f6630246710d9fc19756851b61"
+    },
     "council": {
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
@@ -108,6 +114,12 @@
       "sourceType": "github",
       "skillPath": ".agents/skills/spec-driven-implementation/SKILL.md",
       "computedHash": "45793ca1e35b032ddfd2596f2e86fd6f6e938549373bfe4aeb74683486a179e4"
+    },
+    "suggestion-box": {
+      "source": "warpdotdev/common-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/suggestion-box/SKILL.md",
+      "computedHash": "26a194f61ed3c9cab1c6e5429bb51175189fed4a9c96a9805315f60c071bda4c"
     },
     "update-skill": {
       "source": "warpdotdev/common-skills",

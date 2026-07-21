@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-use futures::future::{join_all, BoxFuture};
 use futures::FutureExt;
+use futures::future::{BoxFuture, join_all};
 use itertools::Itertools;
 use warp_editor::multiline::AnyMultilineString;
 use warp_util::file::FileSaveError;
@@ -32,8 +32,8 @@ use crate::ai::agent::{
     AnyFileContent, FileContext, FileLocations, RequestFileEditsResult, UpdatedFileContext,
 };
 use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff};
-use crate::code::editor::compute_unified_diff;
 use crate::code::DiffResult;
+use crate::code::editor::compute_unified_diff;
 
 const APPLY_DIFF_RESULT_CONTEXT_LINES: usize = 10;
 

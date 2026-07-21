@@ -6,8 +6,8 @@ use warpui::{
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-use super::settings::UndoCloseSettingsChangedEvent;
 use super::UndoCloseSettings;
+use super::settings::UndoCloseSettingsChangedEvent;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{PaneGroup, PaneId};

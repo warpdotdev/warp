@@ -1,6 +1,6 @@
 use std::pin::Pin;
 
-use ai::skills::{read_skills, ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
+use ai::skills::{ParsedSkill, SKILL_PROVIDER_DEFINITIONS, read_skills};
 use async_channel::Sender;
 use futures::Future;
 use repo_metadata::repository::RepositorySubscriber;

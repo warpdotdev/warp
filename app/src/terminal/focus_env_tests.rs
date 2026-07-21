@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 
-use super::{add_session_focus_env_vars, FOCUS_URL_ENV, TERMINAL_SESSION_UUID_ENV};
+use super::{FOCUS_URL_ENV, TERMINAL_SESSION_UUID_ENV, add_session_focus_env_vars};
 use crate::channel::ChannelState;
 
 #[test]

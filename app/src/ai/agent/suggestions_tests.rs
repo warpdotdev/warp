@@ -85,38 +85,48 @@ fn test_extend_suggestions() {
     assert_eq!(base_suggestions.rules.len(), 4);
 
     // Verify that original rules with id1 and id2 are still present and unchanged
-    assert!(base_suggestions
-        .rules
-        .iter()
-        .any(|r| r.logging_id.to_string() == "id1"
-            && r.name == "rule1"
-            && r.content == "content1"));
-    assert!(base_suggestions
-        .rules
-        .iter()
-        .any(|r| r.logging_id.to_string() == "id2"
-            && r.name == "rule2"
-            && r.content == "content2"));
+    assert!(
+        base_suggestions
+            .rules
+            .iter()
+            .any(|r| r.logging_id.to_string() == "id1"
+                && r.name == "rule1"
+                && r.content == "content1")
+    );
+    assert!(
+        base_suggestions
+            .rules
+            .iter()
+            .any(|r| r.logging_id.to_string() == "id2"
+                && r.name == "rule2"
+                && r.content == "content2")
+    );
 
     // Verify that new unique rules (id3 and id4) were added
-    assert!(base_suggestions
-        .rules
-        .iter()
-        .any(|r| r.logging_id.to_string() == "id3"
-            && r.name == "rule3"
-            && r.content == "content3"));
-    assert!(base_suggestions
-        .rules
-        .iter()
-        .any(|r| r.logging_id.to_string() == "id4"
-            && r.name == "rule4"
-            && r.content == "content4"));
+    assert!(
+        base_suggestions
+            .rules
+            .iter()
+            .any(|r| r.logging_id.to_string() == "id3"
+                && r.name == "rule3"
+                && r.content == "content3")
+    );
+    assert!(
+        base_suggestions
+            .rules
+            .iter()
+            .any(|r| r.logging_id.to_string() == "id4"
+                && r.name == "rule4"
+                && r.content == "content4")
+    );
 
     // Verify that the modified version of id1 was not added (deduplication worked)
-    assert!(!base_suggestions
-        .rules
-        .iter()
-        .any(|r| r.logging_id.to_string() == "id1" && r.name == "rule1_modified"));
+    assert!(
+        !base_suggestions
+            .rules
+            .iter()
+            .any(|r| r.logging_id.to_string() == "id1" && r.name == "rule1_modified")
+    );
 
     // Verify workflows
 
@@ -124,36 +134,46 @@ fn test_extend_suggestions() {
     assert_eq!(base_suggestions.agent_mode_workflows.len(), 4);
 
     // Verify that original workflows with wid1 and wid2 are still present and unchanged
-    assert!(base_suggestions
-        .agent_mode_workflows
-        .iter()
-        .any(|w| w.logging_id.to_string() == "wid1"
-            && w.name == "workflow1"
-            && w.prompt == "prompt1"));
-    assert!(base_suggestions
-        .agent_mode_workflows
-        .iter()
-        .any(|w| w.logging_id.to_string() == "wid2"
-            && w.name == "workflow2"
-            && w.prompt == "prompt2"));
+    assert!(
+        base_suggestions
+            .agent_mode_workflows
+            .iter()
+            .any(|w| w.logging_id.to_string() == "wid1"
+                && w.name == "workflow1"
+                && w.prompt == "prompt1")
+    );
+    assert!(
+        base_suggestions
+            .agent_mode_workflows
+            .iter()
+            .any(|w| w.logging_id.to_string() == "wid2"
+                && w.name == "workflow2"
+                && w.prompt == "prompt2")
+    );
 
     // Verify that new unique workflows (wid3 and wid4) were added
-    assert!(base_suggestions
-        .agent_mode_workflows
-        .iter()
-        .any(|w| w.logging_id.to_string() == "wid3"
-            && w.name == "workflow3"
-            && w.prompt == "prompt3"));
-    assert!(base_suggestions
-        .agent_mode_workflows
-        .iter()
-        .any(|w| w.logging_id.to_string() == "wid4"
-            && w.name == "workflow4"
-            && w.prompt == "prompt4"));
+    assert!(
+        base_suggestions
+            .agent_mode_workflows
+            .iter()
+            .any(|w| w.logging_id.to_string() == "wid3"
+                && w.name == "workflow3"
+                && w.prompt == "prompt3")
+    );
+    assert!(
+        base_suggestions
+            .agent_mode_workflows
+            .iter()
+            .any(|w| w.logging_id.to_string() == "wid4"
+                && w.name == "workflow4"
+                && w.prompt == "prompt4")
+    );
 
     // Verify that the modified version of wid1 was not added (deduplication worked)
-    assert!(!base_suggestions
-        .agent_mode_workflows
-        .iter()
-        .any(|w| w.logging_id.to_string() == "wid1" && w.name == "workflow1_modified"));
+    assert!(
+        !base_suggestions
+            .agent_mode_workflows
+            .iter()
+            .any(|w| w.logging_id.to_string() == "wid1" && w.name == "workflow1_modified")
+    );
 }

@@ -12,15 +12,15 @@ use warpui::{AddSingletonModel, App, UpdateModel, UpdateView};
 
 use super::*;
 use crate::auth::AuthStateProvider;
+use crate::editor::EditorView;
 use crate::editor::soft_wrap::FrameLayouts;
 use crate::editor::tests::sample_text;
-use crate::editor::EditorView;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
-use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
+use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 impl EditorView {
@@ -493,9 +493,11 @@ fn test_select_word_with_custom_boundaries() {
             SemanticSelection::handle(ctx).update(ctx, |selection, ctx| {
                 // Disable smart select so custom word boundaries take effect
                 report_if_error!(selection.smart_select_enabled.toggle_and_save_value(ctx));
-                report_if_error!(selection
-                    .word_char_allowlist
-                    .set_value("/-.".to_owned(), ctx));
+                report_if_error!(
+                    selection
+                        .word_char_allowlist
+                        .set_value("/-.".to_owned(), ctx)
+                );
                 assert!(!selection.smart_select_enabled());
             });
         });
@@ -4297,11 +4299,13 @@ fn test_buffer_points_to_cache() {
             presenter.borrow_mut().position_cache_mut().end();
 
             let expected_pos_id = position_id_for_cached_point(editor_handle.id(), id);
-            assert!(presenter
-                .borrow()
-                .position_cache()
-                .get_position(expected_pos_id)
-                .is_some())
+            assert!(
+                presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position(expected_pos_id)
+                    .is_some()
+            )
         });
     });
 }

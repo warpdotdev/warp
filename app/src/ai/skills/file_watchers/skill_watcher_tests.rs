@@ -18,7 +18,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::super::subscribers::SkillRepositoryMessage;
-use super::{parse_project_skill_contents, SkillWatcher};
+use super::{SkillWatcher, parse_project_skill_contents};
 use crate::ai::skills::skill_manager::SkillWatcherEvent;
 
 /// Helper function for creating a single skill file

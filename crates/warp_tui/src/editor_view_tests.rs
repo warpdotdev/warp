@@ -38,7 +38,7 @@ fn layout_clamps_stale_scroll_after_resize_and_text_replacement() {
         render_lines_at_width(&app, &editor, 3);
         editor.update(&mut app, |editor, ctx| {
             editor.handle_action(
-                &TuiEditorViewAction::Editor(TuiEditorAction::InsertText("abcdef".to_string())),
+                &TuiEditorViewAction::Editor(TuiEditorAction::PasteText("abcdef".to_string())),
                 ctx,
             );
         });
@@ -123,7 +123,7 @@ fn single_line_paste_discards_later_lines() {
 
         editor.update(&mut app, |editor, ctx| {
             editor.handle_action(
-                &TuiEditorViewAction::Editor(TuiEditorAction::InsertText(
+                &TuiEditorViewAction::Editor(TuiEditorAction::PasteText(
                     "first\nsecond".to_string(),
                 )),
                 ctx,
@@ -198,7 +198,7 @@ fn editor_follows_cursor_within_its_one_row_viewport() {
 
         editor.update(&mut app, |editor, ctx| {
             editor.handle_action(
-                &TuiEditorViewAction::Editor(TuiEditorAction::InsertText("abcd".to_string())),
+                &TuiEditorViewAction::Editor(TuiEditorAction::PasteText("abcd".to_string())),
                 ctx,
             );
         });
@@ -276,7 +276,14 @@ fn keybinding_initializer_registers_line_start_for_input_and_editor() {
                 "alt-enter".to_string(),
             ])
         );
-        assert!(triggers_for("tui:editor:insert_newline").is_empty());
+        assert_eq!(
+            triggers_for("tui:editor:insert_newline"),
+            HashSet::from([
+                "shift-enter".to_string(),
+                "ctrl-j".to_string(),
+                "alt-enter".to_string(),
+            ])
+        );
         assert!(app.read(|ctx| ctx.get_binding_by_name("tui:editor:move_up").is_none()));
     });
 }
@@ -325,7 +332,7 @@ fn actions_edit_the_single_line_buffer() {
         });
         editor.update(&mut app, |editor, ctx| {
             editor.handle_action(
-                &TuiEditorViewAction::Editor(TuiEditorAction::InsertText("gen".to_string())),
+                &TuiEditorViewAction::Editor(TuiEditorAction::PasteText("gen".to_string())),
                 ctx,
             );
             editor.handle_action(

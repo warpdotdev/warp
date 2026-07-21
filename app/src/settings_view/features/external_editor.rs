@@ -13,7 +13,7 @@ use crate::appearance::Appearance;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings_view::settings_page::{
-    render_body_item, render_dropdown_item, AdditionalInfo, LocalOnlyIconState, ToggleState,
+    AdditionalInfo, LocalOnlyIconState, ToggleState, render_body_item, render_dropdown_item,
 };
 use crate::util::file::external_editor::settings::{
     EditorChoice, EditorLayout, OpenCodePanelsFileEditor, OpenFileEditor, OpenFileLayout,
@@ -196,9 +196,11 @@ impl ExternalEditorView {
 
     fn set_code_panels_editor(&mut self, editor: &EditorChoice, ctx: &mut ViewContext<Self>) {
         EditorSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .open_code_panels_file_editor
-                .set_value(*editor, ctx));
+            report_if_error!(
+                settings
+                    .open_code_panels_file_editor
+                    .set_value(*editor, ctx)
+            );
         });
 
         send_telemetry_from_ctx!(

@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use warpui::{App, SingletonEntity};
 
-use super::{set_login_phase, TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
+use super::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase, set_login_phase};
 
 #[test]
 fn emits_logged_in_event_when_login_completes() {

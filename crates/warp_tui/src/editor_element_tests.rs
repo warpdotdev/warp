@@ -172,8 +172,8 @@ fn editable_paste_emits_one_complete_text_action() {
             ));
             let actions = actions.borrow();
             assert_eq!(actions.len(), 1);
-            let TuiEditorAction::InsertText(text) = &actions[0] else {
-                panic!("expected InsertText");
+            let TuiEditorAction::PasteText(text) = &actions[0] else {
+                panic!("expected PasteText");
             };
             assert_eq!(text, payload);
         });

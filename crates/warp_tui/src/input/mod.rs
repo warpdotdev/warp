@@ -10,4 +10,4 @@
 
 pub mod view;
 
-pub use view::{init, TuiInputView, TuiInputViewEvent};
+pub use view::{TuiInputView, TuiInputViewEvent, init};

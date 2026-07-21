@@ -242,6 +242,11 @@ pub enum RunAgentsExecutionMode {
         environment_id: String,
         worker_host: String,
         computer_use_enabled: bool,
+        /// Runner UID selecting the children's compute config (docker
+        /// image, instance shape, setup commands). Empty means "no
+        /// override" — fall back to the environment's default runner then
+        /// system defaults.
+        runner_id: String,
     },
 }
 
@@ -256,6 +261,11 @@ pub struct RunAgentsAgentRunConfig {
     pub name: String,
     pub prompt: String,
     pub title: String,
+    /// Optional UID of the named agent (service account) this child run
+    /// should execute as. Empty means the child runs as the caller. Only
+    /// meaningful for factory agents dispatching sibling factory agents;
+    /// requires remote execution and is enforced server-side at dispatch.
+    pub agent_identity_uid: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -283,6 +293,13 @@ pub enum StartAgentExecutionMode {
         /// `None` means no client-side secret was selected — the remote
         /// environment falls back to its own ambient credentials.
         auth_secret_name: Option<String>,
+        /// Runner UID selecting the child's compute config. Empty means
+        /// "no override" — resolved at dispatch via the environment's
+        /// default runner then system defaults.
+        runner_id: String,
+        /// UID of the named agent (service account) the remote child run
+        /// should execute as. `None` means the child runs as the caller.
+        agent_identity_uid: Option<String>,
     },
 }
 
@@ -313,6 +330,8 @@ impl StartAgentExecutionMode {
             harness_type: String::new(),
             title: String::new(),
             auth_secret_name: None,
+            runner_id: String::new(),
+            agent_identity_uid: None,
         }
     }
 }

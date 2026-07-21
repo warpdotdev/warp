@@ -1,8 +1,8 @@
-use std::sync::mpsc;
 #[cfg(test)]
 use std::sync::Arc;
 #[cfg(not(test))]
 use std::sync::OnceLock;
+use std::sync::mpsc;
 #[cfg(not(target_family = "wasm"))]
 use std::{
     fs::{self, File, OpenOptions},

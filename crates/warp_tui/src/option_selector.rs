@@ -1,7 +1,7 @@
 //! [`TuiOptionSelector`]: a reusable single-select option list for TUI
 //! permission prompts, rendered from a frontend-neutral
-//! [`OptionSnapshot`]. One configuration page shows a header (title,
-//! "n of m" position, question), a selectable option list with viewport
+//! [`OptionSnapshot`]. One configuration page may show a header (title, "n of
+//! m" position, question) above a selectable option list with viewport
 //! scrolling, optional Loading/Failed/Empty status rows, and an optional
 //! custom-text footer editor.
 //!
@@ -10,15 +10,18 @@
 //! since the selector is only rendered while its host is the active blocking
 //! interaction. Escape remains host policy, with an element-level fallback
 //! through [`TuiOptionSelector::handle_back`].
+use std::collections::{HashMap, HashSet};
 
 use warp::tui_export::{OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus};
 use warp_search_core::inline_menu::InlineMenuSelection;
+use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
     Modifier, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
     TuiHoverable, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiParentElement,
     TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
-use warpui_core::elements::MouseStateHandle;
+use warpui_core::keymap::EditableBinding;
+use warpui_core::keymap::macros::*;
 use warpui_core::{
     AppContext, BlurContext, Entity, EntityId, FocusContext, TuiView, TypedActionView, ViewContext,
     ViewHandle,
@@ -26,6 +29,7 @@ use warpui_core::{
 
 use crate::editor_view::{TuiEditorView, TuiEditorViewEvent};
 use crate::inline_menu::keep_selected_visible;
+use crate::keybindings::TUI_BINDING_GROUP;
 use crate::tui_builder::TuiUiBuilder;
 
 /// Maximum option rows visible at once; longer lists scroll.
@@ -33,28 +37,58 @@ pub(crate) const MAX_VISIBLE_OPTION_ROWS: usize = 6;
 
 /// Validation copy shown when the custom-text editor is submitted empty.
 const CUSTOM_TEXT_EMPTY_ERROR: &str = "Enter a value to continue.";
+const SELECTOR_NAVIGATION_ACTIVE: &str = "TuiOptionSelectorNavigationActive";
 
-/// Renderable fields for one selector page.
+pub(crate) fn init(app: &mut AppContext) {
+    let predicate = id!(TuiOptionSelector::ui_name()) & id!(SELECTOR_NAVIGATION_ACTIVE);
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "tui:option-selector:previous",
+            "Select the previous option",
+            TuiOptionSelectorAction::MoveUp,
+        )
+        .with_context_predicate(predicate.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("up"),
+        EditableBinding::new(
+            "tui:option-selector:next",
+            "Select the next option",
+            TuiOptionSelectorAction::MoveDown,
+        )
+        .with_context_predicate(predicate)
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("down"),
+    ]);
+}
+
+/// Optional header rendered above a selector page.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct OptionSelectorPage {
+pub(crate) struct OptionSelectorHeader {
     /// Short field label shown in the header row.
     pub(crate) field_label: String,
     /// One-based position in the current page sequence: `(current, total)`.
     pub(crate) position: (usize, usize),
     /// Full prompt shown above the available options.
     pub(crate) prompt: String,
+}
+
+/// Renderable fields for one selector page.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OptionSelectorPage {
+    /// Header metadata, or `None` when the embedding view provides its own.
+    pub(crate) header: Option<OptionSelectorHeader>,
     /// Options and catalog status rendered on this page.
     pub(crate) snapshot: OptionSnapshot,
     /// Whether this page offers label filtering.
     pub(crate) searchable: bool,
+    /// Non-numeric shortcuts keyed by option row id.
+    pub(crate) row_shortcuts: HashMap<String, char>,
 }
 
 impl Default for OptionSelectorPage {
     fn default() -> Self {
         Self {
-            field_label: String::new(),
-            position: (0, 0),
-            prompt: String::new(),
+            header: None,
             snapshot: OptionSnapshot {
                 rows: Vec::new(),
                 selected_id: None,
@@ -62,6 +96,7 @@ impl Default for OptionSelectorPage {
                 footer: None,
             },
             searchable: false,
+            row_shortcuts: HashMap::new(),
         }
     }
 }
@@ -73,6 +108,8 @@ pub(crate) enum TuiOptionSelectorEvent {
     Confirmed { id: String },
     /// The custom-text footer editor was submitted with a valid value.
     CustomTextSubmitted { value: String },
+    /// The question-card Other editor was opened.
+    CustomTextOpened,
     /// The Retry affordance of a `Failed` catalog was activated.
     RetryRequested,
     /// The selector asked to be dismissed (element-level Escape fallback for
@@ -92,8 +129,12 @@ pub(crate) enum TuiOptionSelectorAction {
     ConfirmSelected,
     MoveUp,
     MoveDown,
+    /// Selects an item at an absolute index without confirming it.
+    SelectItemWithoutConfirm(usize),
     /// Select the viewport-relative item and confirm it when enabled.
     SelectNumberedOption(u8),
+    /// Select the row assigned to a host-defined shortcut.
+    SelectShortcut(char),
     /// Select the item at an absolute index and confirm it when enabled.
     /// Dispatched by row clicks.
     SelectItem(usize),
@@ -245,8 +286,18 @@ struct SelectorInteractionState {
 pub(crate) struct TuiOptionSelector {
     page: OptionSelectorPage,
     interaction: SelectorInteractionState,
+    /// Optional host-owned editor rendered above the options.
+    leading_editor: Option<ViewHandle<TuiEditorView>>,
+    /// Validation copy rendered directly below the host-owned editor.
+    leading_editor_error: Option<String>,
     search_field: Option<ViewHandle<TuiEditorView>>,
     custom_text: CustomTextState,
+    /// Selected question option ids, independent of the keyboard highlight.
+    selected_ids: HashSet<String>,
+    /// Whether selected question options render checkmarks.
+    show_selection_markers: bool,
+    /// Whether this selector is embedded in an AskUserQuestion card.
+    question_style: bool,
     /// Whether the selector itself (the list zone) is focused.
     focused: bool,
     /// Per-item mouse state, indexed like [`Self::items`]. Owned here (not
@@ -271,8 +322,13 @@ impl TuiOptionSelector {
         Self {
             page: OptionSelectorPage::default(),
             interaction: SelectorInteractionState::default(),
+            leading_editor: None,
+            leading_editor_error: None,
             search_field: None,
             custom_text: CustomTextState::new(custom_text_editor),
+            selected_ids: HashSet::new(),
+            show_selection_markers: false,
+            question_style: false,
             focused: false,
             item_mouse_states: Vec::new(),
         }
@@ -297,11 +353,59 @@ impl TuiOptionSelector {
         ctx.emit(TuiOptionSelectorEvent::LayoutInvalidated);
         ctx.notify();
     }
+
+    /// Installs a host-owned editor above the option list.
+    pub(crate) fn set_leading_editor(
+        &mut self,
+        editor: ViewHandle<TuiEditorView>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.leading_editor = Some(editor);
+        self.invalidate_layout(ctx);
+    }
+    /// Updates validation copy shown below the host-owned editor.
+    pub(crate) fn set_leading_editor_error(
+        &mut self,
+        error: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.leading_editor_error == error {
+            return;
+        }
+        self.leading_editor_error = error;
+        self.invalidate_layout(ctx);
+    }
+
     /// Whether the optional search editor currently owns focus.
     fn search_field_is_focused(&self, ctx: &AppContext) -> bool {
         self.search_field
             .as_ref()
             .is_some_and(|field| field.as_ref(ctx).is_focused())
+    }
+
+    /// Whether the host-owned leading editor currently owns focus.
+    fn leading_editor_is_focused(&self, ctx: &AppContext) -> bool {
+        self.leading_editor
+            .as_ref()
+            .is_some_and(|editor| editor.as_ref(ctx).is_focused())
+    }
+
+    /// The editor that participates in top-of-list focus cycling.
+    fn top_editor(&self) -> Option<&ViewHandle<TuiEditorView>> {
+        self.leading_editor.as_ref().or_else(|| {
+            self.page
+                .searchable
+                .then_some(self.search_field.as_ref())
+                .flatten()
+        })
+    }
+
+    /// Moves focus from the option list to its top editor.
+    pub(crate) fn focus_leading_editor(&self, ctx: &mut ViewContext<Self>) {
+        if let Some(editor) = self.top_editor() {
+            ctx.focus(editor);
+            ctx.notify();
+        }
     }
 
     /// Resets all transient interaction state for the newly installed page.
@@ -313,7 +417,6 @@ impl TuiOptionSelector {
         self.custom_text.reset_editor(ctx);
         self.select_id(self.page.snapshot.selected_id.clone());
         self.sync_after_items_changed();
-        ctx.focus_self();
     }
 
     /// Replaces the current page and resets its transient interaction state.
@@ -325,6 +428,94 @@ impl TuiOptionSelector {
         self.custom_text.sync_committed_value(&self.page.snapshot);
         self.reset_interaction_for_page(ctx);
         self.invalidate_layout(ctx);
+    }
+
+    /// Adapts this selector for an ask-question card. The questionnaire owns
+    /// the committed selections; the selector retains its keyboard highlight.
+    pub(crate) fn set_question_state(
+        &mut self,
+        selected_ids: HashSet<String>,
+        show_selection_markers: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.question_style = true;
+        self.selected_ids = selected_ids;
+        self.show_selection_markers = show_selection_markers;
+        ctx.notify();
+    }
+
+    /// The highlighted question-option index, including the trailing Other
+    /// entry when present.
+    pub(crate) fn highlighted_question_index(&self) -> Option<usize> {
+        (!self.custom_text.is_editing())
+            .then(|| self.interaction.selection.selected_index())
+            .flatten()
+    }
+
+    /// The highlighted item index, including a trailing custom-text entry.
+    #[cfg(test)]
+    pub(crate) fn highlighted_index(&self) -> Option<usize> {
+        (!self.custom_text.is_editing())
+            .then(|| self.interaction.selection.selected_index())
+            .flatten()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn search_field_for_test(&self) -> Option<ViewHandle<TuiEditorView>> {
+        self.search_field.clone()
+    }
+
+    /// Moves the option highlight upward.
+    pub(crate) fn move_up(&mut self, ctx: &mut ViewContext<Self>) {
+        self.move_selection(false, ctx);
+    }
+
+    /// Moves the option highlight downward.
+    pub(crate) fn move_down(&mut self, ctx: &mut ViewContext<Self>) {
+        self.move_selection(true, ctx);
+    }
+
+    /// Moves focus and highlight to an item without confirming it.
+    pub(crate) fn select_item_without_confirm(
+        &mut self,
+        index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let items_len = self.items().len();
+        if index >= items_len {
+            return;
+        }
+        self.interaction
+            .selection
+            .select(index, items_len, |_| true);
+        ctx.focus_self();
+        self.scroll_to_keep_visible(items_len, index, ctx);
+        ctx.notify();
+    }
+
+    /// The current inline Other buffer, trimmed for questionnaire transitions.
+    pub(crate) fn active_custom_text(&self, ctx: &AppContext) -> Option<String> {
+        self.custom_text.is_editing().then(|| {
+            self.custom_text
+                .editor
+                .as_ref(ctx)
+                .text(ctx)
+                .trim()
+                .to_owned()
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_active_custom_text_for_test(
+        &mut self,
+        text: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.custom_text.is_editing() {
+            self.custom_text
+                .editor
+                .update(ctx, |editor, ctx| editor.set_text(text, ctx));
+        }
     }
 
     /// Refreshes the snapshot in place after a live catalog change,
@@ -412,6 +603,9 @@ impl TuiOptionSelector {
     /// Activates the custom editor with the last committed value.
     fn begin_custom_text_editing(&mut self, ctx: &mut ViewContext<Self>) {
         self.custom_text.begin_editing(ctx);
+        if self.question_style {
+            ctx.emit(TuiOptionSelectorEvent::CustomTextOpened);
+        }
         ctx.focus(&self.custom_text.editor);
         ctx.notify();
     }
@@ -570,7 +764,7 @@ impl TuiOptionSelector {
             return;
         }
         let items_len = self.items().len();
-        if self.search_field_is_focused(ctx) {
+        if self.search_field_is_focused(ctx) || self.leading_editor_is_focused(ctx) {
             if items_len > 0 {
                 let target = if forward { 0 } else { items_len - 1 };
                 self.interaction
@@ -582,18 +776,16 @@ impl TuiOptionSelector {
             ctx.notify();
             return;
         }
-        let move_to_search = self.page.searchable
+        let move_to_editor = self.top_editor().is_some()
             && match (forward, self.interaction.selection.selected_index()) {
                 (false, None | Some(0)) => true,
                 (true, Some(index)) => index + 1 >= items_len,
                 (true, None) | (false, Some(_)) => false,
             };
-        if move_to_search {
+        if move_to_editor {
             self.interaction.selection.clear();
             self.interaction.scroll_offset = 0;
-            if let Some(search_field) = self.search_field.as_ref() {
-                ctx.focus(search_field);
-            }
+            self.focus_leading_editor(ctx);
             ctx.notify();
             return;
         }
@@ -641,6 +833,27 @@ impl TuiOptionSelector {
         true
     }
 
+    /// Confirms the visible row assigned to `shortcut`.
+    fn confirm_shortcut(&mut self, shortcut: char, ctx: &mut ViewContext<Self>) -> bool {
+        let items = self.items();
+        let visible_end =
+            (self.interaction.scroll_offset + MAX_VISIBLE_OPTION_ROWS).min(items.len());
+        let Some(index) = (self.interaction.scroll_offset..visible_end).find(|index| {
+            let SelectorItem::Row(row_index) = items[*index] else {
+                return false;
+            };
+            self.page
+                .snapshot
+                .rows
+                .get(row_index)
+                .and_then(|row| self.page.row_shortcuts.get(&row.id))
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(&shortcut))
+        }) else {
+            return false;
+        };
+        self.confirm_item(index, ctx)
+    }
+
     /// Validates and submits the custom-text editor: the value
     /// is trimmed; empty input stays editable with a concise error.
     fn submit_custom_text(&mut self, ctx: &mut ViewContext<Self>) -> bool {
@@ -684,9 +897,9 @@ impl TuiOptionSelector {
     // ── Rendering ───────────────────────────────────────────────────
 
     /// One header block: field label + position, then the page prompt.
-    fn render_header(&self, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
-        let (current, total) = self.page.position;
-        let title = TuiText::new(self.page.field_label.clone())
+    fn render_header(header: &OptionSelectorHeader, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+        let (current, total) = header.position;
+        let title = TuiText::new(header.field_label.clone())
             .with_style(builder.primary_text_style())
             .truncate()
             .finish();
@@ -717,45 +930,63 @@ impl TuiOptionSelector {
             .child(title_row)
             .child(TuiText::new(" ").finish())
             .child(
-                TuiText::new(self.page.prompt.clone())
+                TuiText::new(header.prompt.clone())
                     .with_style(builder.primary_text_style().add_modifier(Modifier::BOLD))
                     .finish(),
             )
             .finish()
     }
 
-    /// One option row: viewport-relative digit, label, badge, and disabled
+    /// One option row: shortcut, label, badge, and disabled
     /// reason, with the current selection rendered in bold magenta.
     fn render_row(
         &self,
         row: &OptionRow,
-        digit: Option<usize>,
-        is_selected: bool,
+        shortcut: Option<char>,
+        is_highlighted: bool,
         builder: &TuiUiBuilder,
     ) -> Box<dyn TuiElement> {
         let disabled = row.disabled_reason.is_some();
-        let label_style = if is_selected {
+        let is_selected = if self.question_style {
+            self.selected_ids.contains(&row.id)
+        } else {
+            is_highlighted
+        };
+        let selected_style = if self.question_style {
+            builder.question_option_selected_style()
+        } else {
             builder.option_selector_selected_style()
+        };
+        let label_style = if is_highlighted || is_selected {
+            selected_style
         } else if disabled {
             builder.dim_text_style()
         } else {
             builder.primary_text_style()
         };
-        let detail_style = if is_selected {
-            builder.option_selector_selected_style()
+        let detail_style = if is_highlighted {
+            selected_style
         } else if disabled {
             builder.dim_text_style()
         } else {
             builder.muted_text_style()
         };
-        let digit_prefix = match digit {
-            Some(digit) => format!("({digit}) "),
+        let shortcut_prefix = match shortcut {
+            Some(shortcut) => format!("({shortcut}) "),
             None => "    ".to_string(),
         };
-        let mut spans = vec![
-            (digit_prefix, detail_style),
-            (row.label.clone(), label_style),
-        ];
+        let mut spans = vec![(shortcut_prefix, detail_style)];
+        if self.show_selection_markers {
+            spans.push((
+                if is_selected { "✓ " } else { "  " }.to_string(),
+                if is_selected {
+                    builder.success_glyph_style()
+                } else {
+                    builder.muted_text_style()
+                },
+            ));
+        }
+        spans.push((row.label.clone(), label_style));
         let badge = match row.badge {
             Some(OptionBadge::Default) => Some("default"),
             Some(OptionBadge::Recent) => Some("recent"),
@@ -776,12 +1007,16 @@ impl TuiOptionSelector {
         &self,
         text: String,
         digit: Option<usize>,
-        is_selected: bool,
+        is_highlighted: bool,
         style: TuiStyle,
         builder: &TuiUiBuilder,
     ) -> Box<dyn TuiElement> {
-        let style = if is_selected {
-            builder.option_selector_selected_style()
+        let style = if is_highlighted {
+            if self.question_style {
+                builder.question_option_selected_style()
+            } else {
+                builder.option_selector_selected_style()
+            }
         } else {
             style
         };
@@ -858,50 +1093,55 @@ impl TuiOptionSelector {
             let digit = (position < 9).then_some(position + 1);
             let is_selected = !self.custom_text.is_editing()
                 && self.interaction.selection.selected_index() == Some(index);
-            let element = match item {
-                SelectorItem::Row(row_index) => {
-                    let Some(row) = self.page.snapshot.rows.get(row_index) else {
-                        continue;
-                    };
-                    self.render_row(row, digit, is_selected, builder)
-                }
-                SelectorItem::Retry => self.render_virtual_row(
-                    "↻ Retry".to_string(),
-                    digit,
-                    is_selected,
-                    builder.error_text_style(),
-                    builder,
-                ),
-                SelectorItem::CustomText => {
-                    match (&self.page.snapshot.footer, self.custom_text.is_editing()) {
-                        (Some(OptionFooter::CustomText { label }), true) => self
-                            .render_editor_field(
-                                digit.map_or_else(
-                                    || "    ".to_string(),
-                                    |digit| format!("({digit}) "),
-                                ),
-                                label,
-                                &self.custom_text.editor,
-                                self.custom_text
-                                    .error_is_visible()
-                                    .then_some(CUSTOM_TEXT_EMPTY_ERROR),
-                                builder,
-                            ),
-                        (Some(OptionFooter::CustomText { label }), false) => self
-                            .render_virtual_row(
-                                self.custom_text
-                                    .committed_value
-                                    .clone()
-                                    .unwrap_or_else(|| label.clone()),
-                                digit,
-                                is_selected,
-                                builder.primary_text_style(),
-                                builder,
-                            ),
-                        (Some(OptionFooter::CreateNewAuthSecret) | None, _) => continue,
+            let element =
+                match item {
+                    SelectorItem::Row(row_index) => {
+                        let Some(row) = self.page.snapshot.rows.get(row_index) else {
+                            continue;
+                        };
+                        let shortcut =
+                            self.page.row_shortcuts.get(&row.id).copied().or_else(|| {
+                                digit.and_then(|digit| char::from_digit(digit as u32, 10))
+                            });
+                        self.render_row(row, shortcut, is_selected, builder)
                     }
-                }
-            };
+                    SelectorItem::Retry => self.render_virtual_row(
+                        "↻ Retry".to_string(),
+                        digit,
+                        is_selected,
+                        builder.error_text_style(),
+                        builder,
+                    ),
+                    SelectorItem::CustomText => {
+                        match (&self.page.snapshot.footer, self.custom_text.is_editing()) {
+                            (Some(OptionFooter::CustomText { label }), true) => self
+                                .render_editor_field(
+                                    digit.map_or_else(
+                                        || "    ".to_string(),
+                                        |digit| format!("({digit}) "),
+                                    ),
+                                    label,
+                                    &self.custom_text.editor,
+                                    self.custom_text
+                                        .error_is_visible()
+                                        .then_some(CUSTOM_TEXT_EMPTY_ERROR),
+                                    builder,
+                                ),
+                            (Some(OptionFooter::CustomText { label }), false) => self
+                                .render_virtual_row(
+                                    self.custom_text
+                                        .committed_value
+                                        .clone()
+                                        .unwrap_or_else(|| label.clone()),
+                                    digit,
+                                    is_selected,
+                                    builder.primary_text_style(),
+                                    builder,
+                                ),
+                            (Some(OptionFooter::CreateNewAuthSecret) | None, _) => continue,
+                        }
+                    }
+                };
             // Each visible row is clickable through its own persistent
             // mouse-state handle.
             let element = match self.item_mouse_states.get(index) {
@@ -963,10 +1203,31 @@ impl TuiView for TuiOptionSelector {
         "TuiOptionSelector"
     }
 
+    fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.focused || self.search_field_is_focused(app) {
+            context.set.insert(SELECTOR_NAVIGATION_ACTIVE);
+        }
+        context
+    }
+
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
-        let mut content = TuiFlex::column().child(self.render_header(&builder));
-        if let Some(search_field) = self
+        let mut content = TuiFlex::column();
+        if let Some(header) = &self.page.header {
+            content.add_child(Self::render_header(header, &builder));
+        }
+        if let Some(leading_editor) = self.leading_editor.as_ref() {
+            content.add_child(TuiChildView::new(leading_editor).finish());
+            if let Some(error) = self.leading_editor_error.as_ref() {
+                content.add_child(
+                    TuiText::new(error.clone())
+                        .with_style(builder.error_text_style())
+                        .finish(),
+                );
+            }
+            content.add_child(TuiText::new(" ").finish());
+        } else if let Some(search_field) = self
             .page
             .searchable
             .then_some(self.search_field.as_ref())
@@ -985,12 +1246,14 @@ impl TuiView for TuiOptionSelector {
             child: content.finish(),
             list_focused: self.focused,
             searchable: self.page.searchable,
+            row_shortcuts: self.page.row_shortcuts.values().copied().collect(),
         }
         .finish()
     }
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
         let mut ids = vec![self.custom_text.editor.id()];
+        ids.extend(self.leading_editor.iter().map(ViewHandle::id));
         if self.page.searchable {
             ids.extend(self.search_field.iter().map(ViewHandle::id));
         }
@@ -1003,9 +1266,13 @@ impl TuiView for TuiOptionSelector {
             FocusContext::DescendentFocused(view_id) => {
                 self.focused = false;
                 if self
-                    .search_field
+                    .leading_editor
                     .as_ref()
-                    .is_some_and(|search_field| *view_id == search_field.id())
+                    .is_some_and(|editor| *view_id == editor.id())
+                    || self
+                        .search_field
+                        .as_ref()
+                        .is_some_and(|search_field| *view_id == search_field.id())
                 {
                     self.interaction.selection.clear();
                 }
@@ -1030,9 +1297,27 @@ impl TypedActionView for TuiOptionSelector {
             }
             TuiOptionSelectorAction::MoveUp => self.move_selection(false, ctx),
             TuiOptionSelectorAction::MoveDown => self.move_selection(true, ctx),
+            TuiOptionSelectorAction::SelectItemWithoutConfirm(index) => {
+                self.select_item_without_confirm(*index, ctx);
+            }
             TuiOptionSelectorAction::SelectNumberedOption(digit) => {
                 let index = self.interaction.scroll_offset + usize::from(*digit) - 1;
-                self.confirm_item(index, ctx);
+                let item_has_custom_shortcut = self.items().get(index).is_some_and(|item| {
+                    let SelectorItem::Row(row_index) = item else {
+                        return false;
+                    };
+                    self.page
+                        .snapshot
+                        .rows
+                        .get(*row_index)
+                        .is_some_and(|row| self.page.row_shortcuts.contains_key(&row.id))
+                });
+                if !item_has_custom_shortcut {
+                    self.confirm_item(index, ctx);
+                }
+            }
+            TuiOptionSelectorAction::SelectShortcut(shortcut) => {
+                self.confirm_shortcut(*shortcut, ctx);
             }
             TuiOptionSelectorAction::SelectItem(index) => {
                 self.confirm_item(*index, ctx);
@@ -1070,6 +1355,7 @@ struct SelectorInputElement {
     child: Box<dyn TuiElement>,
     list_focused: bool,
     searchable: bool,
+    row_shortcuts: Vec<char>,
 }
 
 impl TuiElement for SelectorInputElement {
@@ -1120,23 +1406,38 @@ impl TuiElement for SelectorInputElement {
                     return false;
                 }
                 match keystroke.key.as_str() {
-                    "enter" | "numpadenter" => {
+                    "enter" | "numpadenter" if self.list_focused => {
                         event_ctx.dispatch_typed_action(TuiOptionSelectorAction::ConfirmSelected);
                         true
                     }
-                    "escape" => {
+                    "escape" if self.list_focused => {
                         // Escape fallback for hosts without their own
                         // Escape keymap binding; the embedding card's
                         // `escape` binding normally consumes the key first.
                         event_ctx.dispatch_typed_action(TuiOptionSelectorAction::HandleEscape);
                         true
                     }
-                    "up" => {
+                    "up" if self.list_focused => {
                         event_ctx.dispatch_typed_action(TuiOptionSelectorAction::MoveUp);
                         true
                     }
-                    "down" => {
+                    "down" if self.list_focused => {
                         event_ctx.dispatch_typed_action(TuiOptionSelectorAction::MoveDown);
+                        true
+                    }
+                    key if self.list_focused
+                        && key.chars().next().is_some_and(|candidate| {
+                            key.chars().count() == 1
+                                && self
+                                    .row_shortcuts
+                                    .iter()
+                                    .any(|shortcut| shortcut.eq_ignore_ascii_case(&candidate))
+                        }) =>
+                    {
+                        let shortcut = key.chars().next().expect("checked one-character key");
+                        event_ctx.dispatch_typed_action(TuiOptionSelectorAction::SelectShortcut(
+                            shortcut,
+                        ));
                         true
                     }
                     key if self.list_focused => match key.parse::<u8>() {

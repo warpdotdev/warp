@@ -9,7 +9,7 @@ use std::cmp::{max, min};
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::selectable::{row_glyphs, row_text, TuiSelectionHandle};
+use super::selectable::{TuiSelectionHandle, row_glyphs, row_text};
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect,

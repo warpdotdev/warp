@@ -110,7 +110,7 @@ impl<'a> Grapheme<'a> {
     }
 
     /// Returns an iterator over the characters in this grapheme.
-    pub fn chars(&self) -> impl Iterator<Item = char> + 'a {
+    pub fn chars(&self) -> impl Iterator<Item = char> + 'a + use<'a> {
         match self.content {
             CharOrStr::Char(c) => itertools::Either::Left(std::iter::once(c)),
             CharOrStr::Str(s) => itertools::Either::Right(s.chars()),

@@ -14,8 +14,8 @@ use warp_multi_agent_api as api;
 use warpui::units::IntoPixels;
 use warpui::{EntityId, ModelHandle, SingletonEntity, ViewContext};
 
-use super::blocklist_filter::exchanges_for_blocklist;
 use super::DEFAULT_AI_BLOCK_HEIGHT;
+use super::blocklist_filter::exchanges_for_blocklist;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionResultType, AIAgentActionType, AIAgentExchange, AIAgentExchangeId,
@@ -388,37 +388,33 @@ impl TerminalView {
                                     self.ai_action_model.read(ctx, |action_model, _| {
                                         action_model.get_action_result(&action.id).cloned()
                                     })
-                                {
-                                    if let AIAgentActionResultType::CreateDocuments(
+                                    && let AIAgentActionResultType::CreateDocuments(
                                         CreateDocumentsResult::Success { created_documents },
                                     ) = &result.result
-                                    {
-                                        // Create a mapping from document index to title
-                                        let document_titles: Vec<String> =
-                                            documents.iter().map(|doc| doc.title.clone()).collect();
+                                {
+                                    // Create a mapping from document index to title
+                                    let document_titles: Vec<String> =
+                                        documents.iter().map(|doc| doc.title.clone()).collect();
 
-                                        document_model.update(ctx, |doc_model, doc_ctx| {
-                                            for (index, doc_context) in
-                                                created_documents.iter().enumerate()
-                                            {
-                                                let title = document_titles
-                                                    .get(index)
-                                                    .cloned()
-                                                    .unwrap_or_else(|| {
-                                                        DEFAULT_PLANNING_DOCUMENT_TITLE.to_string()
-                                                    });
-
-                                                doc_model.restore_document(
-                                                    doc_context.document_id,
-                                                    conversation_id,
-                                                    title,
-                                                    doc_context.content.clone(),
-                                                    exchange.start_time,
-                                                    doc_ctx,
+                                    document_model.update(ctx, |doc_model, doc_ctx| {
+                                        for (index, doc_context) in
+                                            created_documents.iter().enumerate()
+                                        {
+                                            let title =
+                                                document_titles.get(index).cloned().unwrap_or_else(
+                                                    || DEFAULT_PLANNING_DOCUMENT_TITLE.to_string(),
                                                 );
-                                            }
-                                        });
-                                    }
+
+                                            doc_model.restore_document(
+                                                doc_context.document_id,
+                                                conversation_id,
+                                                title,
+                                                doc_context.content.clone(),
+                                                exchange.start_time,
+                                                doc_ctx,
+                                            );
+                                        }
+                                    });
                                 }
                             }
                             AIAgentActionType::EditDocuments { .. } => {
@@ -426,22 +422,20 @@ impl TerminalView {
                                     self.ai_action_model.read(ctx, |action_model, _| {
                                         action_model.get_action_result(&action.id).cloned()
                                     })
-                                {
-                                    if let AIAgentActionResultType::EditDocuments(
+                                    && let AIAgentActionResultType::EditDocuments(
                                         EditDocumentsResult::Success { updated_documents },
                                     ) = &result.result
-                                    {
-                                        document_model.update(ctx, |doc_model, doc_ctx| {
-                                            for doc_context in updated_documents {
-                                                doc_model.restore_document_edit(
-                                                    &doc_context.document_id,
-                                                    doc_context.content.clone(),
-                                                    exchange.start_time,
-                                                    doc_ctx,
-                                                );
-                                            }
-                                        });
-                                    }
+                                {
+                                    document_model.update(ctx, |doc_model, doc_ctx| {
+                                        for doc_context in updated_documents {
+                                            doc_model.restore_document_edit(
+                                                &doc_context.document_id,
+                                                doc_context.content.clone(),
+                                                exchange.start_time,
+                                                doc_ctx,
+                                            );
+                                        }
+                                    });
                                 }
                             }
                             _ => {}
@@ -792,27 +786,25 @@ impl TerminalView {
         );
 
         // If agent view was open before the session was saved, restore it
-        if FeatureFlag::AgentView.is_enabled() {
-            if let Some(conversation_id) = active_conversation_id_to_restore {
-                // Check if the conversation was successfully restored
-                let conversation_exists = BlocklistAIHistoryModel::handle(ctx)
-                    .as_ref(ctx)
-                    .conversation(&conversation_id)
-                    .is_some();
+        if FeatureFlag::AgentView.is_enabled()
+            && let Some(conversation_id) = active_conversation_id_to_restore
+        {
+            // Check if the conversation was successfully restored
+            let conversation_exists = BlocklistAIHistoryModel::handle(ctx)
+                .as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some();
 
-                if conversation_exists {
-                    log::info!("Restoring agent view for conversation: {conversation_id}");
-                    self.enter_agent_view_for_conversation(
-                        None,
-                        AgentViewEntryOrigin::RestoreExistingConversation,
-                        conversation_id,
-                        ctx,
-                    );
-                } else {
-                    log::warn!(
-                        "Cannot restore agent view: conversation {conversation_id} not found"
-                    );
-                }
+            if conversation_exists {
+                log::info!("Restoring agent view for conversation: {conversation_id}");
+                self.enter_agent_view_for_conversation(
+                    None,
+                    AgentViewEntryOrigin::RestoreExistingConversation,
+                    conversation_id,
+                    ctx,
+                );
+            } else {
+                log::warn!("Cannot restore agent view: conversation {conversation_id} not found");
             }
         }
     }

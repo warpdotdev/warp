@@ -12,15 +12,16 @@
 use std::time::Duration;
 
 use warp::tui_export::{
-    parse_current_commands_and_tokens, tui_completion_context_has_exact_command,
-    tui_completion_session_context, InputType,
+    InputType, SlashCommandDataSource as _, parse_current_commands_and_tokens,
+    tui_completion_context_has_exact_command, tui_completion_session_context,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
-use warpui_core::ViewContext;
+use warpui_core::{AppContext, ViewContext};
 
 use super::TuiTerminalSessionView;
 use crate::inline_menu::active_inline_menu;
+use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 
 const INPUT_AUTODETECTION_DEBOUNCE: Duration = Duration::from_millis(10);
 const MIN_STANDALONE_COMMAND_CHARS: usize = 2;
@@ -103,7 +104,7 @@ impl TuiTerminalSessionView {
         }
     }
 
-    fn abort_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(super) fn abort_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(future) = self.input_detection.future.take() {
             future.abort();
         }
@@ -126,6 +127,28 @@ impl TuiTerminalSessionView {
         });
         true
     }
+    fn has_slash_command_intent(&self, buffer_text: &str, ctx: &AppContext) -> bool {
+        let slash_command_menu_is_open = active_inline_menu(
+            &self.inline_menus,
+            self.suggestions_mode.as_ref(ctx).mode(),
+            ctx,
+        )
+        .is_some_and(|menu| menu.mode() == TuiInputSuggestionsMode::SlashCommands);
+        let first_token_is_recognized =
+            buffer_text
+                .split_whitespace()
+                .next()
+                .is_some_and(|first_token| {
+                    let slash_commands_source = self.slash_commands_source.as_ref(ctx);
+                    slash_commands_source
+                        .active_commands()
+                        .any(|(_, command)| command.name == first_token)
+                        || slash_commands_source
+                            .parse_skill_command(first_token, ctx)
+                            .is_some()
+                });
+        slash_command_menu_is_open || first_token_is_recognized
+    }
 
     pub(super) fn schedule_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
         self.abort_input_detection(ctx);
@@ -133,6 +156,10 @@ impl TuiTerminalSessionView {
             let editor = self.input_view.as_ref(ctx).model().as_ref(ctx);
             editor.content().as_ref(ctx).text().into_string()
         };
+        if self.has_slash_command_intent(&buffer_text, ctx) {
+            self.reset_input_to_agent(InputDetectionDecision::ResetToAgent, ctx);
+            return;
+        }
         let decision = input_detection_decision(&buffer_text, None, 0, false);
         if self.reset_input_to_agent(decision, ctx) {
             return;

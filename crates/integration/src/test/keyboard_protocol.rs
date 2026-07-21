@@ -11,7 +11,7 @@ use warpui_core::event::{KeyEventDetails, KeyState};
 use warpui_core::integration::TestStep;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::keyboard::KeyCode;
-use warpui_core::{async_assert, Event};
+use warpui_core::{Event, async_assert};
 
 use super::new_builder;
 use crate::Builder;

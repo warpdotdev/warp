@@ -47,12 +47,14 @@ impl FileTreeEntry {
         Arc::make_mut(&mut self.state_map).rename_path(path, new_path)
     }
 
-    pub fn load_at_path(
+    pub async fn load_at_path(
         &mut self,
         path: &StandardizedPath,
         gitignores: &mut Vec<Gitignore>,
     ) -> Result<(), BuildTreeError> {
-        Arc::make_mut(&mut self.state_map).load_at_path(path, gitignores)
+        Arc::make_mut(&mut self.state_map)
+            .load_at_path(path, gitignores)
+            .await
     }
 
     pub fn insert_entry_at_path(&mut self, path: Arc<StandardizedPath>, entry: Entry) {
@@ -235,7 +237,10 @@ impl FileTreeEntry {
                     if let Some(parent) = self.find_parent_directory(&dir.path) {
                         self.insert_child_state(&parent, state);
                     } else {
-                        log::warn!("Could not find parent directory for node during incremental update: {:?}", dir.path);
+                        log::warn!(
+                            "Could not find parent directory for node during incremental update: {:?}",
+                            dir.path
+                        );
                     }
                 }
                 RepoNodeMetadata::File(file) => {
@@ -253,7 +258,10 @@ impl FileTreeEntry {
                         if let Some(parent) = self.find_parent_directory(&file.path) {
                             self.insert_child_state(&parent, state);
                         } else {
-                            log::warn!("Could not find parent directory for node during incremental update: {:?}", file.path);
+                            log::warn!(
+                                "Could not find parent directory for node during incremental update: {:?}",
+                                file.path
+                            );
                         }
                     }
                 }

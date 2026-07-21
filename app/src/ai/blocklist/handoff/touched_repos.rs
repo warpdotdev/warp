@@ -21,8 +21,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use command::r#async::Command;
 use command::Stdio;
+use command::r#async::Command;
 use futures::future::join_all;
 use tokio::fs as tokio_fs;
 use warp_util::standardized_path::StandardizedPath;
@@ -305,12 +305,11 @@ pub(crate) fn extract_paths_from_conversation(
 
         // Track the per-exchange cwd unconditionally (it doesn't count as a tool
         // call). Covers `RunShellCommand` cwds without walking action results.
-        if let Some(cwd) = cwd {
-            if let Ok(sp) = StandardizedPath::try_new(cwd) {
-                if seen.insert(sp.clone()) {
-                    paths.push(sp);
-                }
-            }
+        if let Some(cwd) = cwd
+            && let Ok(sp) = StandardizedPath::try_new(cwd)
+            && seen.insert(sp.clone())
+        {
+            paths.push(sp);
         }
 
         let Some(output) = exchange.output_status.output() else {

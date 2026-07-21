@@ -21,15 +21,15 @@ use warpui::{AppContext, ModelContext, TypedActionView};
 
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
+use crate::local_control::LocalControlBridge;
 use crate::local_control::handlers::ack;
 use crate::local_control::handlers::layout::{create_tab, resolve_shell};
-use crate::local_control::handlers::metadata::{surface_unavailable_reason, SurfaceDestination};
+use crate::local_control::handlers::metadata::{SurfaceDestination, surface_unavailable_reason};
 use crate::local_control::resolver::{
     activate_target, active_target_pane_group, decode_params, focus_explicit_pane_target,
     input_target_pane_id, reject_target_families, tab_index_from_target, target_pane_group,
     target_pane_id, target_session_pane_id, target_window_id_for_target, target_workspace,
 };
-use crate::local_control::LocalControlBridge;
 use crate::palette::PaletteMode;
 use crate::pane_group::{ActivationReason, Direction, PaneGroupAction};
 use crate::server::telemetry::PaletteSource;
@@ -37,7 +37,7 @@ use crate::settings_view::SettingsSection;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{resolve_file_target_to_open_in_warp, EditorLayout};
+use crate::util::openable_file_type::{EditorLayout, resolve_file_target_to_open_in_warp};
 #[cfg(feature = "local_fs")]
 use crate::workspace::PaneViewLocator;
 use crate::workspace::{CommandSearchOptions, InitContent, WorkspaceAction};
