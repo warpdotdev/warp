@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use warp_core::features::FeatureFlag;
+
 use super::*;
 use crate::ai::agent::AnyFileContent;
 
@@ -19,6 +21,7 @@ fn file_context(path: &std::path::Path, line_range: Option<Range<usize>>) -> Fil
 #[cfg(feature = "local_fs")]
 #[test]
 fn search_codebase_render_and_detection_share_display_text_and_absolute_target() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let root = tempfile::tempdir().unwrap();
     let cwd_path = root.path().join("repo").join("worktree");
     let file_path = cwd_path.join("src").join("lib.rs");
@@ -58,6 +61,7 @@ fn search_codebase_render_and_detection_share_display_text_and_absolute_target()
 
 #[test]
 fn legacy_and_search_codebase_ui_paths_format_their_actual_result_shapes() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = "/repo/worktree".to_string();
     let first = std::path::Path::new("/repo/worktree/src/lib.rs");
     let second = std::path::Path::new("/repo/worktree/src/other.rs");

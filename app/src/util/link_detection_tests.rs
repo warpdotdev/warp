@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use warp_core::features::FeatureFlag;
 
 use super::*;
 
@@ -251,6 +252,7 @@ fn link_tooltip_anchor_ids_are_unique_per_block() {
 #[test]
 fn relative_display_paths_detect_the_original_absolute_file_and_line() {
     use crate::ai::agent::FileLocations;
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
 
     let root = tempfile::tempdir().unwrap();
     let cwd = root.path().join("repo").join("worktree").join("deep");

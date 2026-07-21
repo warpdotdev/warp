@@ -1,5 +1,7 @@
 #![allow(clippy::single_range_in_vec_init)]
 
+use warp_core::features::FeatureFlag;
+
 use super::*;
 use crate::agent::action_result::{AnyFileContent, FileContext};
 
@@ -18,6 +20,7 @@ fn file_context(name: &str, line_range: Option<Range<usize>>) -> FileContext {
 
 #[test]
 fn to_user_message_formats_relative_paths_and_ranges() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = "/foo/bar/buzz".to_string();
 
     assert_eq!(
@@ -48,6 +51,7 @@ fn to_user_message_formats_relative_paths_and_ranges() {
 
 #[test]
 fn to_user_message_preserves_range_clamping_and_whole_file_suppression() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = "/repo".to_string();
     let locations = FileLocations {
         name: "/repo/src/lib.rs".to_string(),
@@ -71,6 +75,7 @@ fn to_user_message_preserves_range_clamping_and_whole_file_suppression() {
 
 #[test]
 fn group_file_contexts_preserves_first_occurrence_order_and_sorts_ranges() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = "/repo".to_string();
     let contexts = vec![
         file_context("/repo/src/first.rs", Some(40..45)),

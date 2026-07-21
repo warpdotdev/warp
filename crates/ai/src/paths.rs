@@ -1,4 +1,5 @@
 use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
+use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_terminal::shell::ShellLaunchData;
 use warp_util::path::{
@@ -87,6 +88,9 @@ pub fn shell_native_path_for_display(
     };
 
     let absolute_path = shell_native_absolute_path_internal(file_path, shell, cwd);
+    if !FeatureFlag::RelativeBlocklistPaths.is_enabled() {
+        return absolute_path.to_string_lossy().into_owned();
+    }
     let normalized_cwd = shell_native_absolute_path_internal(".", shell, cwd);
 
     for (parent_count, base) in normalized_cwd.ancestors().take(3).enumerate() {

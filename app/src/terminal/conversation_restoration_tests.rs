@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use chrono::{Local, TimeZone};
+#[cfg(feature = "local_fs")]
+use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warp_terminal::model::BlockIndex;
 
@@ -346,6 +348,7 @@ fn forked_startup_working_directory_uses_latest_directory() {
 #[cfg(feature = "local_fs")]
 #[test]
 fn restored_tool_rows_keep_the_exchange_cwd_after_the_live_cwd_changes() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let root = tempfile::tempdir().unwrap();
     let invocation_cwd = root.path().join("repo");
     let live_cwd = root.path().join("other");

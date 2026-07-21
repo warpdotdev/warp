@@ -5,6 +5,7 @@ use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
 use computer_use::{Action, ScreenshotParams, Target, TargetedAction};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
+use warp_core::features::FeatureFlag;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -47,6 +48,7 @@ fn format_upload_artifact_text_includes_request_details() {
 
 #[test]
 fn grep_renderer_preserves_copy_and_formats_explicit_and_current_paths() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = "/repo/worktree/deep".to_string();
     let queries = vec!["needle".to_string()];
 
@@ -70,6 +72,7 @@ fn grep_renderer_preserves_copy_and_formats_explicit_and_current_paths() {
 
 #[test]
 fn file_glob_and_v2_renderer_format_explicit_and_omitted_directories() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = "/repo/worktree/deep".to_string();
     let patterns = vec!["**/*.rs".to_string()];
 
@@ -105,6 +108,7 @@ fn file_context(path: &str, line_range: Option<std::ops::Range<usize>>) -> FileC
 
 #[test]
 fn read_files_request_renderer_formats_paths_once_against_invocation_cwd() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = "/repo/worktree/deep".to_string();
     let files = vec![
         FileLocations {
@@ -132,6 +136,7 @@ fn read_files_request_renderer_formats_paths_once_against_invocation_cwd() {
 
 #[test]
 fn read_files_grouped_success_renderer_formats_and_groups_actual_results() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = "/repo/worktree/deep".to_string();
     let files = vec![
         file_context("/repo/worktree/deep/src/lib.rs", Some(40..45)),
@@ -150,6 +155,7 @@ fn read_files_grouped_success_renderer_formats_and_groups_actual_results() {
 
 #[test]
 fn failed_read_rows_use_invocation_cwd() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = "/repo/worktree/deep".to_string();
     let failed_files = vec![
         ReadFilesFailedFile {
@@ -226,6 +232,7 @@ fn format_upload_artifact_text_includes_terminal_status() {
 
 #[test]
 fn format_upload_artifact_text_uses_invocation_cwd_for_local_paths() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = "/repo/worktree".to_string();
     let request = UploadArtifactRequest {
         file_path: "/repo/worktree/reports/daily.txt".to_string(),

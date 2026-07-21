@@ -302,6 +302,7 @@ fn test_shell_native_absolute_path() {
 #[cfg(unix)]
 #[test]
 fn test_shell_native_path_for_display() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = Some("/foo/bar/buzz".to_string());
 
     assert_eq!(
@@ -334,9 +335,25 @@ fn test_shell_native_path_for_display() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn shell_native_path_for_display_returns_absolute_path_when_flag_is_disabled() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(false);
+    let cwd = Some("/foo/bar/buzz".to_string());
+
+    assert_eq!(
+        shell_native_path_for_display("/foo/bar/buzz/bazz/file.txt", None, cwd.as_ref()),
+        "/foo/bar/buzz/bazz/file.txt"
+    );
+    assert_eq!(
+        shell_native_path_for_display("../../bazz", None, cwd.as_ref()),
+        "/foo/bazz"
+    );
+}
 #[cfg(windows)]
 #[test]
 fn test_shell_native_path_for_display() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let cwd = Some(r"C:\foo\bar\buzz".to_string());
 
     assert_eq!(
@@ -372,6 +389,7 @@ fn test_shell_native_path_for_display() {
 #[cfg(windows)]
 #[test]
 fn test_shell_native_git_bash_paths() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let executable_path = PathBuf::from(r"C:\Program Files\Git\usr\bin\bash.exe");
     let git_bash_shell = Some(ShellLaunchData::MSYS2 {
         executable_path,
@@ -413,6 +431,7 @@ fn test_shell_native_git_bash_paths() {
 #[cfg(windows)]
 #[test]
 fn test_shell_native_wsl_paths() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
     let wsl_shell = Some(ShellLaunchData::WSL {
         distro: "Ubuntu".to_string(),
     });
