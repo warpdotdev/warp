@@ -512,6 +512,17 @@ codegen-units = 1
 inherits = "release-cli"
 debug-assertions = true
 
+# Release profile for the standalone TUI. Strip debug-map entries while
+# retaining function symbols so local backtraces and profiles remain readable.
+[profile.release-tui]
+inherits = "release-cli"
+strip = "debuginfo"
+
+# Packaged local/dev TUI builds retain the release profile's debug assertions.
+[profile.release-tui-debug-assertions]
+inherits = "release-tui"
+debug-assertions = true
+
 [profile.release-wasm]
 inherits = "release"
 opt-level = "s"

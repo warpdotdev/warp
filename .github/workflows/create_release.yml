@@ -567,6 +567,33 @@ jobs:
           WARP_NOTARIZATION_APPLE_ID: ${{ secrets.WARP_NOTARIZATION_APPLE_ID }}
           WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
 
+      - name: Set up Sentry CLI
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        with:
+          token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
+          organization: warpdotdev
+          project: ${{ steps.get-config.outputs.sentry_project }}
+
+      - name: Verify and upload TUI debugging symbols to Sentry
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        run: |
+          binary_path="${{ steps.bundle_tui.outputs.binary_path }}"
+          dsym_path="${{ steps.bundle_tui.outputs.dsym_path }}"
+          test -n "$dsym_path"
+          test -d "$dsym_path"
+
+          binary_uuid="$(dwarfdump --uuid "$binary_path" | awk '{print $2}')"
+          dsym_uuid="$(dwarfdump --uuid "$dsym_path" | awk '{print $2}')"
+          test -n "$binary_uuid"
+          test "$binary_uuid" = "$dsym_uuid"
+
+          dsym_dwarf_path="$(find "$dsym_path/Contents/Resources/DWARF" -type f -print -quit)"
+          test -n "$dsym_dwarf_path"
+          sentry-cli debug-files check "$dsym_dwarf_path"
+          sentry-cli upload-dif "$dsym_path"
+        shell: bash
+
       - name: Package TUI binary
         run: |
           mv ${{ steps.bundle_tui.outputs.binary_path }} warp-tui-${{ steps.get-config.outputs.channel }}
