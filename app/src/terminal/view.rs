@@ -16431,6 +16431,20 @@ impl TerminalView {
         if !self.selected_blocks.is_empty() {
             self.copy_blocks(BlockEntity::CommandAndOutput, ctx);
         }
+
+        // If nothing was copied and a fullscreen TUI (alt screen) is managing its own
+        // selection that Warp can't see (e.g. Claude Code in fullscreen mode), forward
+        // the copy intent to the foreground TUI so it can copy its own selection. We
+        // send `Ctrl+C` (ETX) — the same byte `Ctrl+C` already sends — which Claude
+        // Code and other fullscreen TUIs interpret as "copy the active selection."
+        // Linux-only (see issue #13988); on the normal screen we must NOT send ETX
+        // (it would SIGINT a plain shell prompt).
+        if cfg!(target_os = "linux")
+            && self.selected_blocks.is_empty()
+            && self.model.lock().is_alt_screen_active()
+        {
+            self.user_write_ctrl_c_to_pty(ctx);
+        }
     }
 
     fn copy_commands(&mut self, ctx: &mut ViewContext<Self>) {
