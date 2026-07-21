@@ -223,7 +223,7 @@ impl TuiPromptHistoryMenuModel {
                 .rows()
                 .iter()
                 .map(|row| TuiInlineMenuRow {
-                    title: row.text.clone(),
+                    title: prompt_history_title(&row.text),
                     description: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::Default,
@@ -278,7 +278,11 @@ impl TuiPromptHistoryMenuModel {
             prompt_history_for_terminal_view(self.terminal_surface_id, ctx)
                 .into_iter()
                 .filter(|entry| {
-                    trimmed_query.is_empty() || entry.query_text.starts_with(trimmed_query)
+                    trimmed_query.is_empty()
+                        || entry
+                            .query_text
+                            .lines()
+                            .any(|line| line.starts_with(trimmed_query))
                 })
                 .map(|entry| TuiPromptHistoryRow {
                     text: entry.query_text,
@@ -326,6 +330,15 @@ impl TuiPromptHistoryMenuModel {
                 .update(ctx, |buffer, _| buffer.reset_undo_stack());
         });
     }
+}
+
+/// Returns a single-line menu title while leaving the full prompt available for
+/// preview and acceptance.
+fn prompt_history_title(text: &str) -> String {
+    let Some((first_line, _)) = text.split_once('\n') else {
+        return text.to_owned();
+    };
+    format!("{}...", first_line.strip_suffix('\r').unwrap_or(first_line))
 }
 
 /// Preserves selection by prompt text, falling back to the nearest previous

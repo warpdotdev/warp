@@ -808,7 +808,7 @@ fn menu_result_row(
     };
     let title = TuiText::new(title)
         .with_style(title_style)
-        .truncate()
+        .truncate_with_ellipsis()
         .finish();
     let description_style = if is_selected {
         builder.slash_command_selection_text_style()

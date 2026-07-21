@@ -9,7 +9,10 @@ use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityId, ModelHandle};
 
-use super::{TuiPromptHistoryMenuModel, TuiPromptHistoryRow, reconciled_selection_index};
+use super::{
+    TuiPromptHistoryMenuModel, TuiPromptHistoryRow, prompt_history_title,
+    reconciled_selection_index,
+};
 use crate::inline_menu::render_inline_menu;
 use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
 use crate::tui_builder::TuiUiBuilder;
@@ -114,6 +117,21 @@ fn open_with_typed_text_prefix_filters_rows() {
 }
 
 #[test]
+fn typed_text_prefix_matches_any_prompt_line() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let prompt = "deploy the app\nverify the deployment";
+            let (input, menu) = setup(ctx, &[prompt, "unrelated prompt"]);
+            set_text(&input, "verify", ctx);
+            menu.update(ctx, |m, ctx| m.open(ctx));
+
+            assert_eq!(row_titles(&menu, ctx), vec!["deploy the app..."]);
+            assert_eq!(buffer_text(&input, ctx), prompt);
+        });
+    });
+}
+
+#[test]
 fn dismiss_restores_the_original_buffer() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
@@ -141,6 +159,33 @@ fn accept_selected_returns_highlighted_prompt_and_closes() {
             assert!(!menu.as_ref(ctx).is_open(ctx));
         });
     });
+}
+
+#[test]
+fn multiline_prompt_uses_single_line_title_without_changing_prompt_text() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let prompt = "deploy the app\nthen verify it";
+            let (input, menu) = setup(ctx, &[prompt]);
+            menu.update(ctx, |m, ctx| m.open(ctx));
+
+            let snapshot = menu.as_ref(ctx).snapshot(ctx).expect("menu is open");
+            assert_eq!(snapshot.rows[0].title, "deploy the app...");
+            assert_eq!(buffer_text(&input, ctx), prompt);
+            assert_eq!(
+                menu.update(ctx, |m, ctx| m.accept_selected(ctx)),
+                Some(prompt.to_owned())
+            );
+        });
+    });
+}
+
+#[test]
+fn prompt_history_title_handles_windows_line_endings() {
+    assert_eq!(
+        prompt_history_title("deploy the app\r\nthen verify it"),
+        "deploy the app..."
+    );
 }
 
 #[test]
