@@ -6,10 +6,10 @@ use warp::appearance::Appearance;
 use warp::settings::{AISettings, TuiUsageDisplayMode};
 use warp::terminal::model::ansi::{Handler, InputBufferValue};
 use warp::tui_export::{
-    AIConversationId, AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel,
-    ConversationStatus, ConversationUsageTotals, Harness, InputType, LLMPreferences, PtyIntent,
-    PtyIntentEvent, SizeInfo, SizeUpdate, TranscriptScope, export_conversation_markdown,
-    register_tui_session_view_test_singletons, slash_commands,
+    AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlockPadding,
+    BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals, Harness, InputType,
+    LLMPreferences, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, TranscriptScope,
+    export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
@@ -220,6 +220,50 @@ fn toggle_model_menu_action_opens_and_closes_the_inline_model_menu() {
             assert!(
                 !view.model_menu.as_ref(ctx).is_open(ctx),
                 "ToggleModelMenu action should close an open inline model menu"
+            );
+        });
+    });
+}
+#[test]
+fn fast_forward_slash_command_toggles_selected_conversation_off_on_off() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        // New TUI conversations default to `RespectUserSettings` (off).
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.conversation_selection
+                    .as_ref(ctx)
+                    .pending_query_autoexecute_override(ctx),
+                AIConversationAutoexecuteMode::RespectUserSettings
+            );
+        });
+
+        // Invoking `/fast-forward` executes the TUI `FastForward` arm and toggles
+        // the selected conversation on.
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::FAST_FORWARD, None, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.conversation_selection
+                    .as_ref(ctx)
+                    .pending_query_autoexecute_override(ctx),
+                AIConversationAutoexecuteMode::RunToCompletion
+            );
+        });
+
+        // Invoking `/fast-forward` again toggles it back off.
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::FAST_FORWARD, None, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.conversation_selection
+                    .as_ref(ctx)
+                    .pending_query_autoexecute_override(ctx),
+                AIConversationAutoexecuteMode::RespectUserSettings
             );
         });
     });

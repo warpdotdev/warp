@@ -68,6 +68,48 @@ fn slash_command_menu_renders_view_logs_row() {
     });
 }
 
+#[test]
+fn slash_command_menu_renders_fast_forward_row() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let input_editor = ctx.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
+            let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
+            suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(TuiInputSuggestionsMode::SlashCommands, ctx);
+            });
+            let mixer = ctx.add_model(|_| SlashCommandMixer::new());
+            // Source the title and description from the real `/fast-forward`
+            // static command so the snapshot tracks the registered contract.
+            let model = ctx.add_model(|_| {
+                TuiSlashCommandModel::new_for_test(
+                    input_editor,
+                    suggestions_mode,
+                    mixer,
+                    vec![TuiSlashCommandRow {
+                        title: slash_commands::FAST_FORWARD.name.to_owned(),
+                        description: Some(slash_commands::FAST_FORWARD.description.to_owned()),
+                        action: AcceptSlashCommandOrSavedPrompt::SlashCommand {
+                            id: SlashCommandId::new(),
+                        },
+                    }],
+                    0,
+                )
+            });
+            let menu = TuiInlineMenu::new(model);
+            let element = menu.render(ctx).expect("slash command menu should render");
+            let lines = render_menu_lines(element, ctx);
+
+            assert!(lines.iter().any(|line| line.contains("/fast-forward")));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Toggle fast forward"))
+            );
+        });
+    });
+}
+
 fn render_menu_lines(mut element: Box<dyn TuiElement>, ctx: &AppContext) -> Vec<String> {
     let mut rendered_views = EntityIdMap::default();
     let mut layout_ctx = TuiLayoutContext {
