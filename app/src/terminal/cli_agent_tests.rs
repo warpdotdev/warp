@@ -579,6 +579,8 @@ fn test_oh_my_pi_supports_bash_mode() {
 fn test_command_is_warp_tui_matches_binaries_and_launchers() {
     // Direct binary names.
     assert!(CLIAgent::command_is_warp_tui("warp", None));
+    assert!(CLIAgent::command_is_warp_tui("warp-preview", None));
+    assert!(CLIAgent::command_is_warp_tui("warp-dev", None));
     assert!(CLIAgent::command_is_warp_tui("warp-tui", None));
     assert!(CLIAgent::command_is_warp_tui("warp-tui-oss", None));
     // The dev launcher script.
@@ -592,6 +594,10 @@ fn test_command_is_warp_tui_matches_binaries_and_launchers() {
     assert!(CLIAgent::command_is_warp_tui(
         "./target/debug/warp-tui",
         None
+    ));
+    assert!(CLIAgent::command_is_warp_tui(
+        "/Applications/WarpPreview.app/Contents/MacOS/warp-preview --resume abc",
+        None,
     ));
     // With arguments and leading whitespace.
     assert!(CLIAgent::command_is_warp_tui("  warp --resume abc", None));
@@ -613,6 +619,8 @@ fn test_command_is_warp_tui_negatives() {
     assert!(!CLIAgent::command_is_warp_tui("htop", None));
     assert!(!CLIAgent::command_is_warp_tui("claude", None));
     // Lookalikes / substrings should not match.
+    assert!(!CLIAgent::command_is_warp_tui("warp-preview-wrapper", None));
+    assert!(!CLIAgent::command_is_warp_tui("mywarp-dev", None));
     assert!(!CLIAgent::command_is_warp_tui("warp-tui-wrapper", None));
     assert!(!CLIAgent::command_is_warp_tui("mywarp-tui", None));
     assert!(!CLIAgent::command_is_warp_tui("", None));

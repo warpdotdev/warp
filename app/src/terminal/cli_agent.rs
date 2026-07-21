@@ -421,8 +421,8 @@ impl CLIAgent {
     }
 
     /// Returns whether `command` launches Warp's own headless TUI (`warp_tui`) —
-    /// e.g. `warp`, the legacy `warp-tui` alias, `warp-tui-oss`, an
-    /// absolute/relative path to one of those, or the `./script/run-tui` dev
+    /// e.g. `warp`, `warp-preview`, `warp-dev`, the legacy `warp-tui` aliases,
+    /// an absolute/relative path to one of those, or the `./script/run-tui` dev
     /// launcher.
     ///
     /// This mirrors [`Self::detect`] (which decides when to show the CLI agent
@@ -438,7 +438,10 @@ impl CLIAgent {
         // Match on the executable's file name so absolute/relative paths work
         // (e.g. `/path/to/warp-tui`, `./target/debug/warp-tui`).
         let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(&first_word);
-        matches!(basename, "warp" | "warp-tui" | "warp-tui-oss" | "run-tui")
+        matches!(
+            basename,
+            "warp" | "warp-preview" | "warp-dev" | "warp-tui" | "warp-tui-oss" | "run-tui"
+        )
     }
 }
 
