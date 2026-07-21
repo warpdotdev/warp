@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use objc2::rc::Retained;
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventSource, CGEventSourceStateID, CGEventType,
 };
@@ -36,7 +37,7 @@ fn synthetic_focus_event(
     field_58_valid: Option<i64>,
     field_91_window: Option<i64>,
     field_92_window: Option<i64>,
-) -> CGEvent {
+) -> Retained<CGEvent> {
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
     let event = CGEvent::new(source.as_deref())
         .expect("creating a synthetic CGEvent for the callback matrix must succeed");
