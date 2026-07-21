@@ -18,6 +18,24 @@ fn account_first_started_payload_includes_flow_metadata() {
 }
 
 #[test]
+fn offer_action_payload_includes_account_class() {
+    assert_eq!(
+        OnboardingEvent::OnboardingAction {
+            slide_name: "head_start".to_string(),
+            action: "get_more_ai".to_string(),
+            account_class: Some("free_icp".to_string()),
+        }
+        .payload(),
+        Some(json!({
+            "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+            "slide_name": "head_start",
+            "action": "get_more_ai",
+            "account_class": "free_icp",
+        }))
+    );
+}
+
+#[test]
 fn account_first_slide_and_setting_payloads_include_flow_version() {
     let _account_first_onboarding = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
 

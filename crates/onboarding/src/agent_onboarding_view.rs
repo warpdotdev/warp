@@ -16,8 +16,8 @@ use crate::model::{
 };
 use crate::slides::{
     AgentSlide, AiAccessSlide, AiAccessSlideEvent, AiSetupSlide, CustomizeUISlide, IntentionSlide,
-    IntroSlide, IntroSlideEvent, OnboardingModelInfo, OnboardingSlide, ProjectSlide,
-    ThemePickerSlide, ThemePickerSlideEvent, ThirdPartySlide,
+    IntroSlide, IntroSlideEvent, OfferSlide, OfferSlideEvent, OfferVariant, OnboardingModelInfo,
+    OnboardingSlide, ProjectSlide, ThemePickerSlide, ThemePickerSlideEvent, ThirdPartySlide,
 };
 use crate::telemetry::OnboardingEvent;
 
@@ -66,6 +66,9 @@ pub enum AgentOnboardingEvent {
     UpgradeRequested,
     UpgradeCopyUrlRequested,
     UpgradePasteTokenFromClipboardRequested,
+    OfferSetUpLaterSelected {
+        variant: OfferVariant,
+    },
     /// Emitted when the app regains focus (e.g. user returns from the browser).
     /// The parent should refresh any stale data: available models, workspace/billing metadata, etc.
     AppBecameActive,
@@ -80,6 +83,7 @@ pub struct AgentOnboardingView {
     customize_slide: ViewHandle<CustomizeUISlide>,
     agent_slide: Option<ViewHandle<AgentSlide>>,
     ai_access_slide: Option<ViewHandle<AiAccessSlide>>,
+    offer_slide: Option<ViewHandle<OfferSlide>>,
     third_party_slide: Option<ViewHandle<ThirdPartySlide>>,
     project_slide: Option<ViewHandle<ProjectSlide>>,
     skippable: bool,
@@ -245,6 +249,25 @@ impl AgentOnboardingView {
             });
         }
 
+        let offer_slide = if account_first {
+            let onboarding_state = onboarding_state.clone();
+            let offer_slide = ctx.add_typed_action_view(move |_| OfferSlide::new(onboarding_state));
+            ctx.subscribe_to_view(&offer_slide, |_me, _view, event, ctx| match event {
+                OfferSlideEvent::SetUpLaterSelected { variant } => {
+                    ctx.emit(AgentOnboardingEvent::OfferSetUpLaterSelected { variant: *variant });
+                }
+                OfferSlideEvent::CopyUpgradeUrlRequested => {
+                    ctx.emit(AgentOnboardingEvent::UpgradeCopyUrlRequested);
+                }
+                OfferSlideEvent::PasteAuthTokenFromClipboardRequested => {
+                    ctx.emit(AgentOnboardingEvent::UpgradePasteTokenFromClipboardRequested);
+                }
+            });
+            Some(offer_slide)
+        } else {
+            None
+        };
+
         let third_party_slide = if account_first {
             None
         } else {
@@ -287,6 +310,7 @@ impl AgentOnboardingView {
             customize_slide,
             agent_slide,
             ai_access_slide,
+            offer_slide,
             third_party_slide,
             project_slide,
             skippable,
@@ -325,6 +349,14 @@ impl AgentOnboardingView {
         self.onboarding_state.update(ctx, |state, ctx| {
             state.set_auth_state(auth_state, ctx);
         });
+        ctx.notify();
+    }
+
+    pub fn show_post_auth_offer(&mut self, variant: OfferVariant, ctx: &mut ViewContext<Self>) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.show_post_auth_offer(variant, ctx);
+        });
+        ctx.focus_self();
         ctx.notify();
     }
 
@@ -378,6 +410,9 @@ impl AgentOnboardingView {
                 asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
             }
             for path in ThemePickerSlide::VISUAL_IMAGE_PATHS {
+                asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
+            }
+            for path in OfferSlide::VISUAL_IMAGE_PATHS {
                 asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
             }
             return;
@@ -663,6 +698,9 @@ impl View for AgentOnboardingView {
             OnboardingStep::Project => {
                 ChildView::new(self.project_slide.as_ref().expect("fallback slide exists")).finish()
             }
+            OnboardingStep::PostAuthOffer => {
+                ChildView::new(self.offer_slide.as_ref().expect("offer slide exists")).finish()
+            }
         };
 
         stack.add_child(slide);
@@ -820,6 +858,13 @@ impl TypedActionView for AgentOnboardingView {
                 .project_slide
                 .as_ref()
                 .expect("fallback slide exists")
+                .update(ctx, |slide, ctx| {
+                    dispatch_onboarding_action_to_slide(slide, *action, ctx)
+                }),
+            OnboardingStep::PostAuthOffer => self
+                .offer_slide
+                .as_ref()
+                .expect("offer slide exists")
                 .update(ctx, |slide, ctx| {
                     dispatch_onboarding_action_to_slide(slide, *action, ctx)
                 }),
