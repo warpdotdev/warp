@@ -75,6 +75,18 @@ fn render_buffer(
     width: u16,
     height: u16,
 ) -> TuiBuffer {
+    render_buffer_in_place(ctx, &mut element, width, height)
+}
+
+/// Like [`render_buffer`], but leaves the element usable so tests can lay the
+/// same cached element out repeatedly (the presenter reuses elements across
+/// frames).
+fn render_buffer_in_place(
+    ctx: &AppContext,
+    element: &mut TuiEditorElement,
+    width: u16,
+    height: u16,
+) -> TuiBuffer {
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -172,8 +184,8 @@ fn editable_paste_emits_one_complete_text_action() {
             ));
             let actions = actions.borrow();
             assert_eq!(actions.len(), 1);
-            let TuiEditorAction::InsertText(text) = &actions[0] else {
-                panic!("expected InsertText");
+            let TuiEditorAction::PasteText(text) = &actions[0] else {
+                panic!("expected PasteText");
             };
             assert_eq!(text, payload);
         });
@@ -307,6 +319,156 @@ fn scroll_windows_the_visible_rows() {
             }
             let element = TuiEditorElement::new(&model, ctx).with_viewport_rows(2);
             assert_eq!(render_lines(ctx, element, 10, 10), vec!["l2", "l3"]);
+        });
+    });
+}
+
+#[test]
+fn width_change_follows_cursor_after_reflow() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let model = model(ctx, "abcde");
+            model.update(ctx, |model, ctx| {
+                model.select_at(CharOffset::from(6), false, ctx);
+                model.end_selection(ctx);
+            });
+
+            let wide = TuiEditorElement::new(&model, ctx).with_viewport_rows(1);
+            assert_eq!(render_lines(ctx, wide, 10, 10), vec!["abcde"]);
+
+            let narrow = TuiEditorElement::new(&model, ctx).with_viewport_rows(1);
+            assert_eq!(render_lines(ctx, narrow, 3, 10), vec!["de"]);
+            let render = model.as_ref(ctx).render_state().as_ref(ctx);
+            let char_cell = render.char_cell().expect("char-cell model");
+            assert_eq!(char_cell.scroll_offset(), 1);
+        });
+    });
+}
+
+/// An editable, view-focused element over `model` with fixed `placeholder`
+/// ghost text in the given `style`.
+fn placeholder_element(
+    ctx: &AppContext,
+    model: &ModelHandle<CodeEditorModel>,
+    placeholder: &str,
+    style: TuiStyle,
+) -> TuiEditorElement {
+    let placeholder = placeholder.to_owned();
+    TuiEditorElement::new(model, ctx)
+        .editable()
+        .with_view_focused(true)
+        .with_placeholder_ghost_text(move |_| Some((placeholder.clone(), style)))
+}
+
+#[test]
+fn placeholder_ghost_text_renders_only_while_buffer_empty() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let empty = model(ctx, "");
+            let element = placeholder_element(ctx, &empty, "type here", TuiStyle::default());
+            // One pad cell separates the cursor from the hint.
+            assert_eq!(render_lines(ctx, element, 20, 5), vec![" type here"]);
+
+            let populated = model(ctx, "draft");
+            let element = placeholder_element(ctx, &populated, "type here", TuiStyle::default());
+            assert_eq!(render_lines(ctx, element, 20, 5), vec!["draft"]);
+        });
+    });
+}
+
+#[test]
+fn placeholder_ghost_text_requires_view_focus() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let empty = model(ctx, "");
+            let element = TuiEditorElement::new(&empty, ctx)
+                .editable()
+                .with_view_focused(false)
+                .with_placeholder_ghost_text(|_| {
+                    Some(("type here".to_owned(), TuiStyle::default()))
+                });
+            assert_eq!(render_lines(ctx, element, 20, 5), vec![""]);
+        });
+    });
+}
+
+/// The presenter caches elements across frames while the state a hint depends
+/// on changes without the owning view being invalidated; the provider must
+/// therefore be re-resolved on every layout pass, not snapshotted once.
+#[test]
+fn placeholder_ghost_text_provider_resolves_on_every_layout() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let empty = model(ctx, "");
+            let hint = Rc::new(RefCell::new("first".to_owned()));
+            let hint_for_provider = hint.clone();
+            let mut element = TuiEditorElement::new(&empty, ctx)
+                .editable()
+                .with_view_focused(true)
+                .with_placeholder_ghost_text(move |_| {
+                    Some((hint_for_provider.borrow().clone(), TuiStyle::default()))
+                });
+            let lines = |buffer: TuiBuffer| {
+                buffer
+                    .to_lines()
+                    .into_iter()
+                    .map(|line| line.trim_end().to_string())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                lines(render_buffer_in_place(ctx, &mut element, 20, 5)),
+                vec![" first"]
+            );
+            *hint.borrow_mut() = "second".to_owned();
+            assert_eq!(
+                lines(render_buffer_in_place(ctx, &mut element, 20, 5)),
+                vec![" second"]
+            );
+        });
+    });
+}
+
+#[test]
+fn trailing_ghost_text_outranks_placeholder_ghost_text() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let empty = model(ctx, "");
+            let element = placeholder_element(ctx, &empty, "placeholder", TuiStyle::default())
+                .with_trailing_ghost_text("<argument>", TuiStyle::default());
+            assert_eq!(render_lines(ctx, element, 20, 5), vec!["<argument>"]);
+        });
+    });
+}
+
+#[test]
+fn placeholder_ghost_text_paints_with_configured_style() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let empty = model(ctx, "");
+            let style = TuiStyle::default().fg(Color::Blue);
+            let element = placeholder_element(ctx, &empty, "hint", style);
+            let buffer = render_buffer(ctx, element, 20, 5);
+            assert_eq!(buffer[(1, 0)].symbol(), "h");
+            assert_eq!(buffer[(1, 0)].fg, Color::Blue);
+            assert_eq!(buffer[(4, 0)].fg, Color::Blue);
+        });
+    });
+}
+
+#[test]
+fn placeholder_ghost_text_truncates_to_element_width() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let empty = model(ctx, "");
+            let element = placeholder_element(ctx, &empty, "a very long hint", TuiStyle::default());
+            assert_eq!(render_lines(ctx, element, 6, 5), vec![" a ver"]);
         });
     });
 }

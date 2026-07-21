@@ -188,6 +188,8 @@ ru:
     settings: "Настройки"
     agent: "Агент"
     terminal: "Терминал"
+    toast:
+      check_latest_version: "Обновитесь до последней версии и повторите попытку."
     local_docker_sandbox: "Локальная песочница Docker"
     whats_new: "Что нового"
     keyboard_shortcuts: "Горячие клавиши"
@@ -2079,6 +2081,7 @@ ru:
   # ── Agent Message Bar ──
     orchestration:
       env_none_label: Пустое окружение
+      runner_none_label: Использовать по умолчанию
       default_model_label: Модель по умолчанию
       skip_advanced: Пропустить (для опытных)
       api_key: API-ключ
@@ -2208,8 +2211,8 @@ ru:
     run_agents:
       constructing: "Настройка агентов…"
       running: "Запуск {count} {noun}…"
-      succeeded_all: "Запущено агентов: {count}"
-      failed_spawn: "Не удалось запустить агентов: {count}"
+      succeeded_all: "Запущено агентов: {count} {noun}"
+      failed_spawn: "Не удалось запустить агентов: {count} {noun}"
       succeeded_partial: "Запущено {launched} из {total} агентов"
       denied: "Оркестрация отключена — агенты не запущены"
       failed_with_error: "Не удалось запустить оркестрацию: {error}"
@@ -2220,6 +2223,8 @@ ru:
         created: "Создан"
         deleted: "Удалён"
         updated: "Изменён"
+        edited: "Изменено"
+      in_progress: "Изменение"
       summary_label: "Изменено файлов: {N}"
       file_label:
         one: "файл"
@@ -2228,6 +2233,15 @@ ru:
       cancelled: "Изменения файлов отменены"
       failed: "Не удалось изменить файлы"
       success: "Изменено: {N} {file_label} (+{added} −{removed})"
+    permission_prompt:
+      file_edits_title: "Можно ли мне внести эти правки в файлы?"
+      "yes": "Да"
+      "no": "Нет"
+      edit_command: "Изменить команду"
+      other: "Другое"
+      esc_to_cancel: "Esc для отмены"
+      ctrl_e_to_edit: "Ctrl+E для редактирования/сохранения"
+      enter_to_run: "Enter для запуска"
     agent_block:
       thinking_finished: "Думал {duration}"
       thinking_running: "Думаю..."
@@ -2255,7 +2269,7 @@ ru:
       starting: "Запуск терминала…"
       cannot_run_command: "не удалось выполнить — команда уже запущена"
       new_conversation_blocked: "нельзя начать новый разговор, пока в терминале выполняется команда"
-      copied_to_clipboard: "Разговор скопирован в буфер обмена терминала"
+      copied_to_clipboard: "Разговор скопирован в буфер обмена"
       restore_token_mismatch: "Восстановленный разговор не совпадает с запрошенным разговором."
       restore_only_oz_supported: "Warp TUI поддерживает только разговоры Oz/Warp."
       restore_load_failed: "Не удалось загрузить разговор."
@@ -2276,6 +2290,7 @@ ru:
       shell_mode_hint: "shell-режим · esc для выхода"
       copied_hint: "скопировано в буфер обмена"
       copy_failed: "не удалось скопировать в буфер обмена"
+      sub_agents_callout: "Субагенты: Shift + ↑"
     zero_state:
       title: "Warp Agent"
       whats_new: "Что нового"

@@ -1,7 +1,7 @@
 use unicode_segmentation::UnicodeSegmentation as _;
 
-use super::grapheme::Grapheme;
 use super::FlatStorage;
+use super::grapheme::Grapheme;
 use crate::model::grid::cell::Flags;
 use crate::model::grid::row::Row;
 

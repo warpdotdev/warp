@@ -13,12 +13,12 @@ use warp::tui_export::{
     ShellCommandExecutor, TaskId, TerminalModel, UserTakeOverReason,
 };
 use warpui::SingletonEntity;
+use warpui_core::r#async::Timer;
+use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
     TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiLayoutContext,
     TuiParentElement, TuiSize, TuiText,
 };
-use warpui_core::elements::MouseStateHandle;
-use warpui_core::r#async::Timer;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext,
 };

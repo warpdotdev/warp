@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use enum_iterator::{cardinality, Sequence};
+use enum_iterator::{Sequence, cardinality};
 #[cfg(feature = "test-util")]
 pub use overrides::{get_overrides, set_overrides};
 
@@ -113,6 +113,11 @@ pub enum FeatureFlag {
     /// Enables the settings file feature.
     SettingsFile,
 
+    /// Stores GUI execution profiles in the shared settings collection.
+    ///
+    /// TUI builds use the collection on every channel independently of this flag.
+    FileBackedExecutionProfiles,
+
     /// Enables rect selection.
     RectSelection,
 
@@ -181,6 +186,10 @@ pub enum FeatureFlag {
 
     /// Maximizes data in flat storage to reduce memory usage.
     MaximizeFlatStorage,
+
+    /// Recognizes the OSC 8 hyperlink escape sequence and makes the
+    /// linked text Cmd+click-able.
+    OscHyperlinks,
 
     ImeMarkedText,
 
@@ -906,9 +915,11 @@ pub enum FeatureFlag {
     /// eliminating seams between adjacent box-drawing cells in the terminal.
     BoxDrawingGlyphs,
 
-    /// Enables the `oz runner` CRUD commands for managing cloud agent runners
-    /// via the CLI.
-    CloudAgentRunnerCLICommands,
+    /// Enables cloud agent runner selection: the `oz runner` CRUD commands
+    /// for managing runners via the CLI, and the Runner dropdown in the
+    /// orchestration (`run_agents`) confirmation card and plan-card config
+    /// block for choosing a runner when starting remote child agents.
+    CloudAgentRunners,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -943,6 +954,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LazySceneBuilding,
     FeatureFlag::SshDragAndDrop,
     FeatureFlag::MultiWorkspace,
+    FeatureFlag::OscHyperlinks,
     FeatureFlag::ImeMarkedText,
     FeatureFlag::MSYS2Shells,
     FeatureFlag::RetryTruncatedCodeResponses,
@@ -977,15 +989,14 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpControlCli,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
+    FeatureFlag::FileBackedExecutionProfiles,
     FeatureFlag::BackgroundComputerUse,
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::JupyterNotebookRendering,
-    FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::GeminiEnterprise,
     FeatureFlag::BoxDrawingGlyphs,
-    FeatureFlag::CloudAgentRunnerCLICommands,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

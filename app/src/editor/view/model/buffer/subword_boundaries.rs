@@ -1,9 +1,9 @@
 use std::iter::Peekable;
 
 use itertools::Either;
+use warpui::text::TextBuffer;
 use warpui::text::word_boundaries::WordBoundariesApproach;
 use warpui::text::words::is_subword_boundary_char;
-use warpui::text::TextBuffer;
 
 use super::{CharOffset, Point};
 
@@ -132,12 +132,12 @@ impl<'a, T: TextBuffer + ?Sized> SubwordBoundaries<'a, T> {
                 } else if c.is_lowercase() {
                     self.step();
 
-                    if let Some(c_next) = self.char_window.first() {
-                        if c_next.is_uppercase() {
-                            let point = self.buffer.to_point(self.offset).ok();
-                            self.step();
-                            return point;
-                        }
+                    if let Some(c_next) = self.char_window.first()
+                        && c_next.is_uppercase()
+                    {
+                        let point = self.buffer.to_point(self.offset).ok();
+                        self.step();
+                        return point;
                     }
                 } else {
                     self.step();
@@ -174,21 +174,21 @@ impl<'a, T: TextBuffer + ?Sized> SubwordBoundaries<'a, T> {
                 self.in_word = true;
             }
 
-            if self.in_word {
-                if let Some(c_next) = self.char_window.second() {
-                    if c.is_lowercase() && c_next.is_uppercase() {
-                        // c is the end of a word, and c_next begins the next word.
+            if self.in_word
+                && let Some(c_next) = self.char_window.second()
+            {
+                if c.is_lowercase() && c_next.is_uppercase() {
+                    // c is the end of a word, and c_next begins the next word.
+                    self.step();
+                    return self.buffer.to_point(self.offset).ok();
+                } else if c.is_uppercase() && c_next.is_uppercase() {
+                    // c_next could be part of an all-caps word
+                    // or the start of a new Capitalized word
+                    if let Some(c_next_next) = self.char_window.third()
+                        && c_next_next.is_lowercase()
+                    {
                         self.step();
                         return self.buffer.to_point(self.offset).ok();
-                    } else if c.is_uppercase() && c_next.is_uppercase() {
-                        // c_next could be part of an all-caps word
-                        // or the start of a new Capitalized word
-                        if let Some(c_next_next) = self.char_window.third() {
-                            if c_next_next.is_lowercase() {
-                                self.step();
-                                return self.buffer.to_point(self.offset).ok();
-                            }
-                        }
                     }
                 }
             }
@@ -214,23 +214,23 @@ impl<'a, T: TextBuffer + ?Sized> SubwordBoundaries<'a, T> {
                 self.in_word = true;
             }
 
-            if self.in_word {
-                if let Some(c_next) = self.char_window.second() {
-                    if c.is_lowercase() && c_next.is_uppercase() {
-                        // c_next is the start of the c's subword.
-                        self.step();
-                        self.step();
-                        let point = self.buffer.to_point(self.offset).ok();
-                        self.step(); // to avoid re-designating this character as a start
-                        return point;
-                    } else if c.is_uppercase() && c_next.is_lowercase() {
-                        // c is the start Capitalized or Uppercase subword,
-                        // and c_next is the end of a Capitalized or lowercase
-                        // subword to the right of it.
-                        self.step();
-                        let point = self.buffer.to_point(self.offset).ok();
-                        return point;
-                    }
+            if self.in_word
+                && let Some(c_next) = self.char_window.second()
+            {
+                if c.is_lowercase() && c_next.is_uppercase() {
+                    // c_next is the start of the c's subword.
+                    self.step();
+                    self.step();
+                    let point = self.buffer.to_point(self.offset).ok();
+                    self.step(); // to avoid re-designating this character as a start
+                    return point;
+                } else if c.is_uppercase() && c_next.is_lowercase() {
+                    // c is the start Capitalized or Uppercase subword,
+                    // and c_next is the end of a Capitalized or lowercase
+                    // subword to the right of it.
+                    self.step();
+                    let point = self.buffer.to_point(self.offset).ok();
+                    return point;
                 }
             }
 

@@ -1,10 +1,11 @@
 use ai::LLMId;
 use chrono::{DateTime, Utc};
-use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings, ProjectOnboardingSettings};
 use onboarding::SelectedSettings;
+use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings, ProjectOnboardingSettings};
 use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
 
+use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel,
@@ -17,11 +18,10 @@ use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::sync_queue::SyncQueue;
-use crate::settings::{apply_onboarding_settings, AISettings, PrivacySettings};
+use crate::settings::{AISettings, PrivacySettings, apply_onboarding_settings};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::LaunchMode;
 
 fn mock_server_metadata(uid: ServerId) -> ServerMetadata {
     ServerMetadata {

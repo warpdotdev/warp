@@ -82,6 +82,18 @@ pub struct TuiMcpManager {
 }
 
 impl TuiMcpManager {
+    /// Creates an empty MCP aggregate for frontend tests.
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
+    pub(crate) fn new_for_test(_ctx: &mut ModelContext<Self>) -> Self {
+        Self {
+            snapshot: TuiMcpSnapshot {
+                config_path: PathBuf::new(),
+                config_state: TuiMcpConfigState::Missing,
+                servers: Vec::new(),
+            },
+        }
+    }
+
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(&FileBasedMCPManager::handle(ctx), |me, _, _, ctx| {
             me.refresh(ctx);

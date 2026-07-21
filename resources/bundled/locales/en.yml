@@ -188,6 +188,8 @@ en:
     settings: "Settings"
     agent: "Agent"
     terminal: "Terminal"
+    toast:
+      check_latest_version: "Check out the latest version and try again."
     local_docker_sandbox: "Local Docker Sandbox"
     whats_new: "What's new"
     keyboard_shortcuts: "Keyboard shortcuts"
@@ -2078,6 +2080,7 @@ en:
   # ── Agent Message Bar ──
     orchestration:
       env_none_label: Empty environment
+      runner_none_label: Use default
       default_model_label: Default model
       skip_advanced: Skip (advanced)
       api_key: API key
@@ -2219,6 +2222,8 @@ en:
         created: "Created"
         deleted: "Deleted"
         updated: "Updated"
+        edited: "Edited"
+      in_progress: "Editing"
       summary_label: "Edited {N} files"
       file_label:
         one: "file"
@@ -2227,6 +2232,15 @@ en:
       cancelled: "File edits cancelled"
       failed: "File edits failed"
       success: "Edited {N} {file_label} (+{added} −{removed})"
+    permission_prompt:
+      file_edits_title: "Is it OK if I make these file edits?"
+      "yes": "Yes"
+      "no": "No"
+      edit_command: "Edit command"
+      other: "Other"
+      esc_to_cancel: "Esc to cancel"
+      ctrl_e_to_edit: "Ctrl+E to edit/save"
+      enter_to_run: "Enter to run"
     agent_block:
       thinking_finished: "Thought for {duration}"
       thinking_running: "Thinking..."
@@ -2254,7 +2268,7 @@ en:
       starting: "Starting terminal…"
       cannot_run_command: "cannot run — command already running"
       new_conversation_blocked: "cannot start new conversation while terminal command is running"
-      copied_to_clipboard: "Conversation sent to terminal clipboard"
+      copied_to_clipboard: "Conversation copied to clipboard"
       restore_token_mismatch: "The restored conversation did not match the requested conversation."
       restore_only_oz_supported: "The Warp TUI only supports Oz/Warp conversations."
       restore_load_failed: "The conversation could not be loaded."
@@ -2275,6 +2289,7 @@ en:
       shell_mode_hint: "shell mode · esc to exit"
       copied_hint: "copied to clipboard"
       copy_failed: "failed to copy to clipboard"
+      sub_agents_callout: "Shift + ↑ sub-agents"
     zero_state:
       title: "Warp Agent"
       whats_new: "What's new"

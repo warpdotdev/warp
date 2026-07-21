@@ -74,3 +74,6 @@ __pycache__/
 # Keep on disk (developer tools), but never commit.
 .playwright-mcp/
 .settings_schema_cache.json
+
+.claude/scheduled_tasks.lock
+

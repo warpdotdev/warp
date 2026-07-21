@@ -45,7 +45,9 @@ mod scene;
 mod scrollable;
 mod selectable;
 mod shimmering_text;
+mod size_constraint_switch;
 mod text;
+mod text_helpers;
 mod viewported_list;
 
 pub use animated::TuiAnimated;
@@ -71,11 +73,13 @@ pub use scene::{
 };
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use selectable::{
-    point_after_col, TuiRowGlyph, TuiRowResize, TuiSelectable, TuiSelectableElement,
-    TuiSelectionHandle, TuiSelectionSpan,
+    TuiRowGlyph, TuiRowResize, TuiSelectable, TuiSelectableElement, TuiSelectionHandle,
+    TuiSelectionSpan, point_after_col,
 };
 pub use shimmering_text::TuiShimmeringText;
+pub use size_constraint_switch::{TuiSizeConstraintCondition, TuiSizeConstraintSwitch};
 pub use text::TuiText;
+pub use text_helpers::{text_width, truncate_with_ellipsis};
 pub use viewported_list::{
     TuiViewportContent, TuiViewportPosition, TuiViewportVerticalAlignment, TuiViewportWindow,
     TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,

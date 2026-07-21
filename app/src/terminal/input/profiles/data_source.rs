@@ -2,17 +2,18 @@ use fuzzy_match::match_indices_case_insensitive;
 use ordered_float::OrderedFloat;
 use warpui::{AppContext, Entity, EntityId, SingletonEntity};
 
-use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
+use crate::ai::execution_profiles::ExecutionProfileId;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::search::SyncDataSource;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
-use crate::search::SyncDataSource;
 use crate::terminal::input::inline_menu::{InlineMenuAction, InlineMenuType};
 use crate::terminal::input::profiles::search_item::ProfileSearchItem;
 
 #[derive(Clone, Debug)]
 pub enum SelectProfileMenuItem {
-    Profile { profile_id: ClientProfileId },
+    Profile { profile_id: ExecutionProfileId },
     ManageProfiles,
 }
 
@@ -39,9 +40,10 @@ impl SyncDataSource for ProfileSelectorDataSource {
         app: &AppContext,
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let profiles_model = AIExecutionProfilesModel::as_ref(app);
-        let active_profile_id = *profiles_model
+        let active_profile_id = profiles_model
             .active_profile(Some(self.terminal_view_id), app)
-            .id();
+            .id()
+            .clone();
         let query_text = query.text.trim().to_lowercase();
         let mut results = Vec::new();
         if query_text.is_empty() {
@@ -59,11 +61,11 @@ impl SyncDataSource for ProfileSelectorDataSource {
             ));
         }
 
-        let mut profiles: Vec<(ClientProfileId, String)> = profiles_model
+        let mut profiles: Vec<(ExecutionProfileId, String)> = profiles_model
             .get_all_profile_ids()
             .into_iter()
             .filter_map(|profile_id| {
-                let profile_info = profiles_model.get_profile_by_id(profile_id, app)?;
+                let profile_info = profiles_model.get_profile_by_id(&profile_id, app)?;
                 let profile_name = profile_info.data().display_name();
                 Some((profile_id, profile_name))
             })
@@ -71,11 +73,12 @@ impl SyncDataSource for ProfileSelectorDataSource {
         profiles.sort_by(|(_, a), (_, b)| a.to_lowercase().cmp(&b.to_lowercase()));
 
         for (profile_id, profile_name) in profiles {
+            let is_active = profile_id == active_profile_id;
             if query_text.is_empty() {
                 results.push(QueryResult::from(ProfileSearchItem::new_profile_item(
                     profile_id,
                     profile_name,
-                    profile_id == active_profile_id,
+                    is_active,
                 )));
                 continue;
             }
@@ -85,13 +88,9 @@ impl SyncDataSource for ProfileSelectorDataSource {
             {
                 let score = match_result.score;
                 results.push(QueryResult::from(
-                    ProfileSearchItem::new_profile_item(
-                        profile_id,
-                        profile_name,
-                        profile_id == active_profile_id,
-                    )
-                    .with_match_result(match_result)
-                    .with_score(OrderedFloat(score as f64)),
+                    ProfileSearchItem::new_profile_item(profile_id, profile_name, is_active)
+                        .with_match_result(match_result)
+                        .with_score(OrderedFloat(score as f64)),
                 ));
             }
         }

@@ -1,9 +1,9 @@
 use std::fs;
 
 use super::{
+    ClaudeCodePluginManager, CliAgentPluginManager, MINIMUM_PLATFORM_PLUGIN_VERSION,
     check_installed, check_platform_plugin_installed, claude_code_marketplace_has_local_override,
-    installed_platform_plugin_version, installed_version, ClaudeCodePluginManager,
-    CliAgentPluginManager, MINIMUM_PLATFORM_PLUGIN_VERSION,
+    installed_platform_plugin_version, installed_version,
 };
 
 /// A version strictly below `version`, so below-minimum tests track the
@@ -104,9 +104,11 @@ fn local_marketplace_override_via_trait_uses_claude_config_dir() {
     )
     .unwrap();
 
-    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
     let result = ClaudeCodePluginManager::new(None, None, None).has_local_marketplace_override();
-    std::env::remove_var("CLAUDE_CONFIG_DIR");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
 
     assert!(result);
 }
@@ -172,9 +174,11 @@ fn platform_plugin_needs_update_via_trait_when_version_below_minimum() {
     )
     .unwrap();
 
-    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
     let result = ClaudeCodePluginManager::new(None, None, None).platform_plugin_needs_update();
-    std::env::remove_var("CLAUDE_CONFIG_DIR");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
 
     assert!(result);
 }
@@ -197,9 +201,11 @@ fn platform_plugin_does_not_need_update_via_trait_when_current() {
     )
     .unwrap();
 
-    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
     let result = ClaudeCodePluginManager::new(None, None, None).platform_plugin_needs_update();
-    std::env::remove_var("CLAUDE_CONFIG_DIR");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
 
     assert!(!result);
 }
@@ -222,9 +228,11 @@ fn platform_plugin_needs_update_via_trait_when_installed_without_version() {
     )
     .unwrap();
 
-    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
     let result = ClaudeCodePluginManager::new(None, None, None).platform_plugin_needs_update();
-    std::env::remove_var("CLAUDE_CONFIG_DIR");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
 
     assert!(result);
 }
@@ -341,9 +349,11 @@ fn is_installed_via_trait_with_claude_config_dir_env() {
     )
     .unwrap();
 
-    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
     let result = ClaudeCodePluginManager::new(None, None, None).is_installed();
-    std::env::remove_var("CLAUDE_CONFIG_DIR");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
 
     assert!(result);
 }
@@ -353,9 +363,11 @@ fn is_installed_via_trait_with_claude_config_dir_env() {
 fn not_installed_via_trait_when_claude_config_dir_empty() {
     let dir = tempfile::tempdir().unwrap();
 
-    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
     let result = ClaudeCodePluginManager::new(None, None, None).is_installed();
-    std::env::remove_var("CLAUDE_CONFIG_DIR");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
 
     assert!(!result);
 }

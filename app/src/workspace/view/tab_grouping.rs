@@ -4,9 +4,9 @@ use itertools::{Either, Itertools};
 use warp_core::features::FeatureFlag;
 use warpui::{EntityId, UpdateView, ViewContext};
 
-use super::{group_member_indices, Workspace};
+use super::{Workspace, group_member_indices};
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::tab::{TabData, MOVE_TO_GROUP_LABEL};
+use crate::tab::{MOVE_TO_GROUP_LABEL, TabData};
 use crate::workspace::action::{TabContextMenuAnchor, WorkspaceAction};
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::util::PaneViewLocator;
@@ -147,14 +147,13 @@ impl Workspace {
     /// visually active across a tab reorder. Pass the pane group id captured
     /// before the reorder; no-op if it can't be found.
     pub(super) fn restore_active_tab_index(&mut self, pane_group_id: Option<EntityId>) {
-        if let Some(active_id) = pane_group_id {
-            if let Some(new_index) = self
+        if let Some(active_id) = pane_group_id
+            && let Some(new_index) = self
                 .tabs
                 .iter()
                 .position(|tab| tab.pane_group.id() == active_id)
-            {
-                self.active_tab_index = new_index;
-            }
+        {
+            self.active_tab_index = new_index;
         }
     }
 
@@ -464,12 +463,14 @@ impl Workspace {
     /// group" only when there's a destination group worth offering.
     fn tab_selection_menu_items(&self) -> Vec<MenuItem<WorkspaceAction>> {
         let shared_group = self.selection_shared_group();
-        let mut menu_items = vec![MenuItemFields::new(crate::menu_label(
-            "workspace.tab_grouping.create_group",
-            "Create group from tabs",
-        ))
+        let mut menu_items = vec![
+            MenuItemFields::new(crate::menu_label(
+                "workspace.tab_grouping.create_group",
+                "Create group from tabs",
+            ))
             .with_on_select_action(WorkspaceAction::NewTabGroupFromSelectedTabs)
-            .into_item()];
+            .into_item(),
+        ];
 
         // Only single-group selections have an unambiguous group to leave.
         if shared_group.is_some() {
@@ -478,8 +479,8 @@ impl Workspace {
                     "workspace.tab_grouping.remove_from_group",
                     "Remove from group",
                 ))
-                    .with_on_select_action(WorkspaceAction::RemoveSelectedTabsFromGroup)
-                    .into_item(),
+                .with_on_select_action(WorkspaceAction::RemoveSelectedTabsFromGroup)
+                .into_item(),
             );
         }
 
@@ -489,11 +490,13 @@ impl Workspace {
             .keys()
             .any(|group_id| Some(*group_id) != shared_group);
         if has_destination_group {
-            menu_items.push(MenuItemFields::new_submenu(crate::menu_label(
-                "workspace.tab_grouping.move_to_group",
-                MOVE_TO_GROUP_LABEL,
-            ))
-            .into_item());
+            menu_items.push(
+                MenuItemFields::new_submenu(crate::menu_label(
+                    "workspace.tab_grouping.move_to_group",
+                    MOVE_TO_GROUP_LABEL,
+                ))
+                .into_item(),
+            );
         }
         menu_items
     }
@@ -711,11 +714,8 @@ impl Workspace {
                     .get(&group_id)
                     .and_then(|g| g.name.clone())
                     .unwrap_or_else(|| {
-                        crate::menu_label(
-                            "workspace.tab_grouping.untitled_group",
-                            "Untitled group",
-                        )
-                        .to_string()
+                        crate::menu_label("workspace.tab_grouping.untitled_group", "Untitled group")
+                            .to_string()
                     });
                 let action = match tab_index {
                     Some(tab_index) => WorkspaceAction::MoveTabToGroup {

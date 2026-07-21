@@ -1,5 +1,5 @@
-use super::chunker::Fragment;
 use super::Error;
+use super::chunker::Fragment;
 
 mod hash;
 mod node;

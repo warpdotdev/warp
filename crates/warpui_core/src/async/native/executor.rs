@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use async_executor::LocalExecutor;
@@ -12,8 +12,8 @@ use futures_util::future::{AbortHandle, Abortable};
 use tracing::Instrument as _;
 use warp_errors::report_error;
 
-use crate::platform;
 use crate::r#async::executor::Error;
+use crate::platform;
 
 pub type ForegroundTask = async_task::Task<()>;
 

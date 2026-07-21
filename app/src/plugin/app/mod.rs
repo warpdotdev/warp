@@ -47,8 +47,10 @@ impl PluginHost {
                         match ipc::Client::connect(connection_address, background_executor).await {
                             Ok(client) => Some(client),
                             Err(e) => {
-                                report_error!(anyhow::Error::new(e)
-                                    .context("Failed to instantiate LocalSocketClient"));
+                                report_error!(
+                                    anyhow::Error::new(e)
+                                        .context("Failed to instantiate LocalSocketClient")
+                                );
                                 None
                             }
                         }

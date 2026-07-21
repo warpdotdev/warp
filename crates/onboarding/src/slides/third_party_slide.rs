@@ -1,4 +1,4 @@
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::{
@@ -15,11 +15,11 @@ use warpui_core::{
     ViewContext,
 };
 
-use super::toggle_card::{render_toggle_card, ToggleCardSpec};
 use super::OnboardingSlide;
+use super::toggle_card::{ToggleCardSpec, render_toggle_card};
+use crate::OnboardingIntention;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
-use crate::OnboardingIntention;
 
 /// Which setting card is currently expanded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -59,7 +59,9 @@ where
     match Regex::new_many(&patterns) {
         Ok(regex) => *TELEMETRY_SECRETS_REGEX.write() = regex,
         Err(err) => {
-            report_error!(anyhow::Error::new(err).context("Failed to build telemetry secrets regex"))
+            report_error!(
+                anyhow::Error::new(err).context("Failed to build telemetry secrets regex")
+            )
         }
     }
 }

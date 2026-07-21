@@ -6,10 +6,10 @@ use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warpui_core::assets::asset_cache::AssetSource;
 use warpui_core::image_cache::ImageType;
-use warpui_core::windowing::state::{ApplicationStage, StateEvent};
 use warpui_core::windowing::WindowManager;
+use warpui_core::windowing::state::{ApplicationStage, StateEvent};
 
-use crate::components::feature_optout_dialog::{render_feature_optout_dialog, FeatureOptOutDialog};
+use crate::components::feature_optout_dialog::{FeatureOptOutDialog, render_feature_optout_dialog};
 use crate::model::{
     OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel, OnboardingStep,
     SelectedSettings,
@@ -27,10 +27,10 @@ const PLAN_ACTIVATED_TOAST_DURATION: Duration = Duration::from_secs(5);
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::{Fill, WarpTheme};
-use warp_core::ui::Icon;
 use warpui_core::elements::{
     Align, CacheOption, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Dismiss, Empty,
     Flex, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,

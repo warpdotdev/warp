@@ -27,8 +27,8 @@ use crate::persistence::model::ObjectPermissions;
 use crate::persistence::{BlockCompleted, ModelEvent, PersistedDataScope, PersistenceScope};
 use crate::server::ids::ClientId;
 use crate::tab::SelectedTabColor;
-use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::ShellLaunchData;
+use crate::terminal::model::block::SerializedBlock;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::tab_group::TabGroupId;
 

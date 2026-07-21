@@ -1,9 +1,9 @@
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
 use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::{
     Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
@@ -440,11 +440,7 @@ impl IntentionSlide {
 
         let is_terminal = selected_index == 1;
         let (step_index, step_count) = if new_settings_modes {
-            if is_terminal {
-                (0, 4)
-            } else {
-                (0, 5)
-            }
+            if is_terminal { (0, 4) } else { (0, 5) }
         } else {
             (1, 4)
         };

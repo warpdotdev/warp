@@ -16,10 +16,10 @@ use super::{
     Color, Modifier, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
     TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
 };
+use crate::AppContext;
 use crate::color::ColorU;
 use crate::elements::animation::AnimationClock;
 use crate::elements::shimmer_math::{self, ShimmerConfig};
-use crate::AppContext;
 
 /// How often the shimmer repaints. The band moves about one cell per ~140ms
 /// with the default config on short strings, so 100ms keeps it smooth without

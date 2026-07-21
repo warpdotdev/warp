@@ -1,14 +1,14 @@
 use std::fmt::Display;
 
+use warpui::Element;
 use warpui::elements::MouseStateHandle;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::Element;
 
 use super::teams_page::TeamsPageAction;
+use crate::Appearance;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::workspaces::team::Team;
-use crate::Appearance;
 
 /// The Tabs trait provides common functionality for an enum to be used as a tabs menu UI component.
 /// It requires the trait-user to implement action_on_click() and label().

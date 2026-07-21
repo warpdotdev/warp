@@ -22,6 +22,11 @@ fn bundled_skill(content: &str) -> BundledSkill {
     bundled_skill
 }
 
+#[test]
+fn unavailable_bundled_context_path_renders_as_empty_string() {
+    assert_eq!(display_optional_path(None), "");
+}
+
 fn remote_content<'a>(bundled_skills: &'a BundledSkills, host_id: &HostId) -> Option<&'a str> {
     bundled_skills
         .remote(host_id)?

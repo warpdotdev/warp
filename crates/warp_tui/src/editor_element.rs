@@ -45,13 +45,13 @@ const WHEEL_STEP: isize = 2;
 /// owning view translates them into its own typed actions and applies them to
 /// the editor model (mirroring how the GUI's element dispatches into its view).
 #[derive(Debug, Clone)]
-pub(crate) enum TuiEditorAction {
+pub enum TuiEditorAction {
     /// Insert a printable character (only emitted when the element is
     /// [`editable`](TuiEditorElement::editable)).
     InsertChar(char),
     /// Insert one complete paste payload (only emitted when the element is
     /// [`editable`](TuiEditorElement::editable)).
-    InsertText(String),
+    PasteText(String),
     /// Place the cursor / begin a character selection at `offset` (single click).
     SelectionStartAt { offset: CharOffset },
     /// Extend the active selection's head to `offset` (shift-click).
@@ -71,6 +71,9 @@ pub(crate) enum TuiEditorAction {
 
 /// Handler receiving the element's [`TuiEditorAction`]s during event dispatch.
 type TuiEditorActionHandler = Rc<dyn for<'a> Fn(TuiEditorAction, &mut TuiEventContext<'a>)>;
+
+/// Resolves the placeholder ghost text (and its style) from fresh app state.
+type PlaceholderGhostTextProvider = Rc<dyn Fn(&AppContext) -> Option<(String, TuiStyle)>>;
 
 /// Whole-row styles by row kind, plus per-line overrides — all consumer
 /// policy. Gutter cells take their row's style.
@@ -125,6 +128,11 @@ pub(crate) struct TuiEditorElement {
     hide_trailing_empty_line: bool,
     styles: TuiEditorStyles,
     trailing_ghost_text: Option<(String, TuiStyle)>,
+    /// Resolves the empty-buffer placeholder hint against fresh app state
+    /// during every layout pass; see [`Self::with_placeholder_ghost_text`].
+    placeholder_ghost_text_provider: Option<PlaceholderGhostTextProvider>,
+    /// The provider's most recent resolution, refreshed in [`Self::build`].
+    placeholder_ghost_text: Option<(String, TuiStyle)>,
     on_action: Option<TuiEditorActionHandler>,
 
     // ── Built during layout ─────────────────────────────────────────────────
@@ -190,6 +198,8 @@ impl TuiEditorElement {
             hide_trailing_empty_line: false,
             styles: TuiEditorStyles::default(),
             trailing_ghost_text: None,
+            placeholder_ghost_text_provider: None,
+            placeholder_ghost_text: None,
             on_action: None,
             column: TuiFlex::column(),
             gutter_cols: 0,
@@ -251,6 +261,44 @@ impl TuiEditorElement {
         self
     }
 
+    /// Ghost text painted while the buffer is empty — placeholder-style
+    /// guidance (e.g. mode-dependent keybinding hints). Painted starting one
+    /// cell after the cursor so the terminal's block cursor never obscures
+    /// the first glyph (matching the design's cursor·gap·hint layout).
+    /// Rendered under the same conditions as trailing ghost text (editable,
+    /// focused, cursor visible); a configured trailing ghost text takes
+    /// precedence when both are set.
+    ///
+    /// `provider` is re-evaluated against fresh app state during every layout
+    /// pass — the element may stay cached across frames while the state the
+    /// hint depends on (e.g. transcript emptiness) changes without this
+    /// view being invalidated, so the content must never be snapshotted at
+    /// construction time.
+    pub(crate) fn with_placeholder_ghost_text(
+        mut self,
+        provider: impl Fn(&AppContext) -> Option<(String, TuiStyle)> + 'static,
+    ) -> Self {
+        self.placeholder_ghost_text_provider = Some(Rc::new(provider));
+        self
+    }
+
+    /// The ghost text to paint this frame and the column offset from the
+    /// cursor to start painting at: the trailing ghost text when set
+    /// (contextual hints like slash-command arguments outrank passive
+    /// placeholders) painted at the cursor, else the placeholder one cell
+    /// after the cursor while the buffer is empty.
+    fn active_ghost_text(&self) -> Option<(&str, TuiStyle, u16)> {
+        if let Some((text, style)) = &self.trailing_ghost_text {
+            return Some((text, *style, 0));
+        }
+        if self.text.is_empty()
+            && let Some((text, style)) = &self.placeholder_ghost_text
+        {
+            return Some((text, *style, 1));
+        }
+        None
+    }
+
     /// Elide the buffer's final empty line (buffers whose text ends with a
     /// newline have one). Diff bodies set this so a file's conventional
     /// trailing newline doesn't render as a blank numbered row; the input must
@@ -294,6 +342,11 @@ impl TuiEditorElement {
     /// Builds the visible rows, cursor position, and selection spans at
     /// `full_width`, storing them for `render`/`cursor_position`.
     fn build(&mut self, full_width: u16, app: &AppContext) {
+        // Placeholder hints depend on app state that changes without this
+        // element's view being invalidated; re-resolve them every layout.
+        if let Some(provider) = &self.placeholder_ghost_text_provider {
+            self.placeholder_ghost_text = provider(app);
+        }
         let render_state = self.model.as_ref(app).render_state().clone();
         let render_state = render_state.as_ref(app);
         let Some(char_cell) = render_state.char_cell() else {
@@ -312,10 +365,18 @@ impl TuiEditorElement {
             0
         };
         let content_width = full_width.saturating_sub(self.gutter_cols);
+        let width_changed = char_cell.terminal_width() != content_width;
         char_cell.set_terminal_width(content_width);
 
         let chars: Vec<char> = self.text.chars().collect();
         let cursor_offset = CharOffset::from(self.cursor_offset.as_usize().saturating_sub(1));
+        if let Some(viewport_rows) = self.viewport_rows {
+            if width_changed {
+                char_cell.follow_cursor(cursor_offset, viewport_rows, &hidden);
+            } else {
+                char_cell.clamp_scroll_offset(cursor_offset, viewport_rows, &hidden);
+            }
+        }
         // The first visible row is model-side scroll state; unwindowed
         // consumers always render from the top.
         let first_visible_row = if self.viewport_rows.is_some() {
@@ -678,7 +739,7 @@ impl TuiElement for TuiEditorElement {
             return;
         };
         self.column.render(origin, surface, ctx);
-        if let Some((text, style)) = &self.trailing_ghost_text {
+        if let Some((text, style, cursor_gap)) = self.active_ghost_text() {
             let cursor_at_end =
                 self.cursor_offset.as_usize().saturating_sub(1) == self.text.chars().count();
             if cursor_at_end
@@ -686,7 +747,7 @@ impl TuiElement for TuiEditorElement {
                 && self.cursor_col < size.width
                 && self.cursor_row_in_view < size.height
             {
-                let mut col = self.cursor_col;
+                let mut col = self.cursor_col.saturating_add(cursor_gap);
                 for char in text.chars() {
                     if col >= size.width {
                         break;
@@ -695,7 +756,7 @@ impl TuiElement for TuiEditorElement {
                         origin.offset(i32::from(col), i32::from(self.cursor_row_in_view));
                     if let Some(cell) = surface.cell_mut(position) {
                         cell.set_char(char);
-                        cell.set_style(*style);
+                        cell.set_style(style);
                     }
                     col += 1;
                 }
@@ -780,15 +841,17 @@ impl TuiElement for TuiEditorElement {
                     // (consumer keybindings) before the element pass ever sees the
                     // key. Only printable-character insertion stays element-level —
                     // text insertion is not a keybinding, matching the GUI.
-                    if !keystroke.ctrl && !keystroke.alt && !chars.is_empty() {
-                        if let Some(char) = chars.chars().next() {
-                            handler(TuiEditorAction::InsertChar(char), event_ctx);
-                            return true;
-                        }
+                    if !keystroke.ctrl
+                        && !keystroke.alt
+                        && !chars.is_empty()
+                        && let Some(char) = chars.chars().next()
+                    {
+                        handler(TuiEditorAction::InsertChar(char), event_ctx);
+                        return true;
                     }
                 }
                 TuiEvent::Paste { text } => {
-                    handler(TuiEditorAction::InsertText(text.clone()), event_ctx);
+                    handler(TuiEditorAction::PasteText(text.clone()), event_ctx);
                     return true;
                 }
                 TuiEvent::ScrollWheel { .. }

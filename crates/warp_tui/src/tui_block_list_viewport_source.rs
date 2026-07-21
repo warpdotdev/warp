@@ -12,14 +12,14 @@ use sum_tree::SeekBias;
 use warp::tui_export::TotalIndex;
 use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId, TerminalModel};
 use warpui::{EntityId, ViewHandle};
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     TuiChildView, TuiElement, TuiLayoutContext, TuiRowResize, TuiSelectionSpan, TuiViewportContent,
     TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
 };
-use warpui_core::AppContext;
 
 use super::agent_block::TuiAIBlock;
-use super::terminal_block::{should_render_terminal_block, TerminalBlockElement};
+use super::terminal_block::{TerminalBlockElement, should_render_terminal_block};
 use super::tui_cli_subagent_view::TuiCLISubagentView;
 
 pub(super) type AgentBlockRegistry = Rc<RefCell<HashMap<EntityId, ViewHandle<TuiAIBlock>>>>;
@@ -129,25 +129,23 @@ impl TuiBlockListViewportSource {
                 break;
             }
             let item_bottom = item_top.saturating_add(item.height().as_f64().ceil() as usize);
-            if item_bottom > band_top {
-                if let BlockHeightItem::RichContent(rich_content) = item {
-                    if !rich_content.should_hide {
-                        if let Some(view) = agent_blocks.get(&rich_content.view_id) {
-                            if view
-                                .as_ref(app)
-                                .needs_height_measurement(available_width, app)
-                            {
-                                view_ids.insert(rich_content.view_id);
-                            }
-                        } else if let Some(view) = cli_subagent_blocks.get(&rich_content.view_id) {
-                            if view
-                                .as_ref(app)
-                                .needs_height_measurement(available_width, app)
-                            {
-                                view_ids.insert(rich_content.view_id);
-                            }
-                        }
+            if item_bottom > band_top
+                && let BlockHeightItem::RichContent(rich_content) = item
+                && !rich_content.should_hide
+            {
+                if let Some(view) = agent_blocks.get(&rich_content.view_id) {
+                    if view
+                        .as_ref(app)
+                        .needs_height_measurement(available_width, app)
+                    {
+                        view_ids.insert(rich_content.view_id);
                     }
+                } else if let Some(view) = cli_subagent_blocks.get(&rich_content.view_id)
+                    && view
+                        .as_ref(app)
+                        .needs_height_measurement(available_width, app)
+                {
+                    view_ids.insert(rich_content.view_id);
                 }
             }
             cursor.next();

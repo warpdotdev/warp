@@ -30,14 +30,14 @@ use super::delete_environment_confirmation_dialog::{
     DeleteEnvironmentConfirmationDialog, DeleteEnvironmentConfirmationDialogEvent,
 };
 use super::settings_page::{
-    MatchData, PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
-    SettingsWidget, CONTENT_FONT_SIZE,
+    CONTENT_FONT_SIZE, MatchData, PageType, SettingsPageEvent, SettingsPageMeta,
+    SettingsPageViewHandle, SettingsWidget,
 };
 use super::update_environment_form::{
     EnvironmentFormInitArgs, EnvironmentFormValues, UpdateEnvironmentForm,
     UpdateEnvironmentFormEvent,
 };
-use super::{editor_text_colors, SettingsSection};
+use super::{SettingsSection, editor_text_colors};
 use crate::ai::ambient_agents::github_auth_url::GithubAuthRedirectTarget;
 use crate::ai::cloud_environments::{self, CloudAmbientAgentEnvironment};
 use crate::appearance::Appearance;
@@ -64,8 +64,8 @@ use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icons::Icon;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::view_components::{
-    render_copyable_text_field, CopyButtonPlacement, CopyableTextFieldConfig, DismissibleToast,
-    COPY_FEEDBACK_DURATION,
+    COPY_FEEDBACK_DURATION, CopyButtonPlacement, CopyableTextFieldConfig, DismissibleToast,
+    render_copyable_text_field,
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -75,7 +75,7 @@ use new_environment_button::NewEnvironmentButtonView;
 #[cfg(not(target_family = "wasm"))]
 #[allow(unused_imports)] // IntegrationsClient trait is used in fetch_github_repos
 use {
-    crate::server::server_api::{integrations::IntegrationsClient, ServerApiProvider},
+    crate::server::server_api::{ServerApiProvider, integrations::IntegrationsClient},
     warp_graphql::queries::user_github_info::UserGithubInfoResult,
 };
 
@@ -414,7 +414,7 @@ impl EnvironmentsPageView {
         placeholder: &'static str,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<EditorView> {
-        let editor = ctx.add_typed_action_view(|ctx| {
+        ctx.add_typed_action_view(|ctx| {
             let appearance = Appearance::as_ref(ctx);
             let options = SingleLineEditorOptions {
                 text: TextOptions {
@@ -430,8 +430,7 @@ impl EnvironmentsPageView {
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text(placeholder, ctx);
             editor
-        });
-        editor
+        })
     }
 
     fn update_search_editor_text_colors(&mut self, ctx: &mut ViewContext<Self>) {
@@ -753,34 +752,26 @@ impl EnvironmentsPageView {
         // Check if this is a successful create for our pending create
         if let (ObjectOperation::Create { .. }, OperationSuccessType::Success) =
             (&result.operation, &result.success_type)
+            && let Some(pending_client_id) = self.pending_create_client_id.take()
         {
-            if let Some(pending_client_id) = self.pending_create_client_id.take() {
-                // Check if the client_id in the result matches our pending client_id
-                if let Some(result_client_id) = &result.client_id {
-                    if *result_client_id == pending_client_id {
-                        self.show_success_toast(
-                            toast_created_success().to_string(),
-                            ctx,
-                        );
-                    }
-                }
+            // Check if the client_id in the result matches our pending client_id
+            if let Some(result_client_id) = &result.client_id
+                && *result_client_id == pending_client_id
+            {
+                self.show_success_toast(toast_created_success().to_string(), ctx);
             }
         }
 
         // Check if this is a successful delete for our pending delete
         if let (ObjectOperation::Delete { .. }, OperationSuccessType::Success) =
             (&result.operation, &result.success_type)
+            && let Some(pending_env_id) = self.pending_delete_env_id.take()
         {
-            if let Some(pending_env_id) = self.pending_delete_env_id.take() {
-                // Check if the server_id matches our pending environment
-                if let Some(server_id) = &result.server_id {
-                    if server_id.uid() == pending_env_id.uid() {
-                        self.show_success_toast(
-                            toast_deleted_success().to_string(),
-                            ctx,
-                        );
-                    }
-                }
+            // Check if the server_id matches our pending environment
+            if let Some(server_id) = &result.server_id
+                && server_id.uid() == pending_env_id.uid()
+            {
+                self.show_success_toast(toast_deleted_success().to_string(), ctx);
             }
         }
 
@@ -1556,8 +1547,7 @@ impl EnvironmentsPageWidget {
                 icon: Icon::Github,
                 title: quick_setup_title(),
                 badge: Some(quick_setup_badge()),
-                subtitle:
-                    quick_setup_subtitle(),
+                subtitle: quick_setup_subtitle(),
                 action_button: github_button,
                 compact_action_button: github_button_compact,
                 icon_size,
@@ -1570,8 +1560,7 @@ impl EnvironmentsPageWidget {
                 icon: Icon::Terminal,
                 title: use_agent_title(),
                 badge: None,
-                subtitle:
-                    use_agent_subtitle(),
+                subtitle: use_agent_subtitle(),
                 action_button: local_repos_button,
                 compact_action_button: local_repos_button_compact,
                 icon_size,
@@ -1898,25 +1887,25 @@ impl EnvironmentsPageWidget {
             );
 
             // Description (if present) - lighter than other details
-            if let Some(description) = &env_description {
-                if !description.is_empty() {
-                    content_column.add_child(
-                        Text::new(
-                            description.clone(),
-                            appearance.ui_font_family(),
-                            appearance.ui_font_size(),
-                        )
-                        .soft_wrap(true)
-                        .with_color(
-                            theme
-                                .background()
-                                .blend(&theme.foreground().with_opacity(80))
-                                .into(),
-                        )
-                        .with_selectable(true)
-                        .finish(),
-                    );
-                }
+            if let Some(description) = &env_description
+                && !description.is_empty()
+            {
+                content_column.add_child(
+                    Text::new(
+                        description.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .soft_wrap(true)
+                    .with_color(
+                        theme
+                            .background()
+                            .blend(&theme.foreground().with_opacity(80))
+                            .into(),
+                    )
+                    .with_selectable(true)
+                    .finish(),
+                );
             }
 
             let mut details_parts = vec![card_image_template().replace("{}", &env_docker_image)];
@@ -2148,8 +2137,8 @@ impl SettingsPageMeta for EnvironmentsPageView {
 }
 
 use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::view::{HeaderContent, HeaderRenderContext};
 use crate::pane_group::pane::BackingView;
+use crate::pane_group::pane::view::{HeaderContent, HeaderRenderContext};
 
 impl BackingView for EnvironmentsPageView {
     type PaneHeaderOverflowMenuAction = EnvironmentsPageAction;

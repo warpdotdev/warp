@@ -2,12 +2,12 @@
 use std::time::Duration;
 
 use warp::tui_export::menu_label;
+use warpui_core::AppContext;
+use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
     Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiStyle, TuiText,
 };
-use warpui_core::elements::CrossAxisAlignment;
-use warpui_core::AppContext;
 
 use crate::tui_builder::TuiUiBuilder;
 use crate::warping_indicator::render_spinner;
@@ -16,10 +16,10 @@ use crate::warping_indicator::render_spinner;
 pub(crate) fn abbreviate_home_prefix(path: &str) -> String {
     if let Some(home) = dirs::home_dir() {
         let home = home.to_string_lossy();
-        if let Some(rest) = path.strip_prefix(&*home) {
-            if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
-                return format!("~{rest}");
-            }
+        if let Some(rest) = path.strip_prefix(&*home)
+            && (rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\'))
+        {
+            return format!("~{rest}");
         }
     }
     path.to_owned()
@@ -120,7 +120,7 @@ fn vertically_centered(content: TuiFlex) -> Box<dyn TuiElement> {
 }
 
 /// Centers `content` horizontally and vertically within the viewport.
-fn centered_in_viewport(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
+pub(crate) fn centered_in_viewport(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
     let centered_row = TuiFlex::row()
         .flex_child(TuiFlex::row().finish())
         .child(content)

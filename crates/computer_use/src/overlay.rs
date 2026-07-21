@@ -8,11 +8,33 @@ use std::time::Duration;
 use crate::{Action, Key, ScrollDirection, TargetedAction};
 
 /// A group of semantic actions dispatched in one `UseComputer` call.
+///
+/// One entry represents one *successful* `UseComputer` call: `offset` is when
+/// the client began executing the call's action sequence, and `finish_offset`
+/// is when that complete sequence (including any explicit waits and the
+/// requested post-action screenshot) returned. Failed or cancelled calls never
+/// become entries.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ActionLogEntry {
-    /// Time from when capture went live to when this group was dispatched.
+    /// Time from when capture went live to when this group's `UseComputer` call
+    /// began executing on the client.
     pub offset: Duration,
+    /// Time from when capture went live to when this group's complete action
+    /// sequence (and any post-action screenshot) finished.
+    pub finish_offset: Duration,
     pub labels: Vec<String>,
+}
+
+/// Returns true if a `UseComputer` action batch contains at least one real
+/// interaction — any non-`Wait` action (keyboard, typing, pointer, or scroll).
+/// A wait-only or zero-duration no-op batch (for example a screenshot-only
+/// call, which emits a single `Wait(0)`) is not a qualifying action group and is
+/// not committed to the recording timeline. A pointer-only batch still
+/// qualifies (with empty labels) so its on-screen effects are retained.
+pub fn is_meaningful_action_group(actions: &[TargetedAction]) -> bool {
+    actions
+        .iter()
+        .any(|targeted| !matches!(targeted.action, Action::Wait(_)))
 }
 
 enum LabelCandidate {
@@ -164,8 +186,6 @@ fn scroll_label(direction: ScrollDirection) -> &'static str {
 }
 
 #[cfg(any(linux, test))]
-const ACTION_GROUP_DURATION: Duration = Duration::from_millis(1500);
-#[cfg(any(linux, test))]
 const PILL_FONT_SIZE: i32 = 48;
 #[cfg(any(linux, test))]
 const APPROX_GLYPH_WIDTH: i32 = 29;
@@ -175,13 +195,167 @@ const PILL_HORIZONTAL_PADDING: i32 = 32;
 const PILL_GAP: i32 = 24;
 #[cfg(any(linux, test))]
 const PILL_BOTTOM_MARGIN: i32 = 90;
+/// Context margin retained on each side of a real action window before cutting.
+/// Supplies visible context and smoothness around each kept segment; it is not a
+/// transition and does not change the 1x playback rate inside a segment.
+#[cfg(any(linux, test))]
+const SEGMENT_MARGIN: Duration = Duration::from_millis(500);
+
+/// One retained source segment of the cut recording.
+///
+/// `source_start`/`source_end` describe the half-open interval `[start, end)`
+/// of the 1x source master that is kept; `output_start` is where that interval
+/// begins on the compacted output timeline (segments are concatenated in source
+/// order with all gaps removed).
+#[cfg(any(linux, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KeepSegment {
+    pub(crate) source_start: Duration,
+    pub(crate) source_end: Duration,
+    pub(crate) output_start: Duration,
+}
+
+#[cfg(any(linux, test))]
+fn frame_duration(frame_rate: u32) -> Duration {
+    Duration::from_secs_f64(1.0 / frame_rate.max(1) as f64)
+}
+
+/// The clamped source interval for one action group: `[offset, finish_offset]`
+/// clamped to `[0, source_duration]` with a one-source-frame minimum when start
+/// and finish collapse into the same frame (for example an instantaneous call).
+/// Returns `None` when the clamped interval is empty (the group falls entirely
+/// at or beyond `source_duration`).
+#[cfg(any(linux, test))]
+fn group_source_interval(
+    entry: &ActionLogEntry,
+    source_duration: Duration,
+    frame: Duration,
+) -> Option<(Duration, Duration)> {
+    let start = entry.offset.min(source_duration);
+    let mut finish = entry.finish_offset.min(source_duration);
+    if finish < start {
+        finish = start;
+    }
+    if finish - start < frame {
+        finish = start + frame;
+    }
+    let finish = finish.min(source_duration);
+    (finish > start).then_some((start, finish))
+}
+
+/// Builds the ordered retained segments for a post-stop cut.
+///
+/// Each committed action group contributes a `[start, finish]` window (with a
+/// one-frame minimum). Every window is expanded by [`SEGMENT_MARGIN`] on both
+/// sides and clamped to `[0, source_duration]`. The expanded windows are then
+/// sorted by source start and merged whenever they overlap or touch (adjacent
+/// windows become one contiguous segment), and each merged segment is assigned
+/// an `output_start` equal to the cumulative duration of the segments before
+/// it. Source gaps between merged segments are removed entirely by the cut.
+#[cfg(any(linux, test))]
+pub(crate) fn build_keep_segments(
+    entries: &[ActionLogEntry],
+    source_duration: Duration,
+    frame_rate: u32,
+) -> Vec<KeepSegment> {
+    let frame = frame_duration(frame_rate);
+
+    let mut windows: Vec<(Duration, Duration)> = entries
+        .iter()
+        .filter_map(|entry| group_source_interval(entry, source_duration, frame))
+        .map(|(start, finish)| {
+            let expanded_start = start.saturating_sub(SEGMENT_MARGIN);
+            let expanded_end = finish.saturating_add(SEGMENT_MARGIN);
+            (
+                expanded_start.min(source_duration),
+                expanded_end.min(source_duration),
+            )
+        })
+        .collect();
+    windows.sort_by_key(|(start, _)| *start);
+
+    let mut merged: Vec<(Duration, Duration)> = Vec::new();
+    for (start, end) in windows {
+        if let Some(last) = merged.last_mut()
+            && start <= last.1
+        {
+            if end > last.1 {
+                last.1 = end;
+            }
+            continue;
+        }
+        merged.push((start, end));
+    }
+
+    let mut segments = Vec::with_capacity(merged.len());
+    let mut output_cursor = Duration::ZERO;
+    for (start, end) in merged {
+        segments.push(KeepSegment {
+            source_start: start,
+            source_end: end,
+            output_start: output_cursor,
+        });
+        output_cursor += end - start;
+    }
+    segments
+}
+
+/// Remaps a source-timeline interval `[start, end]` onto the compacted output
+/// timeline defined by `segments`.
+///
+/// Returns `None` when the interval is wholly inside a removed gap (no retained
+/// segment overlaps it) or when the remapped interval is empty. Intervals that
+/// touch a cut boundary are clamped to the retained boundary: the start is
+/// clamped up to the first overlapping segment's start, and the end is clamped
+/// down to the last overlapping segment's end. Remapping is done at `Duration`
+/// precision before ASS centisecond formatting.
+#[cfg(any(linux, test))]
+pub(crate) fn remap_source_interval(
+    start: Duration,
+    end: Duration,
+    segments: &[KeepSegment],
+) -> Option<(Duration, Duration)> {
+    if end <= start {
+        return None;
+    }
+    // A segment [ss, se) overlaps [start, end) iff ss < end && se > start.
+    let first = segments
+        .iter()
+        .find(|seg| seg.source_start < end && seg.source_end > start)?;
+    let last = segments
+        .iter()
+        .rev()
+        .find(|seg| seg.source_start < end && seg.source_end > start)?;
+
+    let clamped_start = start.max(first.source_start);
+    let clamped_end = end.min(last.source_end);
+    if clamped_end <= clamped_start {
+        return None;
+    }
+    let out_start = first.output_start + (clamped_start - first.source_start);
+    let out_end = last.output_start + (clamped_end - last.source_start);
+    (out_end > out_start).then_some((out_start, out_end))
+}
 
 /// Builds an ASS subtitle document that renders each entry as a bottom-center
-/// row. Entries are ordered by timecode and each group's end is clamped to the
-/// next group's start.
+/// row on the compacted output timeline. Entries are ordered by source start;
+/// each group's `[offset, finish_offset]` interval (one-frame minimum) is
+/// remapped through the retained segments before timecode formatting, so pills
+/// stay aligned with their actions after the cut. Groups whose remapped
+/// interval is empty (for example wholly inside a removed gap) emit no dialogue.
+/// Pointer-only groups with empty labels commit to the timeline (keeping their
+/// segment) but render no pill.
 #[cfg(any(linux, test))]
-pub(crate) fn build_overlay_ass(entries: &[ActionLogEntry], dimensions: (u32, u32)) -> String {
+pub(crate) fn build_overlay_ass(
+    entries: &[ActionLogEntry],
+    dimensions: (u32, u32),
+    source_duration: Duration,
+    frame_rate: u32,
+) -> String {
     let (width, height) = dimensions;
+    let segments = build_keep_segments(entries, source_duration, frame_rate);
+    let frame = frame_duration(frame_rate);
+
     let mut script = String::new();
     script.push_str("[Script Info]\n");
     script.push_str("ScriptType: v4.00+\n");
@@ -208,17 +382,14 @@ pub(crate) fn build_overlay_ass(entries: &[ActionLogEntry], dimensions: (u32, u3
     let mut ordered: Vec<&ActionLogEntry> = entries.iter().collect();
     ordered.sort_by_key(|entry| entry.offset);
 
-    for (index, entry) in ordered.iter().enumerate() {
-        let start = entry.offset;
-        let mut end = entry.offset + ACTION_GROUP_DURATION;
-        if let Some(next) = ordered.get(index + 1)
-            && next.offset < end
-        {
-            end = next.offset;
-        }
-        if end <= start {
+    for entry in ordered.iter() {
+        let (start, finish) = match group_source_interval(entry, source_duration, frame) {
+            Some(interval) => interval,
+            None => continue,
+        };
+        let Some((out_start, out_end)) = remap_source_interval(start, finish, &segments) else {
             continue;
-        }
+        };
 
         let widths = entry
             .labels
@@ -234,8 +405,8 @@ pub(crate) fn build_overlay_ass(entries: &[ActionLogEntry], dimensions: (u32, u3
             let x = left + pill_width / 2;
             script.push_str(&format!(
                 "Dialogue: 0,{},{},Pill,,0,0,0,,{{\\an2\\pos({x},{y})}}{}\n",
-                format_ass_timecode(start),
-                format_ass_timecode(end),
+                format_ass_timecode(out_start),
+                format_ass_timecode(out_end),
                 escape_ass_text(label),
             ));
             left += pill_width + PILL_GAP;

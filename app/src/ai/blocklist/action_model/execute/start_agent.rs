@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use shell_words::split as split_shell_words;
 use warp_cli::agent::Harness;
 use warp_errors::report_error;
@@ -322,7 +322,7 @@ impl StartAgentExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let AIAgentAction {
             action:
                 AIAgentActionType::StartAgent {
@@ -432,6 +432,8 @@ impl StartAgentExecutor {
                 harness_type,
                 title,
                 auth_secret_name,
+                runner_id,
+                agent_identity_uid,
             } => {
                 let harness_type = Harness::parse_orchestration_harness(&harness_type)
                     .map(|harness| harness.to_string())
@@ -479,6 +481,8 @@ impl StartAgentExecutor {
                         harness_type,
                         title,
                         auth_secret_name,
+                        runner_id,
+                        agent_identity_uid,
                     },
                     Some(parent_run_id),
                 )

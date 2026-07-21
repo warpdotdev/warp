@@ -3,11 +3,11 @@ use std::ops::Range;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 
+use crate::EventContext;
 use crate::elements::{Point, ZIndex};
 use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
 use crate::zoom::{Scale, ZoomFactor};
-use crate::EventContext;
 
 #[derive(Debug)]
 pub struct DispatchedEvent {

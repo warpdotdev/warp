@@ -6,8 +6,8 @@ use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 
 use super::Availability;
-use crate::search::slash_command_menu::static_commands::Argument;
 use crate::search::slash_command_menu::StaticCommand;
+use crate::search::slash_command_menu::static_commands::Argument;
 use crate::ui_components::color_dot;
 
 pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
@@ -42,6 +42,42 @@ pub const MCP: StaticCommand = StaticCommand {
     description: "View and manage MCP servers",
     icon_path: "bundled/svg/dataflow.svg",
     availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const VIEW_LOGS: StaticCommand = StaticCommand {
+    name: "/view-logs",
+    description: "Bundle your logs into a zip archive",
+    icon_path: "bundled/svg/download-01.svg",
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const ENABLE_NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
+    name: "/enable-natural-language-detection",
+    description: "Turn on natural language detection in the input",
+    icon_path: "bundled/svg/eye.svg",
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const DISABLE_NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
+    name: "/disable-natural-language-detection",
+    description: "Turn off natural language detection in the input",
+    icon_path: "bundled/svg/eye.svg",
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const EXIT: StaticCommand = StaticCommand {
+    name: "/exit",
+    description: "Exit Warp",
+    icon_path: "bundled/svg/log-out-01.svg",
+    availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
     argument: None,
 };
@@ -584,7 +620,7 @@ impl Default for Registry {
 impl Registry {
     pub fn new() -> Self {
         let mut commands = HashMap::new();
-        for command in all_commands().into_iter() {
+        for command in all_commands(settings::settings_mode()) {
             debug_assert!(
                 !command
                     .availability
@@ -622,7 +658,7 @@ impl Registry {
     }
 }
 
-fn all_commands() -> Vec<StaticCommand> {
+fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
     let mut commands = vec![
         ADD_MCP,
         ADD_PROMPT.clone(),
@@ -649,8 +685,14 @@ fn all_commands() -> Vec<StaticCommand> {
     if FeatureFlag::LocalDockerSandbox.is_enabled() {
         commands.push(CREATE_DOCKER_SANDBOX);
     }
-    if settings::settings_mode() == settings::SettingsMode::Tui {
-        commands.push(MCP);
+    if settings_mode == settings::SettingsMode::Tui {
+        commands.extend([
+            MCP,
+            EXIT,
+            VIEW_LOGS,
+            ENABLE_NATURAL_LANGUAGE_DETECTION,
+            DISABLE_NATURAL_LANGUAGE_DETECTION,
+        ]);
     }
 
     if FeatureFlag::CreatingSharedSessions.is_enabled()

@@ -1,8 +1,8 @@
 use super::{
-    slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui, TuiSlashCommand,
+    TuiSlashCommand, slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui,
 };
 use crate::features::FeatureFlag;
-use crate::search::slash_command_menu::static_commands::{commands, Availability};
+use crate::search::slash_command_menu::static_commands::{Availability, commands};
 const BASELINE_AVAILABILITY: Availability = Availability::AGENT_VIEW
     .union(Availability::AI_ENABLED)
     .union(Availability::NO_LRC_CONTROL);
@@ -56,6 +56,8 @@ fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
         ),
         (&*commands::EXPORT_TO_FILE, TuiSlashCommand::ExportToFile),
         (&commands::MCP, TuiSlashCommand::Mcp),
+        (&commands::EXIT, TuiSlashCommand::Exit),
+        (&commands::VIEW_LOGS, TuiSlashCommand::ViewLogs),
     ] {
         assert_eq!(
             TuiSlashCommand::from_static_command(command),
@@ -81,6 +83,27 @@ fn model_command_is_supported_in_tui_without_becoming_a_prompt_command() {
     assert!(slash_command_is_supported_in_tui(&commands::MODEL));
     assert!(!slash_command_is_submitted_as_prompt(&commands::MODEL));
     assert!(commands::MODEL.argument.is_none());
+}
+
+#[test]
+fn exit_command_executes_immediately_and_takes_no_argument() {
+    use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
+
+    assert_eq!(
+        TuiSlashCommand::from_static_command(&commands::EXIT),
+        Some(TuiSlashCommand::Exit)
+    );
+    assert!(slash_command_is_supported_in_tui(&commands::EXIT));
+    // No argument, and it is never reiterated into the conversation as a prompt.
+    assert!(commands::EXIT.argument.is_none());
+    assert!(!slash_command_is_submitted_as_prompt(&commands::EXIT));
+    // With no argument, accepting the command from the menu runs it immediately.
+    assert_eq!(
+        slash_command_selection_behavior(&commands::EXIT),
+        SlashCommandSelectionBehavior::Execute
+    );
+    // Available in every session context (gated to the TUI at registry level).
+    assert_eq!(commands::EXIT.availability, Availability::ALWAYS);
 }
 
 #[test]
@@ -111,15 +134,44 @@ fn cloud_mode_v2_commands_are_active_only_in_cloud_mode_v2_context() {
     assert!(commands::HARNESS.is_active(cloud_mode_v2_context));
 }
 
+#[test]
+fn natural_language_detection_commands_are_supported_in_tui() {
+    for (command, expected) in [
+        (
+            &commands::ENABLE_NATURAL_LANGUAGE_DETECTION,
+            TuiSlashCommand::EnableNaturalLanguageDetection,
+        ),
+        (
+            &commands::DISABLE_NATURAL_LANGUAGE_DETECTION,
+            TuiSlashCommand::DisableNaturalLanguageDetection,
+        ),
+    ] {
+        assert_eq!(
+            TuiSlashCommand::from_static_command(command),
+            Some(expected),
+            "{} should map to its TUI command",
+            command.name
+        );
+        assert!(
+            slash_command_is_supported_in_tui(command),
+            "{} should be supported in TUI",
+            command.name
+        );
+        // The toggle commands run immediately and are never reiterated as a prompt.
+        assert!(command.argument.is_none());
+        assert!(!slash_command_is_submitted_as_prompt(command));
+    }
+}
+
 #[cfg(all(feature = "local_fs", windows))]
 mod windows {
     use std::sync::Arc;
 
     use super::super::*;
-    use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
-    use crate::terminal::model::session::SessionInfo;
-    use crate::terminal::shell::ShellType;
     use crate::terminal::ShellLaunchData;
+    use crate::terminal::model::session::SessionInfo;
+    use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+    use crate::terminal::shell::ShellType;
 
     fn wsl_session() -> Session {
         Session::new(

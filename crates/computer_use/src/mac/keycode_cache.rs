@@ -4,14 +4,12 @@
 //! The translation depends on the current keyboard layout.
 //!
 //! The Carbon APIs used for translation (`TISCopyCurrentKeyboardInputSource`,
-//! `UCKeyTranslate`) are not thread-safe, so all cache builds are serialized through a
-//! process-wide mutex. This matters because concurrent computer-use agents can build the cache
-//! from different worker threads at the same time.
+//! `UCKeyTranslate`) must run on the main thread, so cache construction dispatches there.
 
 use std::collections::HashMap;
 use std::ptr::NonNull;
-use std::sync::Mutex;
 
+use dispatch2::run_on_main;
 use objc2_core_foundation::{CFData, CFRetained, CFString, CFType};
 use objc2_core_graphics::CGKeyCode;
 
@@ -60,36 +58,14 @@ const SHIFT_MODIFIER: u32 = 1 << 1;
 
 /// Builds a character-to-keycode cache for the current keyboard layout.
 ///
-/// # Threading
-/// This MUST be called on the main thread. `get_keyboard_layout_data` calls Carbon Text Input
-/// Source APIs (`TISCopyCurrentKeyboardInputSource` etc.) that contain an internal
-/// `dispatch_assert_queue(main)` check, so invoking them off the main thread aborts the process
-/// with a libdispatch main-thread assertion (`BUG IN CLIENT OF LIBDISPATCH ... com.apple.main-thread`).
-/// We deliberately do NOT dispatch the work to the main queue ourselves: in the headless
-/// `agent run` CLI the main thread never services the GCD main queue, so a synchronous main-queue
-/// dispatch would deadlock. Instead, callers construct the keyboard/actor on the main thread (both
-/// the GUI app and the headless runtime run the computer-use action-model body on the main thread).
-///
-/// The Carbon translation APIs (`UCKeyTranslate`) are also not thread-safe, so the build is
-/// additionally serialized through a process-wide mutex.
+/// This function dispatches to the main thread to call Carbon APIs safely.
 /// TODO(QUALITY-271): Store the modifier keys as well.
 pub fn build_cache() -> HashMap<char, CGKeyCode> {
-    // Fail loudly in debug if a caller ever invokes this off the main thread, so the regression is
-    // caught here rather than as an opaque libdispatch abort deep inside the Carbon TIS call.
-    // `MainThreadMarker::new()` returns `Some` only on the main thread.
-    debug_assert!(
-        objc2::MainThreadMarker::new().is_some(),
-        "keycode cache must be built on the main thread; Carbon Text Input Source APIs assert \
-         they run on the main thread"
-    );
-    static BUILD_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = BUILD_LOCK.lock().unwrap();
-    build_cache_locked()
+    run_on_main(|_| build_cache_on_main_thread())
 }
 
-/// Builds the cache while the process-wide build lock is held, serializing access to the
-/// non-thread-safe Carbon APIs.
-fn build_cache_locked() -> HashMap<char, CGKeyCode> {
+/// Builds the cache on the main thread where Carbon APIs are safe to call.
+fn build_cache_on_main_thread() -> HashMap<char, CGKeyCode> {
     let mut cache = HashMap::new();
 
     // Get the keyboard layout data.

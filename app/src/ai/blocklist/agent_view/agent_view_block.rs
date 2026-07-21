@@ -1,8 +1,8 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Empty, Expanded, Flex, Hoverable, MainAxisSize,
     MouseStateHandle, ParentElement, SavePosition, Shrinkable, Text,
@@ -18,15 +18,15 @@ use warpui::{
 };
 
 use super::{AgentViewController, AgentViewEntryOrigin};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::terminal::BlockListSettings;
 use crate::ui_components::blended_colors;
-use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
+use crate::ui_components::icon_with_status::{IconWithStatusVariant, render_icon_with_status};
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ToastStack, WorkspaceAction};
-use crate::BlocklistAIHistoryModel;
 
 #[derive(Default)]
 struct StateHandles {

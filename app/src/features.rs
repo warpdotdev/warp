@@ -63,6 +63,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::DefaultWaterfallMode,
         #[cfg(feature = "settings_file")]
         FeatureFlag::SettingsFile,
+        #[cfg(feature = "file_backed_execution_profiles")]
+        FeatureFlag::FileBackedExecutionProfiles,
         #[cfg(feature = "rect_selection")]
         FeatureFlag::RectSelection,
         #[cfg(feature = "alacritty_settings_import")]
@@ -85,6 +87,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CloudEnvironments,
         #[cfg(feature = "cloud_runners")]
         FeatureFlag::CloudRunners,
+        #[cfg(feature = "cloud_agent_runners")]
+        FeatureFlag::CloudAgentRunners,
         #[cfg(all(feature = "simulate_github_unauthed", debug_assertions))]
         FeatureFlag::SimulateGithubUnauthed,
         #[cfg(feature = "session_sharing_acls")]
@@ -505,6 +509,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::NldPromptHistoryMatch,
         #[cfg(feature = "prompt_cache_expiry_warning")]
         FeatureFlag::PromptCacheExpiryWarning,
+        #[cfg(feature = "osc_hyperlinks")]
+        FeatureFlag::OscHyperlinks,
         #[cfg(feature = "terminal_lifecycle_recovery")]
         FeatureFlag::TerminalLifecycleRecovery,
     ]);

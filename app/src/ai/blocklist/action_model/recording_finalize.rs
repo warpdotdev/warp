@@ -96,40 +96,61 @@ async fn finalize_recording(
     uploader: FileArtifactUploader,
     server_conversation_token: Option<crate::ai::agent::api::ServerConversationToken>,
 ) -> StopRecordingResult {
-    // Conversation cancellation discards the recording instead of publishing
-    // it. Dropping the handle kill-on-drops the ffmpeg process and removes the
-    // partial output, so there is nothing to finalize or upload.
+    // Both early exits discard the recording without uploading. They share the
+    // same mechanism — dropping the whole `ActiveRecording` struct, which
+    // kill-on-drops ffmpeg and removes the partial capture — but return
+    // different results to distinguish a user-initiated cancellation from a
+    // genuine finalization error. The cancellation check intentionally comes
+    // first so its `Cancelled` contract holds even when no action group was
+    // committed.
     if !should_upload {
         drop(recording);
         return StopRecordingResult::Cancelled;
     }
+    if recording.actions.is_empty() {
+        drop(recording);
+        return StopRecordingResult::Error(
+            "Recording contained no committed actions; no video artifact was published."
+                .to_string(),
+        );
+    }
+    let ActiveRecording {
+        handle,
+        actions,
+        frame_rate,
+        ..
+    } = recording;
     let recorder = computer_use::create_recorder();
-    let actions = recording.actions;
-    let output = match recorder.stop(recording.handle).await {
+    let output = match recorder.stop(handle).await {
         Ok(output) => output,
         Err(error) => return StopRecordingResult::Error(error.to_string()),
     };
 
     let local_path = output.path.clone();
 
-    // Burn keyboard action pills into the video before upload. Best-effort: on
-    // any failure the original capture is uploaded unannotated (a no-labels
-    // video beats no video). The overlay file, when produced, is a sibling of
-    // the mp4.
+    // Apply the post-stop smart cut (keep real action windows at 1x, drop
+    // blocked/thinking gaps) and burn the remapped overlay pills into the video
+    // before upload. Best-effort: on any failure the original 1x capture is
+    // uploaded unannotated (a no-cut video beats no video). The cut/overlay
+    // file, when produced, is a sibling of the mp4.
     let mut upload_path = local_path.clone();
     let mut overlay_path: Option<std::path::PathBuf> = None;
-    if !actions.is_empty() {
-        match computer_use::burn_in_action_log(&local_path, &actions, (output.width, output.height))
-            .await
-        {
-            Ok(path) if path != local_path => {
-                overlay_path = Some(path.clone());
-                upload_path = path;
-            }
-            Ok(_) => {}
-            Err(error) => {
-                log::warn!("Recording overlay burn-in failed; uploading original: {error}");
-            }
+    match computer_use::burn_in_action_log(
+        &local_path,
+        &actions,
+        (output.width, output.height),
+        output.duration,
+        frame_rate,
+    )
+    .await
+    {
+        Ok(path) if path != local_path => {
+            overlay_path = Some(path.clone());
+            upload_path = path;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("Recording cut/overlay burn-in failed; uploading original: {error}");
         }
     }
 
@@ -175,7 +196,7 @@ fn build_finalize_future(
     ctx: &AppContext,
 ) -> (
     String,
-    impl Future<Output = StopRecordingResult> + Send + 'static,
+    impl Future<Output = StopRecordingResult> + Send + 'static + use<>,
 ) {
     let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
         .conversation(&recording.conversation_id)

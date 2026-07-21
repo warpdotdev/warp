@@ -1,5 +1,5 @@
-use ::local_control::protocol::TargetSelector;
 use ::local_control::InstanceId;
+use ::local_control::protocol::TargetSelector;
 use warpui::App;
 
 use super::create_tab;

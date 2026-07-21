@@ -16,12 +16,12 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use warp::tui_export::format_credits;
+use warpui_core::AppContext;
 use warpui_core::elements::animation::{AnimationClock, Keyframe, KeyframeTimeline};
 use warpui_core::elements::shimmer_math::ShimmerConfig;
 use warpui_core::elements::tui::{
     Modifier, TuiAnimated, TuiElement, TuiFlex, TuiShimmeringText, TuiStyle, TuiText,
 };
-use warpui_core::AppContext;
 
 use crate::tui_builder::TuiUiBuilder;
 
