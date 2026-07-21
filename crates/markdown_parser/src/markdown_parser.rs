@@ -1810,15 +1810,35 @@ fn parse_inline_token_link_end<'a, E: ContextError<&'a str> + ParseError<&'a str
     context("link_end", map(tag("]"), |_| InlineToken::LinkEnd))(input)
 }
 
+/// Recognize the attribute region between a start tag's name and its closing `>`, honoring
+/// quoted attribute values so a `>` inside a quoted value does not end the tag early.
+///
+/// Per HTML syntax an attribute value is double-quoted, single-quoted, or unquoted; only a `>`
+/// outside quotes closes the tag. This scans a sequence of chunks — a fully-consumed quoted
+/// string (matching quotes), or a run of characters that are neither a quote nor `>` — up to but
+/// not including the closing `>`. The attributes are discarded (only the recognized slice is used
+/// for the verbatim-literal fallback), so this deliberately does not validate attribute structure;
+/// it only needs to find the real tag close.
+fn parse_html_attributes<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, &'a str, E> {
+    recognize(many0(alt((
+        // A double- or single-quoted value, including any `>` inside it.
+        recognize(delimited(char('"'), take_while(|c| c != '"'), char('"'))),
+        recognize(delimited(char('\''), take_while(|c| c != '\''), char('\''))),
+        // A run of unquoted characters that neither open a quote nor close the tag.
+        take_till1(|c| c == '"' || c == '\'' || c == '>'),
+    ))))(input)
+}
+
 /// Recognize an inline HTML start tag `<name …>` whose attributes are ignored, returning the
 /// verbatim matched slice (tag name, any attributes, and the angle brackets).
 ///
 /// Per HTML syntax, an attribute must be separated from the tag name by whitespace, so only
 /// `<name>` and `<name<whitespace>…>` match; `<namex>` is a different element and does not.
-/// Attribute content is consumed up to the first `>`; a `>` inside a quoted attribute value
-/// (`<u title="a>b">`) would split early, matching how the rest of this tokenizer treats tags and
-/// not a case the viewer needs to round-trip. The closing form `</name>` never matches here because
-/// its second character is `/`, not the tag name.
+/// The attribute region is scanned by [`parse_html_attributes`], which honors quoted values so a
+/// `>` inside a quoted attribute value (`<u title="a>b">`) does not split the tag early. The
+/// closing form `</name>` never matches here because its second character is `/`, not the tag name.
 fn parse_html_start_tag<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     name: &'static str,
 ) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str, E> {
@@ -1829,8 +1849,8 @@ fn parse_html_start_tag<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             alt((
                 // Bare tag: name immediately followed by `>`.
                 recognize(char('>')),
-                // Attributed tag: whitespace, then any attribute text up to the closing `>`.
-                recognize(tuple((space1, take_until(">"), char('>')))),
+                // Attributed tag: whitespace, then the attribute region, then the closing `>`.
+                recognize(tuple((space1, parse_html_attributes, char('>')))),
             )),
         )))(input)
     }

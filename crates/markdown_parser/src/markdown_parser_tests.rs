@@ -2269,6 +2269,44 @@ fn test_parse_underline_ignores_attributes() {
 }
 
 #[test]
+fn test_parse_attribute_value_containing_gt_does_not_split_early() {
+    // A `>` inside a quoted attribute value must not be mistaken for the tag close. The
+    // round-1 `take_until(">")` scan split `<sub title="a>b">2</sub>` at the inner `>`, so the
+    // opener was never recognized as one attributed tag and the leftover `b">2` leaked into
+    // content. All three attributed tags share the same helper, so all three are checked.
+    assert_eq!(
+        parse_all("<sub title=\"a>b\">2</sub>", parse_inline),
+        vec![FormattedTextFragment::subscript("2")]
+    );
+    assert_eq!(
+        parse_all("<sup title=\"a>b\">2</sup>", parse_inline),
+        vec![FormattedTextFragment::superscript("2")]
+    );
+    assert_eq!(
+        parse_all("<u title=\"a>b\">t</u>", parse_inline),
+        vec![FormattedTextFragment::underline("t")]
+    );
+    // Single-quoted values with `>` behave the same.
+    assert_eq!(
+        parse_all("<sub title='a>b'>2</sub>", parse_inline),
+        vec![FormattedTextFragment::subscript("2")]
+    );
+}
+
+#[test]
+fn test_parse_unclosed_tag_with_gt_in_quoted_value_degrades_verbatim() {
+    // When an attributed opener whose quoted value contains `>` has no matching close, it must
+    // degrade to the ORIGINAL source verbatim — the full opener (including the inner `>`) plus
+    // trailing content — not a slice truncated at the inner `>`.
+    assert_eq!(
+        parse_all("H<sub title=\"a>b\">2 and more", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "H<sub title=\"a>b\">2 and more"
+        )]
+    );
+}
+
+#[test]
 fn test_parse_empty_subscript() {
     assert_eq!(
         parse_all("a<sub></sub>b", parse_inline),
