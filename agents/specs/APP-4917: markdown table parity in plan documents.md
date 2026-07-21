@@ -14,7 +14,7 @@ Suraj Gupta reported that plan / Warp Drive notebook documents feel like a diffe
 *Key design choices:*
 1. Scope to table-rendering parity, not editor unification — the notebook (`NotebooksEditorModel`, block model, Warp Drive/SQLite/version persistence, agent-diff streaming) and code editor (`CodeEditorView`, line/character model, LSP, file-bytes persistence, raw source) are semantically distinct; unifying them is out of proportion to the request.
 2. Treat the existing shared rich-text/table stack (`Buffer::from_markdown` GFM parsing, `BufferBlockStyle::Table`, `TableStyle`, `MarkdownTableAppearance`, GFM/HTML round-trip) as the single source of truth; do not add another isolated renderer.
-3. Resolve the GUI-vs-TUI parse gate divergence and make the `MarkdownTables` flag rollout explicit (promote toward removal or explicitly document channel state) so behavior is deterministic.
+3. Resolve the GUI-vs-TUI parse gate divergence by making the TUI honor the same `MarkdownTables` flag as the GUI, and make the flag rollout explicit (promote toward removal only in a follow-up) so behavior is deterministic.
 
 == PRODUCT ==
 
@@ -28,7 +28,7 @@ Suraj Gupta reported that plan / Warp Drive notebook documents feel like a diffe
 
 2. **Agent-authored plans.** When the agent creates or edits a plan via `CreateDocuments`/`EditDocuments` (applied through `apply_diffs` → `reset_with_markdown`), any valid GFM table in the resulting document renders as a table in the plan pane, identical to a table typed by a user, once the applied document is re-parsed.
 
-3. **TUI plan parity.** The TUI plan renderer (`tui_plan_view.rs`) renders valid GFM tables in plan documents, consistent with the GUI plan surface for the same content. The GUI (flag-gated) and TUI (currently ungated) table-parse decisions are reconciled to a single, documented gate so the two surfaces cannot disagree for the same build.
+3. **TUI plan parity.** The TUI plan renderer (`tui_plan_view.rs`) renders valid GFM tables in plan documents, consistent with the GUI plan surface for the same content. The TUI must honor the same `FeatureFlag::MarkdownTables` gate as the GUI: enabled builds parse/render tables, while disabled builds use the documented non-table fallback, so the two surfaces cannot disagree for the same build.
 
 4. **Alignment + inline formatting.** Left / center / right column alignment is preserved, and inline formatting inside cells (bold, italic, bold-italic, inline code, strikethrough, links, and escaped `\|` rendered as a literal pipe) renders correctly on every surface that renders the table.
 
@@ -65,13 +65,13 @@ Suraj Gupta reported that plan / Warp Drive notebook documents feel like a diffe
 
 - **(a) Unify plan/notebook editing with general `.md` editing (rejected).** Would require merging `NotebooksEditorModel` (block model; embedded workflows, command/mermaid child models; Warp Drive/SQLite persistence and AI version history; agent-diff streaming) with `CodeEditorView` (line/character model; LSP; syntax highlighting; vim; find/replace; file-bytes persistence; diff/code-review integration). These are semantically different surfaces (rendered rich-text vs raw source). Pros: one editing experience. Cons: very large blast radius across LSP, code review, diff viewer, vim, notebook blocks, and two persistence models; high regression risk; the user's actual pain (tables not rendering in plans) does not require it. **Not justified.**
 - **(b) Markdown-table rendering parity in plan/notebook documents (chosen).** Reuse the existing shared parser/lowering/renderer/round-trip; verify and regression-lock parity across all notebook surfaces + TUI; reconcile the GUI/TUI parse gate; make the flag rollout explicit. Pros: directly fixes the report, low incremental code, deterministic to test. Cons: does not merge the two editors (acceptable — that is a non-goal).
-- **Flag rollout sub-decision.** Options: (i) leave the flag as a default-on Cargo feature and only document + regression-test it; (ii) promote it toward removal (delete the flag and the disabled code paths) now that it ships on by default; (iii) add channel entries. Recommended: **(i) for this ticket** — keep the flag as the single gate, add the tests/UI verification and the GUI/TUI reconciliation, and record flag removal as an explicit follow-up (per the repo's remove-feature-flag process) rather than bundling a flag-removal into a parity fix. The chosen approach during implementation must be stated in the PR.
+- **Flag rollout sub-decision.** Options: (i) leave the flag as a default-on Cargo feature and only document + regression-test it; (ii) promote it toward removal (delete the flag and the disabled code paths) now that it ships on by default; (iii) add channel entries. Selected: **(i) for this ticket** — keep `MarkdownTables` as the single GUI/TUI gate, add the tests/UI verification and the explicit default-on documentation, and record flag removal as a follow-up (per the repo's remove-feature-flag process) rather than bundling flag removal into a parity fix.
 
 *Proposed changes (implementation-time; this is a spec, not an implementation):*
 
 1. **Verify parity, then close any gap.** Confirm that AI planning documents, Warp Drive notebooks, and file-backed `.md` notebooks all render a valid GFM table at HEAD (they share `from_markdown`, so they should). For any surface that does not, route it through the shared `reset_with_markdown`/`from_markdown` path rather than adding a bespoke renderer.
-2. **Reconcile the GUI/TUI parse gate.** Make the TUI plan renderer honor the same `MarkdownTables` decision as the GUI (or make the decision unconditional in both) so the two surfaces render identically for the same build. Document the chosen single gate.
-3. **Make the flag rollout explicit.** Add regression tests asserting behavior with `MarkdownTables` enabled and disabled, and document (in code near the flag and in the PR) that it ships on by default via the `default` Cargo feature. If flag removal is chosen instead, follow the repo's feature-flag removal process and delete the disabled fallback branches.
+2. **Reconcile the GUI/TUI parse gate.** Update the TUI plan renderer to branch on `FeatureFlag::MarkdownTables`, using `parse_markdown_with_gfm_tables` when enabled and the ordinary `parse_markdown` path when disabled. This is the selected single gate for both front-ends; do not make table parsing unconditional in only one surface.
+3. **Make the flag rollout explicit.** Keep `MarkdownTables` as the default-on Cargo feature and single runtime gate for this ticket. Add regression tests asserting enabled and disabled behavior, and document (in code near the flag and in the PR) that it ships on by default via the `default` Cargo feature. Flag removal is a separate follow-up and is not part of this implementation.
 4. **Do not touch** `CodeEditorView` raw-source behavior or the file-notebook Raw (code-pane) mode.
 
 *Open questions resolved:*
@@ -79,8 +79,8 @@ Suraj Gupta reported that plan / Warp Drive notebook documents feel like a diffe
 - *Is the missing rendering caused by the flag being off?* → No. Resolved from `app/Cargo.toml` + `app/src/features.rs`: `MarkdownTables` is a default Cargo feature enabled on all channels. Most likely a stale build at report time and/or the residual gaps closed here.
 - *Do agent-streamed plans reparse tables?* → Yes. Resolved from `app/src/notebooks/editor/model.rs:1808-1854`: `apply_diffs` re-serializes to Markdown and calls `reset_with_markdown` → `from_markdown`.
 - *Do tables round-trip for persistence/restore?* → Yes. Resolved from `crates/editor/src/content/markdown.rs:1270-1291` and `buffer.rs:2374-2520`.
-- *Is the GUI/TUI gate consistent?* → No, today: GUI is flag-gated (`buffer.rs:850`), TUI is ungated (`tui_plan_view.rs:128`). Must be reconciled (proposed change 2).
-- *Live-typed tables (not via reparse)?* → GFM lowering happens on full (re)parse (`from_markdown`), not on incremental keystroke insertion; `apply_diffs` and `reset_with_markdown` both reparse, so agent edits and document (re)loads lower tables. Whether keystroke-by-keystroke live lowering of a freshly typed table is required is a **product follow-up**, not part of parity, and is called out as a known limitation to confirm during UI verification.
+- *Is the GUI/TUI gate consistent?* → No, today: GUI is flag-gated (`buffer.rs:850`), TUI is ungated (`tui_plan_view.rs:128`). The selected fix is for TUI to honor the GUI's `MarkdownTables` gate (proposed change 2), with flag-off fallback covered by tests.
+- *Live-typed tables (not via reparse)?* → GFM lowering happens on full (re)parse (`from_markdown`), not on incremental keystroke insertion; `apply_diffs` and `reset_with_markdown` both reparse, so agent edits and document (re)loads lower tables. Keystroke-by-keystroke promotion of a newly typed table is explicitly out of scope for this ticket; the UI verification confirms that existing editable table interactions do not regress.
 
 *Validation & verification criteria* (must ALL pass before merge):
 
@@ -107,6 +107,6 @@ User-facing UI verification (per `factory-verification`; capture screenshot/visu
 16. **Agent-authored plan.** Have the agent create/edit a plan with a table via `CreateDocuments`/`EditDocuments`; confirm the table renders in the plan pane after the edit is applied.
 17. **TUI plan.** In the TUI (`./script/run-tui`), render a plan containing the same table; confirm it renders as a table consistent with the GUI.
 18. **Fallback + wide-table checks.** Confirm malformed table-like content and a fenced code block containing pipes do not render as tables; confirm a wide table remains readable/scrollable and selectable; confirm cursor/selection/link interactions in an editable notebook table are unchanged.
-19. **Flag-off sanity (if the flag is retained).** With `MarkdownTables` disabled for the build, confirm every surface degrades to readable non-table text with no crash or content loss.
+19. **Flag-off sanity.** With `MarkdownTables` disabled for the build, confirm every surface degrades to readable non-table text with no crash or content loss.
 
 Reproduction closure: the exact report ("plan/notebook documents don't render Markdown tables like `.md` files do") no longer reproduces — criteria 13–17 demonstrate the same GFM table rendering identically in plan/notebook surfaces and the `.md` rendered view; and the parser/round-trip/gate tests (1–10) lock the behavior so it cannot silently regress.
