@@ -8,10 +8,10 @@ use super::{
     TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
 };
 use crate::elements::tui::{
-    Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiContainer, TuiElement, TuiEvent,
+    Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiContainer, TuiElement, TuiEvent,
     TuiEventContext, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect,
     TuiScreenPoint, TuiScreenPosition, TuiScrollable, TuiScrollableElement, TuiSelectable,
-    TuiSelectionHandle, TuiSelectionSpan, TuiSize, TuiText,
+    TuiSelectionHandle, TuiSelectionSpan, TuiSize, TuiStyle, TuiText,
 };
 use crate::event::ModifiersState;
 use crate::presenter::tui::TuiPresenter;
@@ -215,7 +215,11 @@ fn viewport_with_state(
     state: TuiViewportedListState,
     content: FakeContent,
 ) -> TuiViewportedList<FakeContent> {
-    TuiViewportedList::new(state, content)
+    TuiViewportedList::new(state, content, viewport_selection_style())
+}
+
+fn viewport_selection_style() -> TuiStyle {
+    TuiStyle::default().fg(Color::Black).bg(Color::White)
 }
 
 /// Verifies viewport geometry is unavailable until layout establishes it.
@@ -395,6 +399,7 @@ fn bottom_clipped_item_is_laid_out_once() {
             LayoutCountingContent {
                 layout_count: layout_count.clone(),
             },
+            viewport_selection_style(),
         );
 
         render_viewport(&app, &mut viewport, TuiSize::new(8, 2));
@@ -539,7 +544,8 @@ fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
 fn scrolling_up_works_over_opaque_content_in_a_clipped_layer() {
     App::test((), |app| async move {
         let state = TuiViewportedListState::new_at_end();
-        let viewport = TuiViewportedList::new(state.clone(), OpaqueContent);
+        let viewport =
+            TuiViewportedList::new(state.clone(), OpaqueContent, viewport_selection_style());
         let mut scrollable = TuiScrollable::new(viewport.finish_scrollable());
         let size = TuiSize::new(10, 3);
 
@@ -586,6 +592,7 @@ fn selectable_viewport_highlights_and_copies_linear_rows() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 3)]);
         let state = TuiViewportedListState::new_at_end();
+        let selection_style = viewport_selection_style();
         let viewport = viewport_with_state(state.clone(), content);
         let copies = Rc::new(RefCell::new(Vec::new()));
         let copies_for_callback = copies.clone();
@@ -613,8 +620,12 @@ fn selectable_viewport_highlights_and_copies_linear_rows() {
             }
             buffer
         });
-        assert!(buffer[(0, 0)].modifier.contains(Modifier::REVERSED));
-        assert!(buffer[(2, 1)].modifier.contains(Modifier::REVERSED));
+        for position in [(0, 0), (2, 1)] {
+            let cell = &buffer[position];
+            assert_eq!(Some(cell.fg), selection_style.fg);
+            assert_eq!(Some(cell.bg), selection_style.bg);
+            assert!(!cell.modifier.contains(Modifier::REVERSED));
+        }
         assert!(mouse(&app, &mut element, size, left_up(2, 1)));
         assert_eq!(copies.borrow().as_slice(), ["1:0\n1:1"]);
         assert!(selection.range().is_some());
@@ -754,19 +765,6 @@ fn selectable_prefers_smart_selection_over_word_boundaries() {
 
         assert_eq!(copies.borrow().as_slice(), ["foo-bar"]);
     });
-}
-
-#[test]
-fn selection_reverse_toggles_existing_modifier() {
-    let area = TuiRect::new(0, 0, 2, 1);
-    let mut buffer = TuiBuffer::empty(area);
-    buffer[(0, 0)].modifier.insert(Modifier::REVERSED);
-    {
-        let mut surface = TuiPaintSurface::new(&mut buffer);
-        super::toggle_selection_reverse(&mut surface, TuiScreenPosition::new(0, 0), area.as_size());
-    }
-    assert!(!buffer[(0, 0)].modifier.contains(Modifier::REVERSED));
-    assert!(buffer[(1, 0)].modifier.contains(Modifier::REVERSED));
 }
 
 /// Verifies wheel scrolling preserves persistent selection anchors.
@@ -923,7 +921,7 @@ fn drag_past_edge_preserves_selection_when_scroll_changes_a_visible_glyph() {
         let content = ScrollSensitiveContent { row_count: 10 };
         let state = TuiViewportedListState::new_at_end();
         state.scroll_to_rows_from_top(5);
-        let viewport = TuiViewportedList::new(state.clone(), content);
+        let viewport = TuiViewportedList::new(state.clone(), content, viewport_selection_style());
         let selection = TuiSelectionHandle::default();
         let selectable = TuiSelectable::new(selection.clone(), viewport);
         let mut element = TuiScrollable::new(selectable.finish_scrollable());
@@ -1012,7 +1010,7 @@ fn repaint_after_mouse_up_preserves_selection_on_glyph_change() {
         };
         let state = TuiViewportedListState::new_at_end();
         state.scroll_to_rows_from_top(0);
-        let viewport = TuiViewportedList::new(state, content);
+        let viewport = TuiViewportedList::new(state, content, viewport_selection_style());
         let selection = TuiSelectionHandle::default();
         let selectable = TuiSelectable::new(selection.clone(), viewport);
         let mut element = TuiScrollable::new(selectable.finish_scrollable());
@@ -1295,6 +1293,7 @@ fn single_element_viewport(
         SingleElementContent {
             element: RefCell::new(Some(element)),
         },
+        viewport_selection_style(),
     )
 }
 

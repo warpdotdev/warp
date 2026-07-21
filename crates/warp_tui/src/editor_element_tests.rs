@@ -16,9 +16,8 @@ use warpui_core::event::KeyEventDetails;
 use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext, ModelHandle};
 
-use crate::tui_builder::TuiUiBuilder;
-
 use super::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
+use crate::tui_builder::TuiUiBuilder;
 
 /// A char-cell editor model seeded with `text`.
 fn model(ctx: &mut AppContext, text: &str) -> ModelHandle<CodeEditorModel> {

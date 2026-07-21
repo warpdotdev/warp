@@ -321,7 +321,7 @@ impl TuiUiBuilder {
             .bg(self.orchestration_surface_background())
     }
 
-    /// Solid selection background for text selection in editor elements.
+    /// Solid selection style shared by editors and transcript viewports.
     /// Uses the theme foreground as the selection background and the
     /// terminal background as the selection foreground, giving a consistent
     /// solid highlight instead of per-cell reversal.
