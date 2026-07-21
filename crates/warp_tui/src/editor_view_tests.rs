@@ -276,7 +276,14 @@ fn keybinding_initializer_registers_line_start_for_input_and_editor() {
                 "alt-enter".to_string(),
             ])
         );
-        assert!(triggers_for("tui:editor:insert_newline").is_empty());
+        assert_eq!(
+            triggers_for("tui:editor:insert_newline"),
+            HashSet::from([
+                "shift-enter".to_string(),
+                "ctrl-j".to_string(),
+                "alt-enter".to_string(),
+            ])
+        );
         assert!(app.read(|ctx| ctx.get_binding_by_name("tui:editor:move_up").is_none()));
     });
 }

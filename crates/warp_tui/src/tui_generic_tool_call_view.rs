@@ -75,7 +75,7 @@ impl TuiGenericToolCallView {
         let action_id = self.action.id.clone();
         let action_model = self.action_model.clone();
         let prompt = ctx.add_typed_action_tui_view(move |ctx| {
-            TuiPermissionPrompt::new(action_model, action_id, false, ctx)
+            TuiPermissionPrompt::new(action_model, action_id, None, ctx)
         });
         ctx.subscribe_to_view(&prompt, |view, _, event, ctx| match event {
             TuiPermissionPromptEvent::AcceptRequested => view.accept(ctx),
@@ -90,7 +90,6 @@ impl TuiGenericToolCallView {
                 view.invalidate_layout(ctx);
             }
             TuiPermissionPromptEvent::LayoutChanged => view.invalidate_layout(ctx),
-            TuiPermissionPromptEvent::EditBodyRequested => {}
         });
         self.permission_prompt = Some(prompt);
         self.invalidate_layout(ctx);
@@ -279,9 +278,11 @@ impl TuiGenericToolCallView {
         render_permission_card(
             prompt,
             self.permission_question(),
-            TuiText::new(self.details())
-                .with_style(builder.primary_text_style())
-                .finish(),
+            Some(
+                TuiText::new(self.details())
+                    .with_style(builder.primary_text_style())
+                    .finish(),
+            ),
             app,
         )
     }

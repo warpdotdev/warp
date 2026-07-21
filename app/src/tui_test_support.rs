@@ -30,7 +30,7 @@ use crate::network::NetworkStatus;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::manager::SettingsManager;
-use crate::settings::{AISettings, init_and_register_user_preferences};
+use crate::settings::{AISettings, PrivacySettings, init_and_register_user_preferences};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::user_config::WarpConfig;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -64,6 +64,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(|ctx| {
         let (team_client, workspace_client) = {
             let provider = ServerApiProvider::as_ref(ctx);

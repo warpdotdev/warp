@@ -1,4 +1,6 @@
-//! Reusable Yes/No/Other interaction for TUI tool-call permission requests.
+//! Reusable interaction for TUI tool-call permission requests.
+
+use std::collections::HashMap;
 
 use warp::tui_export::{
     AIAgentActionId, BlocklistAIActionEvent, BlocklistAIActionModel, OptionFooter, OptionRow,
@@ -6,7 +8,7 @@ use warp::tui_export::{
 };
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::tui::{
-    Modifier, TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiText,
+    Modifier, TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
@@ -14,13 +16,17 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
+use crate::editor_view::TuiEditorView;
 use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
-use crate::option_selector::{OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent};
+use crate::option_selector::{
+    OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorAction, TuiOptionSelectorEvent,
+};
 use crate::tui_builder::TuiUiBuilder;
 
 const PERMISSION_PROMPT_ACTIVE: &str = "TuiPermissionPromptActive";
 const YES_ID: &str = "yes";
 const NO_ID: &str = "no";
+const EDIT_ID: &str = "edit";
 
 /// Registers controls used while a permission prompt owns focus.
 pub(crate) fn init(app: &mut AppContext) {
@@ -73,11 +79,11 @@ pub(crate) fn init(app: &mut AppContext) {
 pub(crate) enum TuiPermissionPromptAction {
     /// Confirms the highlighted response.
     Confirm,
-    /// Moves to the previous response or requests body editing above Yes.
+    /// Moves to the previous response, cycling through the optional body editor.
     MoveUp,
-    /// Moves to the next response.
+    /// Moves to the next response, cycling through the optional body editor.
     MoveDown,
-    /// Requests editing from a host with an editable action body.
+    /// Focuses the optional editable action body.
     EditBody,
     /// Unwinds Other editing, otherwise rejects the request.
     CancelOrBack,
@@ -87,8 +93,6 @@ pub(crate) enum TuiPermissionPromptAction {
 pub(crate) enum TuiPermissionPromptEvent {
     /// The user selected Yes.
     AcceptRequested,
-    /// The user requested editing of the action body.
-    EditBodyRequested,
     /// The user submitted replacement guidance from Other.
     ReplacementGuidanceSubmitted(String),
     /// The user selected No or cancelled the request.
@@ -99,13 +103,12 @@ pub(crate) enum TuiPermissionPromptEvent {
     LayoutChanged,
 }
 
-/// Reusable Yes/No/Other selector for one blocked tool action.
+/// Reusable selector for one blocked tool action.
 pub(crate) struct TuiPermissionPrompt {
     action_model: ModelHandle<BlocklistAIActionModel>,
     action_id: AIAgentActionId,
     selector: ViewHandle<TuiOptionSelector>,
-    body_editable: bool,
-    body_editing: bool,
+    body_editor: Option<ViewHandle<TuiEditorView>>,
 }
 
 impl TuiPermissionPrompt {
@@ -113,38 +116,56 @@ impl TuiPermissionPrompt {
     pub(crate) fn new(
         action_model: ModelHandle<BlocklistAIActionModel>,
         action_id: AIAgentActionId,
-        body_editable: bool,
+        body_editor: Option<ViewHandle<TuiEditorView>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let selector = ctx.add_typed_action_tui_view(TuiOptionSelector::new);
         selector.update(ctx, |selector, ctx| {
+            if let Some(body_editor) = body_editor.as_ref() {
+                selector.set_leading_editor(body_editor.clone(), ctx);
+            }
+            let mut rows = vec![
+                OptionRow {
+                    id: YES_ID.to_owned(),
+                    label: "yes".to_owned(),
+                    harness: None,
+                    badge: None,
+                    disabled_reason: None,
+                },
+                OptionRow {
+                    id: NO_ID.to_owned(),
+                    label: "no".to_owned(),
+                    harness: None,
+                    badge: None,
+                    disabled_reason: None,
+                },
+            ];
+            if body_editor.is_some() {
+                rows.push(OptionRow {
+                    id: EDIT_ID.to_owned(),
+                    label: "edit command".to_owned(),
+                    harness: None,
+                    badge: None,
+                    disabled_reason: None,
+                });
+            }
             selector.set_page(
                 OptionSelectorPage {
                     header: None,
                     snapshot: OptionSnapshot {
-                        rows: vec![
-                            OptionRow {
-                                id: YES_ID.to_owned(),
-                                label: "yes".to_owned(),
-                                harness: None,
-                                badge: None,
-                                disabled_reason: None,
-                            },
-                            OptionRow {
-                                id: NO_ID.to_owned(),
-                                label: "no".to_owned(),
-                                harness: None,
-                                badge: None,
-                                disabled_reason: None,
-                            },
-                        ],
+                        rows,
                         selected_id: Some(YES_ID.to_owned()),
                         status: OptionSourceStatus::Ready,
-                        footer: Some(OptionFooter::CustomText {
+                        footer: body_editor.is_none().then(|| OptionFooter::CustomText {
                             label: "Other".to_owned(),
                         }),
                     },
                     searchable: false,
+                    row_shortcuts: if body_editor.is_some() {
+                        HashMap::from([(EDIT_ID.to_owned(), 'e')])
+                    } else {
+                        Default::default()
+                    },
                 },
                 ctx,
             );
@@ -171,8 +192,7 @@ impl TuiPermissionPrompt {
             action_model,
             action_id,
             selector,
-            body_editable,
-            body_editing: false,
+            body_editor,
         }
     }
 
@@ -184,16 +204,28 @@ impl TuiPermissionPrompt {
             .is_some_and(|status| status.is_blocked())
     }
 
-    /// Focuses the option selector or its active Other editor.
+    /// Focuses the option selector.
     pub(crate) fn focus(&self, ctx: &mut ViewContext<Self>) {
         ctx.focus(&self.selector);
     }
 
-    /// Returns whether the option selector should currently consume input.
-    fn owns_input(&self, app: &AppContext) -> bool {
-        self.is_active(app) && !self.body_editing
+    /// Restores Yes as the highlighted response after body editing.
+    pub(crate) fn restore_options_focus(&self, ctx: &mut ViewContext<Self>) {
+        self.selector.update(ctx, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::SelectItemWithoutConfirm(0), ctx)
+        });
+    }
+    #[cfg(test)]
+    pub(crate) fn highlighted_index(&self, app: &AppContext) -> Option<usize> {
+        self.selector.as_ref(app).highlighted_index()
     }
 
+    /// Updates validation copy rendered below the optional body editor.
+    pub(crate) fn set_body_error(&self, error: Option<String>, ctx: &mut ViewContext<Self>) {
+        self.selector.update(ctx, |selector, ctx| {
+            selector.set_leading_editor_error(error, ctx)
+        });
+    }
     /// Translates selector outcomes into tool-host permission events.
     fn handle_selector_event(
         &mut self,
@@ -206,6 +238,10 @@ impl TuiPermissionPrompt {
             }
             TuiOptionSelectorEvent::Confirmed { id } if id == NO_ID => {
                 ctx.emit(TuiPermissionPromptEvent::RejectRequested);
+            }
+            TuiOptionSelectorEvent::Confirmed { id } if id == EDIT_ID => {
+                self.selector
+                    .update(ctx, |selector, ctx| selector.focus_leading_editor(ctx));
             }
             TuiOptionSelectorEvent::CustomTextSubmitted { value } => {
                 ctx.emit(TuiPermissionPromptEvent::ReplacementGuidanceSubmitted(
@@ -220,19 +256,6 @@ impl TuiPermissionPrompt {
             TuiOptionSelectorEvent::Confirmed { .. } | TuiOptionSelectorEvent::RetryRequested => {}
         }
     }
-
-    /// Hands focus to an editable action body when the host supports one.
-    fn request_body_edit(&mut self, ctx: &mut ViewContext<Self>) {
-        if !self.body_editable {
-            return;
-        }
-        self.body_editing = true;
-        self.selector
-            .update(ctx, |selector, ctx| selector.clear_highlight(ctx));
-        ctx.emit(TuiPermissionPromptEvent::EditBodyRequested);
-        self.invalidate_layout(ctx);
-    }
-
     /// Requests remeasurement by the tool host.
     fn invalidate_layout(&self, ctx: &mut ViewContext<Self>) {
         ctx.emit(TuiPermissionPromptEvent::LayoutChanged);
@@ -246,7 +269,7 @@ impl TuiPermissionPrompt {
             ("Esc".to_owned(), builder.primary_text_style()),
             (" to cancel  ".to_owned(), builder.muted_text_style()),
         ];
-        if self.body_editable {
+        if self.body_editor.is_some() {
             spans.extend([
                 ("Ctrl+E".to_owned(), builder.primary_text_style()),
                 (" to edit/save  ".to_owned(), builder.muted_text_style()),
@@ -264,7 +287,7 @@ impl TuiPermissionPrompt {
 pub(crate) fn render_permission_card(
     prompt: &ViewHandle<TuiPermissionPrompt>,
     title: impl Into<String>,
-    body: Box<dyn TuiElement>,
+    body: Option<Box<dyn TuiElement>>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
@@ -281,18 +304,17 @@ pub(crate) fn render_permission_card(
     .with_background(builder.permission_header_background())
     .with_padding_x(1)
     .finish();
-    let body = TuiContainer::new(
-        TuiFlex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .child(body)
-            .child(TuiText::new(" ").finish())
-            .child(TuiChildView::new(prompt).finish())
-            .finish(),
-    )
-    .with_background(builder.permission_surface_background())
-    .with_padding_x(3)
-    .with_padding_y(1)
-    .finish();
+    let mut body_content = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+    if let Some(body) = body {
+        body_content.add_child(body);
+        body_content.add_child(TuiText::new(" ").finish());
+    }
+    body_content.add_child(TuiChildView::new(prompt).finish());
+    let body = TuiContainer::new(body_content.finish())
+        .with_background(builder.permission_surface_background())
+        .with_padding_x(3)
+        .with_padding_y(1)
+        .finish();
     TuiFlex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .child(header)
@@ -320,7 +342,11 @@ impl TuiView for TuiPermissionPrompt {
 
     fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
         let mut context = Self::default_keymap_context();
-        if self.owns_input(app) {
+        let body_editor_focused = self
+            .body_editor
+            .as_ref()
+            .is_some_and(|editor| editor.as_ref(app).is_focused());
+        if self.is_active(app) && !body_editor_focused {
             context.set.insert(PERMISSION_PROMPT_ACTIVE);
         }
         context
@@ -335,32 +361,27 @@ impl TypedActionView for TuiPermissionPrompt {
     type Action = TuiPermissionPromptAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
-        if !self.owns_input(ctx) {
+        if !self.is_active(ctx) {
             return;
         }
         match action {
             TuiPermissionPromptAction::Confirm => {
-                self.selector
-                    .update(ctx, |selector, ctx| selector.confirm_selected(ctx));
+                self.selector.update(ctx, |selector, ctx| {
+                    selector.confirm_selected(ctx);
+                });
             }
             TuiPermissionPromptAction::MoveUp => {
-                let edit_body = self.body_editable
-                    && self.selector.read(ctx, |selector, _| {
-                        !selector.is_editing_custom_text()
-                            && selector.highlighted_index() == Some(0)
-                    });
-                if edit_body {
-                    self.request_body_edit(ctx);
-                } else {
-                    self.selector
-                        .update(ctx, |selector, ctx| selector.move_up(ctx));
-                }
+                self.selector
+                    .update(ctx, |selector, ctx| selector.move_up(ctx));
             }
             TuiPermissionPromptAction::MoveDown => {
                 self.selector
                     .update(ctx, |selector, ctx| selector.move_down(ctx));
             }
-            TuiPermissionPromptAction::EditBody => self.request_body_edit(ctx),
+            TuiPermissionPromptAction::EditBody => {
+                self.selector
+                    .update(ctx, |selector, ctx| selector.focus_leading_editor(ctx));
+            }
             TuiPermissionPromptAction::CancelOrBack => {
                 let handled = self
                     .selector

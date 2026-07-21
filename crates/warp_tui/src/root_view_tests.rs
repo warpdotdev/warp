@@ -4,6 +4,7 @@ use warpui::{AddWindowOptions, UpdateModel};
 use warpui_core::{App, TuiView as _, WindowId};
 
 use super::RootTuiView;
+use crate::cloud_run::TuiCloudRunState;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 
@@ -77,6 +78,18 @@ fn root_projects_only_the_focused_retained_session_view() {
             assert_eq!(root.as_ref(ctx).child_view_ids(ctx), vec![first_view_id]);
             assert!(ctx.check_view_or_child_focused(window_id, &first_view_id));
             assert_eq!(ctx.focused_view_id(window_id), focused_window_view);
+        });
+
+        let cloud_state = app.add_model(|_| TuiCloudRunState::new());
+        let (cloud_id, cloud_view) = app.update(|ctx| {
+            TuiSessions::create_cloud_run_session(&sessions, window_id, cloud_state, false, ctx)
+        });
+        app.update_model(&sessions, |sessions, ctx| {
+            sessions.focus_session(cloud_id, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(root.as_ref(ctx).child_view_ids(ctx), vec![cloud_view.id()]);
+            assert!(ctx.check_view_or_child_focused(window_id, &cloud_view.id()));
         });
     });
 }

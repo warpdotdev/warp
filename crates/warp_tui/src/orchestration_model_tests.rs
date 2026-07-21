@@ -1,20 +1,48 @@
 use warp::tui_export::{
-    AIConversationId, BlocklistAIHistoryModel, Harness, StartAgentExecutionMode,
-    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    AIConversationId, BlocklistAIHistoryModel, CloudAgentStartupBlocker, CloudAgentStartupIssue,
+    ConversationStatus, Harness, OrchestrationEventStreamerEvent, StartAgentExecutionMode,
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
     register_tui_session_view_test_singletons,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
-use warpui_core::{App, WindowId};
+use warpui_core::elements::tui::{TuiBufferExt, TuiRect, text_width};
+use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
 
 use super::TuiOrchestrationModel;
+use crate::cloud_run::TuiCloudRunStartup;
+use crate::cloud_run_view::{TuiCloudRunAction, TuiCloudRunView};
 use crate::root_view::RootTuiView;
-use crate::session_registry::{TuiSessionId, TuiSessions};
+use crate::session_registry::{TuiSessionId, TuiSessionView, TuiSessions};
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 
 struct OrchestrationFixture {
     sessions: ModelHandle<TuiSessions>,
     window_id: WindowId,
+}
+
+fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest {
+    StartAgentRequest {
+        id: Default::default(),
+        name: "cloud-researcher".to_string(),
+        prompt: "research the codebase".to_string(),
+        execution_mode: StartAgentExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            skill_references: Vec::new(),
+            model_id: "auto".to_string(),
+            computer_use_enabled: false,
+            worker_host: "warp".to_string(),
+            harness_type: "oz".to_string(),
+            title: "Researcher".to_string(),
+            auth_secret_name: None,
+            runner_id: String::new(),
+            agent_identity_uid: None,
+        },
+        lifecycle_subscription: None,
+        parent_conversation_id,
+        parent_run_id: Some("parent-run-1".to_string()),
+    }
 }
 
 /// Boots the container + root + orchestration model wiring (no live PTYs).
@@ -69,6 +97,54 @@ fn add_child_session(
     (session_id, conversation_id)
 }
 
+fn add_remote_child_session(
+    app: &mut App,
+    fixture: &OrchestrationFixture,
+    parent_session_id: TuiSessionId,
+    request: &StartAgentRequest,
+    display_name: String,
+    orchestration_harness: Harness,
+) -> (
+    AIConversationId,
+    warpui::EntityId,
+    ModelHandle<crate::cloud_run::TuiCloudRunState>,
+) {
+    let child = app.update(|ctx| {
+        TuiSessions::create_remote_child_session(&fixture.sessions, parent_session_id, ctx)
+    });
+    let surface_id = child.session_id.surface_id();
+    let cloud_run_state = child.cloud_run_state.clone();
+    let conversation_id = app.update(|ctx| {
+        TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+            model.initialize_remote_child_session(
+                &child,
+                request,
+                display_name,
+                orchestration_harness,
+                ctx,
+            )
+        })
+    });
+    (conversation_id, surface_id, cloud_run_state)
+}
+
+fn cloud_view(
+    surface_id: warpui::EntityId,
+    ctx: &warpui::AppContext,
+) -> warpui::ViewHandle<TuiCloudRunView> {
+    let session_id = TuiSessions::as_ref(ctx)
+        .session_id_for_surface(surface_id)
+        .expect("cloud session is retained");
+    match TuiSessions::as_ref(ctx)
+        .session(session_id)
+        .expect("cloud session is registered")
+        .view()
+    {
+        TuiSessionView::Cloud(view) => view.clone(),
+        TuiSessionView::Terminal(_) => panic!("expected a lightweight cloud session"),
+    }
+}
+
 /// Registers a session with a live active conversation.
 fn add_dispatching_session(
     app: &mut App,
@@ -76,7 +152,17 @@ fn add_dispatching_session(
     focus: bool,
 ) -> TuiSessionId {
     let (session, manager) = add_test_terminal_session(app, fixture.window_id);
-    app.update(|ctx| TuiSessions::register_session(&fixture.sessions, session, manager, focus, ctx))
+    let session_id = app.update(|ctx| {
+        TuiSessions::register_session(&fixture.sessions, session, manager, focus, ctx)
+    });
+    app.update(|ctx| {
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            let conversation_id =
+                history.start_new_conversation(session_id.surface_id(), false, false, false, ctx);
+            history.set_active_conversation_id(conversation_id, session_id.surface_id(), ctx);
+        });
+    });
+    session_id
 }
 /// Creates a standalone executor and relays its frontend materialization
 /// events into the coordinator.
@@ -175,6 +261,7 @@ fn assert_failed_launch_cleaned_up(
         expected_session_count,
     );
 }
+
 #[test]
 fn local_harness_children_fail_cleanly() {
     App::test((), |mut app| async move {
@@ -193,6 +280,65 @@ fn local_harness_children_fail_cleanly() {
         );
         assert_error_containing(outcome, "aren't supported in the Warp TUI yet");
         assert_failed_launch_cleaned_up(&app, &fixture, parent_conversation_id, 1);
+    });
+}
+
+#[test]
+fn github_auth_blocker_keeps_the_remote_session_and_actionable_url() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = app.read(|ctx| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation(parent_session_id.surface_id())
+                .unwrap()
+                .id()
+        });
+        let request = remote_request(parent_conversation_id);
+        let (conversation_id, surface_id, cloud_run_state) = add_remote_child_session(
+            &mut app,
+            &fixture,
+            parent_session_id,
+            &request,
+            "cloud-researcher".to_string(),
+            Harness::Oz,
+        );
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.finish_remote_child_launch(
+                    conversation_id,
+                    surface_id,
+                    cloud_run_state.clone(),
+                    Err(CloudAgentStartupIssue::Blocked(
+                        CloudAgentStartupBlocker::GitHubAuthRequired {
+                            message: "GitHub authentication required".to_string(),
+                            auth_url: "https://example.com/auth".to_string(),
+                        },
+                    )),
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| {
+            assert!(
+                TuiSessions::as_ref(ctx)
+                    .session_id_for_surface(surface_id)
+                    .is_some()
+            );
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .unwrap()
+                    .status(),
+                &ConversationStatus::Blocked {
+                    blocked_action: "GitHub authentication required".to_string(),
+                }
+            );
+            let TuiCloudRunStartup::Blocked(blocker) = cloud_run_state.as_ref(ctx).startup() else {
+                panic!("expected blocked cloud startup state");
+            };
+            assert_eq!(blocker.primary_url(), "https://example.com/auth");
+        });
     });
 }
 
@@ -250,7 +396,6 @@ fn snapshot_is_shared_across_tree_and_filters_conversations_without_sessions() {
                 vec![0, 1]
             );
         });
-
         app.update(|ctx| {
             let selected = TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
                 model.focus_conversation_session(second_child_id, ctx)
@@ -298,31 +443,142 @@ fn snapshot_is_shared_across_tree_and_filters_conversations_without_sessions() {
 }
 
 #[test]
-fn remote_children_fail_cleanly() {
+fn remote_child_session_is_navigable_and_projects_lifecycle() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture(&mut app);
-        let session_id = add_dispatching_session(&mut app, &fixture, true);
-        let executor = add_relayed_executor(&mut app, session_id);
-
-        let (parent_conversation_id, outcome) = dispatch_and_recv(
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = app.read(|ctx| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation(parent_session_id.surface_id())
+                .unwrap()
+                .id()
+        });
+        let request = remote_request(parent_conversation_id);
+        let (conversation_id, surface_id, cloud_run_state) = add_remote_child_session(
             &mut app,
-            session_id,
-            &executor,
-            StartAgentExecutionMode::Remote {
-                environment_id: "env-1".to_string(),
-                skill_references: Vec::new(),
-                model_id: "auto".to_string(),
-                computer_use_enabled: false,
-                worker_host: "warp".to_string(),
-                harness_type: "oz".to_string(),
-                title: "Researcher".to_string(),
-                auth_secret_name: None,
-                runner_id: String::new(),
-                agent_identity_uid: None,
-            },
+            &fixture,
+            parent_session_id,
+            &request,
+            "cloud-researcher".to_string(),
+            Harness::Oz,
         );
-        assert_error_containing(outcome, "Cloud child agents aren't supported");
-        assert_failed_launch_cleaned_up(&app, &fixture, parent_conversation_id, 1);
+        app.read(|ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let conversation = history.conversation(&conversation_id).unwrap();
+            assert!(conversation.is_remote_child());
+            assert_eq!(
+                history.resolved_parent_conversation_id_for_conversation(conversation),
+                Some(parent_conversation_id)
+            );
+            assert!(
+                TuiSessions::as_ref(ctx)
+                    .session_id_for_surface(surface_id)
+                    .is_some()
+            );
+            assert!(matches!(
+                cloud_run_state.as_ref(ctx).startup(),
+                TuiCloudRunStartup::Dispatching
+            ));
+            assert_eq!(
+                cloud_run_state.as_ref(ctx).conversation_id(),
+                Some(conversation_id)
+            );
+            let view = cloud_view(surface_id, ctx);
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                view.as_ref(ctx).render(ctx),
+                TuiRect::new(0, 0, 80, 12),
+                ctx,
+            );
+            let lines = frame.buffer.to_lines();
+            let status_line = lines
+                .iter()
+                .find(|line| line.contains("Starting cloud run…"))
+                .expect("cloud status is visible");
+            let status_content = status_line.trim();
+            assert_eq!(
+                status_line.find(status_content),
+                Some(usize::from((80 - text_width(status_content)).div_ceil(2)))
+            );
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Shift + ↑ sub-agents"))
+            );
+        });
+        app.update(|ctx| {
+            let view = cloud_view(surface_id, ctx);
+            view.update(ctx, |view, ctx| {
+                view.refresh_orchestration_tab_state(ctx);
+                view.handle_action(&TuiCloudRunAction::FocusOrchestrationTabs, ctx);
+            });
+        });
+        app.read(|ctx| {
+            let view = cloud_view(surface_id, ctx);
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                view.as_ref(ctx).render(ctx),
+                TuiRect::new(0, 0, 112, 24),
+                ctx,
+            );
+            let lines = frame.buffer.to_lines();
+            assert_eq!(
+                lines.last().map(|line| line.trim()),
+                Some(
+                    "Tab or ← → to navigate | Shift + ← → to go to start/end | ↓ to send a \
+                     message  Ctrl+C to kill sub-agent"
+                )
+            );
+        });
+
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.assign_run_id_for_conversation(
+                    conversation_id,
+                    "00000000-0000-0000-0000-000000000004".to_string(),
+                    None,
+                    surface_id,
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation_id_for_agent_id("00000000-0000-0000-0000-000000000004"),
+                Some(conversation_id)
+            );
+        });
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.handle_streamer_event(
+                    &OrchestrationEventStreamerEvent::WatchedRunStatusChanged {
+                        owner_conversation_id: parent_conversation_id,
+                        run_id: "00000000-0000-0000-0000-000000000004".to_string(),
+                        status: ConversationStatus::Success,
+                    },
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .unwrap()
+                    .status(),
+                &ConversationStatus::Success
+            );
+            let snapshot = TuiOrchestrationModel::as_ref(ctx)
+                .snapshot(conversation_id, ctx)
+                .expect("remote child remains navigable");
+            let child = snapshot
+                .children
+                .iter()
+                .find(|child| child.conversation_id == conversation_id)
+                .expect("remote child has an orchestration tab");
+            assert_eq!(child.status, ConversationStatus::Success);
+        });
     });
 }
 

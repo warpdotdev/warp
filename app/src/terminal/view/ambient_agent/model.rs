@@ -18,10 +18,7 @@ use crate::ai::ambient_agents::github_auth_notifier::{GitHubAuthEvent, GitHubAut
 use crate::ai::ambient_agents::spawn::{AmbientAgentEvent, spawn_task, submit_run_followup};
 use crate::ai::ambient_agents::task::{HarnessAuthSecretsConfig, HarnessConfig};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
-use crate::ai::ambient_agents::{
-    AgentSource, AmbientAgentTaskId, OUT_OF_CREDITS_TASK_FAILURE_MESSAGE,
-    SERVER_OVERLOADED_TASK_FAILURE_MESSAGE, github_auth_url,
-};
+use crate::ai::ambient_agents::{AgentSource, AmbientAgentTaskId};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
@@ -33,23 +30,22 @@ use crate::ai::execution_profiles::{
 };
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::orchestration::{
+    CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
+    classify_cloud_agent_startup_error, should_disable_snapshot,
+};
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ServerApiProvider;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::InitialSnapshotToken;
 use crate::server::server_api::ai::{
     AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, SpawnAgentRequest,
 };
-use crate::server::server_api::{
-    AIApiError, ClientError, CloudAgentCapacityError, ServerApiProvider,
-};
-use crate::settings::PrivacySettings;
 use crate::terminal::CLIAgent;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::AdminEnablementSetting;
 
 /// Wire prompt substituted for an empty-prompt handoff against an active source
 /// conversation that also carries uploaded snapshot content.
@@ -1518,40 +1514,24 @@ impl AmbientAgentViewModel {
             ctx
         );
 
-        if let Some(client_error) = err.downcast_ref::<ClientError>()
-            && let Some(auth_url) = &client_error.auth_url
-        {
-            self.handle_needs_github_auth(auth_url.clone(), client_error.error.clone(), ctx);
-            return;
-        }
-        if let Some(capacity_error) = err.downcast_ref::<CloudAgentCapacityError>() {
-            self.handle_spawn_error(capacity_error.error.clone(), ctx);
-            ctx.emit(AmbientAgentViewModelEvent::ShowCloudAgentCapacityModal);
-            return;
-        }
-        if let Some(ai_api_error) = err.downcast_ref::<AIApiError>() {
-            match ai_api_error {
-                AIApiError::QuotaLimit {
-                    user_display_message,
-                } => {
-                    let error_message = user_display_message
-                        .clone()
-                        .unwrap_or_else(|| OUT_OF_CREDITS_TASK_FAILURE_MESSAGE.to_string());
-                    self.handle_spawn_error(error_message, ctx);
-                    ctx.emit(AmbientAgentViewModelEvent::ShowAICreditModal);
-                    return;
-                }
-                AIApiError::ServerOverloaded => {
-                    self.handle_spawn_error(
-                        SERVER_OVERLOADED_TASK_FAILURE_MESSAGE.to_string(),
-                        ctx,
-                    );
-                    return;
-                }
-                _ => {}
+        match classify_cloud_agent_startup_error(&err) {
+            CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
+                message,
+                auth_url,
+            }) => self.handle_needs_github_auth(auth_url, message, ctx),
+            CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Capacity { message }) => {
+                self.handle_spawn_error(message, ctx);
+                ctx.emit(AmbientAgentViewModelEvent::ShowCloudAgentCapacityModal);
             }
+            CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::OutOfCredits { message }) => {
+                self.handle_spawn_error(message, ctx);
+                ctx.emit(AmbientAgentViewModelEvent::ShowAICreditModal);
+            }
+            CloudAgentStartupIssue::Failed(
+                CloudAgentStartupFailure::ServerOverloaded { message }
+                | CloudAgentStartupFailure::Other { message },
+            ) => self.handle_spawn_error(message, ctx),
         }
-        self.handle_spawn_error(error_message, ctx);
     }
 
     /// Starts the periodic timer that updates the progress UI while waiting for a session.
@@ -1652,7 +1632,7 @@ impl AmbientAgentViewModel {
         self.status = Status::NeedsGithubAuth {
             progress,
             error_message,
-            auth_url: github_auth_url::cloud_setup_auth_url_with_next(&auth_url),
+            auth_url,
         };
         self.pending_followup_prompt = None;
 
@@ -1872,17 +1852,6 @@ pub enum AmbientAgentViewModelEvent {
     /// a task is attached to the view (transcript restore) or when an
     /// execution ends.
     RunLifecycleChanged,
-}
-
-pub(crate) fn should_disable_snapshot(ctx: &AppContext) -> bool {
-    let privacy = PrivacySettings::as_ref(ctx);
-    if !privacy.is_cloud_conversation_storage_enabled {
-        return true;
-    }
-    matches!(
-        UserWorkspaces::as_ref(ctx).get_cloud_conversation_storage_enablement_setting(),
-        AdminEnablementSetting::Disable
-    )
 }
 
 impl Entity for AmbientAgentViewModel {

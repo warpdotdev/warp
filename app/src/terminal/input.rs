@@ -5001,9 +5001,10 @@ impl Input {
                 selected_tab,
                 set_as_default,
             } => {
-                let profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+                let profile_id = AIExecutionProfilesModel::as_ref(ctx)
                     .active_profile(Some(self.terminal_view_id), ctx)
-                    .id();
+                    .id()
+                    .clone();
 
                 match selected_tab {
                     InlineModelSelectorTab::BaseAgent => {
@@ -5016,13 +5017,13 @@ impl Input {
                         });
                         if *set_as_default {
                             AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-                                profiles.set_base_model(profile_id, Some(id.clone()), ctx);
+                                profiles.set_base_model(&profile_id, Some(id.clone()), ctx);
                             });
                         }
                     }
                     InlineModelSelectorTab::FullTerminalUse => {
                         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-                            profiles.set_cli_agent_model(profile_id, Some(id.clone()), ctx);
+                            profiles.set_cli_agent_model(&profile_id, Some(id.clone()), ctx);
                         });
                     }
                 }
@@ -5082,7 +5083,11 @@ impl Input {
         match event {
             InlineProfileSelectorEvent::SelectedProfile { profile_id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_active_profile(self.terminal_view_id, *profile_id, ctx);
+                    profiles_model.set_active_profile(
+                        self.terminal_view_id,
+                        profile_id.clone(),
+                        ctx,
+                    );
                 });
 
                 // Remove any LLM override when switching profiles

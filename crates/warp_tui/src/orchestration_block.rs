@@ -476,6 +476,7 @@ impl TuiOrchestrationBlock {
             }),
             snapshot: self.snapshot_for_page(page, ctx),
             searchable: page.is_searchable(),
+            row_shortcuts: Default::default(),
         };
         self.selector.update(ctx, |selector, ctx| {
             selector.set_page(selector_page, ctx);

@@ -228,6 +228,7 @@ impl TuiAskQuestionView {
                     header: None,
                     snapshot,
                     searchable: false,
+                    row_shortcuts: Default::default(),
                 },
                 ctx,
             );

@@ -125,7 +125,7 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
     EditorBindingSpec {
         command: TuiEditorCommand::InsertNewline,
         input_name: Some("tui:input:insert_newline"),
-        editor_name: None,
+        editor_name: Some("tui:editor:insert_newline"),
         description: "Insert a newline",
         keys: &["shift-enter", "ctrl-j", "alt-enter"],
     },

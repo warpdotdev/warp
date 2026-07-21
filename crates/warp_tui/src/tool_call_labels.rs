@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use ai::agent::action_result::RunAgentsAgentOutcome;
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType,
     AskUserQuestionResult, FileGlobV2Result, GrepResult, RequestCommandOutputResult,
@@ -555,25 +556,14 @@ fn label_for_action(
                     Some(AIAgentActionResultType::RunAgents(RunAgentsResult::Launched {
                         agents,
                         ..
-                    })) => {
-                        let launched = agents
-                            .iter()
-                            .filter(|agent| {
-                                matches!(agent.kind, RunAgentsAgentOutcomeKind::Launched { .. })
-                            })
-                            .count();
-                        let total = agents.len();
-                        if launched == total {
-                            format!("Spawned {}", count_label(total, "agent", "agents"))
-                        } else if launched == 0 {
-                            format!("Failed to spawn {}", count_label(total, "agent", "agents"))
-                        } else {
-                            format!("Spawned {launched} of {total} agents")
-                        }
-                    }
+                    })) => launched_agents_label(agents),
                     _ => format!("Spawned {}", count_label(total, "agent", "agents")),
                 },
                 State::Failed => match result {
+                    Some(AIAgentActionResultType::RunAgents(RunAgentsResult::Launched {
+                        agents,
+                        ..
+                    })) => launched_agents_label(agents),
                     Some(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
                         ..
                     })) => "Orchestration disabled — agents not launched".to_owned(),
@@ -598,6 +588,20 @@ fn label_for_action(
     }
 }
 
+fn launched_agents_label(agents: &[RunAgentsAgentOutcome]) -> String {
+    let launched = agents
+        .iter()
+        .filter(|agent| matches!(agent.kind, RunAgentsAgentOutcomeKind::Launched { .. }))
+        .count();
+    let total = agents.len();
+    if launched == total {
+        format!("Spawned {}", count_label(total, "agent", "agents"))
+    } else if launched == 0 {
+        format!("Failed to spawn {}", count_label(total, "agent", "agents"))
+    } else {
+        format!("Spawned {launched} of {total} agents")
+    }
+}
 /// Shared label body for both file-glob action versions; only V2 results
 /// carry a match count.
 fn file_glob_label(

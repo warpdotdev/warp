@@ -63,6 +63,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::DefaultWaterfallMode,
         #[cfg(feature = "settings_file")]
         FeatureFlag::SettingsFile,
+        #[cfg(feature = "file_backed_execution_profiles")]
+        FeatureFlag::FileBackedExecutionProfiles,
         #[cfg(feature = "rect_selection")]
         FeatureFlag::RectSelection,
         #[cfg(feature = "alacritty_settings_import")]

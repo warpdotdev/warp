@@ -15,9 +15,9 @@ use super::{
     PERMISSION_PROMPT_ACTIVE, TuiPermissionPrompt, TuiPermissionPromptAction,
     TuiPermissionPromptEvent, render_permission_card,
 };
-use crate::option_selector::TuiOptionSelectorEvent;
+use crate::editor_view::TuiEditorView;
+use crate::option_selector::{TuiOptionSelectorAction, TuiOptionSelectorEvent};
 use crate::test_fixtures::{TestHostView, add_test_action_model};
-
 fn add_prompt(app: &mut App, body_editable: bool) -> ViewHandle<TuiPermissionPrompt> {
     app.add_singleton_model(|_| Appearance::mock());
     let action_model = add_test_action_model(app);
@@ -30,10 +30,12 @@ fn add_prompt(app: &mut App, body_editable: bool) -> ViewHandle<TuiPermissionPro
             |_| TestHostView,
         );
         ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            let body_editor =
+                body_editable.then(|| ctx.add_typed_action_tui_view(TuiEditorView::single_line));
             TuiPermissionPrompt::new(
                 action_model,
                 AIAgentActionId::from("permission-action".to_owned()),
-                body_editable,
+                body_editor,
                 ctx,
             )
         })
@@ -51,8 +53,13 @@ fn render_lines(app: &mut App, prompt: &ViewHandle<TuiPermissionPrompt>) -> Vec<
         presenter.invalidate(&invalidation, ctx, prompt.window_id(ctx));
         presenter
             .present_element(
-                render_permission_card(prompt, "Permission", TuiText::new("details").finish(), ctx),
-                TuiRect::new(0, 0, 80, 10),
+                render_permission_card(
+                    prompt,
+                    "Permission",
+                    Some(TuiText::new("details").finish()),
+                    ctx,
+                ),
+                TuiRect::new(0, 0, 80, 12),
                 ctx,
             )
             .buffer
@@ -90,7 +97,7 @@ fn permission_prompt_defaults_to_yes_and_renders_other() {
 }
 
 #[test]
-fn body_editing_suspends_option_navigation() {
+fn leading_editor_participates_in_selector_focus_cycle() {
     App::test((), |mut app| async move {
         let prompt = add_prompt(&mut app, true);
         let (action_model, action) = app.read(|ctx| {
@@ -103,12 +110,18 @@ fn body_editing_suspends_option_navigation() {
 
         prompt.update(&mut app, |prompt, ctx| {
             prompt.handle_action(&TuiPermissionPromptAction::MoveUp, ctx);
-            prompt.handle_action(&TuiPermissionPromptAction::MoveUp, ctx);
         });
 
         app.read(|ctx| {
             let prompt = prompt.as_ref(ctx);
-            assert!(prompt.body_editing);
+            assert!(
+                prompt
+                    .body_editor
+                    .as_ref()
+                    .expect("editable prompt has a body editor")
+                    .as_ref(ctx)
+                    .is_focused()
+            );
             assert_eq!(prompt.selector.as_ref(ctx).highlighted_index(), None);
             assert!(
                 !prompt
@@ -117,6 +130,62 @@ fn body_editing_suspends_option_navigation() {
                     .contains(PERMISSION_PROMPT_ACTIVE)
             );
         });
+
+        prompt.update(&mut app, |prompt, ctx| {
+            prompt.handle_action(&TuiPermissionPromptAction::MoveUp, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                prompt.as_ref(ctx).selector.as_ref(ctx).highlighted_index(),
+                Some(2)
+            );
+        });
+    });
+}
+
+#[test]
+fn editable_prompt_uses_edit_option_for_shortcut_and_click() {
+    App::test((), |mut app| async move {
+        let prompt = add_prompt(&mut app, true);
+        let lines = render_lines(&mut app, &prompt);
+        assert!(lines.iter().any(|line| line == "(e) edit command"));
+        assert!(lines.iter().all(|line| !line.contains("Other")));
+
+        let (action_model, action) = app.read(|ctx| {
+            let prompt = prompt.as_ref(ctx);
+            (prompt.action_model.clone(), pending_action(prompt))
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
+        });
+
+        let selector = prompt.read(&app, |prompt, _| prompt.selector.clone());
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::SelectShortcut('e'), ctx);
+        });
+        assert!(app.read(|ctx| {
+            prompt
+                .as_ref(ctx)
+                .body_editor
+                .as_ref()
+                .expect("editable prompt has a body editor")
+                .as_ref(ctx)
+                .is_focused()
+        }));
+
+        prompt.update(&mut app, |prompt, ctx| prompt.restore_options_focus(ctx));
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::SelectItem(2), ctx);
+        });
+        assert!(app.read(|ctx| {
+            prompt
+                .as_ref(ctx)
+                .body_editor
+                .as_ref()
+                .expect("editable prompt has a body editor")
+                .as_ref(ctx)
+                .is_focused()
+        }));
     });
 }
 
@@ -203,7 +272,6 @@ fn other_emits_guidance_without_requesting_rejection() {
                     *rejected_for_event.borrow_mut() = true;
                 }
                 TuiPermissionPromptEvent::AcceptRequested
-                | TuiPermissionPromptEvent::EditBodyRequested
                 | TuiPermissionPromptEvent::BlockingStateChanged
                 | TuiPermissionPromptEvent::LayoutChanged => {}
             });

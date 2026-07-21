@@ -212,8 +212,9 @@ use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::conversation_details_panel::ConversationDetailsPanel;
 use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
+use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
-use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::view::AIFactPage;
 use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
 use crate::ai::llms::LLMPreferences;
@@ -8816,12 +8817,12 @@ impl Workspace {
     pub fn open_execution_profile_editor_pane(
         &mut self,
         direction: Option<Direction>,
-        profile_id: ClientProfileId,
+        profile_id: ExecutionProfileId,
         ctx: &mut ViewContext<Self>,
     ) {
         let manager = ExecutionProfileEditorManager::handle(ctx);
 
-        if let Some(locator) = manager.as_ref(ctx).find_pane(ctx.window_id(), profile_id) {
+        if let Some(locator) = manager.as_ref(ctx).find_pane(ctx.window_id(), &profile_id) {
             self.focus_pane(locator, ctx);
             return;
         }
@@ -13880,9 +13881,10 @@ impl Workspace {
         new_terminal_view_id: EntityId,
         ctx: &mut AppContext,
     ) {
-        let source_profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+        let source_profile_id = AIExecutionProfilesModel::as_ref(ctx)
             .active_profile(Some(source_terminal_view_id), ctx)
-            .id();
+            .id()
+            .clone();
         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
             profiles.set_active_profile(new_terminal_view_id, source_profile_id, ctx);
         });
@@ -14981,7 +14983,7 @@ impl Workspace {
                 self.open_custom_router_editor_pane(None, router.clone(), ctx);
             }
             SettingsViewEvent::OpenExecutionProfileEditor(profile_id) => {
-                self.open_execution_profile_editor_pane(None, *profile_id, ctx);
+                self.open_execution_profile_editor_pane(None, profile_id.clone(), ctx);
             }
             SettingsViewEvent::OpenLspLogs { log_path } => {
                 self.open_lsp_logs(log_path, ctx);
@@ -17055,7 +17057,7 @@ impl Workspace {
                 self.close_tabs_with_file_path(path, ctx);
             }
             pane_group::Event::OpenAgentProfileEditor { profile_id } => {
-                self.open_execution_profile_editor_pane(None, *profile_id, ctx);
+                self.open_execution_profile_editor_pane(None, profile_id.clone(), ctx);
             }
             pane_group::Event::OpenEnvironmentManagementPane => {
                 self.open_environment_management_pane(
@@ -19165,7 +19167,7 @@ impl Workspace {
                 // Set codex as the model for the default profile and make the default profile active.
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
                     let default_profile_id = profiles.default_profile_id();
-                    profiles.set_base_model(default_profile_id, Some(codex_model_id), ctx);
+                    profiles.set_base_model(&default_profile_id, Some(codex_model_id), ctx);
                     profiles.set_active_profile(terminal_view.id(), default_profile_id, ctx);
                 });
 

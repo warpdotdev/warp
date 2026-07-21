@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_graphql::object_permissions::AccessLevel;
 use warpui::{App, SingletonEntity};
@@ -6,21 +7,22 @@ use warpui::{App, SingletonEntity};
 use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
+    AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, ExecutionProfileId,
+    WriteToPtyPermission,
 };
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::user::TEST_USER_UID;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{
-    Owner, Revision, ServerAIExecutionProfile, ServerGuestSubject, ServerMetadata,
-    ServerObjectGuest, ServerPermissions,
+    ObjectIdType, Owner, Revision, ServerAIExecutionProfile, ServerCreationInfo,
+    ServerGuestSubject, ServerMetadata, ServerObjectGuest, ServerPermissions,
 };
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::ids::{ServerId, SyncId};
+use crate::server::ids::{ServerId, ServerIdAndType, SyncId};
 use crate::server::sync_queue::SyncQueue;
-use crate::settings::PrivacySettings;
+use crate::settings::{AISettings, PrivacySettings};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -37,6 +39,19 @@ fn mock_server_metadata(uid: ServerId) -> ServerMetadata {
         last_editor_uid: None,
         current_editor_uid: None,
     }
+}
+
+fn owned_legacy_profile(
+    sync_id: SyncId,
+    metadata_id: ServerId,
+    profile: AIExecutionProfile,
+) -> ServerAIExecutionProfile {
+    ServerAIExecutionProfile::new(
+        sync_id,
+        CloudAIExecutionProfileModel::new(profile),
+        mock_server_metadata(metadata_id),
+        ServerPermissions::mock_personal(),
+    )
 }
 
 fn attacker_owned_shared_default_profile(cloud_uid: ServerId) -> ServerAIExecutionProfile {
@@ -89,6 +104,23 @@ fn install_singletons(app: &mut App, auth_state: AuthStateProvider) {
     app.add_singleton_model(UserWorkspaces::default_mock);
 }
 
+fn collection_with_profile(
+    id: &str,
+    name: &str,
+    permission: ActionPermission,
+) -> crate::ai::execution_profiles::ExecutionProfilesConfig {
+    let mut profiles = crate::ai::execution_profiles::ExecutionProfilesConfig::default();
+    profiles.insert(
+        ExecutionProfileId::parse(id).expect("test profile key should be valid"),
+        AIExecutionProfile {
+            name: name.to_string(),
+            read_files: permission,
+            ..Default::default()
+        },
+    );
+    profiles
+}
+
 /// Regression test for the onboarding autonomy bug where
 /// `edit_profile_internal` would silently drop edits made to an `Unsynced`
 /// default profile whenever `personal_drive` returned `None` (logged-out
@@ -124,7 +156,7 @@ fn edits_persist_on_unsynced_default_profile_when_logged_out() {
         // `set_apply_code_diffs` value was cloned, mutated, then dropped
         // without being written back to `default_profile_state`.
         profile_model.update(&mut app, |model, ctx| {
-            model.set_apply_code_diffs(default_profile_id, &ActionPermission::AlwaysAllow, ctx);
+            model.set_apply_code_diffs(&default_profile_id, &ActionPermission::AlwaysAllow, ctx);
         });
 
         profile_model.read(&app, |model, ctx| {
@@ -136,6 +168,307 @@ fn edits_persist_on_unsynced_default_profile_when_logged_out() {
             );
         });
     })
+}
+
+#[test]
+fn explicit_local_collection_is_preserved_from_onboarding() {
+    let _guard = FeatureFlag::FileBackedExecutionProfiles.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_for_test());
+        app.update(|ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .execution_profiles
+                    .set_value(
+                        collection_with_profile(
+                            "pre-login",
+                            "Pre-login",
+                            ActionPermission::AlwaysAllow,
+                        ),
+                        ctx,
+                    )
+                    .unwrap();
+            });
+        });
+
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        profile_model.update(&mut app, |model, ctx| {
+            model.migrate_settings_profiles(ctx);
+        });
+
+        profile_model.read(&app, |model, ctx| {
+            assert!(model.should_preserve_onboarding_profile(ctx));
+        });
+        app.read(|ctx| {
+            assert!(
+                AISettings::as_ref(ctx)
+                    .execution_profiles
+                    .value()
+                    .profile(&ExecutionProfileId::parse("pre-login").unwrap())
+                    .is_some()
+            );
+        });
+    });
+}
+
+#[test]
+fn migration_retries_after_pending_legacy_profile_receives_server_id() {
+    let _guard = FeatureFlag::FileBackedExecutionProfiles.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_for_test());
+        let client_id = crate::server::ids::ClientId::new();
+        let server_id = ServerId::from(503);
+        let pending_profile = owned_legacy_profile(
+            SyncId::ClientId(client_id),
+            server_id,
+            AIExecutionProfile {
+                name: "Pending".to_string(),
+                read_files: ActionPermission::AlwaysAllow,
+                ..Default::default()
+            },
+        );
+        CloudModel::handle(&app).update(&mut app, |cloud_model, ctx| {
+            cloud_model.upsert_from_server_object(pending_profile, ctx);
+        });
+
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        profile_model.update(&mut app, |model, ctx| {
+            model.migrate_settings_profiles(ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                AISettings::as_ref(ctx)
+                    .execution_profiles
+                    .value()
+                    .profile_ids()
+                    .count(),
+                1
+            );
+        });
+
+        CloudModel::handle(&app).update(&mut app, |cloud_model, ctx| {
+            cloud_model.update_object_after_server_creation(
+                client_id,
+                ServerCreationInfo {
+                    creator_uid: None,
+                    permissions: ServerPermissions::mock_personal(),
+                    server_id_and_type: ServerIdAndType {
+                        id: server_id,
+                        id_type: ObjectIdType::GenericStringObject,
+                    },
+                },
+                ctx,
+            );
+        });
+
+        let migrated_key = ExecutionProfileId::from_legacy_server_id(server_id);
+        app.read(|ctx| {
+            assert_eq!(
+                AISettings::as_ref(ctx)
+                    .execution_profiles
+                    .value()
+                    .profile(&migrated_key)
+                    .map(|profile| profile.read_files),
+                Some(ActionPermission::AlwaysAllow)
+            );
+        });
+    });
+}
+
+#[test]
+fn migration_imports_owned_legacy_profiles_with_deterministic_keys() {
+    let _guard = FeatureFlag::FileBackedExecutionProfiles.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_for_test());
+        let default_server_id = ServerId::from(501);
+        let custom_server_id = ServerId::from(502);
+        let default_profile = owned_legacy_profile(
+            SyncId::ServerId(default_server_id),
+            default_server_id,
+            AIExecutionProfile {
+                name: "Default".to_string(),
+                is_default_profile: true,
+                execute_commands: ActionPermission::AlwaysAllow,
+                ..Default::default()
+            },
+        );
+        let custom_profile = owned_legacy_profile(
+            SyncId::ServerId(custom_server_id),
+            custom_server_id,
+            AIExecutionProfile {
+                name: "Review".to_string(),
+                is_default_profile: false,
+                read_files: ActionPermission::AlwaysAllow,
+                ..Default::default()
+            },
+        );
+        CloudModel::handle(&app).update(&mut app, |cloud_model, ctx| {
+            cloud_model.upsert_from_server_object(default_profile, ctx);
+            cloud_model.upsert_from_server_object(custom_profile, ctx);
+        });
+
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        profile_model.update(&mut app, |model, ctx| {
+            model.migrate_settings_profiles(ctx);
+        });
+
+        let custom_key = ExecutionProfileId::from_legacy_server_id(custom_server_id);
+        app.read(|ctx| {
+            let profiles = AISettings::as_ref(ctx).execution_profiles.value();
+            assert_eq!(
+                profiles
+                    .profile(&ExecutionProfileId::default_profile())
+                    .map(|profile| profile.execute_commands),
+                Some(ActionPermission::AlwaysAllow)
+            );
+            assert_eq!(
+                profiles
+                    .profile(&custom_key)
+                    .map(|profile| profile.read_files),
+                Some(ActionPermission::AlwaysAllow)
+            );
+            assert_eq!(
+                CloudModel::as_ref(ctx)
+                    .get_all_objects_of_type::<
+                        crate::cloud_object::model::generic_string_model::GenericStringObjectId,
+                        CloudAIExecutionProfileModel,
+                    >()
+                    .count(),
+                2
+            );
+        });
+    });
+}
+
+#[test]
+fn profile_sources_preserve_state_across_migration_and_rollout() {
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_for_test());
+        app.update(|ctx| {
+            let mut profiles = crate::ai::execution_profiles::ExecutionProfilesConfig::default();
+            profiles
+                .profile_mut(&ExecutionProfileId::default_profile())
+                .unwrap()
+                .name = "Settings default".to_string();
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .execution_profiles
+                    .set_value(profiles, ctx)
+                    .unwrap();
+            });
+        });
+
+        let server_id = ServerId::from(506);
+        let legacy_default = owned_legacy_profile(
+            SyncId::ServerId(server_id),
+            server_id,
+            AIExecutionProfile {
+                name: "Legacy default".to_string(),
+                is_default_profile: true,
+                ..Default::default()
+            },
+        );
+        CloudModel::handle(&app).update(&mut app, |cloud_model, ctx| {
+            cloud_model.upsert_from_server_object(legacy_default, ctx);
+        });
+
+        let settings_model = {
+            let _guard = FeatureFlag::FileBackedExecutionProfiles.override_enabled(true);
+            app.add_model(|ctx| {
+                AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+            })
+        };
+        settings_model.update(&mut app, |model, ctx| {
+            model.migrate_settings_profiles(ctx);
+        });
+        settings_model.read(&app, |model, ctx| {
+            assert_eq!(model.default_profile(ctx).data().name, "Settings default");
+        });
+        let created_profile_id = settings_model
+            .update(&mut app, |model, ctx| model.create_profile(ctx))
+            .unwrap();
+        settings_model.update(&mut app, |model, ctx| {
+            model.set_profile_name(&created_profile_id, "Edited", ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                AISettings::as_ref(ctx)
+                    .execution_profiles
+                    .value()
+                    .profile(&created_profile_id)
+                    .map(|profile| profile.name.as_str()),
+                Some("Edited")
+            );
+        });
+        settings_model.update(&mut app, |model, ctx| {
+            model.delete_profile(&created_profile_id, ctx);
+        });
+
+        let legacy_model = {
+            let _guard = FeatureFlag::FileBackedExecutionProfiles.override_enabled(false);
+            app.add_model(|ctx| {
+                AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+            })
+        };
+        legacy_model.read(&app, |model, ctx| {
+            assert_eq!(model.default_profile(ctx).data().name, "Legacy default");
+        });
+
+        let restored_settings_model = {
+            let _guard = FeatureFlag::FileBackedExecutionProfiles.override_enabled(true);
+            app.add_model(|ctx| {
+                AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+            })
+        };
+        restored_settings_model.read(&app, |model, ctx| {
+            assert_eq!(model.default_profile(ctx).data().name, "Settings default");
+        });
+
+        let tui_model = {
+            let _guard = FeatureFlag::FileBackedExecutionProfiles.override_enabled(false);
+            app.add_model(|ctx| {
+                AIExecutionProfilesModel::new(
+                    &LaunchMode::Tui {
+                        mount: Box::new(|_| {}),
+                        api_key: None,
+                    },
+                    ctx,
+                )
+            })
+        };
+        tui_model.read(&app, |model, ctx| {
+            assert_eq!(model.default_profile(ctx).data().name, "Settings default");
+        });
+
+        let cli_model = {
+            let _guard = FeatureFlag::FileBackedExecutionProfiles.override_enabled(true);
+            app.add_model(|ctx| {
+                AIExecutionProfilesModel::new(
+                    &LaunchMode::CommandLine {
+                        command: warp_cli::CliCommand::Whoami,
+                        global_options: warp_cli::GlobalOptions::default(),
+                        debug: false,
+                        is_sandboxed: true,
+                        computer_use_override: None,
+                    },
+                    ctx,
+                )
+            })
+        };
+        cli_model.read(&app, |model, ctx| {
+            assert_ne!(model.default_profile(ctx).data().name, "Settings default");
+            assert!(model.default_profile(ctx).sync_id().is_none());
+        });
+    });
 }
 
 /// Regression test for the "log in to an existing user after onboarding"
@@ -216,7 +549,7 @@ fn reconciles_unsynced_default_profile_with_cloud_after_initial_load() {
         // creating a duplicate.
         let default_profile_id = profile_model.read(&app, |model, _ctx| model.default_profile_id());
         profile_model.update(&mut app, |model, ctx| {
-            model.set_apply_code_diffs(default_profile_id, &ActionPermission::AlwaysAsk, ctx);
+            model.set_apply_code_diffs(&default_profile_id, &ActionPermission::AlwaysAsk, ctx);
         });
         profile_model.read(&app, |model, ctx| {
             let info = model.default_profile(ctx);

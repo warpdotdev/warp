@@ -6,13 +6,10 @@ use warpui_core::elements::tui::{TuiChildView, TuiElement};
 use warpui_core::keymap::FixedBinding;
 use warpui_core::keymap::macros::*;
 use warpui_core::platform::TerminationMode;
-use warpui_core::{
-    AppContext, Entity, EntityId, TuiView, TypedActionView, ViewContext, ViewHandle, keymap,
-};
+use warpui_core::{AppContext, Entity, EntityId, TuiView, TypedActionView, ViewContext, keymap};
 
 use crate::keybindings::TUI_BINDING_GROUP;
-use crate::session_registry::TuiSessions;
-use crate::terminal_session_view::TuiTerminalSessionView;
+use crate::session_registry::{TuiSessionView, TuiSessions};
 use crate::ui::{login_failed, login_placeholder, terminal_starting};
 
 /// Typed actions handled by [`RootTuiView`].
@@ -57,7 +54,7 @@ impl RootTuiView {
         ctx.notify();
     }
 
-    fn focused_session_view(&self, ctx: &AppContext) -> Option<ViewHandle<TuiTerminalSessionView>> {
+    fn focused_session_view(&self, ctx: &AppContext) -> Option<TuiSessionView> {
         if !ctx.has_singleton_model::<TuiSessions>() {
             return None;
         }
@@ -99,7 +96,10 @@ impl TuiView for RootTuiView {
             },
             RootTuiState::Terminal => self
                 .focused_session_view(ctx)
-                .map(|view| TuiChildView::new(&view).finish())
+                .map(|view| match view {
+                    TuiSessionView::Terminal(view) => TuiChildView::new(&view).finish(),
+                    TuiSessionView::Cloud(view) => TuiChildView::new(&view).finish(),
+                })
                 .unwrap_or_else(terminal_starting),
         }
     }

@@ -64,6 +64,13 @@ impl TuiEditorView {
         }
     }
 
+    /// Creates an empty multiline editor with a bounded viewport.
+    pub(crate) fn multiline(viewport_rows: u32, ctx: &mut ViewContext<Self>) -> Self {
+        let mut view = Self::single_line(ctx);
+        view.editor_behavior = TuiEditorBehavior::multiline(viewport_rows);
+        view
+    }
+
     /// Returns the current editor text.
     pub(crate) fn text(&self, ctx: &AppContext) -> String {
         let model = self.model.as_ref(ctx);
@@ -96,8 +103,8 @@ impl TuiEditorView {
     /// Renders the shared editor configured as a one-row field.
     fn render_editor(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         TuiEditorElement::new(&self.model, ctx)
-            .editable()
             .with_view_focused(self.focused)
+            .editable()
             .with_viewport_rows(self.editor_behavior.viewport_rows())
             .on_action(|action, event_ctx| {
                 event_ctx.dispatch_typed_action(TuiEditorViewAction::Editor(action));
@@ -144,7 +151,8 @@ impl TuiView for TuiEditorView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        TuiHoverable::new(self.mouse_state.clone(), self.render_editor(app))
+        let editor = self.render_editor(app);
+        TuiHoverable::new(self.mouse_state.clone(), editor)
             .on_click(|event_ctx, _| {
                 event_ctx.dispatch_typed_action(TuiEditorViewAction::FocusRequested);
             })

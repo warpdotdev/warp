@@ -9,13 +9,50 @@ use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
 use warpui::App;
 
-use super::{deltas_for, verb_and_name};
+use super::{
+    SectionKey, SectionStates, ToolCallDisplayState, deltas_for, file_edit_header_label,
+    verb_and_name,
+};
 
 fn delta(range: std::ops::Range<usize>, insertion: &str) -> DiffDelta {
     DiffDelta {
         replacement_line_range: range,
         insertion: insertion.to_owned(),
     }
+}
+
+#[test]
+fn all_file_edit_sections_start_collapsed_and_toggle_independently() {
+    let states = SectionStates::default();
+
+    assert!(states.is_collapsed(SectionKey::Summary));
+    assert!(states.is_collapsed(SectionKey::File(0)));
+    assert!(states.is_collapsed(SectionKey::File(1)));
+
+    states.toggle_collapsed(SectionKey::File(0));
+    assert!(states.is_collapsed(SectionKey::Summary));
+    assert!(!states.is_collapsed(SectionKey::File(0)));
+    assert!(states.is_collapsed(SectionKey::File(1)));
+}
+#[test]
+fn blocked_file_edit_headers_use_in_progress_wording() {
+    assert_eq!(
+        file_edit_header_label(ToolCallDisplayState::Blocked, "Edited", "2 files"),
+        "Editing 2 files"
+    );
+    assert_eq!(
+        file_edit_header_label(ToolCallDisplayState::Blocked, "Updated", "lib.rs"),
+        "Editing lib.rs"
+    );
+
+    assert_eq!(
+        file_edit_header_label(ToolCallDisplayState::Succeeded, "Edited", "2 files"),
+        "Edited 2 files"
+    );
+    assert_eq!(
+        file_edit_header_label(ToolCallDisplayState::Succeeded, "Updated", "lib.rs"),
+        "Updated lib.rs"
+    );
 }
 
 fn update_diff(path: &str, rename: Option<&str>) -> FileDiff {

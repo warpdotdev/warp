@@ -1,8 +1,8 @@
 //! [`TuiSessions`]: registry and foreground selection for live TUI sessions.
 //!
-//! Every session is a full [`TuiTerminalSessionView`] backed by a retained
-//! terminal manager. The container owns session lifetime and focus; the root
-//! view renders and routes input only to the focused session.
+//! Sessions retain either a terminal view with its manager or a lightweight
+//! cloud-run view. The container owns session lifetime and focus; the root view
+//! renders and routes input only to the focused session.
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -16,6 +16,8 @@ use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle, WindowId};
 
+use crate::cloud_run::TuiCloudRunState;
+use crate::cloud_run_view::TuiCloudRunView;
 use crate::orchestration_model::{
     MaterializedLocalOzChildSession, TuiOrchestrationEvent, TuiOrchestrationModel,
 };
@@ -37,17 +39,78 @@ impl TuiSessionId {
     }
 }
 
-/// A live TUI session: its full view and the manager retaining its PTY.
+/// A retained view hosted by the TUI session registry.
+#[derive(Clone)]
+pub(crate) enum TuiSessionView {
+    Terminal(ViewHandle<TuiTerminalSessionView>),
+    Cloud(ViewHandle<TuiCloudRunView>),
+}
+
+impl TuiSessionView {
+    pub(crate) fn id(&self) -> EntityId {
+        match self {
+            Self::Terminal(view) => view.id(),
+            Self::Cloud(view) => view.id(),
+        }
+    }
+
+    pub(crate) fn window_id(&self, ctx: &AppContext) -> WindowId {
+        match self {
+            Self::Terminal(view) => view.window_id(ctx),
+            Self::Cloud(view) => view.window_id(ctx),
+        }
+    }
+
+    pub(crate) fn activate(&self, ctx: &mut AppContext) {
+        match self {
+            Self::Terminal(view) => view.update(ctx, |view, ctx| view.activate(ctx)),
+            Self::Cloud(view) => view.update(ctx, |view, ctx| view.activate(ctx)),
+        }
+    }
+
+    pub(crate) fn refresh_orchestration_tab_state(&self, ctx: &mut AppContext) {
+        match self {
+            Self::Terminal(view) => {
+                view.update(ctx, |view, ctx| view.refresh_orchestration_tab_state(ctx));
+            }
+            Self::Cloud(view) => {
+                view.update(ctx, |view, ctx| view.refresh_orchestration_tab_state(ctx));
+            }
+        }
+    }
+
+    pub(crate) fn set_orchestration_tab_focus(&self, focused: bool, ctx: &mut AppContext) {
+        match self {
+            Self::Terminal(view) => {
+                view.update(ctx, |view, ctx| {
+                    view.set_orchestration_tab_focus(focused, ctx);
+                });
+            }
+            Self::Cloud(view) => {
+                view.update(ctx, |view, ctx| {
+                    view.set_orchestration_tab_focus(focused, ctx);
+                });
+            }
+        }
+    }
+}
+
+/// A live TUI session and any resources required to retain it.
 pub(crate) struct TuiSession {
     id: TuiSessionId,
-    view: ViewHandle<TuiTerminalSessionView>,
-    /// Retained for the session's lifetime to keep its PTY and event loop alive.
-    _manager: ModelHandle<Box<dyn TerminalManagerTrait>>,
+    view: TuiSessionView,
+    /// Present for terminal sessions to keep their PTY and event loop alive.
+    _manager: Option<ModelHandle<Box<dyn TerminalManagerTrait>>>,
+}
+
+/// Retained TUI session resources for a remote child.
+pub(crate) struct RemoteChildSession {
+    pub(crate) session_id: TuiSessionId,
+    pub(crate) cloud_run_state: ModelHandle<TuiCloudRunState>,
 }
 
 impl TuiSession {
-    /// The session's full terminal view.
-    pub(crate) fn view(&self) -> &ViewHandle<TuiTerminalSessionView> {
+    pub(crate) fn view(&self) -> &TuiSessionView {
         &self.view
     }
 }
@@ -133,6 +196,47 @@ impl TuiSessions {
             Self::register_session(sessions, manager.surface, manager.manager, focus, ctx);
         (session_id, surface)
     }
+
+    /// Creates and registers a lightweight cloud-run session.
+    pub(crate) fn create_cloud_run_session(
+        sessions: &ModelHandle<Self>,
+        window_id: WindowId,
+        cloud_run_state: ModelHandle<TuiCloudRunState>,
+        focus: bool,
+        ctx: &mut AppContext,
+    ) -> (TuiSessionId, ViewHandle<TuiCloudRunView>) {
+        let surface = ctx
+            .add_typed_action_tui_view(window_id, |ctx| TuiCloudRunView::new(cloud_run_state, ctx));
+        let session_id = Self::register_cloud_session(sessions, surface.clone(), focus, ctx);
+        (session_id, surface)
+    }
+
+    /// Creates and registers the retained session resources for a remote child.
+    pub(crate) fn create_remote_child_session(
+        sessions: &ModelHandle<Self>,
+        parent_session_id: TuiSessionId,
+        ctx: &mut AppContext,
+    ) -> RemoteChildSession {
+        let window_id = sessions
+            .as_ref(ctx)
+            .session(parent_session_id)
+            .expect("the dispatching parent session must remain registered")
+            .view()
+            .window_id(ctx);
+        let cloud_run_state = ctx.add_model(|_| TuiCloudRunState::new());
+        let (session_id, _) = Self::create_cloud_run_session(
+            sessions,
+            window_id,
+            cloud_run_state.clone(),
+            false,
+            ctx,
+        );
+        RemoteChildSession {
+            session_id,
+            cloud_run_state,
+        }
+    }
+
     /// Wires a session view to orchestration before registering it.
     pub(crate) fn register_session(
         sessions: &ModelHandle<Self>,
@@ -177,8 +281,33 @@ impl TuiSessions {
             );
             sessions.sessions.push(TuiSession {
                 id,
-                view,
-                _manager: manager,
+                view: TuiSessionView::Terminal(view),
+                _manager: Some(manager),
+            });
+            if focus {
+                sessions.focus_session(id, ctx);
+            }
+            ctx.notify();
+            id
+        })
+    }
+
+    fn register_cloud_session(
+        sessions: &ModelHandle<Self>,
+        view: ViewHandle<TuiCloudRunView>,
+        focus: bool,
+        ctx: &mut AppContext,
+    ) -> TuiSessionId {
+        let id = TuiSessionId(view.id());
+        sessions.update(ctx, |sessions, ctx| {
+            debug_assert!(
+                sessions.session(id).is_none(),
+                "a session must not be registered twice"
+            );
+            sessions.sessions.push(TuiSession {
+                id,
+                view: TuiSessionView::Cloud(view),
+                _manager: None,
             });
             if focus {
                 sessions.focus_session(id, ctx);
@@ -201,9 +330,7 @@ impl TuiSessions {
                 .focused_session()
                 .map(|session| session.view().clone());
             if let Some(focused_view) = focused_view {
-                focused_view.update(ctx, |view, ctx| {
-                    view.refresh_orchestration_tab_state(ctx);
-                });
+                focused_view.refresh_orchestration_tab_state(ctx);
             }
         });
 
@@ -217,15 +344,13 @@ impl TuiSessions {
                 .session(*session_id)
                 .map(|session| session.view().clone());
             if let Some(focused_view) = focused_view {
-                focused_view.update(ctx, |view, ctx| {
-                    view.refresh_orchestration_tab_state(ctx);
-                });
+                focused_view.refresh_orchestration_tab_state(ctx);
             }
         });
         let sessions = sessions.clone();
         let orchestration_for_events = orchestration.clone();
         ctx.subscribe_to_model(orchestration, move |_, event, ctx| match event {
-            TuiOrchestrationEvent::CreateLocalOzChildSession {
+            TuiOrchestrationEvent::CreateLocalChildSession {
                 parent_session_id,
                 request,
                 model_id,
@@ -257,6 +382,21 @@ impl TuiSessions {
                             task_id: *task_id,
                             conversation_name: conversation_name.clone(),
                         },
+                        ctx,
+                    );
+                });
+            }
+            TuiOrchestrationEvent::CreateRemoteChildSession {
+                parent_session_id,
+                request,
+                prepared,
+            } => {
+                let child = Self::create_remote_child_session(&sessions, *parent_session_id, ctx);
+                orchestration_for_events.update(ctx, |orchestration, ctx| {
+                    orchestration.register_remote_child_session(
+                        child,
+                        (**request).clone(),
+                        (**prepared).clone(),
                         ctx,
                     );
                 });
@@ -332,7 +472,7 @@ impl TuiSessions {
             .expect("focused session was validated above")
             .view
             .clone();
-        view.update(ctx, |view, ctx| view.activate(ctx));
+        view.activate(ctx);
         ctx.emit(TuiSessionsEvent::FocusChanged(id));
         ctx.notify();
         true
@@ -351,6 +491,25 @@ impl TuiSessions {
     /// Looks up a registered session.
     pub(crate) fn session(&self, id: TuiSessionId) -> Option<&TuiSession> {
         self.sessions.iter().find(|session| session.id == id)
+    }
+
+    /// Looks up a retained session by its terminal surface id.
+    pub(crate) fn session_id_for_surface(&self, surface_id: EntityId) -> Option<TuiSessionId> {
+        self.sessions
+            .iter()
+            .find_map(|session| (session.id.surface_id() == surface_id).then_some(session.id))
+    }
+    pub(crate) fn set_orchestration_tab_focus(
+        session_id: TuiSessionId,
+        focused: bool,
+        ctx: &mut AppContext,
+    ) {
+        let view = Self::as_ref(ctx)
+            .session(session_id)
+            .map(|session| session.view.clone());
+        if let Some(view) = view {
+            view.set_orchestration_tab_focus(focused, ctx);
+        }
     }
 
     /// Builds the loaded conversation-to-session index used by one topology snapshot.
