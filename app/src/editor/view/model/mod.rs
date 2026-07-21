@@ -35,7 +35,6 @@ use vim::{
     vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
     vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
-use warp_editor::model::TypeaheadEditor;
 use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::text::TextBuffer;
@@ -465,37 +464,6 @@ pub enum EditorModelEvent {
 
 impl Entity for EditorModel {
     type Event = EditorModelEvent;
-}
-
-impl TypeaheadEditor for EditorModel {
-    type T = EditorModel;
-
-    fn replace_previous_typeahead(
-        &mut self,
-        previously_inserted: CharOffset,
-        text: &str,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.edit(
-            ctx,
-            Edits::new().with_update_buffer(
-                PlainTextEditorViewAction::ReplaceBuffer,
-                EditOrigin::UserInitiated,
-                |editor_model, ctx| {
-                    editor_model.replace_first_n_characters(previously_inserted, text, ctx);
-                },
-            ),
-        );
-    }
-
-    fn move_typeahead_cursor_to_end(&mut self, ctx: &mut ModelContext<Self>) {
-        self.edit(
-            ctx,
-            Edits::new().with_change_selections(|editor_model, ctx| {
-                editor_model.move_to_buffer_end(false, ctx);
-            }),
-        );
-    }
 }
 
 /// The public interface.

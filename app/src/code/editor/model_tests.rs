@@ -3,7 +3,6 @@ use std::path::Path;
 use futures::channel::oneshot;
 use vec1::vec1;
 use warp_editor::content::buffer::{InitialBufferState, SelectionOffsets};
-use warp_editor::model::TypeaheadEditor;
 use warp_editor::multiline::MultilineString;
 use warp_util::content_version::ContentVersion;
 use warpui::App;
@@ -58,26 +57,18 @@ async fn layout_model(app: &mut App, model: &ModelHandle<CodeEditorModel>) {
 }
 
 #[test]
-fn typeahead_editor_replaces_incremental_prefix_and_moves_cursor_to_end() {
+fn replace_first_n_characters_handles_incremental_unicode_prefix() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
         let editor = mock_model(&mut app, "suffix", ContentVersion::new());
 
         editor.update(&mut app, |editor, ctx| {
-            editor.insert_typeahead_text(CharOffset::from(0), "é", ctx);
-            editor.insert_typeahead_text(CharOffset::from(1), "élan", ctx);
+            editor.replace_first_n_characters(CharOffset::from(0), "é", ctx);
+            editor.replace_first_n_characters(CharOffset::from(1), "élan", ctx);
         });
 
         editor.read(&app, |editor, ctx| {
             assert_eq!(editor.content().as_ref(ctx).text().as_str(), "élansuffix");
-            let end = editor.content().as_ref(ctx).max_charoffset();
-            assert_eq!(
-                editor.selections(ctx),
-                vec1![SelectionOffsets {
-                    head: end,
-                    tail: end,
-                }]
-            );
         });
     });
 }

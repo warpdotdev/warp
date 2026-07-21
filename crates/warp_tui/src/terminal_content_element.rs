@@ -208,6 +208,7 @@ fn possible_typeahead_for_event(event: &TuiEvent) -> Option<String> {
         | TuiEvent::MouseMoved { .. } => None,
     }
 }
+
 /// Converts one semantic TUI input event to bytes for the foreground process.
 /// Composing key and pointer events are handled separately.
 fn pty_bytes_for_event(event: &TuiEvent, model: &Arc<FairMutex<TerminalModel>>) -> Option<Vec<u8>> {

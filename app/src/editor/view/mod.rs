@@ -52,7 +52,6 @@ use warp_completer::completer::Description;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::{safe_error, send_telemetry_from_ctx};
 use warp_editor::editor::NavigationKey;
-use warp_editor::model::TypeaheadEditor;
 use warp_util::path::ShellFamily;
 use warp_util::user_input::UserInput;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
@@ -4608,19 +4607,6 @@ impl EditorView {
                 },
             ),
         );
-    }
-
-    // Insert text that was typed while another command was running
-    // (that wasn't handled by said command).
-    pub fn insert_typeahead_text(
-        &mut self,
-        previously_inserted: CharOffset,
-        text: &str,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.editor_model.update(ctx, |editor_model, ctx| {
-            editor_model.insert_typeahead_text(previously_inserted, text, ctx);
-        });
     }
 
     pub fn replace_last_n_characters(

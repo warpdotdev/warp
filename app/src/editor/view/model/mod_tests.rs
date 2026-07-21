@@ -1,33 +1,10 @@
 use string_offset::{ByteOffset, CharOffset};
 use vec1::vec1;
-use warp_editor::model::TypeaheadEditor;
 use warpui::App;
 use warpui::text_layout::TextStyle;
 
 use super::{EditOrigin, EditorModel, Edits, InteractionState, UpdateBufferOption};
 use crate::editor::{EditorSnapshot, PlainTextEditorViewAction, TextRun, ValidInputType};
-
-#[test]
-fn typeahead_editor_replaces_incremental_prefix_and_moves_cursor_to_end() {
-    App::test((), |mut app| async move {
-        let model = app
-            .add_model(|ctx| EditorModel::new("suffix".into(), 0, None, ValidInputType::All, ctx));
-
-        model.update(&mut app, |model, ctx| {
-            model.insert_typeahead_text(CharOffset::from(0), "é", ctx);
-            model.insert_typeahead_text(CharOffset::from(1), "élan", ctx);
-        });
-
-        model.read(&app, |model, ctx| {
-            assert_eq!(model.buffer_text(ctx), "élansuffix");
-            let selection = model.first_selection(ctx);
-            assert_eq!(
-                model.selection_to_byte_offset(selection, ctx),
-                ByteOffset::from("élansuffix".len())..ByteOffset::from("élansuffix".len())
-            );
-        });
-    });
-}
 
 #[test]
 #[should_panic]

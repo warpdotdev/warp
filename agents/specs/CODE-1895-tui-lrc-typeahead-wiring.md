@@ -22,19 +22,14 @@ wiring that observes it and writes it into the editor.
    notification already live in the shared `TerminalModel` and already reach the
    TUI as `ModelEvent::Typeahead`. The fix is view-side wiring only — no new
    detection logic and no new event plumbing.
-2. *Full two-way sharing — both front-ends migrate onto the shared paths.*
-   Factor two things into shared code and migrate *both* the GUI and the TUI onto
-   them: (a) the "should we insert, and what text / how much to overwrite"
-   decision (the AI-requested-command exclusion + `advance_typeahead`) into a
-   single method on the shared `TerminalModel`; and (b) the editor overwrite
-   arithmetic ("replace the first N characters, then move the cursor to the end")
-   into a shared `TypeaheadEditor` contract in `crates/editor`. The contract owns
-   the replace-then-move sequence, while backend hooks preserve the legacy GUI
-   editor's zero-based CRDT offsets and the TUI `CodeEditorModel`'s one-based
-   core-editor offsets. The GUI is migrated off its open-coded
-   `handle_typeahead_event` decision and its front-end-local insertion sequence.
-   After the change both front-ends call the same semantic insertion method and
-   differ only in their buffer-specific primitive implementations.
+2. *Share the typeahead policy, keep editor application backend-local.* The
+   "should we insert, and what text / how much to overwrite" decision
+   (AI-requested-command exclusion + `advance_typeahead`) lives in one shared
+   `TerminalModel` method used by both front-ends. Applying that result stays
+   local to each editor backend: the GUI terminal input uses a zero-based CRDT
+   buffer, while the TUI uses the one-based core editor. The core editor gains a
+   general `replace_first_n_characters` primitive; each input view explicitly
+   performs the trivial replace-then-move-to-end sequence.
 3. *Scope the reported bug to the common (ShellReported) path; treat
    InputMatching as best-effort.* For modern shells (zsh, bash ≥ 4) the shell
    reports its input buffer, so the model already accumulates typeahead and only
@@ -135,27 +130,20 @@ same `TerminalModel`):
   `crates/warp_tui/src/terminal_session_view.rs:2979-2985 @ abea51c`. So
   `InputMatching` shells cannot match typeahead in the TUI.
 
-*Design alternatives.*
-- *Shared decision logic — where it lives.* (A) Add a method on the shared
-  `TerminalModel` (e.g. `take_typeahead_for_input(&mut self) -> Option<(String,
-  CharOffset)>`) encapsulating the just-completed-block lookup, the
+*Design.*
+- *Shared decision logic.* `TerminalModel::take_typeahead_for_input(&mut self)
+  -> Option<(String, CharOffset)>` encapsulates the just-completed-block lookup,
   agent-requested exclusion, and `advance_typeahead`; both front-ends call it.
-  (B) Duplicate the GUI's `handle_typeahead_event` block-lookup/exclusion logic
-  inside the TUI. — *Chosen: (A).* It is the request's explicit "shared code
-  path", keeps the AI-exclusion rule in exactly one place (a subtle correctness
-  rule), and the logic already operates purely on the shared `BlockList`. (B)
-  risks the two front-ends drifting on the exclusion rule.
-- *Editor overwrite contract.* The GUI terminal input uses the legacy CRDT
+  The AI-exclusion rule and accumulated overwrite count therefore have one
+  implementation on the shared `BlockList`.
+- *Editor application.* The GUI terminal input uses the legacy CRDT
   `EditorModel`, while the TUI uses `CodeEditorModel` backed by the core editor;
   neither buffer can substitute for the other, and their character offsets use
-  different bases. `crates/editor/src/model.rs` therefore defines a narrow
-  `TypeaheadEditor` contract whose `insert_typeahead_text` default method owns
-  the shared "replace previous typeahead, then move the cursor to the end"
-  sequence. The core-editor blanket implementation uses
-  `BufferEditAction::InsertAtCharOffsetRanges` with one-based ranges. The legacy
-  GUI `EditorModel` implementation delegates to its existing CRDT edit and
-  selection primitives with zero-based ranges. Both front-ends call the same
-  semantic contract; no TUI-local insertion sequence is permitted.
+  different bases. `CoreEditorModel::replace_first_n_characters` provides a
+  general one-based core-editor primitive built on
+  `BufferEditAction::InsertAtCharOffsetRanges`. The TUI uses it before moving
+  its cursor to the end. The GUI retains its existing zero-based editor
+  primitive and cursor movement.
 - *Insertion target / timing in the TUI.* While the LRC runs, the input target is
   `TuiInputTarget::Pty` and the agent editor is hidden; on `BlockCompleted` the
   TUI runs `resume_after_user_controlled_command` + `update_process_input_focus`
@@ -186,16 +174,14 @@ same `TerminalModel`):
    decision path the TUI uses. The externally observable GUI behavior is
    unchanged, but the GUI must be migrated — a shared method the GUI does not use
    is explicitly not acceptable.
-3. *Shared editor insertion contract (required, used by both front-ends).* In
-   `crates/editor/src/model.rs`, add `TypeaheadEditor` with backend hooks for
-   replacing the previously inserted character count and moving the cursor to
-   the end. Its shared `insert_typeahead_text` default method calls those hooks
-   in order. Provide a blanket implementation for `CoreEditorModel` backends
-   using `InsertAtCharOffsetRanges`, and a legacy GUI `EditorModel`
-   implementation using its existing CRDT edit and selection primitives.
-   Migrate `Input::insert_typeahead_text`
-   (`app/src/terminal/input.rs:8894-8904 @ abea51c`) and the TUI input view to the
-   same contract. A front-end-local replace-then-move sequence is not acceptable.
+3. *Core-editor prefix replacement.* In `crates/editor/src/model.rs`, add
+   `CoreEditorModel::replace_first_n_characters`, implemented with
+   `InsertAtCharOffsetRanges` and the core editor's one-based offsets. The TUI
+   input view uses it with the model's previous-inserted count, then moves the
+   cursor to the end. The GUI keeps its existing
+   `Input::insert_typeahead_text` behavior
+   (`app/src/terminal/input.rs:8894-8904 @ abea51c`) on its zero-based CRDT
+   editor.
 4. *TUI observe-and-insert.* In
    `crates/warp_tui/src/terminal_session_view.rs`, split `ModelEvent::Typeahead`
    out of the notify-only arm (`:1091-1098`) into a new
@@ -241,19 +227,16 @@ same `TerminalModel`):
   PTY bytes (which would be lossy). Marked "where feasible" because it only
   affects bash 3.2; the reported repro is fixed by step 4 alone.
 
-*Risks / blast radius.* Full GUI+TUI sharing is a required part of this change,
-so the GUI-side migrations (steps 2 and 3) are in scope, not deferred — the risks
-below are mitigated with tests rather than avoided by scoping them out.
+*Risks / blast radius.* The shared policy migration and TUI editor wiring are
+covered with tests across the shared model and both front-ends.
 - The GUI decision migration (step 2) touches the live GUI typeahead path;
   mitigate by keeping GUI behavior observably identical (the shared method is a
   faithful extraction) and covering it with existing GUI typeahead tests
   (`app/src/terminal/model/early_output_tests.rs`) plus a new shared-method unit
   test.
-- Adding the shared `TypeaheadEditor` contract and migrating both backends onto
-  it (step 3) affects the core editor and the legacy GUI editor model; mitigate
-  with an additive semantic trait, backend tests covering their offset
-  conventions, and existing GUI editor tests confirming insertion behavior is
-  unchanged after delegation.
+- Adding `CoreEditorModel::replace_first_n_characters` affects the shared core
+  editor API; mitigate with focused Unicode and offset-count coverage plus the
+  existing editor suites. The legacy GUI editor implementation is unchanged.
 - Step 5 must not double-write or alter what reaches the foreground process —
   reporting typeahead is additive to (not a replacement for) the existing
   `ForwardUserPtyBytes` write; covered by an existing-passthrough regression
@@ -285,17 +268,15 @@ below are mitigated with tests rather than avoided by scoping them out.
    AI-exclusion rule (`agent_interaction_metadata` check for typeahead) plus the
    `advance_typeahead` call each exist in exactly one place (the shared method) —
    no second copy in either front-end.
-7. *Shared editor overwrite helper used by both front-ends, verifies key design
-   choice #2.* Code review + grep confirm both the GUI typeahead insertion
-   (`Input::insert_typeahead_text`) and the TUI insertion route through the
-   single shared `TypeaheadEditor::insert_typeahead_text` method, with no
-   front-end-local copy of the replace-then-move sequence. Unit tests exercise
-   the shared contract against both editor backends, including their different
-   offset bases and multibyte characters.
+7. *Editor overwrite semantics, verifies key design choice #2.* A core-editor
+   unit test covers `replace_first_n_characters` with incremental multibyte
+   input. TUI input/session tests verify that incremental typeahead overwrites
+   rather than appends and leaves the cursor at the end. Existing GUI tests
+   continue to cover its unchanged zero-based editor path.
 8. *GUI parity unchanged.* Existing GUI typeahead tests
    (`app/src/terminal/model/early_output_tests.rs` and any view-level typeahead
    tests) still pass unchanged after the GUI is migrated onto the shared decision
-   method and the shared editor overwrite helper (steps 2 and 3).
+   method (step 2).
 9. *Manual TUI verification (user-facing proof), verifies #1–#4.* Per the
    `tui-verify-change` skill (the TUI's analog to computer-use, since the TUI is
    headless): run the TUI in a real terminal, execute `sleep 5`, type `echo hi`
