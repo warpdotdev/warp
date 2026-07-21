@@ -197,7 +197,7 @@ struct FooterSegments {
     /// The session's compacted working directory. Part of the combined
     /// cwd/branch section.
     cwd: Option<String>,
-    /// The current branch name, appended to the cwd segment as ` ↬ branch`.
+    /// The current branch name, appended to the cwd segment as ` ⊢ branch`.
     branch: Option<String>,
     /// The clickable usage entry. Hidden in shell mode.
     usage: Option<Box<dyn TuiElement>>,
@@ -209,9 +209,9 @@ struct FooterSegments {
 
 /// Builds the left-aligned sectioned status row from resolved segments.
 ///
-/// Agent mode orders the sections `[model] [cwd ↬ branch] • [usage] •
+/// Agent mode orders the sections `[model] [cwd ⊢ branch] • [usage] •
 /// [+N -M]`; shell mode leads with the shell-mode indicator and hides the
-/// model and usage segments, yielding `[shell mode] [cwd ↬ branch] •
+/// model and usage segments, yielding `[shell mode] [cwd ⊢ branch] •
 /// [+N -M]`. A plain space separates the model from cwd/branch; a ` • `
 /// separator precedes usage and diff. Absent metadata never leaves a stray
 /// separator. Every child truncates to a single row, so the row lays out one
@@ -253,7 +253,7 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
         }
         if let Some(branch) = segments.branch {
             row = row.child(
-                TuiText::new(format!(" ↬ {branch}"))
+                TuiText::new(format!(" ⊢ {branch}"))
                     .with_style(muted)
                     .truncate()
                     .finish(),
@@ -2090,8 +2090,8 @@ impl TuiTerminalSessionView {
     }
 
     /// Builds the status footer under the input box. The row is left-aligned:
-    /// in agent mode `[model] [cwd ↬ branch] • [usage] • [+N -M]`, and in shell
-    /// mode `[shell mode] [cwd ↬ branch] • [+N -M]` (model and usage hidden).
+    /// in agent mode `[model] [cwd ⊢ branch] • [usage] • [+N -M]`, and in shell
+    /// mode `[shell mode] [cwd ⊢ branch] • [+N -M]` (model and usage hidden).
     /// A replacing hint — the ctrl-c exit
     /// confirmation while armed, the conversation-list loading hint, an active
     /// transient notice, or the `Shift + ↑ sub-agents` orchestration callout
