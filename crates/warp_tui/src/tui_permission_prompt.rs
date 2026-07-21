@@ -366,19 +366,8 @@ impl TypedActionView for TuiPermissionPrompt {
         }
         match action {
             TuiPermissionPromptAction::Confirm => {
-                let body_editor_focused = self
-                    .body_editor
-                    .as_ref()
-                    .is_some_and(|editor| editor.as_ref(ctx).is_focused());
                 self.selector.update(ctx, |selector, ctx| {
-                    if body_editor_focused {
-                        selector.handle_action(
-                            &TuiOptionSelectorAction::SelectItemWithoutConfirm(0),
-                            ctx,
-                        );
-                    } else {
-                        selector.confirm_selected(ctx);
-                    }
+                    selector.confirm_selected(ctx);
                 });
             }
             TuiPermissionPromptAction::MoveUp => {

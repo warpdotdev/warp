@@ -12,6 +12,7 @@ use warpui::platform::WindowStyle;
 use warpui_core::elements::tui::{
     Color, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
 };
+use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{
     App, AppContext, EntityIdMap, TuiView, TypedActionView, ViewHandle, WindowInvalidation,
@@ -107,6 +108,7 @@ fn blocked_command_card_matches_permission_layout() {
 #[test]
 fn finishing_command_editing_selects_yes_without_executing() {
     App::test((), |mut app| async move {
+        app.update(super::init);
         let action = command_action("action-1", "echo original");
         let view = add_shell_view(
             &mut app,
@@ -139,12 +141,20 @@ fn finishing_command_editing_selects_yes_without_executing() {
                 None
             );
         });
-        view.update(&mut app, |view, ctx| {
-            view.command_editor.update(ctx, |editor, ctx| {
-                editor.set_text("echo edited\necho second", ctx)
-            });
-            view.handle_action(&TuiShellCommandViewAction::SaveCommandEdit, ctx);
+        let command_editor = app.read(|ctx| view.as_ref(ctx).command_editor.clone());
+        command_editor.update(&mut app, |editor, ctx| {
+            editor.set_text("echo edited\necho second", ctx)
         });
+        let window_id = app.read(|ctx| view.window_id(ctx));
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[view.id(), prompt.id(), command_editor.id()],
+                &Keystroke::parse("enter").expect("valid Enter keystroke"),
+                false,
+            )
+            .expect("Enter dispatch succeeds");
+        assert!(handled);
 
         app.read(|ctx| {
             let view = view.as_ref(ctx);

@@ -144,58 +144,6 @@ fn leading_editor_participates_in_selector_focus_cycle() {
 }
 
 #[test]
-fn confirm_from_leading_editor_selects_yes_without_accepting() {
-    App::test((), |mut app| async move {
-        let prompt = add_prompt(&mut app, true);
-        let (action_model, action) = app.read(|ctx| {
-            let prompt = prompt.as_ref(ctx);
-            (prompt.action_model.clone(), pending_action(prompt))
-        });
-        action_model.update(&mut app, |model, ctx| {
-            queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
-        });
-        let accepted = Rc::new(RefCell::new(false));
-        let accepted_for_event = accepted.clone();
-        app.update(|ctx| {
-            ctx.subscribe_to_view(&prompt, move |_, event, _| {
-                if matches!(event, TuiPermissionPromptEvent::AcceptRequested) {
-                    *accepted_for_event.borrow_mut() = true;
-                }
-            });
-        });
-
-        prompt.update(&mut app, |prompt, ctx| {
-            prompt.handle_action(&TuiPermissionPromptAction::MoveUp, ctx);
-        });
-        assert!(app.read(|ctx| {
-            prompt
-                .as_ref(ctx)
-                .body_editor
-                .as_ref()
-                .expect("editable prompt has a body editor")
-                .as_ref(ctx)
-                .is_focused()
-        }));
-        prompt.update(&mut app, |prompt, ctx| {
-            prompt.handle_action(&TuiPermissionPromptAction::Confirm, ctx);
-        });
-
-        app.read(|ctx| {
-            let prompt = prompt.as_ref(ctx);
-            assert!(
-                !prompt
-                    .body_editor
-                    .as_ref()
-                    .expect("editable prompt has a body editor")
-                    .as_ref(ctx)
-                    .is_focused()
-            );
-            assert_eq!(prompt.selector.as_ref(ctx).highlighted_index(), Some(0));
-        });
-        assert!(!*accepted.borrow());
-    });
-}
-#[test]
 fn editable_prompt_uses_edit_option_for_shortcut_and_click() {
     App::test((), |mut app| async move {
         let prompt = add_prompt(&mut app, true);
