@@ -83,6 +83,9 @@ impl NativeModal {
         for _ in 0..alert_dialog.button_data.len() {
             self.modal_button_mouse_states.push(Default::default());
         }
+        if alert_dialog.disable_initially_checked {
+            self.dont_show_again = true;
+        }
         self.alert_dialog = Some(alert_dialog);
     }
 
@@ -134,10 +137,14 @@ impl View for NativeModal {
             ..Default::default()
         };
 
+        let disable_label = alert_dialog
+            .disable_label
+            .as_deref()
+            .unwrap_or("Don't show again.");
         let dont_show_again_checkbox = appearance
             .ui_builder()
             .checkbox(self.dont_show_again_mouse_state.clone(), Some(14.))
-            .with_label(Span::new("Don't show again.", Default::default()))
+            .with_label(Span::new(disable_label.to_string(), Default::default()))
             .check(self.dont_show_again)
             .build()
             .with_cursor(Cursor::PointingHand)

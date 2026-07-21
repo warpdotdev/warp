@@ -196,7 +196,8 @@ use std::collections::HashSet;
 use std::ops::Deref;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ::settings::{Setting, ToggleableSetting};
 #[cfg(feature = "local_tty")]
@@ -204,6 +205,7 @@ use anyhow::Context;
 use anyhow::{Result, anyhow};
 use appearance::{Appearance, AppearanceManager};
 use channel::ChannelState;
+use instant::Instant;
 use interval_timer::IntervalTimer;
 use itertools::Itertools;
 #[cfg(feature = "integration_tests")]
@@ -233,6 +235,7 @@ use warp_logging::LogDestination;
 use warp_managed_secrets::ManagedSecretManager;
 use warp_server_client::iap::{IapManager, IapManagerEvent, IapState, ManagedIapMint};
 use warp_server_client::network_logging::NetworkLogModel;
+use warpui::clipboard::ClipboardContent;
 use warpui::integration::TestDriver;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
 use warpui::platform::TerminationMode;
@@ -283,6 +286,7 @@ use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::manager::NotebookManager;
 use crate::notification::NotificationContext;
 use crate::palette::PaletteMode;
+use crate::pane_group::Direction;
 use crate::persistence::PersistenceWriter;
 use crate::persistence::model::AgentConversationData;
 use crate::projects::ProjectManagementModel;
@@ -2238,8 +2242,11 @@ pub(crate) fn initialize_app(
         });
         IapManager::new(iap_state, path_resolver, managed_iap_mint, ctx)
     });
-    // Subscribe to IAP manager events to show a modal when refresh fails.
-    ctx.subscribe_to_model(&IapManager::handle(ctx), |_, e, ctx| {
+    // Subscribe to IAP manager events to show a Warp-native modal when refresh fails.
+    // Track when the user last snoozed the modal so we can enforce a 5-minute cooldown.
+    let iap_modal_cooldown: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    let iap_modal_cooldown_sub = iap_modal_cooldown.clone();
+    ctx.subscribe_to_model(&IapManager::handle(ctx), move |_, e, ctx| {
         let IapManagerEvent::RefreshFailed {
             message,
             is_first_failure_of_streak,
@@ -2250,27 +2257,59 @@ pub(crate) fn initialize_app(
         if !*is_first_failure_of_streak {
             return;
         }
-        let dialog = AlertDialogWithCallbacks::for_app(
-            "IAP credential refresh failed",
-            format!("{message}\n\nHave you tried running `gcloud auth login`?"),
-            vec![ModalButton::for_app("Dismiss", |_| {})],
-            |_| {},
-        );
-        if cfg!(all(not(target_family = "wasm"), target_os = "macos")) {
-            ctx.show_native_platform_modal(dialog);
-        } else {
-            let window_id = ctx
-                .windows()
-                .active_window()
-                .or_else(|| ctx.windows().ordered_window_ids().first().copied());
-            if let Some(window_id) = window_id
-                && let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
-                && let Some(handle) = workspaces.first().cloned()
-            {
-                handle.update(ctx, |view, ctx| {
-                    view.show_native_modal(dialog, ctx);
-                });
+        // Respect the 5-minute snooze: if the user dismissed with the checkbox
+        // checked recently, suppress the modal until the cooldown expires.
+        {
+            let cooldown = iap_modal_cooldown_sub
+                .lock()
+                .expect("IAP modal cooldown lock poisoned");
+            if cooldown.is_some_and(|t| t.elapsed() < Duration::from_secs(5 * 60)) {
+                return;
             }
+        }
+        let error_msg_for_copy = message.clone();
+        let iap_modal_cooldown_for_snooze = iap_modal_cooldown_sub.clone();
+        let mut dialog = AlertDialogWithCallbacks::for_app(
+            "IAP credential refresh failed",
+            // Show the raw error so the user can read/copy it, then the gcloud hint.
+            format!("{message}\n\nHave you tried running `gcloud auth login`?"),
+            vec![
+                // "Copy Error" lets users grab the error text: the Warp-native modal
+                // renders info_text as static (non-selectable) text.
+                ModalButton::for_app("Copy Error", move |ctx| {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(error_msg_for_copy));
+                }),
+                // Opens a new split pane and pre-fills the input with `gcloud auth login`.
+                ModalButton::for_app("Open New Pane", move |ctx| {
+                    open_new_pane_with_gcloud_auth_login(ctx);
+                }),
+                ModalButton::for_app("Dismiss", |_| {}),
+            ],
+            // on_disable: called when the "Don't show again for 5 mins" checkbox is
+            // checked. Records the snooze time so future failures are suppressed.
+            move |_| {
+                if let Ok(mut cooldown) = iap_modal_cooldown_for_snooze.lock() {
+                    *cooldown = Some(Instant::now());
+                }
+            },
+        );
+        // Label the checkbox to make the cooldown duration clear, and pre-check it
+        // so the default dismiss behaviour is to snooze for 5 minutes.
+        dialog.disable_label = Some("Don't show again for 5 mins.".to_string());
+        dialog.disable_initially_checked = true;
+        // Show the Warp-native modal for all platforms (no macOS-native dialog).
+        let window_id = ctx
+            .windows()
+            .active_window()
+            .or_else(|| ctx.windows().ordered_window_ids().first().copied());
+        if let Some(window_id) = window_id
+            && let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+            && let Some(handle) = workspaces.first().cloned()
+        {
+            handle.update(ctx, |view, ctx| {
+                view.show_native_modal(dialog, ctx);
+            });
         }
     });
 
@@ -2790,6 +2829,28 @@ fn focus_running_window_and_show_native_modal(
     {
         handle.update(ctx, |view, ctx| {
             view.show_native_modal(dialog_with_callbacks, ctx);
+        });
+    }
+}
+
+/// Opens a new terminal pane to the right and pre-fills its input buffer with
+/// `gcloud auth login`, providing a one-click re-authentication path when IAP
+/// credential refresh fails.
+fn open_new_pane_with_gcloud_auth_login(ctx: &mut AppContext) {
+    let window_id = ctx
+        .windows()
+        .active_window()
+        .or_else(|| ctx.windows().ordered_window_ids().first().copied());
+    if let Some(window_id) = window_id
+        && let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+        && let Some(workspace_handle) = workspaces.first().cloned()
+    {
+        workspace_handle.update(ctx, |workspace, ctx| {
+            let pane_group_handle = workspace.active_tab_pane_group().clone();
+            pane_group_handle.update(ctx, |pane_group, ctx| {
+                pane_group.add_terminal_pane(Direction::Right, None, ctx);
+            });
+            workspace.set_active_terminal_input_contents_and_focus_app("gcloud auth login", ctx);
         });
     }
 }
