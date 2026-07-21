@@ -29,9 +29,11 @@ pub(crate) fn long_context_pricing_warning_title() -> FormattedTextInline {
     ]
 }
 
+mod config;
 pub mod editor;
 pub mod model_menu_items;
 pub mod profiles;
+pub use config::{ExecutionProfileId, ExecutionProfilesConfig};
 
 /// Result of resolving the cloud agent computer use setting.
 /// Contains both the effective value and whether it's forced by organization policy.

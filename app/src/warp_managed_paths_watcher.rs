@@ -323,13 +323,26 @@ impl WarpManagedPathsWatcher {
                     "Warp home skills directory",
                 );
             }
-            if let Some(active_mcp_config_path) = active_mcp_config_file_path()
-                && let Some(active_mcp_config_dir) =
-                    active_mcp_config_path.parent().map(Path::to_path_buf)
+            let active_mcp_config_path = active_mcp_config_file_path();
+            let active_mcp_config_dir = active_mcp_config_path
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf);
+
+            // The TUI settings and MCP files share one directory. Registering that
+            // directory again with an MCP-only filter would prevent settings hot reloads.
+            let is_covered_by_tui_config_watcher = settings::settings_mode()
+                == settings::SettingsMode::Tui
+                && active_mcp_config_dir.as_deref()
+                    == Some(warp_core::paths::tui_config_local_dir().as_path());
+
+            if let Some(active_mcp_config_path) = active_mcp_config_path
+                && let Some(active_mcp_config_dir) = active_mcp_config_dir
                 && active_mcp_config_dir.exists()
                 && !active_mcp_config_dir.starts_with(&data_dir)
                 && (!should_register_config_local_dir
                     || !active_mcp_config_dir.starts_with(&config_local_dir))
+                && !is_covered_by_tui_config_watcher
             {
                 // Watch the config directory non-recursively,
                 // and ignore events for files other than the MCP config file.

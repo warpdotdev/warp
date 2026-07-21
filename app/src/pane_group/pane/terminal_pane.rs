@@ -1375,7 +1375,7 @@ fn handle_terminal_view_event(
             }
             Event::OpenAgentProfileEditor { profile_id } => {
                 ctx.emit(pane_group::Event::OpenAgentProfileEditor {
-                    profile_id: *profile_id,
+                    profile_id: profile_id.clone(),
                 });
             }
             Event::InsertCodeReviewComments {

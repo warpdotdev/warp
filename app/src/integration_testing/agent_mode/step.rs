@@ -376,9 +376,9 @@ pub fn set_execution_profile_no_auto_execute() -> TestStep {
         "Update execution profile",
         |app, _window_id| {
             AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
-                let default_profile_id = *profiles.default_profile(ctx).id();
+                let default_profile_id = profiles.default_profile_id();
                 profiles.set_execute_commands(
-                    default_profile_id,
+                    &default_profile_id,
                     &ActionPermission::AlwaysAsk,
                     ctx,
                 );

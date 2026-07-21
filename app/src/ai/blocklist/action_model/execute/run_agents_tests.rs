@@ -595,8 +595,8 @@ fn cancel_during_plan_publication_does_not_dispatch_children() {
 
 fn set_run_agents_permission(app: &mut App, permission: RunAgentsPermission) {
     AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
-        let profile_id = *profiles.active_profile(None, ctx).id();
-        profiles.set_run_agents(profile_id, permission, ctx);
+        let profile_id = profiles.active_profile(None, ctx).id().clone();
+        profiles.set_run_agents(&profile_id, permission, ctx);
     });
 }
 

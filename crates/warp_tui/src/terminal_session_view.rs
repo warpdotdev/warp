@@ -1145,16 +1145,11 @@ impl TuiTerminalSessionView {
             _ => {}
         });
         // The footer shows the active model, working directory, and usage
-        // entry: re-render when the TUI model or usage-display-mode settings
-        // change (click or settings-file hot reload), when model display
-        // names arrive from the server post-login, or when the session's
-        // working directory changes.
+        // entry: re-render when the usage-display-mode setting changes (click
+        // or settings-file hot reload), when the active model or its display
+        // name changes, or when the session's working directory changes.
         ctx.subscribe_to_model(&AISettings::handle(ctx), |view, _, event, ctx| {
-            if matches!(
-                event,
-                AISettingsChangedEvent::TuiAgentModel { .. }
-                    | AISettingsChangedEvent::TuiUsageDisplayMode { .. }
-            ) {
+            if matches!(event, AISettingsChangedEvent::TuiUsageDisplayMode { .. }) {
                 ctx.notify();
             }
             if matches!(event, AISettingsChangedEvent::AIAutoDetectionEnabled { .. }) {
@@ -1162,7 +1157,11 @@ impl TuiTerminalSessionView {
             }
         });
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |_, _, event, ctx| {
-            if let LLMPreferencesEvent::UpdatedAvailableLLMs = event {
+            if matches!(
+                event,
+                LLMPreferencesEvent::UpdatedAvailableLLMs
+                    | LLMPreferencesEvent::UpdatedActiveAgentModeLLM
+            ) {
                 ctx.notify();
             }
         });
@@ -2439,11 +2438,11 @@ impl TuiTerminalSessionView {
     }
 
     fn handle_accepted_model(&mut self, id: &LLMId, ctx: &mut ViewContext<Self>) {
-        let result = AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            settings.agent_model.set_value(id.as_str().to_owned(), ctx)
+        let terminal_view_id = ctx.view_id();
+        let persisted = LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+            preferences.update_active_profile_base_model(id, Some(terminal_view_id), ctx)
         });
-        if let Err(error) = result {
-            report_error!(error.context("Failed to persist the TUI agent model"));
+        if !persisted {
             self.show_transient_hint(MODEL_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
             return;
         }
