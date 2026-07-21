@@ -141,7 +141,7 @@ pub enum Error {
     #[error("Device was lost")]
     DeviceLost,
     #[error("Failed to map buffer range: {0}")]
-    BufferMap(#[source] wgpu::MapRangeError),
+    BufferMap(#[from] wgpu::MapRangeError),
     #[error("Failed to acquire surface texture: {0:#}")]
     SurfaceError(#[from] GetSurfaceTextureError),
     #[error("Failed to configure surface: {0:#}")]
