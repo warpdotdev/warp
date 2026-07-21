@@ -75,6 +75,12 @@ use pathfinder_geometry::vector::Vector2F;
 /// hidden-section tooltip's long-standing 500 ms show delay.
 pub const TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
 
+/// Fade duration for pointer-anchored (at-cursor) tooltips. Tighter than
+/// [`TOOLTIP_SHOW_DELAY`] because a fade that begins the moment the pointer
+/// rests reads sluggish at 500 ms; the hidden-section tooltip keeps the
+/// longer delay since it appears without an animation.
+pub const TOOLTIP_POINTER_FADE_DELAY: Duration = Duration::from_millis(300);
+
 /// Default jitter tolerance (in pixels) for pointer-hysteresis tooltips: inter-
 /// sample movement at or below this counts as the pointer still being at rest,
 /// so hand tremor neither fades out nor relocates a visible tooltip. Raised from

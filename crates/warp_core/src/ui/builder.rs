@@ -5,7 +5,7 @@ use warpui_core::color::ColorU;
 use warpui_core::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Fill as UiFill, Flex,
     Hoverable, Icon, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, Stack, TOOLTIP_JITTER_THRESHOLD, TOOLTIP_SHOW_DELAY, Text,
+    ParentOffsetBounds, Radius, Stack, TOOLTIP_JITTER_THRESHOLD, TOOLTIP_POINTER_FADE_DELAY, Text,
     TooltipState,
 };
 use warpui_core::fonts::{FamilyId, Properties, Weight};
@@ -505,7 +505,7 @@ impl UiBuilder {
     ///
     /// Behavior (see [`TooltipHysteresis`]): opacity animates toward full while
     /// the pointer is at rest over the element and toward zero while it moves
-    /// (a full fade spans [`TOOLTIP_SHOW_DELAY`]); the fade-in *is* the rest
+    /// (a full fade spans [`TOOLTIP_POINTER_FADE_DELAY`]); the fade-in *is* the rest
     /// delay, and moving mid-fade reverses from the current opacity. The tooltip
     /// colors are scaled by that opacity so the whole affordance fades together.
     /// Position is captured when a fade-in starts from zero and held fixed while
@@ -543,7 +543,7 @@ impl UiBuilder {
             }
             stack.finish()
         })
-        .with_pointer_hysteresis(TOOLTIP_SHOW_DELAY, TOOLTIP_JITTER_THRESHOLD)
+        .with_pointer_hysteresis(TOOLTIP_POINTER_FADE_DELAY, TOOLTIP_JITTER_THRESHOLD)
         .finish()
     }
 
