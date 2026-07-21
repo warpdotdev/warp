@@ -546,7 +546,11 @@ impl ServerApi {
             ChannelState::rtc_http_url()
         );
 
-        let mut request = self.base_client.http_client().get(&url);
+        let mut request = self
+            .base_client
+            .http_client()
+            .get(&url)
+            .fetch_credentials_include();
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }

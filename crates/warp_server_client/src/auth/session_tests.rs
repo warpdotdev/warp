@@ -34,6 +34,18 @@ fn bearer_credentials_are_returned_without_session_refresh_events() {
 }
 
 #[test]
+fn session_cookie_credentials_do_not_create_a_bearer_token() {
+    let auth_state = Arc::new(AuthState::new_logged_out_for_test());
+    auth_state.set_credentials(Some(Credentials::SessionCookie));
+    let (session, event_receiver) = session_with_state(auth_state);
+
+    let token = block_on(session.get_or_refresh_access_token()).unwrap();
+
+    assert!(matches!(token, AuthToken::NoAuth));
+    assert!(event_receiver.try_recv().is_err());
+}
+
+#[test]
 fn unexpired_firebase_credentials_return_cached_token_without_refresh_events() {
     let auth_state = Arc::new(AuthState::new_logged_out_for_test());
     auth_state.set_credentials(Some(Credentials::Firebase(FirebaseAuthTokens {
