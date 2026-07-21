@@ -244,18 +244,19 @@ impl schemars::JsonSchema for ExecutionProfilesConfig {
     }
 }
 
-/// File-safe representation of general agent action permissions.
-///
-/// Domain-only `Unknown` values are written conservatively as `always_ask`.
+// Domain-only `Unknown` values are written conservatively as `always_ask`.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[schemars(rename_all = "snake_case")]
+#[schemars(
+    description = "File-safe representation of general agent action permissions.",
+    rename_all = "snake_case"
+)]
 enum FileActionPermission {
-    /// The agent decides whether explicit approval is required.
+    #[schemars(description = "The agent decides whether explicit approval is required.")]
     AgentDecides,
-    /// The action may run without approval.
+    #[schemars(description = "The action may run without approval.")]
     AlwaysAllow,
-    /// The action always requires approval.
+    #[schemars(description = "The action always requires approval.")]
     #[default]
     AlwaysAsk,
 }
@@ -280,19 +281,20 @@ impl From<FileActionPermission> for ActionPermission {
     }
 }
 
-/// File-safe representation of terminal-write permissions.
-///
-/// Domain-only `Unknown` values are written conservatively as `always_ask`.
+// Domain-only `Unknown` values are written conservatively as `always_ask`.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[schemars(rename_all = "snake_case")]
+#[schemars(
+    description = "File-safe representation of terminal-write permissions.",
+    rename_all = "snake_case"
+)]
 enum FileWriteToPtyPermission {
-    /// Terminal writes may proceed without approval.
+    #[schemars(description = "Terminal writes may proceed without approval.")]
     AlwaysAllow,
-    /// Every terminal write requires approval.
+    #[schemars(description = "Every terminal write requires approval.")]
     #[default]
     AlwaysAsk,
-    /// Only the first write to a process requires approval.
+    #[schemars(description = "Only the first write to a process requires approval.")]
     AskOnFirstWrite,
 }
 
@@ -316,18 +318,19 @@ impl From<FileWriteToPtyPermission> for WriteToPtyPermission {
     }
 }
 
-/// File-safe representation of permission to ask the user questions.
-///
-/// Domain-only `Unknown` values are written conservatively as `always_ask`.
+// Domain-only `Unknown` values are written conservatively as `always_ask`.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[schemars(rename_all = "snake_case")]
+#[schemars(
+    description = "File-safe representation of permission to ask the user questions.",
+    rename_all = "snake_case"
+)]
 enum FileAskUserQuestionPermission {
-    /// The agent may not ask the user questions.
+    #[schemars(description = "The agent may not ask the user questions.")]
     Never,
-    /// Questions are suppressed only during auto-approval.
+    #[schemars(description = "Questions are suppressed only during auto-approval.")]
     AskExceptInAutoApprove,
-    /// Questions are always available to the agent.
+    #[schemars(description = "Questions are always available to the agent.")]
     #[default]
     AlwaysAsk,
 }
@@ -354,18 +357,19 @@ impl From<FileAskUserQuestionPermission> for AskUserQuestionPermission {
     }
 }
 
-/// File-safe representation of child-agent launch permissions.
-///
-/// Domain-only `Unknown` values fail closed to `never_allow`.
+// Domain-only `Unknown` values fail closed to `never_allow`.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[schemars(rename_all = "snake_case")]
+#[schemars(
+    description = "File-safe representation of child-agent launch permissions.",
+    rename_all = "snake_case"
+)]
 enum FileRunAgentsPermission {
-    /// Child agents may not be launched.
+    #[schemars(description = "Child agents may not be launched.")]
     NeverAllow,
-    /// Child agents may be launched without approval.
+    #[schemars(description = "Child agents may be launched without approval.")]
     AlwaysAllow,
-    /// Child-agent launches require approval.
+    #[schemars(description = "Child-agent launches require approval.")]
     #[default]
     AlwaysAsk,
 }
@@ -390,19 +394,20 @@ impl From<FileRunAgentsPermission> for RunAgentsPermission {
     }
 }
 
-/// File-safe representation of computer-use permissions.
-///
-/// Domain-only `Unknown` values fail closed to `never`.
+// Domain-only `Unknown` values fail closed to `never`.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[schemars(rename_all = "snake_case")]
+#[schemars(
+    description = "File-safe representation of computer-use permissions.",
+    rename_all = "snake_case"
+)]
 enum FileComputerUsePermission {
-    /// Computer use is disabled.
+    #[schemars(description = "Computer use is disabled.")]
     #[default]
     Never,
-    /// Each computer-use request requires approval.
+    #[schemars(description = "Each computer-use request requires approval.")]
     AlwaysAsk,
-    /// Computer use may proceed without approval.
+    #[schemars(description = "Computer use may proceed without approval.")]
     AlwaysAllow,
 }
 
@@ -426,55 +431,54 @@ impl From<FileComputerUsePermission> for ComputerUsePermission {
     }
 }
 
-/// User-editable representation of one execution profile.
-///
-/// This deliberately omits `is_default_profile`; the containing map key owns
-/// that invariant. String-backed regex and UUID fields are validated while
-/// converting back to [`AIExecutionProfile`].
+// `is_default_profile` is omitted because the containing map key owns that
+// invariant. String-backed regex and UUID fields are validated while converting
+// back to [`AIExecutionProfile`].
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
+#[schemars(description = "User-editable representation of one execution profile.")]
 struct ExecutionProfileFile {
-    /// User-facing profile name.
+    #[schemars(description = "User-facing profile name.")]
     name: String,
-    /// Permission to apply generated code changes.
+    #[schemars(description = "Permission to apply generated code changes.")]
     apply_code_diffs: FileActionPermission,
-    /// Permission to read files.
+    #[schemars(description = "Permission to read files.")]
     read_files: FileActionPermission,
-    /// Permission to execute commands.
+    #[schemars(description = "Permission to execute commands.")]
     execute_commands: FileActionPermission,
-    /// Permission to write to interactive terminal processes.
+    #[schemars(description = "Permission to write to interactive terminal processes.")]
     write_to_pty: FileWriteToPtyPermission,
-    /// Permission to call MCP servers.
+    #[schemars(description = "Permission to call MCP servers.")]
     mcp_permissions: FileActionPermission,
-    /// Permission to ask the user questions.
+    #[schemars(description = "Permission to ask the user questions.")]
     ask_user_question: FileAskUserQuestionPermission,
-    /// Permission to launch child agents.
+    #[schemars(description = "Permission to launch child agents.")]
     run_agents: FileRunAgentsPermission,
-    /// Command patterns that must always require approval.
+    #[schemars(description = "Command patterns that must always require approval.")]
     command_denylist: Vec<String>,
-    /// Command patterns that may execute without approval.
+    #[schemars(description = "Command patterns that may execute without approval.")]
     command_allowlist: Vec<String>,
-    /// Directories that may be read without approval.
+    #[schemars(description = "Directories that may be read without approval.")]
     directory_allowlist: Vec<std::path::PathBuf>,
-    /// MCP server IDs that may be called without approval.
+    #[schemars(description = "MCP server IDs that may be called without approval.")]
     mcp_allowlist: Vec<String>,
-    /// MCP server IDs that must require approval.
+    #[schemars(description = "MCP server IDs that must require approval.")]
     mcp_denylist: Vec<String>,
-    /// Permission to use the computer-use tool.
+    #[schemars(description = "Permission to use the computer-use tool.")]
     computer_use: FileComputerUsePermission,
-    /// Optional base-model override.
+    #[schemars(description = "Optional base-model override.")]
     base_model: Option<String>,
-    /// Optional coding-model override.
+    #[schemars(description = "Optional coding-model override.")]
     coding_model: Option<String>,
-    /// Optional full-terminal-use model override.
+    #[schemars(description = "Optional full-terminal-use model override.")]
     cli_agent_model: Option<String>,
-    /// Optional computer-use model override.
+    #[schemars(description = "Optional computer-use model override.")]
     computer_use_model: Option<String>,
-    /// Optional maximum context window in tokens.
+    #[schemars(description = "Optional maximum context window in tokens.")]
     context_window_limit: Option<u32>,
-    /// Whether plans are automatically synced to Warp Drive.
+    #[schemars(description = "Whether plans are automatically synced to Warp Drive.")]
     autosync_plans_to_warp_drive: bool,
-    /// Whether the web-search tool is available.
+    #[schemars(description = "Whether the web-search tool is available.")]
     web_search_enabled: bool,
 }
 
