@@ -276,6 +276,123 @@ impl VoiceInputToggleKey {
     }
 }
 
+/// The language used for voice input speech recognition.
+///
+/// `AutoDetect` (the default) sends no language to the transcription provider,
+/// preserving auto-detection behavior. Every other variant maps to an ISO 639-1
+/// 2-letter language code that is forwarded to the provider.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Language used for voice input speech recognition.",
+    rename_all = "snake_case"
+)]
+pub enum VoiceInputLanguage {
+    #[default]
+    #[schemars(description = "Automatically detect the spoken language.")]
+    AutoDetect,
+    English,
+    Spanish,
+    French,
+    German,
+    Italian,
+    Portuguese,
+    Dutch,
+    Hindi,
+    Japanese,
+    Korean,
+    Chinese,
+    Arabic,
+    Russian,
+    Polish,
+    Swedish,
+    Turkish,
+    Ukrainian,
+    Indonesian,
+    Vietnamese,
+    Thai,
+}
+
+settings::macros::implement_setting_for_enum!(
+    VoiceInputLanguage,
+    AISettings,
+    SupportedPlatforms::DESKTOP,
+    // A language preference is user-level (not hardware-specific), so sync it
+    // globally like `voice_input_enabled`, respecting the user's sync setting.
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    surface: settings::SettingSurfaces::GUI,
+    private: false,
+    toml_path: "agents.voice.voice_input_language",
+    description: "The language used for voice input speech recognition (Auto-detect by default).",
+);
+
+impl VoiceInputLanguage {
+    /// Returns the ISO 639-1 2-letter code for the language, or `None` for
+    /// `AutoDetect` (which means "send no language / let the provider detect").
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            VoiceInputLanguage::AutoDetect => None,
+            VoiceInputLanguage::English => Some("en"),
+            VoiceInputLanguage::Spanish => Some("es"),
+            VoiceInputLanguage::French => Some("fr"),
+            VoiceInputLanguage::German => Some("de"),
+            VoiceInputLanguage::Italian => Some("it"),
+            VoiceInputLanguage::Portuguese => Some("pt"),
+            VoiceInputLanguage::Dutch => Some("nl"),
+            VoiceInputLanguage::Hindi => Some("hi"),
+            VoiceInputLanguage::Japanese => Some("ja"),
+            VoiceInputLanguage::Korean => Some("ko"),
+            VoiceInputLanguage::Chinese => Some("zh"),
+            VoiceInputLanguage::Arabic => Some("ar"),
+            VoiceInputLanguage::Russian => Some("ru"),
+            VoiceInputLanguage::Polish => Some("pl"),
+            VoiceInputLanguage::Swedish => Some("sv"),
+            VoiceInputLanguage::Turkish => Some("tr"),
+            VoiceInputLanguage::Ukrainian => Some("uk"),
+            VoiceInputLanguage::Indonesian => Some("id"),
+            VoiceInputLanguage::Vietnamese => Some("vi"),
+            VoiceInputLanguage::Thai => Some("th"),
+        }
+    }
+
+    /// Display name for the language, shown in the AI settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            VoiceInputLanguage::AutoDetect => "Auto-detect",
+            VoiceInputLanguage::English => "English",
+            VoiceInputLanguage::Spanish => "Spanish (Español)",
+            VoiceInputLanguage::French => "French (Français)",
+            VoiceInputLanguage::German => "German (Deutsch)",
+            VoiceInputLanguage::Italian => "Italian (Italiano)",
+            VoiceInputLanguage::Portuguese => "Portuguese (Português)",
+            VoiceInputLanguage::Dutch => "Dutch (Nederlands)",
+            VoiceInputLanguage::Hindi => "Hindi (हिन्दी)",
+            VoiceInputLanguage::Japanese => "Japanese (日本語)",
+            VoiceInputLanguage::Korean => "Korean (한국어)",
+            VoiceInputLanguage::Chinese => "Chinese (中文)",
+            VoiceInputLanguage::Arabic => "Arabic (العربية)",
+            VoiceInputLanguage::Russian => "Russian (Русский)",
+            VoiceInputLanguage::Polish => "Polish (Polski)",
+            VoiceInputLanguage::Swedish => "Swedish (Svenska)",
+            VoiceInputLanguage::Turkish => "Turkish (Türkçe)",
+            VoiceInputLanguage::Ukrainian => "Ukrainian (Українська)",
+            VoiceInputLanguage::Indonesian => "Indonesian (Bahasa Indonesia)",
+            VoiceInputLanguage::Vietnamese => "Vietnamese (Tiếng Việt)",
+            VoiceInputLanguage::Thai => "Thai (ไทย)",
+        }
+    }
+}
+
 /// The default mode for new terminal sessions.
 #[derive(
     Default,
@@ -1008,6 +1125,8 @@ define_settings_group!(AISettings, settings: [
     // This field is used to store the key used for voice input toggling.
     // Note this is not the named key, but rather corresponds to the physical key.
     voice_input_toggle_key: VoiceInputToggleKey,
+    // The language used for voice input speech recognition (Auto-detect by default).
+    voice_input_language: VoiceInputLanguage,
     // This is not a user-visible setting - it's merely a one-time flag to track if the user has
     // explicitly interacted with voice input. We use this to determine whether we should show a toast
     // to inform the user about voice input and auto-set the keybinding.

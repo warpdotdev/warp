@@ -447,6 +447,15 @@ impl EditorView {
                 if let Some(transcriber) = voice_transcriber.transcriber() {
                     let transcriber = transcriber.clone();
 
+                    // Read the user's selected voice input language (if any).
+                    // `AutoDetect` yields `None`, which omits the language and
+                    // lets the provider auto-detect.
+                    let language = AISettings::handle(ctx)
+                        .as_ref(ctx)
+                        .voice_input_language
+                        .code()
+                        .map(|code| code.to_string());
+
                     VoiceInput::handle(ctx).update(ctx, |voice, _| {
                         voice.set_transcribing_active(true);
                     });
@@ -454,7 +463,7 @@ impl EditorView {
                     self.set_voice_input_state(
                         VoiceInputState::Transcribing {
                             handle: ctx.spawn(
-                                async move { transcriber.transcribe(wav_base64).await },
+                                async move { transcriber.transcribe(wav_base64, language).await },
                                 Self::apply_transcribed_voice_input,
                             ),
                         },
