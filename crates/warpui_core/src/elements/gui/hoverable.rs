@@ -6,6 +6,7 @@ use instant::Instant;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 
+use super::tooltip_hysteresis::{TooltipHysteresis, TooltipState};
 use super::{Point, SelectableElement, Selection, SelectionFragment, ZIndex};
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::platform::Cursor;
@@ -63,6 +64,15 @@ pub struct Hoverable {
     //
     suppress_drag: bool,
     defer_events_to_children: bool,
+
+    /// Whether this `Hoverable` opted into browser-`title` tooltip hysteresis
+    /// (via [`Self::with_pointer_hysteresis`]). When set, a [`TooltipHysteresis`]
+    /// lives in the shared [`MouseState`] and intra-element mouse moves are routed
+    /// through it, so a pointer-anchored tooltip shows on rest, relocates on
+    /// re-rest, and dismisses on sustained motion or exit — independently of the
+    /// plain hover-in/out delays. The delay `D` and jitter threshold live on the
+    /// machine itself.
+    pointer_hysteresis: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -110,6 +120,20 @@ pub struct MouseState {
     ///
     /// Only [`Some`] if [`Hoverable::hover_out_delay`] is set.
     hover_out_timer: Option<HoverTimer>,
+
+    /// The browser-`title` tooltip hysteresis machine, present only when the
+    /// owning [`Hoverable`] opted in via [`Hoverable::with_pointer_hysteresis`].
+    ///
+    /// When set, it — not [`Self::is_hovered`] — governs whether a
+    /// pointer-anchored tooltip is shown and where. Read it from a hover build
+    /// closure via [`Self::tooltip_hysteresis_state`]; the [`Hoverable`] feeds it
+    /// pointer samples and drives its timers.
+    tooltip_hysteresis: Option<TooltipHysteresis>,
+
+    /// The notify timer currently armed to re-evaluate [`Self::tooltip_hysteresis`]
+    /// at its next deadline (show or dismiss), if any. Distinct from the
+    /// hover-in/out timers so the two mechanisms never clobber each other.
+    hysteresis_timer: Option<HoverTimer>,
 }
 
 impl MouseState {
@@ -158,9 +182,20 @@ impl MouseState {
         self.hover_position
     }
 
+    /// The current browser-`title` tooltip hysteresis outcome, or [`None`] when
+    /// the owning [`Hoverable`] did not opt into pointer hysteresis. A hover
+    /// build closure reads this to decide whether to show a pointer-anchored
+    /// tooltip and at what position, instead of consulting [`Self::is_hovered`].
+    pub fn tooltip_hysteresis_state(&self) -> Option<TooltipState> {
+        self.tooltip_hysteresis.as_ref().map(|h| h.state())
+    }
+
     pub fn reset_hover_state(&mut self) {
         self.is_hovered = false;
         self.hover_position = None;
+        if let Some(hysteresis) = self.tooltip_hysteresis.as_mut() {
+            hysteresis.on_pointer_left();
+        }
     }
 
     /// Fully clear interaction state. Useful when a click triggers navigation or focus changes,
@@ -178,6 +213,11 @@ impl MouseState {
         // Cancel any pending hover timers
         self.hover_in_timer = None;
         self.hover_out_timer = None;
+        // Dismiss any pointer-anchored tooltip immediately and drop its timer.
+        if let Some(hysteresis) = self.tooltip_hysteresis.as_mut() {
+            hysteresis.on_pointer_left();
+        }
+        self.hysteresis_timer = None;
     }
 
     fn set_hover_timer(&mut self, timer_type: HoverTimerType, hover_timer: HoverTimer) {
@@ -254,6 +294,7 @@ impl Hoverable {
             child_max_z_index: None,
             suppress_drag: true,
             defer_events_to_children: false,
+            pointer_hysteresis: false,
         }
     }
 
@@ -385,6 +426,35 @@ impl Hoverable {
         self
     }
 
+    /// Opt this [`Hoverable`] into browser-`title` tooltip hysteresis for a
+    /// pointer-anchored tooltip. `delay` is the single duration `D` reused for
+    /// both showing on rest and dismissing on sustained motion;
+    /// `jitter_threshold` is the pixel radius below which movement counts as
+    /// rest rather than motion.
+    ///
+    /// While this is set, a hover build closure should consult
+    /// [`MouseState::tooltip_hysteresis_state`] (not [`MouseState::is_hovered`])
+    /// to decide whether and where to show the tooltip. The [`Hoverable`] feeds
+    /// the machine every intra-element mouse move and arms notify timers so the
+    /// show/relocate/dismiss transitions fire on schedule without rebuilding on
+    /// every move. This is orthogonal to the plain hover-in/out delays; it does
+    /// not affect [`MouseState::is_hovered`] or `on_hover` callbacks.
+    pub fn with_pointer_hysteresis(mut self, delay: Duration, jitter_threshold: f32) -> Self {
+        self.pointer_hysteresis = true;
+        // Install the machine into the shared state, but only if absent: this
+        // builder runs on *every* rebuild (the view's render closure re-wraps the
+        // element each frame), and the machine carries live show/dismiss state
+        // that must survive rebuilds. Overwriting it here would reset a visible
+        // tooltip back to hidden on the very next frame.
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.tooltip_hysteresis.is_none() {
+                state.tooltip_hysteresis = Some(TooltipHysteresis::new(delay, jitter_threshold));
+            }
+        }
+        self
+    }
+
     /// Skip firing [`Hoverable::on_hover`] when an item is hovered on synthetic mouse events.
     /// Synthetic events are generated by the UI framework when layout changes,
     /// even though the mouse hasn't actually moved.
@@ -473,6 +543,102 @@ impl Hoverable {
         }
     }
 
+    /// Feed a mouse move (or a re-dispatched last-move on redraw) into the
+    /// pointer-hysteresis machine, if this `Hoverable` opted in, and reconcile
+    /// the notify timer that re-evaluates it. Returns `true` if the tooltip's
+    /// visible state changed (so the caller should treat the move as handled and
+    /// let the ensuing rebuild pick up the new [`TooltipState`]).
+    ///
+    /// The machine sees intra-element moves that the hover-state logic ignores;
+    /// its show/relocate/dismiss transitions are driven from a single
+    /// `notify_after` timer armed at the machine's next deadline. On redraw the
+    /// window re-dispatches the last move, which re-enters here and lets a
+    /// matured deadline resolve (see the timer plumbing in `App::dispatch_event`).
+    fn drive_pointer_hysteresis(
+        &mut self,
+        is_over_element: bool,
+        position: Vector2F,
+        ctx: &mut EventContext,
+    ) -> bool {
+        if !self.pointer_hysteresis {
+            return false;
+        }
+
+        // Translate the screen-space sample into the element-relative space the
+        // machine (and the tooltip anchor) work in. Without a paint origin yet we
+        // cannot place the tooltip, so skip until the next frame supplies one.
+        let Some(origin) = self.origin else {
+            return false;
+        };
+        let relative = position - origin.xy();
+        let now = Instant::now();
+
+        let before = self.state().tooltip_hysteresis.as_ref().map(|h| h.state());
+        {
+            let mut state = self.state();
+            let hysteresis = state
+                .tooltip_hysteresis
+                .as_mut()
+                .expect("hysteresis machine installed when pointer_hysteresis is set");
+            if is_over_element {
+                hysteresis.on_pointer_moved(relative, now);
+            } else {
+                hysteresis.on_pointer_left();
+            }
+        }
+
+        // Reconcile the single re-evaluation timer with the machine's next
+        // deadline: clear a stale one, arm a fresh one when a deadline is pending
+        // and none is already scheduled for it.
+        self.reconcile_hysteresis_timer(ctx);
+
+        let after = self.state().tooltip_hysteresis.as_ref().map(|h| h.state());
+        if before != after {
+            ctx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear any armed hysteresis re-evaluation timer whose deadline no longer
+    /// matches the machine, and arm a fresh `notify_after` timer for the current
+    /// pending deadline (show or dismiss) when one is needed.
+    fn reconcile_hysteresis_timer(&mut self, ctx: &mut EventContext) {
+        let deadline = self
+            .state()
+            .tooltip_hysteresis
+            .as_ref()
+            .and_then(|h| h.next_deadline());
+        let existing = self.state().hysteresis_timer.clone();
+
+        match (deadline, existing) {
+            // A deadline is pending and the armed timer already targets it: keep it.
+            (Some(deadline), Some(timer)) if timer.hover_at == deadline => {}
+            // Deadline changed or newly appeared: replace any stale timer.
+            (Some(deadline), existing) => {
+                if let Some(existing) = existing {
+                    ctx.clear_notify_timer(existing.timer_id);
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let (timer_id, hover_at) = ctx.notify_after(remaining);
+                // Pin the recorded deadline to the machine's, so the re-dispatch
+                // on the resulting redraw resolves it deterministically even if
+                // `notify_after` rounds the wake time.
+                self.state().hysteresis_timer = Some(HoverTimer {
+                    hover_at: deadline.max(hover_at),
+                    timer_id,
+                });
+            }
+            // No deadline pending: drop any lingering timer.
+            (None, Some(existing)) => {
+                ctx.clear_notify_timer(existing.timer_id);
+                self.state().hysteresis_timer = None;
+            }
+            (None, None) => {}
+        }
+    }
+
     /// The main handler for [`Event::MouseMoved`] events.
     fn handle_mouse_moved(
         &mut self,
@@ -484,6 +650,13 @@ impl Hoverable {
         let was_mouse_over_element = self.state().is_mouse_over_element;
         let is_hovered = self.is_mouse_over_element(ctx, position);
         self.state().is_mouse_over_element = is_hovered;
+
+        // Feed the pointer-hysteresis machine (if opted in) every move, including
+        // intra-element ones the hover-state logic below ignores. It drives its
+        // own show/relocate/dismiss timers and rebuilds independently of the
+        // hover-in/out delays; a visible-state change means the tooltip must be
+        // rebuilt, so treat the move as handled.
+        let hysteresis_changed = self.drive_pointer_hysteresis(is_hovered, position, ctx);
 
         // The type of timer that we might need to set, if there's a corresponding delay.
         let hover_timer_type = if is_hovered {
@@ -513,13 +686,9 @@ impl Hoverable {
         // If there aren't any delays, then we can just handle
         // the mouse movement immediately.
         let Some(hover_delay) = self.hover_delay(is_hovered) else {
-            return self.handle_mouse_moved_without_delay(
-                is_hovered,
-                position,
-                is_synthetic,
-                ctx,
-                app,
-            );
+            let handled =
+                self.handle_mouse_moved_without_delay(is_hovered, position, is_synthetic, ctx, app);
+            return handled || hysteresis_changed;
         };
 
         // If a timer has already been started, then only handle
@@ -528,13 +697,14 @@ impl Hoverable {
         let timer = self.state().hover_timer(hover_timer_type).cloned();
         if let Some(timer) = timer {
             if Instant::now() >= timer.hover_at {
-                return self.handle_mouse_moved_without_delay(
+                let handled = self.handle_mouse_moved_without_delay(
                     is_hovered,
                     position,
                     is_synthetic,
                     ctx,
                     app,
                 );
+                return handled || hysteresis_changed;
             }
         } else {
             // If a timer has not been started, start it now.
@@ -542,7 +712,7 @@ impl Hoverable {
             self.state()
                 .set_hover_timer(hover_timer_type, HoverTimer { hover_at, timer_id });
         }
-        false
+        hysteresis_changed
     }
 
     /// Handles [`Event::MouseMoved`] events when the
