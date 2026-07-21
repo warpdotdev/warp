@@ -1,7 +1,10 @@
+use instant::Instant;
 use warp::appearance::Appearance;
+use warp::settings::TuiUsageDisplayMode;
 use warp::tui_export::{
-    BlockPadding, ConversationStatus, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate,
-    export_conversation_markdown, register_tui_session_view_test_singletons,
+    BlockPadding, ConversationStatus, ConversationUsageTotals, InputType, PtyIntent,
+    PtyIntentEvent, SizeInfo, SizeUpdate, export_conversation_markdown,
+    register_tui_session_view_test_singletons,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -18,8 +21,10 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView, WindowInvalidation};
 
 use super::{
-    INLINE_MENU_TOP_PADDING_ROWS, TuiTerminalSessionEvent, export_file_success_message,
-    log_bundle_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
+    CTRL_C_EXIT_HINT, ConversationRestoreState, FooterSegments, INLINE_MENU_TOP_PADDING_ROWS,
+    LOADING_CONVERSATION_HINT, SHELL_MODE_HINT, TuiConversationRestoreOrigin,
+    TuiTerminalSessionEvent, export_file_success_message, log_bundle_success_message,
+    raw_prompt_if_not_blank, render_status_footer_row,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -37,6 +42,7 @@ use crate::terminal_use::TuiInputTarget;
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::tui_builder::TuiUiBuilder;
+use crate::usage::UsageToggle;
 
 struct FocusTestFixture {
     window_id: warpui_core::WindowId,
@@ -383,6 +389,39 @@ fn zero_state_transitions_through_bootstrap_lifecycle() {
     });
 }
 
+fn render_footer_lines(
+    app: &mut App,
+    view: &ViewHandle<super::TuiTerminalSessionView>,
+    orchestration_tabs_available: bool,
+    width: u16,
+) -> Vec<String> {
+    app.update(|ctx| {
+        let footer = view
+            .as_ref(ctx)
+            .render_footer(orchestration_tabs_available, ctx)
+            .finish();
+        render_element(footer, ctx, width).to_lines()
+    })
+}
+
+/// A replacing hint occupies the whole status row, so no section separators,
+/// branch arrows, or usage text should appear alongside it.
+fn assert_footer_segments_absent(lines: &[String]) {
+    let row = lines.join("\n");
+    assert!(
+        !row.contains('│'),
+        "a replacing hint should occupy the whole row with no sections: {row}"
+    );
+    assert!(
+        !row.contains(" ↬ "),
+        "the cwd/branch section is absent: {row}"
+    );
+    assert!(
+        !row.contains("credits"),
+        "the usage section is absent: {row}"
+    );
+}
+
 #[test]
 fn orchestration_tab_icon_replaces_identity_only_while_active_or_blocked() {
     App::test((), |mut app| async move {
@@ -424,33 +463,48 @@ fn orchestration_tab_icon_replaces_identity_only_while_active_or_blocked() {
 }
 
 #[test]
-fn footer_falls_back_to_conversations_callout() {
+fn footer_renders_agent_sections_left_aligned_with_separators() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
             let builder = TuiUiBuilder::from_app(ctx);
-            let buffer = render_element(
-                render_left_footer_hint(None, true, &builder)
-                    .expect("empty input should show the conversations callout"),
+            let usage = UsageToggle::default().render_entry(
+                TuiUsageDisplayMode::default(),
+                ConversationUsageTotals {
+                    credits_spent: 2.5,
+                    cost_in_cents: 0.0,
+                },
                 ctx,
-                40,
+                |_, _| {},
             );
+            let row = render_status_footer_row(
+                FooterSegments {
+                    shell_mode: false,
+                    model_name: Some("TestModel".to_owned()),
+                    cwd: Some("/home/user/warp".to_owned()),
+                    branch: Some("main".to_owned()),
+                    usage: Some(usage),
+                    diff_additions: 3,
+                    diff_deletions: 1,
+                },
+                &builder,
+            )
+            .finish();
+            let lines = render_element(row, ctx, 120).to_lines();
+            let line = lines.join("\n");
 
-            assert_eq!(buffer.to_lines(), vec!["← for conversations"]);
             assert_eq!(
-                buffer[(0, 0)].fg,
-                builder
-                    .accent_text_style()
-                    .fg
-                    .expect("accent text has a foreground")
+                lines,
+                vec!["TestModel │ /home/user/warp ↬ main │ 2.5 credits │ +3 -1"],
+                "agent footer is left-aligned with │ separators in order \
+                 model → cwd/branch → usage → diff"
             );
-            assert_eq!(
-                buffer[(1, 0)].fg,
-                builder
-                    .muted_text_style()
-                    .fg
-                    .expect("muted text has a foreground")
+            assert!(
+                line.starts_with("TestModel"),
+                "the first segment starts at the left edge (no flex-spacer padding)"
             );
+            assert!(!line.contains(" • "), "the obsolete • separator is gone");
+            assert!(!line.contains('←'), "the conversations callout is absent");
         });
     });
 }
@@ -475,36 +529,168 @@ fn footer_does_not_render_credit_actions() {
 }
 
 #[test]
-fn transient_footer_hint_replaces_conversations_callout() {
+fn footer_renders_bash_sections_without_model_or_usage() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
             let builder = TuiUiBuilder::from_app(ctx);
-            let buffer = render_element(
-                render_left_footer_hint(
-                    Some(("temporary hint", builder.muted_text_style())),
-                    false,
-                    &builder,
-                )
-                .expect("transient hints remain visible when input has text"),
+            let usage = UsageToggle::default().render_entry(
+                TuiUsageDisplayMode::default(),
+                ConversationUsageTotals {
+                    credits_spent: 2.5,
+                    cost_in_cents: 0.0,
+                },
                 ctx,
-                40,
+                |_, _| {},
             );
+            let row = render_status_footer_row(
+                FooterSegments {
+                    shell_mode: true,
+                    model_name: Some("TestModel".to_owned()),
+                    cwd: Some("/home/user/warp".to_owned()),
+                    branch: Some("main".to_owned()),
+                    usage: Some(usage),
+                    diff_additions: 3,
+                    diff_deletions: 1,
+                },
+                &builder,
+            )
+            .finish();
+            let lines = render_element(row, ctx, 120).to_lines();
+            let line = lines.join("\n");
 
-            assert_eq!(buffer.to_lines(), vec!["temporary hint"]);
+            assert_eq!(
+                lines,
+                vec![format!(
+                    "{SHELL_MODE_HINT} │ /home/user/warp ↬ main │ +3 -1"
+                )],
+                "bash footer leads with the shell-mode indicator and hides model/usage"
+            );
+            assert!(
+                line.starts_with(SHELL_MODE_HINT),
+                "shell mode is the first segment"
+            );
+            assert!(
+                !line.contains("TestModel"),
+                "model segment is hidden in bash mode"
+            );
+            assert!(
+                !line.contains("2.5 credits"),
+                "usage segment is hidden in bash mode"
+            );
+            assert!(!line.contains(" • "), "the obsolete • separator is gone");
         });
     });
 }
 
 #[test]
-fn conversations_callout_is_hidden_when_input_has_text() {
+fn footer_transient_state_replaces_all_sections() {
     App::test((), |mut app| async move {
-        app.update(|ctx| {
-            ctx.add_singleton_model(|_| Appearance::mock());
-            let builder = TuiUiBuilder::from_app(ctx);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
-            assert!(render_left_footer_hint(None, false, &builder).is_none());
+        // ctrl-c exit confirmation replaces the whole row.
+        view.update(&mut app, |view, _| {
+            view.exit_confirmation.arm(Instant::now());
         });
+        let lines = render_footer_lines(&mut app, &view, false, 80);
+        assert_eq!(lines, vec![CTRL_C_EXIT_HINT]);
+        assert_footer_segments_absent(&lines);
+
+        // Loading-conversation hint replaces the whole row.
+        view.update(&mut app, |view, _| {
+            view.exit_confirmation.disarm();
+            view.conversation_restore_state = ConversationRestoreState::Loading {
+                origin: TuiConversationRestoreOrigin::ConversationList,
+                request_id: 0,
+                future: None,
+            };
+        });
+        let lines = render_footer_lines(&mut app, &view, false, 80);
+        assert_eq!(lines, vec![LOADING_CONVERSATION_HINT]);
+        assert_footer_segments_absent(&lines);
+
+        // A transient notice replaces the whole row.
+        view.update(&mut app, |view, ctx| {
+            view.conversation_restore_state = ConversationRestoreState::Idle;
+            view.show_transient_hint("transient notice".to_owned(), ctx);
+        });
+        let lines = render_footer_lines(&mut app, &view, false, 80);
+        assert_eq!(lines, vec!["transient notice"]);
+        assert_footer_segments_absent(&lines);
+
+        // Priority: when ctrl-c, loading, and a transient notice all overlap,
+        // ctrl-c wins (the existing ctrl-c → loading → transient order).
+        view.update(&mut app, |view, ctx| {
+            view.exit_confirmation.arm(Instant::now());
+            view.conversation_restore_state = ConversationRestoreState::Loading {
+                origin: TuiConversationRestoreOrigin::ConversationList,
+                request_id: 1,
+                future: None,
+            };
+            view.show_transient_hint("transient notice".to_owned(), ctx);
+        });
+        let lines = render_footer_lines(&mut app, &view, false, 80);
+        assert_eq!(lines, vec![CTRL_C_EXIT_HINT]);
+    });
+}
+
+#[test]
+fn footer_orchestration_callout_replaces_sections() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        // With orchestration tabs available and the session in agent mode, the
+        // callout replaces the entire status row.
+        let lines = render_footer_lines(&mut app, &view, true, 80);
+        assert_eq!(lines, vec!["Shift + ↑ sub-agents"]);
+        assert_footer_segments_absent(&lines);
+
+        // Shell mode wins over the orchestration callout: the bash row leads
+        // with the shell-mode indicator instead.
+        view.update(&mut app, |view, ctx| {
+            view.ai_input_model.update(ctx, |input_mode, ctx| {
+                input_mode.set_input_type(InputType::Shell, None, ctx);
+            });
+        });
+        let lines = render_footer_lines(&mut app, &view, true, 80);
+        let row = lines.join("\n");
+        assert!(
+            row.starts_with(SHELL_MODE_HINT),
+            "shell mode wins over the orchestration callout: {row}"
+        );
+        assert!(
+            !row.contains("Shift + ↑ sub-agents"),
+            "the orchestration callout yields to shell mode: {row}"
+        );
+    });
+}
+
+#[test]
+fn footer_conversations_callout_no_longer_renders() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        // With an empty input and no replacing hint, the footer renders the
+        // left-aligned sectioned row — never the obsolete `← for conversations`
+        // callout (render_left_footer_hint and the show_conversations_hint
+        // branch are removed, not merely unreachable).
+        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let row = lines.join("\n");
+        assert!(
+            !row.contains("← for conversations"),
+            "the conversations callout must not render: {row}"
+        );
+        assert!(
+            !row.contains('←'),
+            "no conversations-callout glyph remains: {row}"
+        );
+        assert!(
+            row.contains('│'),
+            "the sectioned status row renders in place of the callout: {row}"
+        );
     });
 }
 #[test]

@@ -45,7 +45,7 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::tui::{
-    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiStyle, TuiText,
+    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
@@ -183,23 +183,129 @@ fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
     (!input.trim().is_empty()).then_some(input)
 }
 
-fn render_left_footer_hint(
-    hint: Option<(&str, TuiStyle)>,
-    show_conversations_hint: bool,
-    builder: &TuiUiBuilder,
-) -> Option<Box<dyn TuiElement>> {
-    match hint {
-        Some((text, style)) => Some(TuiText::new(text).with_style(style).truncate().finish()),
-        None if show_conversations_hint => Some(
-            TuiText::from_spans([
-                ("←".to_owned(), builder.accent_text_style()),
-                (" for conversations".to_owned(), builder.muted_text_style()),
-            ])
-            .truncate()
-            .finish(),
-        ),
-        None => None,
+/// A muted vertical separator (` │ `, box-drawing U+2502) between footer
+/// sections, matching the TUI's box-drawing borders.
+fn footer_separator(builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+    TuiText::new(" │ ")
+        .with_style(builder.muted_text_style())
+        .truncate()
+        .finish()
+}
+
+/// Resolved segments for the footer's left-aligned sectioned status row.
+/// [`TuiTerminalSessionView::render_footer`] builds this from view state and
+/// delegates to [`render_status_footer_row`]; keeping the row layout separate
+/// makes the left alignment, ` │ ` separators, section order, and bash-mode
+/// omissions directly render-to-lines testable without view-state plumbing.
+struct FooterSegments {
+    /// Whether the input is in `!` shell mode: the shell-mode indicator leads
+    /// the row and the model/usage segments are hidden.
+    shell_mode: bool,
+    /// The active base model's display name. Hidden in shell mode.
+    model_name: Option<String>,
+    /// The session's compacted working directory. Part of the combined
+    /// cwd/branch section.
+    cwd: Option<String>,
+    /// The current branch name, appended to the cwd segment as ` ↬ branch`.
+    branch: Option<String>,
+    /// The clickable usage entry. Hidden in shell mode.
+    usage: Option<Box<dyn TuiElement>>,
+    /// Uncommitted diff additions; rendered as `+N` when > 0.
+    diff_additions: usize,
+    /// Uncommitted diff deletions; rendered as `-M` when > 0.
+    diff_deletions: usize,
+}
+
+/// Builds the left-aligned sectioned status row from resolved segments.
+///
+/// Agent mode orders the sections `[model] │ [cwd ↬ branch] │ [usage] │
+/// [+N -M]`; shell mode leads with the shell-mode indicator and hides the
+/// model and usage segments, yielding `[shell mode] │ [cwd ↬ branch] │
+/// [+N -M]`. A muted ` │ ` separator spans each boundary between two present
+/// sections, so absent metadata never leaves a stray separator. Every child
+/// truncates to a single row, so the row lays out one row tall.
+fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) -> TuiFlex {
+    let muted = builder.muted_text_style();
+    let mut row = TuiFlex::row();
+    let mut has_segment = false;
+
+    // First segment: the shell-mode indicator (shell mode) or the model name
+    // (agent mode). Shell mode hides the model segment so the indicator leads.
+    if segments.shell_mode {
+        row = row.child(
+            TuiText::new(SHELL_MODE_HINT)
+                .with_style(builder.shell_mode_accent_style())
+                .truncate()
+                .finish(),
+        );
+        has_segment = true;
+    } else if let Some(model_name) = segments.model_name {
+        row = row.child(
+            TuiText::new(model_name)
+                .with_style(builder.primary_text_style())
+                .truncate()
+                .finish(),
+        );
+        has_segment = true;
     }
+
+    // Combined cwd/branch section: the branch stays contextual to its path.
+    if segments.cwd.is_some() || segments.branch.is_some() {
+        if has_segment {
+            row = row.child(footer_separator(builder));
+        }
+        if let Some(cwd) = segments.cwd {
+            row = row.child(TuiText::new(cwd).with_style(muted).truncate().finish());
+        }
+        if let Some(branch) = segments.branch {
+            row = row.child(
+                TuiText::new(format!(" ↬ {branch}"))
+                    .with_style(muted)
+                    .truncate()
+                    .finish(),
+            );
+        }
+        has_segment = true;
+    }
+
+    // Usage entry (agent mode only): the clickable credits/cost toggle.
+    if !segments.shell_mode
+        && let Some(usage) = segments.usage
+    {
+        if has_segment {
+            row = row.child(footer_separator(builder));
+        }
+        row = row.child(usage);
+        has_segment = true;
+    }
+
+    // Diff counts retain their existing added/removed styles.
+    if segments.diff_additions > 0 || segments.diff_deletions > 0 {
+        if has_segment {
+            row = row.child(footer_separator(builder));
+        }
+        if segments.diff_additions > 0 {
+            row = row.child(
+                TuiText::new(format!("+{}", segments.diff_additions))
+                    .with_style(builder.diff_added_style())
+                    .truncate()
+                    .finish(),
+            );
+        }
+        if segments.diff_deletions > 0 {
+            if segments.diff_additions > 0 {
+                row = row.child(TuiText::new(" ").truncate().finish());
+            }
+            row = row.child(
+                TuiText::new(format!("-{}", segments.diff_deletions))
+                    .with_style(builder.diff_removed_style())
+                    .truncate()
+                    .finish(),
+            );
+        }
+    }
+
+    row
 }
 /// Entry point that requested conversation restoration.
 #[derive(Clone, Copy, Debug)]
@@ -889,11 +995,10 @@ impl TuiTerminalSessionView {
             let TuiMcpMenuEvent::Updated = event;
             ctx.notify();
         });
-        // The footer's conversations callout depends on whether the input is
-        // empty, so content changes must invalidate this parent view as well as
-        // the input child. Typing after ctrl-c also disarms the pending exit
-        // confirmation; the ctrl-c buffer clear leaves the buffer empty, so the
-        // window it arms survives its own clear.
+        // Typing after ctrl-c disarms the pending exit confirmation; the
+        // ctrl-c buffer clear leaves the buffer empty, so the window it arms
+        // survives its own clear. Content changes also drive input detection
+        // and must invalidate this parent view as well as the input child.
         let editor_for_footer = input_editor_model.clone();
         ctx.subscribe_to_model(&input_editor_model, move |view, _, event, ctx| {
             let CodeEditorModelEvent::ContentChanged { origin } = event else {
@@ -1966,121 +2071,123 @@ impl TuiTerminalSessionView {
         })
     }
 
-    /// Builds the status footer under the input box. The left slot shows one
-    /// hint at a time — the ctrl-c exit confirmation while armed, else a
-    /// transient notice, else the shell-mode callout, else the conversations
-    /// callout while the input is empty and no inline menu is visible, else the
-    /// orchestration-tab callout; the active model and working directory are
-    /// pushed to the right edge behind a flex spacer. Every child truncates to
-    /// a single row, so the row lays out one row tall.
+    /// Builds the status footer under the input box. The row is left-aligned
+    /// with ` │ `-separated sections: in agent mode `[model] │ [cwd ↬ branch]
+    /// │ [usage] │ [+N -M]`, and in shell mode `[shell mode] │ [cwd ↬ branch]
+    /// │ [+N -M]` (model and usage hidden). A replacing hint — the ctrl-c exit
+    /// confirmation while armed, the conversation-list loading hint, an active
+    /// transient notice, or the `Shift + ↑ sub-agents` orchestration callout
+    /// in agent mode — occupies the whole row instead; shell mode wins over
+    /// the orchestration callout so its indicator keeps leading. Every child
+    /// truncates to a single row, so the row lays out one row tall.
     fn render_footer(&self, orchestration_tabs_available: bool, ctx: &AppContext) -> TuiFlex {
         let builder = TuiUiBuilder::from_app(ctx);
         let muted = builder.muted_text_style();
-        let mut left = TuiFlex::row();
-        // Left slot, highest priority first: while armed, the ctrl-c hint
-        // replaces the other hints in place.
-        let hint = if self.exit_confirmation.is_armed() {
-            Some((CTRL_C_EXIT_HINT, muted))
-        } else if matches!(
+
+        // Replacing hints occupy the entire status row, in the existing
+        // priority order: ctrl-c → loading → transient → orchestration callout.
+        if self.exit_confirmation.is_armed() {
+            return TuiFlex::row().child(
+                TuiText::new(CTRL_C_EXIT_HINT)
+                    .with_style(muted)
+                    .truncate()
+                    .finish(),
+            );
+        }
+        if matches!(
             &self.conversation_restore_state,
             ConversationRestoreState::Loading {
                 origin: TuiConversationRestoreOrigin::ConversationList,
                 ..
             }
         ) {
-            Some((LOADING_CONVERSATION_HINT, muted))
-        } else if let Some((transient, tone)) = self.transient_hint.current() {
+            return TuiFlex::row().child(
+                TuiText::new(LOADING_CONVERSATION_HINT)
+                    .with_style(muted)
+                    .truncate()
+                    .finish(),
+            );
+        }
+        if let Some((transient, tone)) = self.transient_hint.current() {
             let style = match tone {
                 TransientHintTone::Muted => muted,
                 TransientHintTone::Success => builder.success_glyph_style(),
             };
-            Some((transient, style))
-        } else if self.is_shell_mode(ctx) {
-            Some((SHELL_MODE_HINT, builder.shell_mode_accent_style()))
-        } else if orchestration_tabs_available {
-            Some(("Shift + ↑ sub-agents", muted))
-        } else {
-            None
-        };
+            return TuiFlex::row().child(
+                TuiText::new(transient)
+                    .with_style(style)
+                    .truncate()
+                    .finish(),
+            );
+        }
+        // The orchestration-tab callout replaces the status row in agent mode;
+        // shell mode wins so its first segment remains the shell indicator.
+        let shell_mode = self.is_shell_mode(ctx);
+        if orchestration_tabs_available && !shell_mode {
+            return TuiFlex::row().child(
+                TuiText::new("Shift + ↑ sub-agents")
+                    .with_style(muted)
+                    .truncate()
+                    .finish(),
+            );
+        }
 
-        let show_conversations_hint = self.input_view.as_ref(ctx).is_empty(ctx)
-            && !self.suggestions_mode.as_ref(ctx).mode().is_visible();
-        if let Some(hint) = render_left_footer_hint(hint, show_conversations_hint, &builder) {
-            left = left.child(hint);
-        }
-        let mut footer = TuiFlex::row().flex_child(left.finish());
-        let model_name = LLMPreferences::as_ref(ctx)
-            .get_active_base_model(ctx, Some(self.terminal_surface_id))
-            .display_name
-            .clone();
-        footer = footer.child(TuiText::new(" ").truncate().finish()).child(
-            TuiText::new(model_name)
-                .with_style(builder.primary_text_style())
-                .truncate()
-                .finish(),
-        );
-        if let Some(cwd) = self.current_working_directory(ctx) {
-            footer = footer.child(
-                TuiText::new(format!(" {}", compact_footer_path(&cwd)))
-                    .with_style(muted)
-                    .truncate()
-                    .finish(),
-            );
-        }
-        let git_stats = if let Some(metadata) = self.git_status_metadata(ctx) {
-            footer = footer.child(
-                TuiText::new(format!(" ↬ {}", metadata.current_branch_name))
-                    .with_style(muted)
-                    .truncate()
-                    .finish(),
-            );
-            Some(metadata.stats_against_head)
-        } else {
+        // Normal left-aligned sectioned status row.
+        let git_metadata = self.git_status_metadata(ctx);
+        let model_name = if shell_mode {
             None
+        } else {
+            Some(
+                LLMPreferences::as_ref(ctx)
+                    .get_active_base_model(ctx, Some(self.terminal_surface_id))
+                    .display_name
+                    .clone(),
+            )
         };
-        // Usage entry: the selected conversation's credits/cost totals,
-        // hidden until any usage has been reported. The displayed unit is the
-        // persisted `agents.usage_display_mode` setting; a click dispatches
-        // the toggle action (the element pass cannot write settings
-        // directly).
-        if let Some(totals) = self.selected_conversation_usage_totals(ctx) {
-            let mode = AISettings::as_ref(ctx).usage_display_mode;
-            footer = footer
-                .child(TuiText::new(" • ").with_style(muted).truncate().finish())
-                .child(
-                    self.usage_toggle
-                        .render_entry(mode, totals, ctx, |event_ctx, _| {
-                            event_ctx.dispatch_typed_action(
-                                TuiTerminalSessionAction::ToggleUsageDisplay,
-                            );
-                        }),
-                );
-        }
-        if let Some(stats) = git_stats
-            && (stats.total_additions > 0 || stats.total_deletions > 0)
-        {
-            footer = footer.child(TuiText::new(" • ").with_style(muted).truncate().finish());
-            if stats.total_additions > 0 {
-                footer = footer.child(
-                    TuiText::new(format!("+{}", stats.total_additions))
-                        .with_style(builder.diff_added_style())
-                        .truncate()
-                        .finish(),
-                );
-            }
-            if stats.total_deletions > 0 {
-                if stats.total_additions > 0 {
-                    footer = footer.child(TuiText::new(" ").truncate().finish());
-                }
-                footer = footer.child(
-                    TuiText::new(format!("-{}", stats.total_deletions))
-                        .with_style(builder.diff_removed_style())
-                        .truncate()
-                        .finish(),
-                );
-            }
-        }
-        footer
+        let cwd = self
+            .current_working_directory(ctx)
+            .map(|cwd| compact_footer_path(&cwd));
+        let branch = git_metadata.map(|metadata| metadata.current_branch_name.clone());
+        // Usage entry: the selected conversation's credits/cost totals, hidden
+        // until any usage has been reported (and hidden in shell mode, where it
+        // is stale AI-conversation metadata). The displayed unit is the
+        // persisted `agents.usage_display_mode` setting; a click dispatches the
+        // toggle action (the element pass cannot write settings directly).
+        let usage = if shell_mode {
+            None
+        } else {
+            self.selected_conversation_usage_totals(ctx).map(|totals| {
+                let mode = AISettings::as_ref(ctx).usage_display_mode;
+                self.usage_toggle
+                    .render_entry(mode, totals, ctx, |event_ctx, _| {
+                        event_ctx
+                            .dispatch_typed_action(TuiTerminalSessionAction::ToggleUsageDisplay);
+                    })
+            })
+        };
+        let (diff_additions, diff_deletions) = git_metadata
+            .filter(|metadata| {
+                let stats = metadata.stats_against_head;
+                stats.total_additions > 0 || stats.total_deletions > 0
+            })
+            .map(|metadata| {
+                let stats = metadata.stats_against_head;
+                (stats.total_additions, stats.total_deletions)
+            })
+            .unwrap_or_default();
+
+        render_status_footer_row(
+            FooterSegments {
+                shell_mode,
+                model_name,
+                cwd,
+                branch,
+                usage,
+                diff_additions,
+                diff_deletions,
+            },
+            &builder,
+        )
     }
 
     /// Updates the watcher-backed git-status subscription after repository
