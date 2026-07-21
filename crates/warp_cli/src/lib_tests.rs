@@ -2608,3 +2608,103 @@ fn report_shutdown_abnormal_parses() {
         Some("out of memory")
     );
 }
+
+#[test]
+fn report_external_reference_required_args_parse() {
+    let args = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-external-reference",
+        "--url",
+        "https://linear.app/warpdotdev/issue/REMOTE-2253",
+        "--reference-type",
+        "LINEAR_ISSUE",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected harness-support command");
+    };
+    let CliCommand::HarnessSupport(hs_args) = boxed_cmd.as_ref() else {
+        panic!("Expected harness-support command");
+    };
+    let HarnessSupportCommand::ReportExternalReference(report_args) = &hs_args.command else {
+        panic!("Expected report-external-reference subcommand");
+    };
+
+    assert_eq!(
+        report_args.url,
+        "https://linear.app/warpdotdev/issue/REMOTE-2253"
+    );
+    assert_eq!(report_args.reference_type, "LINEAR_ISSUE");
+    assert!(report_args.title.is_none());
+    assert!(report_args.metadata.is_none());
+}
+
+#[test]
+fn report_external_reference_optional_title_parses() {
+    let args = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-external-reference",
+        "--url",
+        "https://github.com/warpdotdev/warp/pull/1",
+        "--reference-type",
+        "GITHUB_PR",
+        "--title",
+        "My pull request",
+        "--metadata",
+        "{\"key\":\"val\"}",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected harness-support command");
+    };
+    let CliCommand::HarnessSupport(hs_args) = boxed_cmd.as_ref() else {
+        panic!("Expected harness-support command");
+    };
+    let HarnessSupportCommand::ReportExternalReference(report_args) = &hs_args.command else {
+        panic!("Expected report-external-reference subcommand");
+    };
+
+    assert_eq!(report_args.url, "https://github.com/warpdotdev/warp/pull/1");
+    assert_eq!(report_args.reference_type, "GITHUB_PR");
+    assert_eq!(report_args.title.as_deref(), Some("My pull request"));
+    assert_eq!(report_args.metadata.as_deref(), Some("{\"key\":\"val\"}"));
+}
+
+#[test]
+fn report_external_reference_missing_url_fails() {
+    let result = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-external-reference",
+        "--reference-type",
+        "LINEAR_ISSUE",
+    ]);
+    assert!(result.is_err(), "missing --url should fail to parse");
+}
+
+#[test]
+fn report_external_reference_missing_reference_type_fails() {
+    let result = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-external-reference",
+        "--url",
+        "https://linear.app/warpdotdev/issue/REMOTE-2253",
+    ]);
+    assert!(
+        result.is_err(),
+        "missing --reference-type should fail to parse"
+    );
+}
