@@ -183,20 +183,11 @@ fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
     (!input.trim().is_empty()).then_some(input)
 }
 
-/// A muted vertical separator (` │ `, box-drawing U+2502) between footer
-/// sections, matching the TUI's box-drawing borders.
-fn footer_separator(builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
-    TuiText::new(" │ ")
-        .with_style(builder.muted_text_style())
-        .truncate()
-        .finish()
-}
-
 /// Resolved segments for the footer's left-aligned sectioned status row.
 /// [`TuiTerminalSessionView::render_footer`] builds this from view state and
 /// delegates to [`render_status_footer_row`]; keeping the row layout separate
-/// makes the left alignment, ` │ ` separators, section order, and bash-mode
-/// omissions directly render-to-lines testable without view-state plumbing.
+/// makes the left alignment, section order, and bash-mode omissions directly
+/// render-to-lines testable without view-state plumbing.
 struct FooterSegments {
     /// Whether the input is in `!` shell mode: the shell-mode indicator leads
     /// the row and the model/usage segments are hidden.
@@ -218,12 +209,13 @@ struct FooterSegments {
 
 /// Builds the left-aligned sectioned status row from resolved segments.
 ///
-/// Agent mode orders the sections `[model] │ [cwd ↬ branch] │ [usage] │
+/// Agent mode orders the sections `[model] [cwd ↬ branch] • [usage] •
 /// [+N -M]`; shell mode leads with the shell-mode indicator and hides the
-/// model and usage segments, yielding `[shell mode] │ [cwd ↬ branch] │
-/// [+N -M]`. A muted ` │ ` separator spans each boundary between two present
-/// sections, so absent metadata never leaves a stray separator. Every child
-/// truncates to a single row, so the row lays out one row tall.
+/// model and usage segments, yielding `[shell mode] [cwd ↬ branch] •
+/// [+N -M]`. A plain space separates the model from cwd/branch; a ` • `
+/// separator precedes usage and diff. Absent metadata never leaves a stray
+/// separator. Every child truncates to a single row, so the row lays out one
+/// row tall.
 fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) -> TuiFlex {
     let muted = builder.muted_text_style();
     let mut row = TuiFlex::row();
@@ -250,9 +242,11 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
     }
 
     // Combined cwd/branch section: the branch stays contextual to its path.
+    // A plain space separates this from the leading model/shell-mode segment,
+    // matching master's layout where model and cwd run together without a dot.
     if segments.cwd.is_some() || segments.branch.is_some() {
         if has_segment {
-            row = row.child(footer_separator(builder));
+            row = row.child(TuiText::new(" ").truncate().finish());
         }
         if let Some(cwd) = segments.cwd {
             row = row.child(TuiText::new(cwd).with_style(muted).truncate().finish());
@@ -273,7 +267,7 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
         && let Some(usage) = segments.usage
     {
         if has_segment {
-            row = row.child(footer_separator(builder));
+            row = row.child(TuiText::new(" • ").with_style(muted).truncate().finish());
         }
         row = row.child(usage);
         has_segment = true;
@@ -282,7 +276,7 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
     // Diff counts retain their existing added/removed styles.
     if segments.diff_additions > 0 || segments.diff_deletions > 0 {
         if has_segment {
-            row = row.child(footer_separator(builder));
+            row = row.child(TuiText::new(" • ").with_style(muted).truncate().finish());
         }
         if segments.diff_additions > 0 {
             row = row.child(
