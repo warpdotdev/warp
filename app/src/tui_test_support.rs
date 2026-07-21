@@ -50,6 +50,7 @@ pub fn queue_tui_permission_action(
 /// Registration order mirrors model subscription dependencies.
 pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
+    app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
     app.update(init_and_register_user_preferences);
     app.add_singleton_model(|_| SettingsManager::default());
     app.add_singleton_model(WarpConfig::mock);

@@ -1,6 +1,6 @@
 use instant::Instant;
 use warp::appearance::Appearance;
-use warp::settings::TuiUsageDisplayMode;
+use warp::settings::{AISettings, TuiUsageDisplayMode};
 use warp::terminal::model::ansi::{Handler, InputBufferValue};
 use warp::tui_export::{
     AIConversationId, AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel,
@@ -8,6 +8,7 @@ use warp::tui_export::{
     SizeInfo, SizeUpdate, export_conversation_markdown, register_tui_session_view_test_singletons,
     slash_commands,
 };
+use warp_core::settings::Setting as _;
 use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -21,6 +22,7 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::keymap::{Context, Keystroke, Trigger};
 use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView as _, WindowInvalidation};
 
 use super::{
@@ -240,6 +242,103 @@ fn empty_typeahead_event_leaves_the_tui_input_unchanged() {
         });
 
         assert_eq!(app.read(|ctx| input_text(&view, ctx)), "draft");
+    });
+}
+
+#[test]
+fn nld_slash_commands_execute_and_report_their_effects() {
+    App::test((), |mut app| async move {
+        let _agent_mode = warp_core::features::FeatureFlag::AgentMode.override_enabled(true);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        flush_events();
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/enable-natural-language-detection", ctx);
+            });
+            view.execute_tui_slash_command(
+                &slash_commands::ENABLE_NATURAL_LANGUAGE_DETECTION,
+                None,
+                ctx,
+            );
+        });
+        futures_lite::future::yield_now().await;
+
+        assert!(app.read(|ctx| {
+            *AISettings::as_ref(ctx)
+                .ai_autodetection_enabled_internal
+                .value()
+        }));
+        assert_eq!(app.read(|ctx| input_text(&view, ctx)), "");
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, tone)| (text.to_owned(), tone))
+            }),
+            Some((
+                "Natural language detection enabled.".to_owned(),
+                super::TransientHintTone::Success
+            ))
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/disable-natural-language-detection", ctx);
+            });
+            view.execute_tui_slash_command(
+                &slash_commands::DISABLE_NATURAL_LANGUAGE_DETECTION,
+                None,
+                ctx,
+            );
+        });
+        futures_lite::future::yield_now().await;
+
+        assert!(!app.read(|ctx| {
+            *AISettings::as_ref(ctx)
+                .ai_autodetection_enabled_internal
+                .value()
+        }));
+        assert_eq!(app.read(|ctx| input_text(&view, ctx)), "");
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, tone)| (text.to_owned(), tone))
+            }),
+            Some((
+                "Natural language detection disabled.".to_owned(),
+                super::TransientHintTone::Success
+            ))
+        );
+
+        let toggles: Vec<_> = flush_events()
+            .into_iter()
+            .filter_map(|event| match event.payload {
+                EventPayload::NamedEvent {
+                    name,
+                    value: Some(value),
+                    ..
+                } if name == "AgentMode.ToggleAutoDetectionSetting" => Some(value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(toggles.len(), 2);
+        assert_eq!(
+            toggles[0],
+            serde_json::json!({
+                "is_autodetection_enabled": true,
+                "origin": "slash_command",
+            })
+        );
+        assert_eq!(
+            toggles[1],
+            serde_json::json!({
+                "is_autodetection_enabled": false,
+                "origin": "slash_command",
+            })
+        );
     });
 }
 
