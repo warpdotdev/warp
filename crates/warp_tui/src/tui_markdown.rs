@@ -154,7 +154,14 @@ fn should_insert_blank_row(line: &FormattedTextLine, next: Option<&FormattedText
         return false;
     };
     match line {
-        FormattedTextLine::Heading(_) => !matches!(
+        // Structural blocks (headings, code blocks, tables, and images) always
+        // get a following blank row unless the next line is itself structural
+        // whitespace or a visual rule. This matches the block-boundary spacing
+        // parity targeted for glamour/codex-style rendering.
+        FormattedTextLine::Heading(_)
+        | FormattedTextLine::CodeBlock(_)
+        | FormattedTextLine::Table(_)
+        | FormattedTextLine::Image(_) => !matches!(
             next,
             FormattedTextLine::LineBreak | FormattedTextLine::HorizontalRule
         ),
@@ -162,6 +169,20 @@ fn should_insert_blank_row(line: &FormattedTextLine, next: Option<&FormattedText
         FormattedTextLine::Line(_) => !matches!(
             next,
             FormattedTextLine::Line(_)
+                | FormattedTextLine::LineBreak
+                | FormattedTextLine::HorizontalRule
+        ),
+        // List items only separate from the following block at the list
+        // boundary: consecutive list items (including mixed list kinds) stay
+        // contiguous, and a trailing blank is skipped when the source already
+        // separated the block with a line break or rule.
+        FormattedTextLine::UnorderedList(_)
+        | FormattedTextLine::OrderedList(_)
+        | FormattedTextLine::TaskList(_) => !matches!(
+            next,
+            FormattedTextLine::UnorderedList(_)
+                | FormattedTextLine::OrderedList(_)
+                | FormattedTextLine::TaskList(_)
                 | FormattedTextLine::LineBreak
                 | FormattedTextLine::HorizontalRule
         ),
