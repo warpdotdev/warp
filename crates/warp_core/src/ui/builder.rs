@@ -5,7 +5,7 @@ use warpui_core::color::ColorU;
 use warpui_core::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
     Icon, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-    Radius, Stack, Text,
+    Radius, Stack, TOOLTIP_JITTER_THRESHOLD, TOOLTIP_SHOW_DELAY, Text, TooltipState,
 };
 use warpui_core::fonts::{FamilyId, Properties, Weight};
 use warpui_core::geometry::vector::{Vector2F, vec2f};
@@ -497,18 +497,19 @@ impl UiBuilder {
     }
 
     /// Like `overlay_tool_tip_on_element`, but anchors the tooltip at the mouse
-    /// pointer rather than at the hovered element's rect. The tooltip's top-left
-    /// is placed at the cursor position captured when hover began (see
-    /// [`MouseState::hover_position`]), nudged by `pointer_offset` (a small
-    /// below-right nudge is conventional so the pointer doesn't cover the text).
+    /// pointer with the browser-`title` show/dismiss hysteresis model rather than
+    /// pinning it to the hovered element's rect. The tooltip's top-left is placed
+    /// at the pointer position the machine reports, nudged by `pointer_offset` (a
+    /// small below-right nudge so the pointer doesn't cover the text).
     ///
-    /// This is a position-at-show affordance, not a cursor follower: the
-    /// `Hoverable` only rebuilds on hover-state changes, so the tooltip stays put
-    /// as the pointer moves within the element. It renders as an overlay (escapes
-    /// parent clips) and is repositioned to stay within the window on both axes.
-    /// If no pointer snapshot is available (e.g. hover was entered synthetically
-    /// without a recorded position), it falls back to anchoring below the
-    /// element's bottom-left, matching the element-anchored variant.
+    /// Behavior (see [`TooltipHysteresis`]): the tooltip appears after the
+    /// pointer comes to rest over the element for [`TOOLTIP_SHOW_DELAY`]; while
+    /// visible, sustained pointer movement dismisses it after the same delay,
+    /// while coming to rest again first relocates it in place with no new delay;
+    /// leaving the element dismisses it immediately. It renders as an overlay
+    /// (escapes parent clips) and is kept within the window on both axes. This is
+    /// driven from timers, not per-move rebuilds, so it has no document-layout
+    /// impact.
     pub fn overlay_tool_tip_at_pointer(
         &self,
         label: String,
@@ -518,32 +519,22 @@ impl UiBuilder {
     ) -> Box<dyn Element> {
         Hoverable::new(mouse_state_handle, |state| {
             let mut stack = Stack::new().with_child(element);
-            if state.is_hovered() {
+            // Consult the hysteresis machine — not `is_hovered` — for whether and
+            // where to show. `Some(Visible { at })` means the pointer settled and
+            // the show/relocate timing has been satisfied.
+            if let Some(TooltipState::Visible { at }) = state.tooltip_hysteresis_state() {
                 let tool_tip = self.tool_tip(label).build().finish();
-                let offset = match state.hover_position() {
-                    // Pointer-relative: `hover_position` is already the cursor
-                    // offset from the element's (parent's) top-left, so anchoring
-                    // the tooltip's top-left to the parent's top-left plus that
-                    // offset places it at the cursor.
-                    Some(pointer) => OffsetPositioning::offset_from_parent(
-                        pointer + pointer_offset,
-                        ParentOffsetBounds::WindowByPosition,
-                        ParentAnchor::TopLeft,
-                        ChildAnchor::TopLeft,
-                    ),
-                    // Fallback: element-anchored below the bottom-left, mirroring
-                    // `overlay_tool_tip_on_element`.
-                    None => OffsetPositioning::offset_from_parent(
-                        vec2f(0., pointer_offset.y().abs()),
-                        ParentOffsetBounds::WindowByPosition,
-                        ParentAnchor::BottomLeft,
-                        ChildAnchor::TopLeft,
-                    ),
-                };
+                let offset = OffsetPositioning::offset_from_parent(
+                    at + pointer_offset,
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                );
                 stack.add_positioned_overlay_child(tool_tip, offset);
             }
             stack.finish()
         })
+        .with_pointer_hysteresis(TOOLTIP_SHOW_DELAY, TOOLTIP_JITTER_THRESHOLD)
         .finish()
     }
 

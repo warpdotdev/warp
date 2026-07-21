@@ -28,7 +28,9 @@ use crate::render::model::{BlockItem, LineCount, RichTextStyles};
 const LABEL_LEFT_PADDING: f32 = 8.;
 /// Slightly smaller than the default UI font size.
 const LABEL_FONT_SIZE: f32 = 11.;
-const TOOLTIP_HOVER_DELAY: Duration = Duration::from_millis(500);
+/// The shared framework tooltip show delay, so this bar's tooltip matches every
+/// other hover tooltip (including the pointer-anchored image alt-text tooltip).
+const TOOLTIP_HOVER_DELAY: Duration = warpui_core::elements::TOOLTIP_SHOW_DELAY;
 /// A hidden-section bar with a link to expand all lines.
 pub struct RenderableHiddenSection {
     element: Box<dyn Element>,
