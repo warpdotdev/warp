@@ -116,6 +116,9 @@ pub(crate) fn render_thinking_section(
         Some(duration) => format!("Thought for {}", format_elapsed_seconds(duration)),
         None => "Thinking...".to_owned(),
     };
+    // Left-align the body with the header (no left indent) and separate it
+    // from the header with a blank line when expanded.
+    let body = TuiContainer::new(body).with_padding_top(1).finish();
     render_collapsible_message_section(
         states,
         message_id,
@@ -135,6 +138,8 @@ pub(crate) fn render_summarization_section(
     body: Box<dyn TuiElement>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
+    // Preserve the existing four-space indent with no header/body gap.
+    let body = TuiContainer::new(body).with_padding_left(4).finish();
     render_collapsible_message_section(
         states,
         message_id,
@@ -154,8 +159,6 @@ fn render_collapsible_message_section(
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
-    // Indent the body so every wrapped line aligns beneath the header.
-    let body_element = TuiContainer::new(body).with_padding_left(4);
 
     let collapsed = states.is_collapsed(message_id, finished);
     let toggle_message_id = message_id.clone();
@@ -163,7 +166,7 @@ fn render_collapsible_message_section(
         collapsed,
         header,
         states.hover_state(message_id),
-        body_element.finish(),
+        body,
         move |event_ctx, _app| {
             event_ctx.dispatch_typed_action(TuiAIBlockAction::SetSectionCollapsed {
                 message_id: toggle_message_id.clone(),
