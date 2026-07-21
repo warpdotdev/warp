@@ -23,10 +23,17 @@ computes a horizontal `visible_left..visible_right` span before delegating to
 - `paint_run_background` takes `visible_left`/`visible_right` as already-computed
   screen-space bounds and paints a `RectF` of width
   `(visible_right - visible_left) + 2. * block_padding` at
-  `visible_left - 2. * block_padding`. `block_padding` (`font_size / 10.` when a
-  border is present) is a small kerning-compensation constant applied symmetrically
-  to both edges — it is *not* the asymmetry this issue is about; the asymmetry comes
-  from `glyph.width` (advance) itself.
+  `visible_left - 2. * block_padding` (`crates/warpui_core/src/text_layout.rs:1401-1405`).
+  Expanding the rect's right edge (`origin.x() + width`) shows this is **not**
+  symmetric: `(visible_left - 2·block_padding) + (visible_right - visible_left) +
+  2·block_padding = visible_right` exactly — the `2·block_padding` term cancels out
+  of the right edge algebraically and only ever shifts the *left* edge outward.
+  `block_padding` (`font_size / 10.` when a border is present) is therefore a
+  **left-only** kerning-compensation offset, not a symmetric one, despite reading
+  like a per-edge inset at first glance. This is a second, independent asymmetry
+  from the one this issue targets (which comes from `glyph.width`/advance itself,
+  below) — see "Interaction with the legacy `block_padding` offset" for how the two
+  compose.
 
 ### What `glyph.width` actually measures
 
@@ -73,6 +80,59 @@ advance-based (they are the text itself). This is a paint-time-only change to th
 background/border rectangle; glyph draw positions
 (`glyph.position_along_baseline`), `Glyph.width`, and `caret_positions` are never
 touched (product spec Success Criteria #2 and #3).
+
+### Interaction with the legacy `block_padding` offset (composes, does not replace)
+
+The ink-derived edges are substituted for `visible_left`/`visible_right` as *local*
+values immediately before the existing `block_padding` math runs unchanged
+(`crates/warpui_core/src/text_layout.rs:1362-1368` reassigns `visible_left`/
+`visible_right`; the `text_rect` construction that consumes them at
+`text_layout.rs:1401-1405` is untouched):
+
+```
+visible_left  = ink_left_of(first_visible_glyph)  - CODE_CHIP_INK_PADDING_RATIO * font_size
+visible_right = ink_right_of(last_visible_glyph)  + CODE_CHIP_INK_PADDING_RATIO * font_size
+# ... then, unchanged from before this fix:
+rect.origin.x = visible_left  - 2 * block_padding
+rect.width    = (visible_right - visible_left) + 2 * block_padding
+# ⇒ rect's right edge = rect.origin.x + rect.width = visible_right   (block_padding cancels)
+# ⇒ rect's left edge  = visible_left - 2 * block_padding             (block_padding does NOT cancel)
+```
+
+So the fix **composes with** the legacy `block_padding` offset; it does not replace,
+bypass, or otherwise adjust it. Concretely, for inline code (which always has
+`run.styles.border.is_some()`, so `block_padding = font_size / 10.` is nonzero):
+
+- The **right** edge is exactly `ink_right + CODE_CHIP_INK_PADDING_RATIO * font_size`
+  — pure ink-edge geometry, `block_padding` has zero effect (it cancels out of the
+  right edge algebraically, as shown above).
+- The **left** edge is `ink_left - CODE_CHIP_INK_PADDING_RATIO * font_size - 2 *
+  block_padding`, i.e. `ink_left - font_size/12 - font_size/5` at the values in this
+  spec — a further `font_size / 5` (≈1.08px at a 13px font) beyond the intended ink
+  padding, entirely from the pre-existing, uncorrected `block_padding` behavior.
+
+**This means the promised "equal ink padding on both sides" (Goal 1 / Success
+Criterion 1) is not fully achieved by the ink-edge fix alone**: the *advance-vs-ink*
+asymmetry this issue targets is eliminated (both edges are now ink-anchored plus a
+fixed pad), but the *pre-existing, unrelated* `block_padding` left-only skew survives
+underneath it, unadjusted. The net left edge is `font_size / 5` further left than the
+net right edge is right, for any bordered inline-code chip.
+
+This residual is small (~1px at typical UI font sizes) and strictly *less* than the
+advance-vs-ink gap this issue removes (which was on the order of a full right-side
+bearing, several pixels for many fonts) — so the fix is a strict visual improvement,
+not a regression. But it is **not** the "left edge does not move / right edge reads
+equal to left" outcome implied by Goal 2 and Success Criterion 1 taken literally: the
+left edge was already `2 * block_padding` further from the ink than the right edge
+before this fix, and remains so after it. Callers of `paint_run_background` do not
+have a lever to fix this within the scope of this change, because `block_padding`'s
+left-only application predates GH13914 and is unrelated to advance-vs-ink; correcting
+it is out of scope here (see Follow-ups) — but the open question it raises (should
+`block_padding` apply to both edges, e.g. `rect.width` also gaining a `-
+2·block_padding`-equivalent on the right, or should the right edge explicitly add
+`+ block_padding` to match) needs an explicit maintainer decision, since either
+resolution changes the border's visual footprint for every bordered/backgrounded run
+in the codebase, not just inline code.
 
 ### Per-glyph ink IS derivable cross-platform (the key finding)
 
@@ -292,6 +352,17 @@ because that surface does not use this paint path at all:
 
 ## Follow-ups
 
+- **`block_padding` left-only asymmetry (new, found while speccing this fix — not
+  fixed here).** As detailed in "Interaction with the legacy `block_padding`
+  offset" above, `block_padding` (`font_size / 10.` when a border is present) only
+  ever offsets the rect's *left* edge — it algebraically cancels out of the right
+  edge in the existing `text_rect` construction
+  (`crates/warpui_core/src/text_layout.rs:1401-1405`). This predates GH13914 and is
+  independent of the advance-vs-ink bug this issue fixes, but it means a bordered
+  inline-code chip's left padding is `font_size / 5` (≈1px at 13px) wider than its
+  right padding even after this fix lands. Needs a maintainer decision on whether to
+  apply `block_padding` to both edges (and the resulting visual footprint change for
+  every bordered/backgrounded run, not just inline code) before it's addressed.
 - If the ~1px macOS rasterizer AA residual (Open Question #2) ever proves visually
   significant, add a design-space per-glyph ink path (CoreText
   `CTFontGetBoundingRectsForGlyphs` to match the Linux ttf-parser outline semantics),
