@@ -34,7 +34,19 @@ Warp already has a separate, explicit exception for symlinked project-skill prov
 maintain standing-query results without materializing those directories in the canonical tree, and
 [`entry_tests.rs`](https://github.com/warpdotdev/warp/blob/abea51cd1e102b363935f1b25ef03d335bc7b36f/crates/repo_metadata/src/entry_tests.rs#L424-L470)
 locks in that behavior. Project Explorer traversal must remain independent of that allowlisted skill
-rule.
+rule. The implementation may share pure symlink classification and path-identity primitives with
+that path, but not its provider matching, standing-query updates, or watcher side effects.
+
+Project Explorer's current **Attach as context** action also has a narrower contract than repository
+context collection:
+
+1. [`FileTreeView::attach_as_context`](https://github.com/warpdotdev/warp/blob/abea51cd1e102b363935f1b25ef03d335bc7b36f/app/src/code/file_tree/view.rs#L2482-L2503)
+   obtains `relative_path_for_item` and emits that path.
+2. [`WorkspaceView::attach_path_as_context`](https://github.com/warpdotdev/warp/blob/abea51cd1e102b363935f1b25ef03d335bc7b36f/app/src/workspace/view.rs#L8534-L8544)
+   forwards the path to the active terminal session.
+3. [`TerminalView::attach_path_as_context`](https://github.com/warpdotdev/warp/blob/abea51cd1e102b363935f1b25ef03d335bc7b36f/app/src/terminal/view.rs#L5710-L5728)
+   inserts its string into the active agent/terminal input (or the CLI-agent input path); it does not
+   read the selected file or traverse a selected directory.
 
 ## Proposed changes
 
@@ -146,7 +158,75 @@ Persist cursors for ordinary and symlinked directories below an alias, not only 
 This is what preserves the boundary when the user expands `A`, then `B`, then `A` in separate model
 tasks. A process-local ancestry set inside one tree walk is insufficient.
 
-### 4. Keep traversal out of indexing, context, standing queries, and remote sync
+### 4. Define nested aliases and the skills-sharing boundary
+
+Run directory-symlink classification for every child produced by an alias-level load, not only for
+aliases found in the shared repository tree. A nested symlink receives its own stable `AliasId` and
+generation, its lexical path is formed below the parent alias, and its resolved directory identity
+is appended to the parent's `canonical_lineage` only after the cycle check succeeds. Its cursor also
+retains the generations of the enclosing alias chain. Completion applies a result only when every
+generation in that chain is still current.
+
+If the nested target repeats any identity in `canonical_lineage`, emit the lexical nested alias as a
+loaded, childless cycle closer and create no cursor or watch lease. Otherwise emit it unloaded with a
+cursor for its resolved directory. This algorithm applies recursively to arbitrary nesting, whether
+each target is inside or outside the workspace. An ordinary directory below an alias keeps the same
+lineage and receives its normal lazy cursor; a file symlink keeps the existing file-entry behavior.
+
+A create, remove, or retarget event at a nested alias path increments only that nested alias's
+generation, removes its descendants and leases, and leaves its parent and siblings intact. Alias
+root action dispatch uses the same typed destructive boundary for a nested alias as for a top-level
+one: rename or delete receives the nested lexical symlink path and never the resolved target.
+
+Factor a small, side-effect-free symlink primitive for both Project Explorer and project skills. For
+example, `classify_directory_symlink(lexical_path)` can use `symlink_metadata`, follow target
+metadata, and return a typed result containing the lexical path, canonical directory identity, and
+redacted failure class. The callers may also share a pure helper that maps a resolved direct-child
+suffix back onto a lexical binding. These are the only initially shared responsibilities.
+
+Keep these responsibilities unique to project skills:
+
+- Matching configured provider roots and direct provider children.
+- Checking for `SKILL.md` and updating `StandingQueryResults` through
+  `record_followed_project_skill_directory`.
+- Maintaining the `symlink_targets` map, translating target watcher events into standing-query
+  deltas, and refreshing those watches through `refresh_symlink_targets` and
+  `add_symlink_target_updates`.
+
+Keep these responsibilities unique to Project Explorer:
+
+- Discovering directory aliases at arbitrary nesting depths and maintaining overlay nodes,
+  generations, traversal lineage, and cycle closers.
+- User-driven lazy expansion, ignore/file-budget behavior, per-view watch leases, and lexical UI
+  operations.
+- Emitting only a local projected-tree refresh and never a standing-query or remote update.
+
+Do not call `record_followed_project_skill_directory`, `refresh_symlink_targets`, or
+`add_symlink_target_updates` from an alias load, and do not generalize the skills provider allowlist
+into a rule for browsable aliases. Conversely, skill discovery must not depend on whether Project
+Explorer has expanded an alias. A later refactor may share a resolved-target watch registry, but
+only if each caller retains its separate lifecycle and output semantics.
+
+### 5. Preserve explicit Attach as context without widening automatic context
+
+The projected entry keeps each alias root and descendant under its lexical `StandardizedPath`, so
+the existing `relative_path_for_item` calculation yields paths such as `vendor` and
+`vendor/src/lib.rs`. Keep the existing `FileTreeAction::AttachAsContext` path unchanged: it remains
+available for file and directory overlay entries, emits the repository-relative lexical path, and
+routes through `WorkspaceView` to `TerminalView::attach_path_as_context`.
+
+Do not canonicalize, open, or enumerate the selected item while handling this action. In
+particular, attaching an unloaded alias root inserts only its lexical path; attaching a visible
+descendant inserts only that descendant's lexical path. Existing terminal/agent input handling then
+decides how the user-authored path is consumed. The action must not copy overlay nodes into
+`get_repo_contents`, construct an `AIAgentContext`, trigger a standing query, or reveal the resolved
+external target in input, telemetry, or errors.
+
+This explicit path reference is the sole agent-context exception for the overlay. Automatic codebase
+indexing, repository context, and ambient context continue to read only the shared tree as described
+below.
+
+### 6. Keep traversal out of indexing, automatic context, standing queries, and remote sync
 
 Make traversal purpose explicit with a private enum or separate APIs:
 
@@ -173,9 +253,10 @@ Enforce the boundary at these points:
    state is persisted to disk.
 
 This preserves PRODUCT invariants 18 and 20 and prevents an external link from silently enlarging
-the codebase indexed or supplied to an agent.
+the codebase indexed or automatically supplied to an agent. The explicit lexical path insertion in
+section 5 does not traverse or export the overlay.
 
-### 5. Define classified failure handling
+### 7. Define classified failure handling
 
 Classify alias-resolution and read failures before applying the completion result:
 
@@ -195,7 +276,7 @@ follow the same rule. Tests may inspect typed fields directly but must not forma
 external target path. A retry always starts from the retained cursor and revalidates the current
 link target.
 
-### 6. Bound target watches to expanded aliases
+### 8. Bound target watches to expanded aliases
 
 Initial lazy alias discovery never registers an external-target watch. Add a
 `ProjectExplorerAliasLease` owned by each active `FileTreeView` subscription:
@@ -226,7 +307,7 @@ leased lexical directory. If a precise event cannot be translated safely, rebuil
 directory level. Never send these events through shared-tree mutations or remote incremental
 serialization.
 
-### 7. Preserve ignore, visibility, and budget semantics
+### 9. Preserve ignore, visibility, and budget semantics
 
 Evaluate repository ignore patterns against the lexical alias path. Reading
 `lexical_path/.gitignore` follows the filesystem link, but matches remain relative to that alias.
@@ -265,7 +346,10 @@ behavior. Add:
 4. A multi-step completion test that expands `A → B → A` in three separate
    `load_directory_with_completion` calls and asserts the final `A` is loaded and childless. Also
    assert every cursor includes its own `resolved_path` as the last lineage item; cover root
-   initialization, a direct self-cycle, and two independent aliases to one target (PRODUCT 7–8).
+   initialization, a direct self-cycle, two independent aliases to one target, and a nested alias
+   whose target is outside the workspace. Retarget that nested alias during an in-flight load and
+   assert only its subtree is invalidated. Exercise nested alias-root rename/delete against a target
+   sentinel to prove the destructive boundary applies at every depth (PRODUCT 4, 7–8).
 5. Table-driven local-model tests for every failure-matrix row: `NotFound`, broken/non-directory,
    root `read_dir` `PermissionDenied`, other transient root read errors, unreadable descendant with
    readable sibling, a transient type-probe failure for an already-known alias, and retarget during
@@ -276,8 +360,9 @@ behavior. Add:
 6. Scope-boundary tests proving an expanded external alias is present in
    `project_explorer_entry` but absent from `get_repo_contents`, repository search/index input,
    agent-context collection, generic standing-query/skill-rule results, `RepoMetadataUpdate`, and
-   remote snapshots. Retain the existing explicit symlinked project-skill discovery regression
-   unchanged (PRODUCT 18, 20).
+   remote snapshots. Separately invoke **Attach as context** and assert it emits only the
+   repository-relative lexical path without changing any of those shared outputs. Retain the
+   existing explicit symlinked project-skill discovery regression unchanged (PRODUCT 18, 20).
 7. Watch-lease tests proving initial lazy aliases create zero external watches; expanding the alias
    root creates one non-recursive watch; an unexpanded child creates none; expanding the child adds
    its own non-recursive watch; a second alias/view shares matching resolved-directory watches; and
@@ -285,11 +370,14 @@ behavior. Add:
    must refresh before display (PRODUCT 14–16).
 8. Project Explorer action tests selecting and opening a descendant and invoking copy, rename, and
    delete paths, asserting every emitted/requested path uses the lexical alias rather than the
-   canonical target. Add alias-root destructive-boundary tests with an external target containing a
-   sentinel file: renaming the root moves only the symlink entry, and deleting the renamed root
-   removes only that symlink, while the target directory and sentinel remain byte-for-byte intact.
-   Also replace the link with an ordinary directory immediately before delete and assert generation
-   plus `symlink_metadata` revalidation fails closed without recursive deletion (PRODUCT 4).
+   canonical target. Invoke **Attach as context** for an unloaded root, nested directory, and file;
+   assert the existing event chain receives `alias`, `alias/nested`, and
+   `alias/nested/file.rs` respectively, with no filesystem read or canonical target in the input.
+   Add alias-root destructive-boundary tests with an external target containing a sentinel file:
+   renaming the root moves only the symlink entry, and deleting the renamed root removes only that
+   symlink, while the target directory and sentinel remain byte-for-byte intact. Also replace the
+   link with an ordinary directory immediately before delete and assert generation plus
+   `symlink_metadata` revalidation fails closed without recursive deletion (PRODUCT 4).
 9. `view_tests.rs` coverage with hidden files and directories below an alias, verifying the existing
    setting hides them by default and reveals them after `show_hidden_files` changes (PRODUCT 13).
 10. Budget/depth tests proving every explicit expansion starts with a fresh
@@ -299,7 +387,10 @@ behavior. Add:
 11. Ignore tests proving workspace rules match lexical paths and a target `.gitignore` applies only
     within that alias projection (PRODUCT 11–12).
 12. File-symlink regression tests and overlay generation tests proving stale async completion cannot
-    overwrite a retargeted alias (PRODUCT 15, 18).
+    overwrite a retargeted alias. Add focused tests for the shared pure symlink classifier, then
+    prove Project Explorer expansion does not call the skills standing-query/update path and skill
+    discovery produces the same results before and after Project Explorer expansion (PRODUCT 15,
+    18).
 
 Implementation PR checks:
 
@@ -307,12 +398,14 @@ Implementation PR checks:
 cargo nextest run -p repo_metadata --features local_fs
 cargo nextest run -p warp --features integration_tests -E 'test(file_tree)'
 ./script/format
-cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
+cargo clippy --workspace --exclude warp_completer --all-targets --tests -- -D warnings
+cargo clippy -p warp --all-targets --tests -- -D warnings
+cargo clippy -p warp_completer --all-targets --tests -- -D warnings
 ```
 
-Both `./script/format` and the full workspace clippy command must pass before opening or updating the
-PR, as required by `AGENTS.md`. Cross-platform CI must compile the unchanged non-macOS paths even
-though symlink-creation behavior tests are macOS-gated.
+`./script/format` and all three Clippy profiles from `script/presubmit` must pass before opening or
+updating the PR, as required by `AGENTS.md`. Cross-platform CI must compile the unchanged non-macOS
+paths even though symlink-creation behavior tests are macOS-gated.
 
 ### Manual evidence
 
@@ -324,6 +417,8 @@ On macOS, create one workspace-local target and one external target, then captur
 3. A cycle fixture showing repeated `A → B → A` expansion terminates and Warp remains responsive.
 4. An external-target fixture showing root rename and delete affect only the workspace symlink while
    the target directory and a sentinel file remain present and unchanged.
+5. A nested external alias fixture showing **Attach as context** inserts only the lexical relative
+   path in the active input and never displays the canonical target path.
 
 The issue screenshots establish the before state. No Linux-only visual evidence is required for
 this macOS-reported bug.
@@ -348,8 +443,9 @@ macOS evidence runs only after integration.
 
 ## Risks and mitigations
 
-1. **Alias contents could leak into indexing or agent context.** Keep the overlay behind an explicit
-   Project Explorer projection type/API and add negative tests at every shared export boundary.
+1. **Alias contents could leak into indexing or automatic agent context.** Keep the overlay behind
+   an explicit Project Explorer projection type/API and add negative tests at every shared export
+   boundary. Test explicit **Attach as context** separately as lexical path insertion only.
 2. **Lazy loads could forget cycle ancestry.** Persist canonical lineage in every unloaded alias
    cursor and test `A → B → A` across separate completion tasks.
 3. **Stale loads could repopulate a retargeted link.** Tie cursors and completion callbacks to an
@@ -367,3 +463,7 @@ macOS evidence runs only after integration.
    external target.** Represent the alias-root boundary in action dispatch, revalidate the lexical
    symlink immediately before mutation, use rename/unlink without canonicalization or recursion, and
    fail closed on replacement races.
+9. **Project Explorer and skill discovery could become coupled through shared symlink support.**
+   Share only pure classification/path-identity helpers initially; keep provider matching,
+   standing-query deltas, overlay traversal, and watch lifecycles behind separate APIs and regression
+   tests.
