@@ -2120,11 +2120,7 @@ fn handle_ai_history_event(
     is_shared_ambient_agent_session: bool,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
-    use std::sync::Arc;
-
-    use crate::ai::blocklist::{
-        AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType,
-    };
+    use crate::ai::blocklist::maybe_build_ai_query_upsert_event;
 
     if event
         .terminal_surface_id()
@@ -2134,74 +2130,21 @@ fn handle_ai_history_event(
     }
 
     match event {
-        BlocklistAIHistoryEvent::AppendedExchange {
-            exchange_id,
-            conversation_id,
-            is_hidden,
-            ..
-        }
-        | BlocklistAIHistoryEvent::UpdatedStreamingExchange {
-            exchange_id,
-            conversation_id,
-            is_hidden,
-            ..
-        } => {
+        BlocklistAIHistoryEvent::AppendedExchange { .. }
+        | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. } => {
             // Check if session restoration is enabled.
             if !*GeneralSettings::as_ref(ctx).restore_session
                 || !AppExecutionMode::as_ref(ctx).can_save_session()
             {
                 return;
             }
-
-            let Some(conversation) =
-                BlocklistAIHistoryModel::as_ref(ctx).conversation(conversation_id)
-            else {
-                log::warn!("Received event with invalid conversation ID: {conversation_id:?}");
+            let Some(upsert_ai_query_event) = maybe_build_ai_query_upsert_event(
+                event,
+                terminal_view_id,
+                is_shared_ambient_agent_session,
+                ctx,
+            ) else {
                 return;
-            };
-
-            let Some(exchange) = conversation.exchange_with_id(*exchange_id) else {
-                log::warn!("Received event with invalid exchange ID: {exchange_id:?}");
-                return;
-            };
-
-            // Hidden blocks and passive-only conversations should not be restored, so we skip
-            // them.
-            if *is_hidden || conversation.is_entirely_passive() {
-                return;
-            }
-
-            // Do not persist AI queries from shared ambient agent sessions that we've viewed,
-            // as these were sent as part of an ambient agent run and shouldn't polute the up arrow history.
-            if is_shared_ambient_agent_session {
-                return;
-            }
-
-            // Only query-bearing inputs (e.g. user queries) are persisted for
-            // up-arrow history. Early return and skip writing for exchanges that
-            // carry empty input.
-            let inputs: Vec<_> = exchange
-                .input
-                .iter()
-                .filter_map(|input| PersistedAIInputType::try_from(input).ok())
-                .collect();
-            if inputs.is_empty() {
-                return;
-            }
-
-            let persisted_query = PersistedAIInput {
-                start_ts: exchange.start_time,
-                inputs,
-                exchange_id: exchange.id,
-                conversation_id: *conversation_id,
-                output_status: AIQueryHistoryOutputStatus::from(&exchange.output_status),
-                working_directory: exchange.working_directory.clone(),
-                // TODO(CORE-3546): shell: exchange.shell.clone(),
-                model_id: exchange.model_id.clone(),
-                coding_model_id: exchange.coding_model_id.clone(),
-            };
-            let upsert_ai_query_event = ModelEvent::UpsertAIQuery {
-                query: Arc::new(persisted_query),
             };
             let _ = ctx.spawn(
                 // Sending over a sync sender can block the current thread, so we
