@@ -97,7 +97,11 @@ impl TuiCloudRunView {
         });
         ctx.subscribe_to_view(&orchestration_tab_bar, |view, _, event, ctx| match event {
             TuiTabBarEvent::SelectTab(conversation_id) => {
-                view.switch_to_orchestration_tab(Some(conversation_id.clone()), ctx);
+                view.switch_to_orchestration_tab(
+                    Some(conversation_id.clone()),
+                    view.orchestration_tabs_focused,
+                    ctx,
+                );
             }
             TuiTabBarEvent::PageChanged(page_anchor) => {
                 let Ok(page_anchor) = page_anchor.clone().try_into() else {
@@ -183,7 +187,12 @@ impl TuiCloudRunView {
         }
     }
 
-    fn switch_to_orchestration_tab(&mut self, key: Option<String>, ctx: &mut ViewContext<Self>) {
+    fn switch_to_orchestration_tab(
+        &mut self,
+        key: Option<String>,
+        keep_tab_focus: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let Some(conversation_id) = key.and_then(|key| key.try_into().ok()) else {
             return;
         };
@@ -194,12 +203,12 @@ impl TuiCloudRunView {
             return;
         };
         if session_id.surface_id() == self.surface_id {
-            self.set_orchestration_tab_focus(true, ctx);
+            self.set_orchestration_tab_focus(keep_tab_focus, ctx);
             return;
         }
         self.orchestration_tabs_focused = false;
         ctx.notify();
-        TuiSessions::set_orchestration_tab_focus(session_id, true, ctx);
+        TuiSessions::set_orchestration_tab_focus(session_id, keep_tab_focus, ctx);
     }
 
     fn display_state(&self, ctx: &AppContext) -> CloudRunDisplayState {
@@ -473,7 +482,7 @@ impl TypedActionView for TuiCloudRunView {
             }
             TuiCloudRunAction::NavigateOrchestrationTabs(action) => {
                 let key = action.target(self.orchestration_tab_bar.as_ref(ctx));
-                self.switch_to_orchestration_tab(key, ctx);
+                self.switch_to_orchestration_tab(key, true, ctx);
             }
         }
     }
