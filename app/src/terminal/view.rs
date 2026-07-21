@@ -136,7 +136,7 @@ use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::user_preferences::GetUserPreferences as _;
-use warp_errors::{report_error, report_if_error};
+use warp_errors::{ReportErrorLogMode, report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
@@ -6592,6 +6592,24 @@ impl TerminalView {
                 conversation_id,
                 initial_requested_command_action_id,
             } => {
+                // Drop the spawn event gracefully when the agent exchange it
+                // references is already absent from history (e.g. a stale event
+                // arrived after the conversation was cleared). Constructing a
+                // view would have no exchange to render and previously panicked
+                // via `.expect` on the missing exchange, so skip registration.
+                if CLISubagentView::latest_exchange_id_for_task(conversation_id, task_id, ctx)
+                    .is_none()
+                {
+                    report_error!(
+                        "CLISubagent view not created: agent exchange data is missing",
+                        extra: {
+                            "conversation_id" => ?conversation_id,
+                            "task_id" => ?task_id,
+                        },
+                        ReportErrorLogMode::OncePerRun
+                    );
+                    return;
+                }
                 let subagent_view = ctx.add_typed_action_view(|ctx| {
                     CLISubagentView::new(
                         block_id.clone(),
