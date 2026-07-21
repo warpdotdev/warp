@@ -11,6 +11,16 @@ use warp::tui_export::{
 use warpui_core::clipboard::{ClipboardContent, ImageData};
 use warpui_core::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES;
 
+pub(super) enum ClipboardPasteContent {
+    Image(ClipboardContent),
+    ImagePaths {
+        paths: Vec<PathBuf>,
+        original_text: String,
+    },
+    Text(String),
+    Empty,
+}
+
 pub(super) fn parse_image_paths(text: &str, cwd: &Path) -> Option<Vec<PathBuf>> {
     let tokens = shell_words::split(text.trim()).ok()?;
     if tokens.is_empty() {
@@ -20,6 +30,48 @@ pub(super) fn parse_image_paths(text: &str, cwd: &Path) -> Option<Vec<PathBuf>> 
         .into_iter()
         .map(|token| resolve_image_path(&token, cwd))
         .collect()
+}
+
+pub(super) fn classify_clipboard_content(
+    content: ClipboardContent,
+    cwd: &Path,
+) -> ClipboardPasteContent {
+    if content.has_image_data() {
+        return ClipboardPasteContent::Image(content);
+    }
+
+    let original_text = if content.plain_text.is_empty() {
+        content
+            .paths
+            .as_ref()
+            .map(|paths| paths.join("\n"))
+            .unwrap_or_default()
+    } else {
+        content.plain_text.clone()
+    };
+    if let Some(paths) = content.paths.as_ref()
+        && !paths.is_empty()
+        && let Some(paths) = paths
+            .iter()
+            .map(|path| resolve_image_path(path, cwd))
+            .collect()
+    {
+        return ClipboardPasteContent::ImagePaths {
+            paths,
+            original_text,
+        };
+    }
+    if let Some(paths) = parse_image_paths(&content.plain_text, cwd) {
+        return ClipboardPasteContent::ImagePaths {
+            paths,
+            original_text,
+        };
+    }
+    if original_text.is_empty() {
+        ClipboardPasteContent::Empty
+    } else {
+        ClipboardPasteContent::Text(original_text)
+    }
 }
 
 fn resolve_image_path(token: &str, cwd: &Path) -> Option<PathBuf> {
@@ -84,20 +136,19 @@ pub(super) async fn process_paths(paths: Vec<PathBuf>) -> Result<Vec<ImageContex
     Ok(images)
 }
 
-pub(super) async fn read_and_process_clipboard_image() -> Result<ImageContext, String> {
-    let content = blocking::unblock(|| -> Result<ClipboardContent, String> {
+pub(super) async fn read_clipboard_content() -> Result<ClipboardContent, String> {
+    blocking::unblock(|| -> Result<ClipboardContent, String> {
         let mut clipboard = warpui::platform::create_system_clipboard()
             .map_err(|_| "The system clipboard is unavailable.".to_owned())?;
         Ok(clipboard.read())
     })
-    .await?;
-    process_clipboard_content(content)
+    .await
 }
 
-fn process_clipboard_content(content: ClipboardContent) -> Result<ImageContext, String> {
+pub(super) fn process_clipboard_content(content: ClipboardContent) -> Result<ImageContext, String> {
     let images = content
         .images
-        .ok_or_else(|| "The clipboard does not contain an image.".to_owned())?;
+        .ok_or_else(|| "Clipboard image data is unavailable.".to_owned())?;
     let image = CLIPBOARD_IMAGE_MIME_TYPES
         .iter()
         .find_map(|mime_type| {
