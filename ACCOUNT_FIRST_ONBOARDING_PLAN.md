@@ -140,14 +140,20 @@ that is correct for this feature (legacy users skip the offer).
    - Add `AccountFirstOnboarding` as the last variant of `FeatureFlag` (after `CloudAgentRunners`,
      ~L917) with a doc comment: gates the account-first FTUE (reordered slides, create-account
      screen, post-auth offer). Do **not** add to `DOGFOOD_FLAGS` / `PREVIEW_FLAGS` / `RELEASE_FLAGS`.
-2. `crates/graphql/src/api/billing.rs`
+2. `app/Cargo.toml` and `app/src/features.rs`
+   - Add the non-default `account_first_onboarding = []` Cargo feature and its
+     `#[cfg(feature = "account_first_onboarding")] FeatureFlag::AccountFirstOnboarding` bridge.
+     This makes local `--features account_first_onboarding` builds turn on the runtime flag without
+     exposing the incomplete flow in default builds.
+3. `crates/graphql/src/api/billing.rs`
    - Add `pub disable_premium_models: bool` to the cynic `WarpAiPolicy` fragment (~L150). Cynic
      derives the camelCase field (`disablePremiumModels`) from the snake_case name automatically —
      confirm generated query includes it (build + any query-snapshot tests).
-3. `app/src/workspaces/workspace.rs`
-   - Add `#[serde(default)] pub disable_premium_models: bool` to the native `WarpAiPolicy` (~L313).
-     `serde(default)` is required: this struct is serialized/deserialized and persisted metadata
-     written by older builds lacks the field.
+4. `app/src/workspaces/workspace.rs`
+   - Add `#[serde(default = "default_disable_premium_models")] pub disable_premium_models: bool`
+     to the native `WarpAiPolicy` (~L313), where the default helper returns `true`. This struct is
+     serialized/deserialized and persisted metadata written by older builds lacks the field;
+     defaulting to disabled makes stale/missing policy fail closed to `FreeStandard`.
    - Update the GraphQL→native conversion so the field flows through. Find it by grepping for
      `warp_ai_policy` in `app/src/workspaces/` and `crates/graphql/src/api/queries/
      get_workspaces_metadata_for_user.rs` (~L36); also check `crates/graphql/src/api/mutations/
@@ -176,7 +182,7 @@ that is correct for this feature (legacy users skip the offer).
          }
      }
      ```
-4. `app/src/auth/auth_manager.rs`
+5. `app/src/auth/auth_manager.rs`
    - In `sign_up_url()` (~L778), append `&native_ftue=1` when
      `FeatureFlag::AccountFirstOnboarding.is_enabled()`. Do not touch `sign_in_url()`,
      `upgrade_url()`, or the `state` contract.
@@ -191,7 +197,7 @@ that is correct for this feature (legacy users skip the offer).
 - `sign_up_url()` test: contains `native_ftue=1` iff the flag is enabled (use the existing
   feature-flag test override utilities in `warp_features`).
 - Serde test: deserializing a persisted `WarpAiPolicy` JSON blob without the new field succeeds
-  with `disable_premium_models == false`.
+  with `disable_premium_models == true` (safe standard-free default).
 
 ### Acceptance criteria
 

@@ -777,9 +777,14 @@ impl AuthManager {
 
     pub fn sign_up_url(&mut self) -> String {
         let state = self.generate_auth_state();
+        let native_ftue = if FeatureFlag::AccountFirstOnboarding.is_enabled() {
+            "&native_ftue=1"
+        } else {
+            ""
+        };
         format!(
             // TODO: we should probably be able to remove the public_beta flag
-            "{}/signup/remote?scheme={}&state={}&public_beta=true",
+            "{}/signup/remote?scheme={}&state={}&public_beta=true{native_ftue}",
             ChannelState::server_root_url(),
             ChannelState::url_scheme(),
             state,

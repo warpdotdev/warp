@@ -312,12 +312,19 @@ pub enum DelinquencyStatus {
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct WarpAiPolicy {
     pub limit: i64,
+    #[serde(default = "default_disable_premium_models")]
+    pub disable_premium_models: bool,
     pub is_code_suggestions_toggleable: bool,
     pub is_prompt_suggestions_toggleable: bool,
     pub is_next_command_enabled: bool,
     pub is_git_operations_ai_enabled: bool,
     pub is_voice_enabled: bool,
 }
+
+fn default_disable_premium_models() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct WorkspaceSizePolicy {
     pub is_unlimited: bool,
@@ -506,6 +513,18 @@ pub struct BillingMetadata {
     pub ai_overages: Option<AiOverages>,
 }
 
+/// The effective account class used to route users after account-first signup.
+///
+/// This is derived from server-authored billing metadata rather than from a
+/// client-side ICP check, so it always reflects the entitlements the user
+/// actually received.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FtueAccountClass {
+    Paid,
+    FreeIcp,
+    FreeStandard,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct BonusGrantsPurchased {
     pub total_credits_purchased: i32,
@@ -637,6 +656,22 @@ impl BillingMetadata {
             | CustomerType::Build
             | CustomerType::BuildMax => true,
             CustomerType::Free | CustomerType::Unknown => false,
+        }
+    }
+
+    /// Classifies the account for post-auth onboarding.
+    ///
+    /// Paid plans always win. For the remaining free tiers, premium model
+    /// access distinguishes FREE_ICP from standard FREE. Missing policy data
+    /// fails closed to the standard-free experience.
+    pub fn ftue_account_class(&self) -> FtueAccountClass {
+        if self.is_user_on_paid_plan() {
+            return FtueAccountClass::Paid;
+        }
+
+        match self.tier.warp_ai_policy {
+            Some(policy) if !policy.disable_premium_models => FtueAccountClass::FreeIcp,
+            Some(_) | None => FtueAccountClass::FreeStandard,
         }
     }
 

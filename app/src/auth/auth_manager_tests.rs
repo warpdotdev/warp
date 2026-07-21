@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
 
 use super::{AuthManager, AuthManagerEvent};
@@ -88,6 +89,34 @@ fn test_duplicate_redirect_for_logged_in_user_is_silently_ignored() {
         AuthManager::handle(&app).update(&mut app, |auth_manager, ctx| {
             auth_manager.initialize_user_from_auth_payload(auth_payload, true, ctx);
         });
+    });
+}
+
+#[test]
+fn signup_url_includes_native_ftue_marker_when_account_first_onboarding_is_enabled() {
+    let _account_first_onboarding = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let signup_url = AuthManager::handle(&app)
+            .update(&mut app, |auth_manager, _ctx| auth_manager.sign_up_url());
+
+        assert!(signup_url.contains("native_ftue=1"));
+    });
+}
+
+#[test]
+fn signup_url_omits_native_ftue_marker_when_account_first_onboarding_is_disabled() {
+    let _account_first_onboarding = FeatureFlag::AccountFirstOnboarding.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let signup_url = AuthManager::handle(&app)
+            .update(&mut app, |auth_manager, _ctx| auth_manager.sign_up_url());
+
+        assert!(!signup_url.contains("native_ftue=1"));
     });
 }
 

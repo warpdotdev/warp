@@ -149,6 +149,7 @@ pub struct TeamSizePolicy {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct WarpAiPolicy {
     pub limit: i32,
+    pub disable_premium_models: bool,
     pub is_code_suggestions_toggleable: bool,
     pub is_prompt_suggestions_toggleable: bool,
     pub is_next_command_enabled: bool,
