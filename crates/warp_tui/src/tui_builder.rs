@@ -321,6 +321,16 @@ impl TuiUiBuilder {
             .bg(self.orchestration_surface_background())
     }
 
+    /// Solid selection background for text selection in editor elements.
+    /// Uses the theme foreground as the selection background and the
+    /// terminal background as the selection foreground, giving a consistent
+    /// solid highlight instead of per-cell reversal.
+    pub(crate) fn selection_style(&self) -> TuiStyle {
+        TuiStyle::default()
+            .fg(cell_color(self.base_background()))
+            .bg(cell_color(self.warp_theme.foreground()))
+    }
+
     /// The deterministic agent identity palette for this theme. See
     /// [`crate::orchestrated_agent_identity_styling`].
     pub(crate) fn agent_identity_palette(&self) -> Vec<AgentIdentity> {
