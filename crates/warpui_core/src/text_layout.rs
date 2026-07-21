@@ -1537,6 +1537,17 @@ impl Line {
                 glyph_color = foreground_color;
             }
 
+            // Sub/superscript shifts this run's glyphs vertically after shaping (see Option A in
+            // the #13734 tech spec). Applied to glyph paint positions only, so selection and caret
+            // hit-testing keep operating on the shaped, un-shifted positions. Everything painted
+            // for this run — background, inline underline, strikethrough/error decorations, and the
+            // truncation ellipsis — must move by the same offset, or a composed style (sub inside a
+            // link, strikethrough sub, sub in an inline-code chip) renders torn apart. The
+            // run-level origin passed to `paint_run_background`/`paint_run_decorations` is shifted
+            // down by this offset for the same reason.
+            let run_baseline_offset = run.styles.baseline_offset(self.font_size);
+            let run_origin = line_origin + vec2f(0., run_baseline_offset);
+
             // Paint the run's background/border BEFORE its glyphs and underline (the
             // hyperlink underline is a filled rect in the same layer as the background,
             // so painting the background afterward would cover and hide the underline on
@@ -1582,7 +1593,7 @@ impl Line {
                 if visible_right > visible_left {
                     self.paint_run_background(
                         run,
-                        line_origin,
+                        run_origin,
                         bounds,
                         visible_left,
                         visible_right,
@@ -1598,11 +1609,6 @@ impl Line {
             } else {
                 itertools::Either::Right(run.glyphs.iter())
             };
-            // Sub/superscript shifts this run's glyphs vertically after shaping (see Option A in
-            // the #13734 tech spec). Applied to glyph paint positions only, so selection and caret
-            // hit-testing keep operating on the shaped, un-shifted positions.
-            let run_baseline_offset = run.styles.baseline_offset(self.font_size);
-
             let mut should_stop_after_run = false;
             for glyph in glyph_iter {
                 let index = glyph.index;
@@ -1620,7 +1626,10 @@ impl Line {
                             }
                             ClipDirection::Start => remaining_width,
                         };
-                        let ellipsis_origin = line_origin + vec2f(ellipsis_x, 0.);
+                        // Shift the ellipsis by the run's sub/sup offset so it sits on the same
+                        // shifted baseline as the run's glyphs it is replacing, rather than
+                        // floating on the un-shifted line baseline beside them.
+                        let ellipsis_origin = line_origin + vec2f(ellipsis_x, run_baseline_offset);
 
                         scene.draw_glyph(
                             ellipsis_origin,
@@ -1673,7 +1682,7 @@ impl Line {
                         UNDERLINE_BOTTOM_PADDING * (self.font_size / DEFAULT_FONT_SIZE);
                     let underline_origin = line_origin
                         + glyph.position_along_baseline
-                        + vec2f(0., scaled_underline_bottom_padding);
+                        + vec2f(0., scaled_underline_bottom_padding + run_baseline_offset);
 
                     scene
                         .draw_rect_without_hit_recording(RectF::new(
@@ -1684,7 +1693,7 @@ impl Line {
                 }
             }
 
-            self.paint_run_decorations(glyph_color, run, line_origin, bounds, scene);
+            self.paint_run_decorations(glyph_color, run, run_origin, bounds, scene);
 
             if should_stop_after_run {
                 break;

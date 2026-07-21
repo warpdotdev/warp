@@ -566,6 +566,216 @@ fn test_sub_sup_run_glyphs_painted_with_vertical_offset() {
     });
 }
 
+/// Composed-style regression (#13734 round 2): the sub/sup vertical offset was applied only to
+/// glyph origins, so a run's background, underline (link), and strikethrough/error decorations
+/// stayed on the un-shifted baseline and rendered torn apart from the shifted glyphs. Each helper
+/// below paints one composed run twice — once plain, once sub or sup — and asserts the decoration
+/// moves with the glyphs by exactly the run's `baseline_offset`.
+#[test]
+fn test_sub_run_background_shifts_with_glyphs() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let bg_color = ColorU::from_u32(0x37393CFF);
+            let glyph_width = 12.0;
+            let font_size = 12.0;
+
+            let make_line = |align: Option<VerticalAlign>| {
+                let mut styles = TextStyle::default().with_background_color(bg_color);
+                if let Some(align) = align {
+                    styles = styles.with_vertical_align(align);
+                }
+                let run = Run {
+                    font_id: FontId(0),
+                    glyphs: vec![Glyph {
+                        id: 0,
+                        position_along_baseline: vec2f(0., 0.),
+                        index: 0,
+                        width: glyph_width,
+                    }],
+                    styles,
+                    width: glyph_width,
+                };
+                Line {
+                    width: glyph_width,
+                    trailing_whitespace_width: 0.,
+                    runs: vec![run],
+                    font_size,
+                    line_height_ratio: 1.,
+                    baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                    clip_config: None,
+                    ascent: 10.,
+                    descent: 2.,
+                    caret_positions: Vec::new(),
+                    chars_with_missing_glyphs: Vec::new(),
+                }
+            };
+
+            let bg_top = |line: &Line| {
+                let mut scene = Scene::new(1., rendering::Config::default());
+                line.paint(
+                    RectF::new(Vector2F::zero(), Vector2F::new(1000., 50.)),
+                    &PaintStyleOverride::default(),
+                    ColorU::black(),
+                    ctx.font_cache(),
+                    &mut scene,
+                );
+                let layer = scene.layers().next().expect("at least one layer");
+                layer
+                    .rects
+                    .iter()
+                    .find(|r| matches!(r.background, Fill::Solid(c) if c == bg_color))
+                    .expect("background rect should be painted")
+                    .bounds
+                    .min_y()
+            };
+
+            let plain_top = bg_top(&make_line(None));
+            let sub_top = bg_top(&make_line(Some(VerticalAlign::Sub)));
+            let expected = TextStyle::default()
+                .with_vertical_align(VerticalAlign::Sub)
+                .baseline_offset(font_size);
+            assert_approx_eq!(f32, sub_top - plain_top, expected);
+        });
+    });
+}
+
+#[test]
+fn test_sub_run_underline_shifts_with_glyphs() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let underline_color = ColorU::from_u32(0x7AA6DAFF);
+            let glyph_width = 12.0;
+            let font_size = 12.0;
+
+            let make_line = |align: Option<VerticalAlign>| {
+                let mut styles = TextStyle::default().with_underline_color(underline_color);
+                if let Some(align) = align {
+                    styles = styles.with_vertical_align(align);
+                }
+                let run = Run {
+                    font_id: FontId(0),
+                    glyphs: vec![Glyph {
+                        id: 0,
+                        position_along_baseline: vec2f(0., 0.),
+                        index: 0,
+                        width: glyph_width,
+                    }],
+                    styles,
+                    width: glyph_width,
+                };
+                Line {
+                    width: glyph_width,
+                    trailing_whitespace_width: 0.,
+                    runs: vec![run],
+                    font_size,
+                    line_height_ratio: 1.,
+                    baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                    clip_config: None,
+                    ascent: 10.,
+                    descent: 2.,
+                    caret_positions: Vec::new(),
+                    chars_with_missing_glyphs: Vec::new(),
+                }
+            };
+
+            let underline_top = |line: &Line| {
+                let mut scene = Scene::new(1., rendering::Config::default());
+                line.paint(
+                    RectF::new(Vector2F::zero(), Vector2F::new(1000., 50.)),
+                    &PaintStyleOverride::default(),
+                    ColorU::black(),
+                    ctx.font_cache(),
+                    &mut scene,
+                );
+                let layer = scene.layers().next().expect("at least one layer");
+                layer
+                    .rects
+                    .iter()
+                    .find(|r| matches!(r.background, Fill::Solid(c) if c == underline_color))
+                    .expect("underline rect should be painted")
+                    .bounds
+                    .min_y()
+            };
+
+            let plain_top = underline_top(&make_line(None));
+            let sub_top = underline_top(&make_line(Some(VerticalAlign::Sub)));
+            let expected = TextStyle::default()
+                .with_vertical_align(VerticalAlign::Sub)
+                .baseline_offset(font_size);
+            assert_approx_eq!(f32, sub_top - plain_top, expected);
+        });
+    });
+}
+
+#[test]
+fn test_sup_run_strikethrough_shifts_with_glyphs() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let glyph_color = ColorU::black();
+            let glyph_width = 12.0;
+            let font_size = 12.0;
+
+            let make_line = |align: Option<VerticalAlign>| {
+                let mut styles = TextStyle::default().with_show_strikethrough(true);
+                if let Some(align) = align {
+                    styles = styles.with_vertical_align(align);
+                }
+                let run = Run {
+                    font_id: FontId(0),
+                    glyphs: vec![Glyph {
+                        id: 0,
+                        position_along_baseline: vec2f(0., 0.),
+                        index: 0,
+                        width: glyph_width,
+                    }],
+                    styles,
+                    width: glyph_width,
+                };
+                Line {
+                    width: glyph_width,
+                    trailing_whitespace_width: 0.,
+                    runs: vec![run],
+                    font_size,
+                    line_height_ratio: 1.,
+                    baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                    clip_config: None,
+                    ascent: 10.,
+                    descent: 2.,
+                    caret_positions: Vec::new(),
+                    chars_with_missing_glyphs: Vec::new(),
+                }
+            };
+
+            // The strikethrough rect is the only rect drawn with the glyph color as its fill.
+            let strike_top = |line: &Line| {
+                let mut scene = Scene::new(1., rendering::Config::default());
+                line.paint(
+                    RectF::new(Vector2F::zero(), Vector2F::new(1000., 50.)),
+                    &PaintStyleOverride::default(),
+                    glyph_color,
+                    ctx.font_cache(),
+                    &mut scene,
+                );
+                let layer = scene.layers().next().expect("at least one layer");
+                layer
+                    .rects
+                    .iter()
+                    .find(|r| matches!(r.background, Fill::Solid(c) if c == glyph_color))
+                    .expect("strikethrough rect should be painted")
+                    .bounds
+                    .min_y()
+            };
+
+            let plain_top = strike_top(&make_line(None));
+            let sup_top = strike_top(&make_line(Some(VerticalAlign::Sup)));
+            let expected = TextStyle::default()
+                .with_vertical_align(VerticalAlign::Sup)
+                .baseline_offset(font_size);
+            assert_approx_eq!(f32, sup_top - plain_top, expected);
+        });
+    });
+}
+
 /// The run background must be clamped to the horizontal span of glyphs that are
 /// actually drawn (`visible_left`..`visible_right`), not the full run width. This
 /// is what keeps a partially-truncated backgrounded run (e.g. an inline-code link
