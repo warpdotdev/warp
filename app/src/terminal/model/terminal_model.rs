@@ -1654,6 +1654,7 @@ impl TerminalModel {
     pub fn block_list_mut(&mut self) -> &mut BlockList {
         &mut self.block_list
     }
+
     /// Clears all completed blocks and resets the active block's screen.
     pub fn clear_blocks(&mut self) {
         self.block_list.clear_screen(ansi::ClearMode::ResetAndClear);
