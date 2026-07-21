@@ -2105,11 +2105,7 @@ impl AISettings {
     /// Preferred spoken language for voice transcription, or `None` for auto-detect.
     pub fn voice_input_language_code(&self) -> Option<&str> {
         let code = self.voice_input_language.as_str();
-        if code.is_empty() {
-            None
-        } else {
-            Some(code)
-        }
+        if code.is_empty() { None } else { Some(code) }
     }
 
     /// Returns `true` if input autodetection is enabled.

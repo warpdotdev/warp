@@ -157,7 +157,7 @@ use crate::server::telemetry::{
     AgentModeAutoDetectionSettingOrigin, AutonomySettingToggleSource,
     ToggleCodeSuggestionsSettingSource,
 };
-use crate::settings::{AISettings, VoiceInputLanguage, VoiceInputToggleKey, VOICE_INPUT_LANGUAGES};
+use crate::settings::{AISettings, VOICE_INPUT_LANGUAGES, VoiceInputLanguage, VoiceInputToggleKey};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings;
