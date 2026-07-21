@@ -2321,24 +2321,55 @@ fn test_partial_autosuggestion() -> Result<()> {
 fn test_autosuggestion_acceptance_uses_normalized_power_shell_text() -> Result<()> {
     use warp_util::path::ShellFamily;
 
+    use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsResponseV2;
+    use crate::ai::predict::next_command_model::normalize_ai_input_suggestion_response;
+
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
-        // Scenario 1 — partial-prefix intelligent acceptance: the user has typed the
-        // first UNC backslash, and the (already-normalized at the AI ingestion point)
-        // intelligent suggestion supplies the rest. The prefix strip keeps the
-        // remaining UNC backslash, and full acceptance yields a buffer with exactly
-        // two leading backslashes and single internal separators.
+        // The AI prompt serializes history as JSON (`serde_json::to_string`), which
+        // doubles every backslash; the model echoes that JSON-escaped form back. The
+        // production ingestion helper (`normalize_ai_input_suggestion_response`)
+        // JSON-decodes the backslashes at the single point where the AI response
+        // enters client state, before `maybe_populate_intelligent_autosuggestion`
+        // strips the typed prefix and sets the autosuggestion. This test feeds a
+        // JSON-doubled response through that helper and then through prefix stripping
+        // + `set_autosuggestion` + full acceptance, so it fails if the ingestion
+        // decode is removed.
+
+        // Scenario 1 - partial-prefix intelligent acceptance: the user has typed the
+        // first UNC backslash, and the AI response (JSON-doubled) supplies the rest.
+        // After ingestion decode + prefix strip + full acceptance the buffer has
+        // exactly two leading UNC backslashes and single internal separators.
         let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
             let mut view = EditorView::new_with_base_text("", Default::default(), ctx);
             view.set_shell_family(ShellFamily::PowerShell);
             view
         });
 
-        view.update(&mut app, |view, ctx| {
+        // JSON-doubled model output: the intended command is
+        // `\\WSL$\Ubuntu\home\dev\file` (two leading UNC backslashes, single
+        // separators), so `serde_json::to_string` doubled every backslash to
+        // `\\\\WSL$\\Ubuntu\\home\\dev\\file` (four + two + two + two + two).
+        let decoded_action = normalize_ai_input_suggestion_response(
+            GenerateAIInputSuggestionsResponseV2 {
+                commands: vec![],
+                ai_queries: vec![],
+                most_likely_action: r#"\\\\WSL$\\Ubuntu\\home\\dev\\file"#.to_owned(),
+            },
+            ShellFamily::PowerShell,
+        )
+        .most_likely_action;
+
+        view.update(&mut app, move |view, ctx| {
             view.user_insert("\\", ctx);
+            // Production path: `maybe_populate_intelligent_autosuggestion` does
+            // `command.strip_prefix(buffer_text)` then `set_autosuggestion(suffix)`.
+            let suffix = decoded_action
+                .strip_prefix(view.buffer_text(ctx).as_str())
+                .expect("decoded command must start with the typed prefix");
             view.set_autosuggestion(
-                r#"\WSL$\Ubuntu\home\dev\file"#,
+                suffix,
                 AutosuggestionLocation::EndOfBuffer,
                 AutosuggestionType::Command {
                     was_intelligent_autosuggestion: true,
@@ -2358,19 +2389,30 @@ fn test_autosuggestion_acceptance_uses_normalized_power_shell_text() -> Result<(
             Result::<()>::Ok(())
         })?;
 
-        // Scenario 2 — full, zero-prefix acceptance (regular acceptance path): an
-        // empty buffer with a complete normalized UNC command as the suggestion.
-        // Accepting it inserts the command verbatim with the UNC prefix intact and no
-        // doubled separators in the final buffer.
+        // Scenario 2 - full, zero-prefix acceptance (regular acceptance path): an
+        // empty buffer with a complete JSON-doubled UNC command as the AI response.
+        // After ingestion decode + full acceptance the buffer has the UNC prefix
+        // intact and no doubled separators.
         let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
             let mut view = EditorView::new_with_base_text("", Default::default(), ctx);
             view.set_shell_family(ShellFamily::PowerShell);
             view
         });
 
-        view.update(&mut app, |view, ctx| {
+        let decoded_full_action = normalize_ai_input_suggestion_response(
+            GenerateAIInputSuggestionsResponseV2 {
+                commands: vec![],
+                ai_queries: vec![],
+                most_likely_action: r#"cat \\\\WSL$\\Ubuntu\\home\\dev\\file"#.to_owned(),
+            },
+            ShellFamily::PowerShell,
+        )
+        .most_likely_action;
+
+        view.update(&mut app, move |view, ctx| {
+            // Empty buffer: the whole decoded command is the suffix.
             view.set_autosuggestion(
-                r#"cat \\WSL$\Ubuntu\home\dev\file"#,
+                decoded_full_action.as_str(),
                 AutosuggestionLocation::EndOfBuffer,
                 AutosuggestionType::Command {
                     was_intelligent_autosuggestion: false,

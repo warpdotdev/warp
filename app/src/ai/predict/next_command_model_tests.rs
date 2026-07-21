@@ -237,35 +237,61 @@ fn test_feature_flag_arg_is_valid_with_no_whitespace_before_arg() {
 }
 
 #[test]
-fn test_normalize_ai_input_suggestion_response_restores_json_doubled_separators() {
+fn test_normalize_ai_input_suggestion_response_decodes_json_doubled_backslashes() {
     use warp_util::path::ShellFamily;
 
     // Build backslash runs of an exact length without multi-backslash literals, so
-    // the expected counts are unambiguous.
+    // the expected counts are unambiguous. `run(n)` is n literal backslashes.
     let run = |n| "\\".repeat(n);
 
-    // AI echo of a UNC path: JSON serialization doubled every backslash. The
-    // ingestion normalizer halves the uniform doubling, restoring the UNC prefix
-    // and single separators in both `most_likely_action` and `commands`.
+    // The AI prompt serializes command history as JSON (`serde_json::to_string`),
+    // which doubles every backslash; the model can echo that JSON-escaped form back
+    // as the "plain command." The ingestion helper reverses that encoding
+    // (`\\` -> `\`) - the deterministic inverse of `serde_json::to_string` - so it
+    // halves every doubled run, in both `most_likely_action` and `commands`.
+
+    // Ordinary AI-doubled path (the core APP-4893 defect): each single separator
+    // (one backslash) was doubled to two by JSON serialization. Halving restores
+    // single separators.
     let response = normalize_ai_input_suggestion_response(
         GenerateAIInputSuggestionsResponseV2 {
-            commands: vec![format!("cat {}WSL${}Ubuntu{}file", run(8), run(4), run(4))],
+            commands: vec![format!("cd C:{}Users{}alice{}repo", run(2), run(2), run(2))],
             ai_queries: vec![],
-            most_likely_action: format!("cat {}WSL${}Ubuntu{}file", run(8), run(4), run(4)),
+            most_likely_action: format!("cd C:{}Users{}alice{}repo", run(2), run(2), run(2)),
         },
         ShellFamily::PowerShell,
     );
     assert_eq!(
         response.most_likely_action,
-        format!("cat {}WSL${}Ubuntu{}file", run(4), run(2), run(2))
+        format!("cd C:{}Users{}alice{}repo", run(1), run(1), run(1))
     );
     assert_eq!(
         response.commands,
-        vec![format!("cat {}WSL${}Ubuntu{}file", run(4), run(2), run(2))]
+        vec![format!("cd C:{}Users{}alice{}repo", run(1), run(1), run(1))]
     );
 
-    // A regex literal the AI echoed as JSON-doubled (two backslashes -> four) is
-    // restored to the intended two backslashes, not collapsed to one.
+    // AI echo of a UNC path: the two leading UNC backslashes were doubled to four
+    // and each separator to two. Halving restores the two-backslash UNC prefix and
+    // single separators.
+    let unc_response = normalize_ai_input_suggestion_response(
+        GenerateAIInputSuggestionsResponseV2 {
+            commands: vec![format!("cat {}WSL${}Ubuntu{}file", run(4), run(2), run(2))],
+            ai_queries: vec![],
+            most_likely_action: format!("cat {}WSL${}Ubuntu{}file", run(4), run(2), run(2)),
+        },
+        ShellFamily::PowerShell,
+    );
+    assert_eq!(
+        unc_response.most_likely_action,
+        format!("cat {}WSL${}Ubuntu{}file", run(2), run(1), run(1))
+    );
+
+    // An intentional double backslash the user typed (e.g. a regex literal inside a
+    // single-quoted PowerShell string) is preserved, not collapsed: JSON
+    // serialization doubled the user's two backslashes to four, the model echoed
+    // four, and the JSON decode restores exactly two. This is the deterministic
+    // inverse of `serde_json::to_string` - no heuristic, so quoted literals and
+    // regex doubles are never corrupted.
     let regex_response = normalize_ai_input_suggestion_response(
         GenerateAIInputSuggestionsResponseV2 {
             commands: vec![],
@@ -279,7 +305,8 @@ fn test_normalize_ai_input_suggestion_response_restores_json_doubled_separators(
         format!("Select-String '{}d+'", run(2))
     );
 
-    // POSIX-family sessions are a no-op: the response is returned unchanged.
+    // POSIX-family sessions are a no-op: POSIX commands use backslashes as shell
+    // escapes that must not be collapsed, so the response is returned unchanged.
     let posix_command = format!("cat {}server{}share", run(8), run(4));
     let posix_response = normalize_ai_input_suggestion_response(
         GenerateAIInputSuggestionsResponseV2 {
@@ -292,11 +319,11 @@ fn test_normalize_ai_input_suggestion_response_restores_json_doubled_separators(
     assert_eq!(posix_response.most_likely_action, posix_command);
     assert_eq!(posix_response.commands, vec![posix_command]);
 
-    // Already-correct single-separator text (history/completer shape, which is never
-    // routed through this helper in production) is a no-op: its single separators
-    // (run of 1) make the input non-uniform, so all_even is false and the normalizer
-    // returns it borrowed and unchanged.
-    let correct = format!("cat {}WSL${}Ubuntu{}file", run(2), run(1), run(1));
+    // An already-correct ordinary path whose separators are all single backslashes
+    // (no doubled runs) is a no-op: there are no `\\` pairs to halve. (History and
+    // completer values are never routed through this helper in production; this
+    // guards that a correct ordinary path is not disturbed if it ever is.)
+    let correct = format!("cd C:{}Users{}alice", run(1), run(1));
     let correct_response = normalize_ai_input_suggestion_response(
         GenerateAIInputSuggestionsResponseV2 {
             commands: vec![],

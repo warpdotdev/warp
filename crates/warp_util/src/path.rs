@@ -254,24 +254,6 @@ impl ShellFamily {
         Cow::Owned(result)
     }
 
-    /// Restores backslashes that the server-backed AI next-command response may
-    /// have had doubled by JSON serialization.
-    ///
-    /// The AI suggestion prompt serializes command history as JSON, which doubles
-    /// every backslash; the model can echo that JSON-escaped form back as the
-    /// "plain command." This is the targeted unescape applied at the single AI
-    /// ingestion point (see `NextCommandModel`), not a broad pass over arbitrary
-    /// suggestion text — history and completer suggestions are already correct and
-    /// are never routed through here. For PowerShell it halves uniformly-doubled
-    /// backslash runs (restoring a UNC prefix `\\` and single separators); POSIX
-    /// shells are a no-op. See [`normalize_powershell_autosuggestion`] for the
-    /// narrow signal this acts on.
-    pub fn normalize_autosuggestion<'s>(&self, input: &'s str) -> Cow<'s, str> {
-        match self {
-            Self::Posix => Cow::Borrowed(input),
-            Self::PowerShell => normalize_powershell_autosuggestion(input),
-        }
-    }
     /// Escapes the path to treat it as a single word within the shell.
     ///
     /// This function returns a [`Cow::Borrowed`] of the input string where possible and only
@@ -303,78 +285,6 @@ impl ShellFamily {
     }
 }
 
-fn normalize_powershell_autosuggestion<'s>(input: &'s str) -> Cow<'s, str> {
-    let bytes = input.as_bytes();
-    // Fast path: no doubled backslash means there is no JSON-doubling artifact to undo.
-    if !bytes.windows(2).any(|window| window == b"\\\\") {
-        return Cow::Borrowed(input);
-    }
-
-    // Measure every contiguous backslash run. JSON serialization doubles *every*
-    // backslash uniformly, so a genuine AI echo of the JSON-escaped form has every
-    // backslash run even — a UNC prefix (two backslashes) doubled to four, a single
-    // separator doubled to two, etc. The discriminator is the *all-even* signal
-    // with a minimum run length of 2 (the smallest JSON-doubled backslash); a run
-    // of >= 4 is NOT required, because an ordinary AI-doubled path like
-    // `C:\\Users\\alice\\repo` has only run-length-2 separators and would otherwise
-    // be left uncorrected (APP-4893).
-    let mut max_run = 0usize;
-    let mut all_even = true;
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'\\' {
-            let start = index;
-            while index < bytes.len() && bytes[index] == b'\\' {
-                index += 1;
-            }
-            let run = index - start;
-            max_run = max_run.max(run);
-            all_even = all_even && run % 2 == 0;
-        } else {
-            index += 1;
-        }
-    }
-
-    // Leave already-correct or mixed text untouched. A correct path with single
-    // separators (run of 1) has an odd run, so all_even is false and it is returned
-    // unchanged — this also keeps the normalizer idempotent, since a halved result
-    // contains single separators and will not be halved again. A mixed (non-uniform)
-    // input — e.g. a correct UNC prefix (run of 2) alongside single separators
-    // (run of 1) — is left alone rather than risk corrupting the odd-length runs.
-    // The tradeoff of the all-even heuristic: an intentional double backslash (e.g.
-    // a regex literal inside a single-quoted string) whose only backslash run is
-    // length 2 is indistinguishable from a JSON-doubled single separator and will
-    // be halved. That is accepted because this normalizer runs only at the AI
-    // next-command ingestion point (see `normalize_ai_input_suggestion_response`),
-    // where JSON-doubled ordinary paths are the common defect and intentional regex
-    // doubles are rare.
-    if max_run < 2 || !all_even {
-        return Cow::Borrowed(input);
-    }
-
-    // Uniform doubling detected: halve every run to restore the original text. This
-    // restores a doubled UNC prefix (four backslashes -> two), doubled separators
-    // (two -> one, including ordinary paths like `C:\\Users\\alice\\repo` ->
-    // `C:\Users\alice\repo`), and a JSON-doubled regex literal (four backslashes ->
-    // two, the user's intended pair). Idempotent: halving an all-even input
-    // produces single separators (odd runs), so a second pass is a no-op.
-    let mut normalized = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(character) = chars.next() {
-        if character == '\\' {
-            let mut run_length = 1;
-            while chars.peek() == Some(&'\\') {
-                chars.next();
-                run_length += 1;
-            }
-            normalized.extend(std::iter::repeat_n('\\', run_length / 2));
-        } else {
-            normalized.push(character);
-        }
-    }
-
-    Cow::Owned(normalized)
-}
 /// Returns `true` iff the given string is a valid POSIX portable pathname.
 /// Source: https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_271
 pub fn is_posix_portable_pathname(s: &str) -> bool {

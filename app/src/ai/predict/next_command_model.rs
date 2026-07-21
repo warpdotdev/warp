@@ -655,31 +655,36 @@ impl NextCommandModel {
     }
 }
 
-/// Unescapes JSON-doubled backslashes in a server-backed AI next-command
-/// response at the single ingestion point where the response enters client
-/// state.
+/// JSON-decodes the server-backed AI next-command response at the single
+/// ingestion point where it enters client state.
 ///
 /// The AI prompt serializes command history as JSON (`serde_json::to_string`),
 /// which doubles every backslash; the model can echo that JSON-escaped form back
-/// as the "plain command." History and completer fallbacks are already correct
-/// and are never routed through here (they return with `is_from_ai = false`).
-/// For the active `ShellFamily` this restores the intended separators so
-/// downstream prefix matching and editor insertion never see doubled
-/// backslashes. POSIX-family sessions are a no-op.
-fn normalize_ai_input_suggestion_response(
+/// as the "plain command." Rather than apply a backslash-counting heuristic, this
+/// simply reverses the JSON string encoding (`\\` -> `\`) - the deterministic
+/// inverse of `serde_json::to_string`, which preserves intentional double
+/// backslashes (e.g. a regex literal the user typed: two backslashes are encoded
+/// to four and decoded back to two) and needs no path-token heuristic. History
+/// and completer fallbacks are already correct and are never routed through here
+/// (they return with `is_from_ai = false`). POSIX-family sessions are a no-op:
+/// their commands use backslashes as shell escapes that must not be collapsed, so
+/// only PowerShell responses are decoded.
+pub(crate) fn normalize_ai_input_suggestion_response(
     mut response: GenerateAIInputSuggestionsResponseV2,
     shell_family: ShellFamily,
 ) -> GenerateAIInputSuggestionsResponseV2 {
     if shell_family != ShellFamily::PowerShell {
         return response;
     }
-    response.most_likely_action = shell_family
-        .normalize_autosuggestion(&response.most_likely_action)
-        .into_owned();
+    // Reverse the JSON string backslash doubling. `serde_json::to_string` doubles
+    // every backslash, so the model's echoed form has `\\` for each original `\`;
+    // halving each pair restores the intended text, including intentional double
+    // backslashes (four -> two). Only backslashes are affected by this encoding.
+    response.most_likely_action = response.most_likely_action.replace("\\\\", "\\");
     response.commands = response
         .commands
         .into_iter()
-        .map(|command| shell_family.normalize_autosuggestion(&command).into_owned())
+        .map(|command| command.replace("\\\\", "\\"))
         .collect();
     response
 }
