@@ -1,4 +1,6 @@
-//! Reusable Yes/No/Other interaction for TUI tool-call permission requests.
+//! Reusable interaction for TUI tool-call permission requests.
+
+use std::collections::HashMap;
 
 use warp::tui_export::{
     AIAgentActionId, BlocklistAIActionEvent, BlocklistAIActionModel, OptionFooter, OptionRow,
@@ -22,6 +24,7 @@ use crate::tui_builder::TuiUiBuilder;
 const PERMISSION_PROMPT_ACTIVE: &str = "TuiPermissionPromptActive";
 const YES_ID: &str = "yes";
 const NO_ID: &str = "no";
+const EDIT_ID: &str = "edit";
 
 /// Registers controls used while a permission prompt owns focus.
 pub(crate) fn init(app: &mut AppContext) {
@@ -98,7 +101,7 @@ pub(crate) enum TuiPermissionPromptEvent {
     LayoutChanged,
 }
 
-/// Reusable Yes/No/Other selector for one blocked tool action.
+/// Reusable selector for one blocked tool action.
 pub(crate) struct TuiPermissionPrompt {
     action_model: ModelHandle<BlocklistAIActionModel>,
     action_id: AIAgentActionId,
@@ -119,33 +122,48 @@ impl TuiPermissionPrompt {
             if let Some(body_editor) = body_editor.as_ref() {
                 selector.set_leading_editor(body_editor.clone(), ctx);
             }
+            let mut rows = vec![
+                OptionRow {
+                    id: YES_ID.to_owned(),
+                    label: "yes".to_owned(),
+                    harness: None,
+                    badge: None,
+                    disabled_reason: None,
+                },
+                OptionRow {
+                    id: NO_ID.to_owned(),
+                    label: "no".to_owned(),
+                    harness: None,
+                    badge: None,
+                    disabled_reason: None,
+                },
+            ];
+            if body_editor.is_some() {
+                rows.push(OptionRow {
+                    id: EDIT_ID.to_owned(),
+                    label: "edit command".to_owned(),
+                    harness: None,
+                    badge: None,
+                    disabled_reason: None,
+                });
+            }
             selector.set_page(
                 OptionSelectorPage {
                     header: None,
                     snapshot: OptionSnapshot {
-                        rows: vec![
-                            OptionRow {
-                                id: YES_ID.to_owned(),
-                                label: "yes".to_owned(),
-                                harness: None,
-                                badge: None,
-                                disabled_reason: None,
-                            },
-                            OptionRow {
-                                id: NO_ID.to_owned(),
-                                label: "no".to_owned(),
-                                harness: None,
-                                badge: None,
-                                disabled_reason: None,
-                            },
-                        ],
+                        rows,
                         selected_id: Some(YES_ID.to_owned()),
                         status: OptionSourceStatus::Ready,
-                        footer: Some(OptionFooter::CustomText {
+                        footer: body_editor.is_none().then(|| OptionFooter::CustomText {
                             label: "Other".to_owned(),
                         }),
                     },
                     searchable: false,
+                    row_shortcuts: if body_editor.is_some() {
+                        HashMap::from([(EDIT_ID.to_owned(), 'e')])
+                    } else {
+                        Default::default()
+                    },
                 },
                 ctx,
             );
@@ -217,6 +235,10 @@ impl TuiPermissionPrompt {
             }
             TuiOptionSelectorEvent::Confirmed { id } if id == NO_ID => {
                 ctx.emit(TuiPermissionPromptEvent::RejectRequested);
+            }
+            TuiOptionSelectorEvent::Confirmed { id } if id == EDIT_ID => {
+                self.selector
+                    .update(ctx, |selector, ctx| selector.focus_leading_editor(ctx));
             }
             TuiOptionSelectorEvent::CustomTextSubmitted { value } => {
                 ctx.emit(TuiPermissionPromptEvent::ReplacementGuidanceSubmitted(

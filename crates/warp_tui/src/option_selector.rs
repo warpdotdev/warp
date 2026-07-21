@@ -10,7 +10,7 @@
 //! since the selector is only rendered while its host is the active blocking
 //! interaction. Escape remains host policy, with an element-level fallback
 //! through [`TuiOptionSelector::handle_back`].
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use warp::tui_export::{OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus};
 use warp_search_core::inline_menu::InlineMenuSelection;
@@ -55,6 +55,8 @@ pub(crate) struct OptionSelectorPage {
     pub(crate) snapshot: OptionSnapshot,
     /// Whether this page offers label filtering.
     pub(crate) searchable: bool,
+    /// Non-numeric shortcuts keyed by option row id.
+    pub(crate) row_shortcuts: HashMap<String, char>,
 }
 
 impl Default for OptionSelectorPage {
@@ -68,6 +70,7 @@ impl Default for OptionSelectorPage {
                 footer: None,
             },
             searchable: false,
+            row_shortcuts: HashMap::new(),
         }
     }
 }
@@ -102,6 +105,8 @@ pub(crate) enum TuiOptionSelectorAction {
     MoveDown,
     /// Select the viewport-relative item and confirm it when enabled.
     SelectNumberedOption(u8),
+    /// Select the row assigned to a host-defined shortcut.
+    SelectShortcut(char),
     /// Select the item at an absolute index and confirm it when enabled.
     /// Dispatched by row clicks.
     SelectItem(usize),
@@ -786,6 +791,27 @@ impl TuiOptionSelector {
         true
     }
 
+    /// Confirms the visible row assigned to `shortcut`.
+    fn confirm_shortcut(&mut self, shortcut: char, ctx: &mut ViewContext<Self>) -> bool {
+        let items = self.items();
+        let visible_end =
+            (self.interaction.scroll_offset + MAX_VISIBLE_OPTION_ROWS).min(items.len());
+        let Some(index) = (self.interaction.scroll_offset..visible_end).find(|index| {
+            let SelectorItem::Row(row_index) = items[*index] else {
+                return false;
+            };
+            self.page
+                .snapshot
+                .rows
+                .get(row_index)
+                .and_then(|row| self.page.row_shortcuts.get(&row.id))
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(&shortcut))
+        }) else {
+            return false;
+        };
+        self.confirm_item(index, ctx)
+    }
+
     /// Validates and submits the custom-text editor: the value
     /// is trimmed; empty input stays editable with a concise error.
     fn submit_custom_text(&mut self, ctx: &mut ViewContext<Self>) -> bool {
@@ -869,12 +895,12 @@ impl TuiOptionSelector {
             .finish()
     }
 
-    /// One option row: viewport-relative digit, label, badge, and disabled
+    /// One option row: shortcut, label, badge, and disabled
     /// reason, with the current selection rendered in bold magenta.
     fn render_row(
         &self,
         row: &OptionRow,
-        digit: Option<usize>,
+        shortcut: Option<char>,
         is_highlighted: bool,
         builder: &TuiUiBuilder,
     ) -> Box<dyn TuiElement> {
@@ -903,11 +929,11 @@ impl TuiOptionSelector {
         } else {
             builder.muted_text_style()
         };
-        let digit_prefix = match digit {
-            Some(digit) => format!("({digit}) "),
+        let shortcut_prefix = match shortcut {
+            Some(shortcut) => format!("({shortcut}) "),
             None => "    ".to_string(),
         };
-        let mut spans = vec![(digit_prefix, detail_style)];
+        let mut spans = vec![(shortcut_prefix, detail_style)];
         if self.show_selection_markers {
             spans.push((
                 if is_selected { "✓ " } else { "  " }.to_string(),
@@ -1025,50 +1051,55 @@ impl TuiOptionSelector {
             let digit = (position < 9).then_some(position + 1);
             let is_selected = !self.custom_text.is_editing()
                 && self.interaction.selection.selected_index() == Some(index);
-            let element = match item {
-                SelectorItem::Row(row_index) => {
-                    let Some(row) = self.page.snapshot.rows.get(row_index) else {
-                        continue;
-                    };
-                    self.render_row(row, digit, is_selected, builder)
-                }
-                SelectorItem::Retry => self.render_virtual_row(
-                    "↻ Retry".to_string(),
-                    digit,
-                    is_selected,
-                    builder.error_text_style(),
-                    builder,
-                ),
-                SelectorItem::CustomText => {
-                    match (&self.page.snapshot.footer, self.custom_text.is_editing()) {
-                        (Some(OptionFooter::CustomText { label }), true) => self
-                            .render_editor_field(
-                                digit.map_or_else(
-                                    || "    ".to_string(),
-                                    |digit| format!("({digit}) "),
-                                ),
-                                label,
-                                &self.custom_text.editor,
-                                self.custom_text
-                                    .error_is_visible()
-                                    .then_some(CUSTOM_TEXT_EMPTY_ERROR),
-                                builder,
-                            ),
-                        (Some(OptionFooter::CustomText { label }), false) => self
-                            .render_virtual_row(
-                                self.custom_text
-                                    .committed_value
-                                    .clone()
-                                    .unwrap_or_else(|| label.clone()),
-                                digit,
-                                is_selected,
-                                builder.primary_text_style(),
-                                builder,
-                            ),
-                        (Some(OptionFooter::CreateNewAuthSecret) | None, _) => continue,
+            let element =
+                match item {
+                    SelectorItem::Row(row_index) => {
+                        let Some(row) = self.page.snapshot.rows.get(row_index) else {
+                            continue;
+                        };
+                        let shortcut =
+                            self.page.row_shortcuts.get(&row.id).copied().or_else(|| {
+                                digit.and_then(|digit| char::from_digit(digit as u32, 10))
+                            });
+                        self.render_row(row, shortcut, is_selected, builder)
                     }
-                }
-            };
+                    SelectorItem::Retry => self.render_virtual_row(
+                        "↻ Retry".to_string(),
+                        digit,
+                        is_selected,
+                        builder.error_text_style(),
+                        builder,
+                    ),
+                    SelectorItem::CustomText => {
+                        match (&self.page.snapshot.footer, self.custom_text.is_editing()) {
+                            (Some(OptionFooter::CustomText { label }), true) => self
+                                .render_editor_field(
+                                    digit.map_or_else(
+                                        || "    ".to_string(),
+                                        |digit| format!("({digit}) "),
+                                    ),
+                                    label,
+                                    &self.custom_text.editor,
+                                    self.custom_text
+                                        .error_is_visible()
+                                        .then_some(CUSTOM_TEXT_EMPTY_ERROR),
+                                    builder,
+                                ),
+                            (Some(OptionFooter::CustomText { label }), false) => self
+                                .render_virtual_row(
+                                    self.custom_text
+                                        .committed_value
+                                        .clone()
+                                        .unwrap_or_else(|| label.clone()),
+                                    digit,
+                                    is_selected,
+                                    builder.primary_text_style(),
+                                    builder,
+                                ),
+                            (Some(OptionFooter::CreateNewAuthSecret) | None, _) => continue,
+                        }
+                    }
+                };
             // Each visible row is clickable through its own persistent
             // mouse-state handle.
             let element = match self.item_mouse_states.get(index) {
@@ -1165,6 +1196,7 @@ impl TuiView for TuiOptionSelector {
             child: content.finish(),
             list_focused: self.focused,
             searchable: self.page.searchable,
+            row_shortcuts: self.page.row_shortcuts.values().copied().collect(),
         }
         .finish()
     }
@@ -1217,7 +1249,22 @@ impl TypedActionView for TuiOptionSelector {
             TuiOptionSelectorAction::MoveDown => self.move_selection(true, ctx),
             TuiOptionSelectorAction::SelectNumberedOption(digit) => {
                 let index = self.interaction.scroll_offset + usize::from(*digit) - 1;
-                self.confirm_item(index, ctx);
+                let item_has_custom_shortcut = self.items().get(index).is_some_and(|item| {
+                    let SelectorItem::Row(row_index) = item else {
+                        return false;
+                    };
+                    self.page
+                        .snapshot
+                        .rows
+                        .get(*row_index)
+                        .is_some_and(|row| self.page.row_shortcuts.contains_key(&row.id))
+                });
+                if !item_has_custom_shortcut {
+                    self.confirm_item(index, ctx);
+                }
+            }
+            TuiOptionSelectorAction::SelectShortcut(shortcut) => {
+                self.confirm_shortcut(*shortcut, ctx);
             }
             TuiOptionSelectorAction::SelectItem(index) => {
                 self.confirm_item(*index, ctx);
@@ -1255,6 +1302,7 @@ struct SelectorInputElement {
     child: Box<dyn TuiElement>,
     list_focused: bool,
     searchable: bool,
+    row_shortcuts: Vec<char>,
 }
 
 impl TuiElement for SelectorInputElement {
@@ -1322,6 +1370,21 @@ impl TuiElement for SelectorInputElement {
                     }
                     "down" if self.list_focused => {
                         event_ctx.dispatch_typed_action(TuiOptionSelectorAction::MoveDown);
+                        true
+                    }
+                    key if self.list_focused
+                        && key.chars().next().is_some_and(|candidate| {
+                            key.chars().count() == 1
+                                && self
+                                    .row_shortcuts
+                                    .iter()
+                                    .any(|shortcut| shortcut.eq_ignore_ascii_case(&candidate))
+                        }) =>
+                    {
+                        let shortcut = key.chars().next().expect("checked one-character key");
+                        event_ctx.dispatch_typed_action(TuiOptionSelectorAction::SelectShortcut(
+                            shortcut,
+                        ));
                         true
                     }
                     key if self.list_focused => match key.parse::<u8>() {

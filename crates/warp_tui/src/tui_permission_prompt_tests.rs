@@ -16,7 +16,7 @@ use super::{
     TuiPermissionPromptEvent, render_permission_card,
 };
 use crate::editor_view::TuiEditorView;
-use crate::option_selector::TuiOptionSelectorEvent;
+use crate::option_selector::{TuiOptionSelectorAction, TuiOptionSelectorEvent};
 use crate::test_fixtures::{TestHostView, add_test_action_model};
 fn add_prompt(app: &mut App, body_editable: bool) -> ViewHandle<TuiPermissionPrompt> {
     app.add_singleton_model(|_| Appearance::mock());
@@ -140,6 +140,52 @@ fn leading_editor_participates_in_selector_focus_cycle() {
                 Some(2)
             );
         });
+    });
+}
+
+#[test]
+fn editable_prompt_uses_edit_option_for_shortcut_and_click() {
+    App::test((), |mut app| async move {
+        let prompt = add_prompt(&mut app, true);
+        let lines = render_lines(&mut app, &prompt);
+        assert!(lines.iter().any(|line| line == "(e) edit command"));
+        assert!(lines.iter().all(|line| !line.contains("Other")));
+
+        let (action_model, action) = app.read(|ctx| {
+            let prompt = prompt.as_ref(ctx);
+            (prompt.action_model.clone(), pending_action(prompt))
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
+        });
+
+        let selector = prompt.read(&app, |prompt, _| prompt.selector.clone());
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::SelectShortcut('e'), ctx);
+        });
+        assert!(app.read(|ctx| {
+            prompt
+                .as_ref(ctx)
+                .body_editor
+                .as_ref()
+                .expect("editable prompt has a body editor")
+                .as_ref(ctx)
+                .is_focused()
+        }));
+
+        prompt.update(&mut app, |prompt, ctx| prompt.restore_options_focus(ctx));
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::SelectItem(2), ctx);
+        });
+        assert!(app.read(|ctx| {
+            prompt
+                .as_ref(ctx)
+                .body_editor
+                .as_ref()
+                .expect("editable prompt has a body editor")
+                .as_ref(ctx)
+                .is_focused()
+        }));
     });
 }
 

@@ -67,6 +67,7 @@ fn page(snapshot: OptionSnapshot, searchable: bool) -> OptionSelectorPage {
         }),
         snapshot,
         searchable,
+        row_shortcuts: Default::default(),
     }
 }
 
@@ -586,6 +587,34 @@ fn digits_confirm_the_corresponding_visible_row() {
     });
 }
 
+#[test]
+fn custom_row_shortcut_renders_and_confirms_instead_of_its_digit() {
+    App::test((), |mut app| async move {
+        let (selector, events) = add_selector(&mut app);
+        selector.update(&mut app, |selector, ctx| {
+            let mut page = page(snapshot(&["yes", "no", "edit command"], Some("yes")), false);
+            page.row_shortcuts.insert("edit command".to_owned(), 'e');
+            selector.set_page(page, ctx);
+        });
+
+        let lines = render_lines(&app, &selector, 60);
+        assert!(lines.iter().any(|line| line.contains("(e) edit command")));
+        assert!(!lines.iter().any(|line| line.contains("(3) edit command")));
+        assert!(dispatch(&app, &selector, &key_down("e")));
+
+        act(
+            &mut app,
+            &selector,
+            TuiOptionSelectorAction::SelectShortcut('e'),
+        );
+        assert_eq!(
+            primary_events(&events),
+            [TuiOptionSelectorEvent::Confirmed {
+                id: "edit command".to_owned()
+            }],
+        );
+    });
+}
 #[test]
 fn digits_are_viewport_relative_in_scrolled_lists() {
     App::test((), |mut app| async move {
