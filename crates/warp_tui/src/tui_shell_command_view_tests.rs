@@ -105,7 +105,7 @@ fn blocked_command_card_matches_permission_layout() {
 }
 
 #[test]
-fn command_editing_saves_text_without_executing() {
+fn finishing_command_editing_selects_yes_without_executing() {
     App::test((), |mut app| async move {
         let action = command_action("action-1", "echo original");
         let view = add_shell_view(

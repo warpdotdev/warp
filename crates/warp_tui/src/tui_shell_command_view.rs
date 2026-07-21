@@ -55,16 +55,14 @@ pub(crate) fn init(app: &mut AppContext) {
             predicate.clone(),
         )
         .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new(
+            "enter",
+            TuiShellCommandViewAction::SaveCommandEdit,
+            predicate.clone(),
+        )
+        .with_group(TUI_BINDING_GROUP),
     ]);
     app.register_editable_bindings([
-        EditableBinding::new(
-            "tui:shell-permission:save",
-            "Save the edited shell command",
-            TuiShellCommandViewAction::SaveCommandEdit,
-        )
-        .with_context_predicate(predicate.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("enter"),
         EditableBinding::new(
             "tui:shell-permission:save",
             "Save the edited shell command",
