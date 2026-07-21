@@ -66,6 +66,22 @@ fn command_registry_filters_explicit_surface_metadata() {
         }
     ));
 }
+
+#[test]
+fn voice_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command == &VOICE)
+    );
+    assert!(
+        !all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .any(|command| command == &VOICE)
+    );
+    assert!(VOICE.argument.is_none());
+    assert_eq!(VOICE.description, "Start voice input (Ctrl-S)");
+}
 #[test]
 fn view_logs_command_is_registered_only_for_tui_mode() {
     assert!(

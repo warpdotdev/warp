@@ -70,6 +70,7 @@ fn tui_commands_have_typed_identities_and_explicit_surface_support() {
         (&commands::LOGOUT, SlashCommandKind::Logout),
         (&commands::VERSION, SlashCommandKind::Version),
         (&commands::VIEW_LOGS, SlashCommandKind::ViewLogs),
+        (&commands::VOICE, SlashCommandKind::Voice),
     ] {
         assert_eq!(
             command.kind, expected,

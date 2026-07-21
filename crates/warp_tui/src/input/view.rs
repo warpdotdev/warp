@@ -31,6 +31,7 @@ use warp::tui_export::{
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding};
@@ -55,6 +56,7 @@ use crate::keybindings::{
 };
 use crate::transcript_view::TuiTranscriptView;
 use crate::tui_builder::TuiUiBuilder;
+use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource};
 
 /// Keymap-context flag set while the input has contextual Escape behavior.
 ///
@@ -210,6 +212,8 @@ pub struct TuiInputView {
     orchestration_tabs_available: Rc<dyn Fn(&AppContext) -> bool>,
     /// Consults the owner live before an inline-menu Enter can accept an item.
     can_accept_inline_menu: Rc<dyn Fn(&AppContext) -> bool>,
+    /// TUI voice state used for Escape routing and shell-gutter suppression.
+    voice_input: ModelHandle<TuiVoiceInputModel>,
 }
 
 impl Entity for TuiInputView {
@@ -279,6 +283,7 @@ impl TuiInputView {
         orchestration_tabs_available: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        let voice_input = ctx.add_model(TuiVoiceInputModel::new);
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
             if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 ctx.notify();
@@ -288,6 +293,7 @@ impl TuiInputView {
         // on the config (shell-mode gutter/border), so every event re-renders.
         ctx.subscribe_to_model(&input_mode, |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&suggestions_mode, |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&voice_input, |_, _, _, ctx| ctx.notify());
         Self {
             model,
             input_mode,
@@ -301,6 +307,7 @@ impl TuiInputView {
             keyboard_enhancement_supported: false,
             orchestration_tabs_available: Rc::new(orchestration_tabs_available),
             can_accept_inline_menu: Rc::new(|_| true),
+            voice_input,
         }
     }
 
@@ -330,6 +337,33 @@ impl TuiInputView {
         input_mode_policy::is_shell_mode(self.input_mode.as_ref(ctx))
     }
 
+    pub(crate) fn voice_is_active(&self, ctx: &AppContext) -> bool {
+        self.voice_input.as_ref(ctx).is_active()
+    }
+
+    pub(crate) fn voice_input_model(&self) -> &ModelHandle<TuiVoiceInputModel> {
+        &self.voice_input
+    }
+
+    pub(crate) fn voice_state(&self, ctx: &AppContext) -> TuiVoiceInputState {
+        self.voice_input.as_ref(ctx).state()
+    }
+
+    pub(crate) fn voice_animation_clock(&self, ctx: &AppContext) -> AnimationClock {
+        self.voice_input.as_ref(ctx).animation_clock()
+    }
+
+    pub(crate) fn start_voice_input(
+        &mut self,
+        available: bool,
+        source: VoiceInputStartSource,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        self.voice_input.update(ctx, |voice_input, ctx| {
+            voice_input.start(available, source, ctx)
+        })
+    }
+
     /// Returns a handle to the backing [`CodeEditorModel`].
     pub fn model(&self) -> &ModelHandle<CodeEditorModel> {
         &self.model
@@ -349,6 +383,16 @@ impl TuiInputView {
         // viewport back to the top.
         self.follow_cursor(ctx);
         ctx.notify();
+    }
+
+    /// Inserts normalized text at the current cursor without submitting it.
+    pub(crate) fn insert_text(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        let text = self.editor_behavior.normalize_text(text);
+        if !text.is_empty() {
+            self.model.update(ctx, |m, ctx| m.user_insert(text, ctx));
+            self.follow_cursor(ctx);
+            ctx.notify();
+        }
     }
 
     /// Builds this frame's core editor element: editable, scroll-windowed, and
@@ -473,6 +517,9 @@ impl TuiView for TuiInputView {
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(ctx);
+        if self.voice_is_active(ctx) {
+            return self.render_input(ctx);
+        }
         let (prefix, prefix_style) = if self.is_shell_mode(ctx) {
             ("!", builder.shell_command_accent_style())
         } else {
@@ -497,7 +544,9 @@ impl TuiView for TuiInputView {
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
         input_keymap_context(InputKeymapContextConfig {
-            input_handles_escape: self.active_inline_menu(ctx).is_some() || self.is_shell_mode(ctx),
+            input_handles_escape: self.active_inline_menu(ctx).is_some()
+                || self.is_shell_mode(ctx)
+                || self.voice_is_active(ctx),
             plan_toggle_available: self.plan_toggle_available(ctx),
             keyboard_enhancement_supported: self.keyboard_enhancement_supported,
             shell_completion_available: self.is_shell_mode(ctx),
@@ -574,7 +623,9 @@ impl TypedActionView for TuiInputView {
                 }
             }
             TuiInputAction::Submit => {
-                self.submit(ctx);
+                if !self.handle_voice_submit(ctx) {
+                    self.submit(ctx);
+                }
                 TuiEditorInteractionOutcome::FollowCursor
             }
             TuiInputAction::HandleEscape => {
@@ -866,6 +917,18 @@ impl TuiInputView {
         ctx.emit(TuiInputViewEvent::Submitted(text));
     }
 
+    fn handle_voice_submit(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        match self.voice_input.as_ref(ctx).state() {
+            TuiVoiceInputState::Listening => {
+                self.voice_input
+                    .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
+                true
+            }
+            TuiVoiceInputState::Transcribing => true,
+            TuiVoiceInputState::Idle => false,
+        }
+    }
+
     fn handle_inline_menu_action(
         &mut self,
         action: &TuiInputAction,
@@ -944,6 +1007,20 @@ impl TuiInputView {
             inline_menu.dismiss(ctx);
             ctx.notify();
             return true;
+        }
+
+        match self.voice_input.as_ref(ctx).state() {
+            TuiVoiceInputState::Listening => {
+                self.voice_input
+                    .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
+                return true;
+            }
+            TuiVoiceInputState::Transcribing => {
+                self.voice_input
+                    .update(ctx, |voice_input, ctx| voice_input.cancel(ctx));
+                return true;
+            }
+            TuiVoiceInputState::Idle => {}
         }
 
         if self.is_shell_mode(ctx) {

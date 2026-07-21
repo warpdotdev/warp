@@ -1,5 +1,8 @@
 //! Test-only app initialization used by the external `warp_tui` crate.
 
+#[cfg(feature = "voice_input")]
+use std::sync::Arc;
+
 use ai::api_keys::ApiKeyManager;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::{Duration, Local};
@@ -25,6 +28,8 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+#[cfg(feature = "voice_input")]
+use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -32,10 +37,14 @@ use crate::code_review::git_repo_model::GitRepoModels;
 use crate::network::NetworkStatus;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
+#[cfg(feature = "voice_input")]
+use crate::server::voice_transcriber::ServerVoiceTranscriber;
 use crate::settings::manager::SettingsManager;
 use crate::settings::{AISettings, PrivacySettings, init_and_register_user_preferences};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::user_config::WarpConfig;
+#[cfg(feature = "voice_input")]
+use crate::voice::transcriber::VoiceTranscriber;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Builds a history model with persisted AI queries for TUI tests.
@@ -113,6 +122,18 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|ctx| {
         AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
     });
+    #[cfg(feature = "voice_input")]
+    {
+        app.add_singleton_model(|ctx| {
+            AIRequestUsageModel::new(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
+        });
+        app.add_singleton_model(voice_input::VoiceInput::new);
+        app.add_singleton_model(|ctx| {
+            VoiceTranscriber::new(Arc::new(ServerVoiceTranscriber::new(
+                ServerApiProvider::as_ref(ctx).get(),
+            )))
+        });
+    }
     app.add_singleton_model(|_| {
         crate::ai::document::ai_document_model::AIDocumentModel::new_for_test()
     });

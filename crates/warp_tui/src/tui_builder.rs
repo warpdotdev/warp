@@ -5,6 +5,9 @@
 //! Composition and layout stay with the views and the element library; the
 //! builder only owns styles.
 
+use std::f32::consts::TAU;
+use std::time::Duration;
+
 use pathfinder_color::ColorU;
 use warp::tui_export::Appearance;
 use warp_core::ui::color::Opacity;
@@ -250,15 +253,39 @@ impl TuiUiBuilder {
             None => self.warp_theme.background(),
         }
     }
+    fn cyan_overlay_2(&self) -> ThemeFill {
+        let cyan = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        self.base_background().blend(&cyan.with_opacity(50))
+    }
 
     /// Accent-colored border style for focused/primary containers. The design
     /// uses the cyan token at 50%; pre-blend it because terminal cells do not
     /// preserve alpha.
     pub(crate) fn accent_border_style(&self) -> TuiStyle {
-        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
-        TuiStyle::default().fg(cell_color(
-            self.base_background().blend(&accent.with_opacity(50)),
-        ))
+        TuiStyle::default().fg(cell_color(self.cyan_overlay_2()))
+    }
+
+    /// Fixed themed cyan for voice-input status text. Terminal foreground
+    /// colors cannot preserve the alpha from `cyan_overlay_2`, so use the
+    /// corresponding opaque color instead of pre-blending it into gray.
+    pub(crate) fn voice_input_status_style(&self) -> TuiStyle {
+        self.accent_text_style()
+    }
+
+    /// Smoothly pulsing border between the themed equivalents of
+    /// `cyan_overlay_2` and `Lilac-600`.
+    pub(crate) fn voice_input_border_style(&self, elapsed: Duration) -> TuiStyle {
+        const PERIOD: Duration = Duration::from_secs(2);
+
+        let phase = elapsed.as_secs_f32() / PERIOD.as_secs_f32();
+        let intensity = (1.0 - (phase * TAU).cos()) * 0.5;
+        let lilac_600 = ThemeFill::from(self.warp_theme.terminal_colors().normal.magenta);
+        let cyan_overlay_2 = self.cyan_overlay_2().into_solid();
+        let color = cyan_overlay_2
+            .to_f32()
+            .lerp(lilac_600.into_solid().to_f32(), intensity)
+            .to_u8();
+        TuiStyle::default().fg(Color::Rgb(color.r, color.g, color.b))
     }
 
     /// Style in the shell-mode accent color (the same blue the GUI uses for

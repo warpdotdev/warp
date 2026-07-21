@@ -14,7 +14,7 @@ use warp::settings::AISettingsChangedEvent;
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIHistoryModel, BlocklistAIInputModel,
     ConversationSelectionEvent, InputConfig, InputModePolicy, InputType, LLMId, PolicyConfigUpdate,
-    SlashCommandId, SlashCommandMixer, blocklist_ai_history_model_with_queries,
+    SlashCommandId, SlashCommandMixer, VoiceInput, blocklist_ai_history_model_with_queries,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
@@ -49,6 +49,7 @@ use crate::prompt_history_menu::TuiPromptHistoryMenuModel;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
 use crate::test_fixtures::{add_test_conversation_selection, add_test_semantic_selection};
 use crate::tui_builder::TuiUiBuilder;
+use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState};
 
 const W: u16 = 80;
 
@@ -404,6 +405,69 @@ fn slash_command_argument_hint_renders_after_menu_closes() {
                 .expect("ghost text has a foreground");
             assert_eq!(buffer[(hint_column, 0)].fg, expected);
         });
+    });
+}
+
+#[test]
+fn enter_and_escape_stop_listening_while_escape_cancels_transcribing() {
+    App::test((), |mut app| async move {
+        let (view, voice_input, submissions) = app.update(|ctx| {
+            let (view, voice_input) = build_view_with_voice(ctx);
+            let submissions = Rc::new(RefCell::new(Vec::new()));
+            let submissions_for_subscription = submissions.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| match event {
+                TuiInputViewEvent::Submitted(text) => {
+                    submissions_for_subscription.borrow_mut().push(text.clone());
+                }
+                TuiInputViewEvent::Pasted(_)
+                | TuiInputViewEvent::BackspaceAtEmptyInput
+                | TuiInputViewEvent::AcceptedSlashCommand(_)
+                | TuiInputViewEvent::AcceptedConversation(_)
+                | TuiInputViewEvent::AcceptedModel(_)
+                | TuiInputViewEvent::AcceptedMcp(_)
+                | TuiInputViewEvent::MoveFocusUp
+                | TuiInputViewEvent::AcceptedPromptHistory(_)
+                | TuiInputViewEvent::RequestShellCompletion
+                | TuiInputViewEvent::ClipboardCopySucceeded
+                | TuiInputViewEvent::ClipboardCopyFailed => {}
+            });
+            (view, voice_input, submissions)
+        });
+
+        app.update(|ctx| {
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Listening, ctx);
+            });
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+            assert_eq!(
+                voice_input.as_ref(ctx).state(),
+                TuiVoiceInputState::Transcribing
+            );
+        });
+        assert!(submissions.borrow().is_empty());
+
+        app.update(|ctx| {
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Listening, ctx);
+            });
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            assert_eq!(
+                voice_input.as_ref(ctx).state(),
+                TuiVoiceInputState::Transcribing
+            );
+        });
+        assert!(submissions.borrow().is_empty());
+
+        app.update(|ctx| {
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+        });
+        assert!(submissions.borrow().is_empty());
+
+        app.update(|ctx| {
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            assert_eq!(voice_input.as_ref(ctx).state(), TuiVoiceInputState::Idle);
+        });
+        assert!(submissions.borrow().is_empty());
     });
 }
 
@@ -816,6 +880,58 @@ fn typeahead_overwrites_incremental_prefix_and_moves_cursor_to_end() {
 
             assert_eq!(text(&view, ctx), "echo hi");
             assert_eq!(cursor_and_height(&view, ctx).0, Some((7, 0)));
+        });
+    });
+}
+fn build_view_with_voice(
+    ctx: &mut AppContext,
+) -> (ViewHandle<TuiInputView>, ModelHandle<TuiVoiceInputModel>) {
+    ctx.add_singleton_model(|_| Appearance::mock());
+    ctx.add_singleton_model(VoiceInput::new);
+    add_test_semantic_selection(ctx);
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
+    let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::Closed);
+    let (_window_id, view) = ctx.add_tui_window(
+        AddWindowOptions {
+            window_style: WindowStyle::NotStealFocus,
+            ..Default::default()
+        },
+        move |ctx| {
+            let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
+            TuiInputView::new_for_test(
+                model,
+                input_mode,
+                suggestions_mode,
+                Vec::new(),
+                |_| false,
+                ctx,
+            )
+        },
+    );
+    let voice_input = view.as_ref(ctx).voice_input.clone();
+    (view, voice_input)
+}
+
+#[test]
+fn listening_voice_input_suppresses_shell_gutter() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (view, voice_input) = build_view_with_voice(ctx);
+            type_str(&view, ctx, "!");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Listening, ctx);
+            });
+            let lines = render_element_lines(view.as_ref(ctx).render(ctx), ctx, W, 4);
+            assert!(
+                !lines.iter().any(|line| line.starts_with('!')),
+                "voice mode must not render the shell gutter: {lines:?}"
+            );
+            assert!(
+                !lines.join("\n").contains("! "),
+                "voice mode must not render a replacement gutter glyph"
+            );
         });
     });
 }

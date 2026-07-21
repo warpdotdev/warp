@@ -35,7 +35,7 @@ use warp::tui_export::{
     maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
     record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
     record_static_slash_command_accepted, saved_prompt_text_for_id,
-    slash_command_selection_behavior, throttle,
+    slash_command_selection_behavior, slash_commands, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
@@ -47,8 +47,8 @@ use warpui::SingletonEntity;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiSize,
-    TuiText,
+    TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
+    TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
@@ -107,6 +107,7 @@ use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{HAND_BACK_KEY_BINDING, TuiCLISubagentView};
 use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;
+use crate::voice_input::{TuiVoiceInputEvent, TuiVoiceInputState, VoiceInputStartSource};
 use crate::warping_indicator::{render_response_summary, render_warping_indicator_row};
 use crate::zero_state::TuiZeroStateView;
 use crate::zero_state_animation::{
@@ -123,6 +124,7 @@ const INITIAL_INPUT_WIDTH: u16 = 80;
 const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 const AUTO_APPROVE_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
+const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
@@ -132,6 +134,7 @@ const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
 pub(crate) const SESSION_COMPOSER_OWNS_INPUT_FLAG: &str = "TuiSessionComposerOwnsInput";
 pub(crate) const PASTE_IMAGE_BINDING_NAME: &str = "tui:session:paste_image";
 pub(crate) const AUTO_APPROVE_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_auto_approve";
+pub(crate) const VOICE_INPUT_BINDING_NAME: &str = "tui:session:start_voice_input";
 
 /// Events emitted by the TUI terminal session surface.
 pub(crate) enum TuiTerminalSessionEvent {
@@ -203,11 +206,55 @@ const ZERO_STATE_ASCII_INITIAL_LOAD_FAILED_HINT: &str =
     "Could not load custom ASCII art. Using the built-in Warp logo.";
 const ZERO_STATE_ASCII_RELOAD_FAILED_HINT: &str =
     "Could not reload custom ASCII art. Keeping the current object.";
+const VOICE_USAGE_HINT: &str = "Usage: /voice (no arguments)";
 const COST_NO_ACTIVE_CONVERSATION_HINT: &str =
     "Cannot show conversation cost: no active conversation";
 const COST_EMPTY_CONVERSATION_HINT: &str = "Cannot show conversation cost: conversation is empty";
 const COST_CONVERSATION_IN_PROGRESS_HINT: &str =
     "Cannot show conversation cost: conversation is in progress";
+
+struct FooterHint<'a> {
+    text: &'a str,
+    style: FooterHintStyle,
+}
+
+enum FooterHintStyle {
+    Muted,
+    Success,
+    Error,
+    VoiceInput,
+}
+
+impl<'a> FooterHint<'a> {
+    fn muted(text: &'a str) -> Self {
+        Self {
+            text,
+            style: FooterHintStyle::Muted,
+        }
+    }
+
+    fn voice_input(text: &'a str) -> Self {
+        Self {
+            text,
+            style: FooterHintStyle::VoiceInput,
+        }
+    }
+
+    fn render(self, builder: &TuiUiBuilder) -> TuiFlex {
+        let style = match self.style {
+            FooterHintStyle::Muted => builder.muted_text_style(),
+            FooterHintStyle::Success => builder.success_glyph_style(),
+            FooterHintStyle::Error => builder.error_text_style(),
+            FooterHintStyle::VoiceInput => builder.voice_input_status_style(),
+        };
+        TuiFlex::row().child(
+            TuiText::new(self.text)
+                .with_style(style)
+                .truncate()
+                .finish(),
+        )
+    }
+}
 
 fn log_bundle_success_message(path: &Path) -> String {
     format!("Log bundle saved to {}", path.display())
@@ -250,6 +297,29 @@ fn cost_command_unavailable_hint(
 
 fn attachment_focus_available(is_shell_mode: bool, attachments_should_render: bool) -> bool {
     !is_shell_mode && attachments_should_render
+}
+
+fn voice_command_argument(input: &str) -> Option<&str> {
+    let argument = input.strip_prefix(slash_commands::VOICE.name)?;
+    argument
+        .chars()
+        .next()
+        .is_none_or(char::is_whitespace)
+        .then_some(argument)
+}
+
+fn voice_argument_is_empty(argument: Option<&String>) -> bool {
+    argument.is_none_or(|argument| argument.trim().is_empty())
+}
+
+fn bordered_input(
+    input_view: &ViewHandle<TuiInputView>,
+    border_style: TuiStyle,
+) -> Box<dyn TuiElement> {
+    TuiContainer::new(TuiChildView::new(input_view).finish())
+        .with_padding_x(1)
+        .with_border_style(border_style)
+        .finish()
 }
 
 /// Resolved segments for the footer's left-aligned sectioned status row.
@@ -400,6 +470,7 @@ enum ConversationRestoreState {
     },
     Failed(String),
 }
+
 fn export_file_success_message(export: &ConversationFileExport) -> String {
     let path = export.path().display();
     if export.overwrote_existing() {
@@ -451,6 +522,8 @@ pub(crate) enum TuiTerminalSessionAction {
     FocusAttachments,
     /// Paste host clipboard text or attach image data and image paths.
     PasteFromClipboard,
+    /// Start recording voice input from the session composer.
+    StartVoiceInput,
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -622,6 +695,17 @@ pub(crate) fn init(app: &mut AppContext) {
         )
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-shift-V"),
+        EditableBinding::new(
+            VOICE_INPUT_BINDING_NAME,
+            "Start voice input",
+            TuiTerminalSessionAction::StartVoiceInput,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
+                & id!(SESSION_COMPOSER_OWNS_INPUT_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-s"),
         #[cfg(windows)]
         EditableBinding::new(
             PASTE_IMAGE_BINDING_NAME,
@@ -1226,6 +1310,10 @@ impl TuiTerminalSessionView {
                 tui_input_target(&terminal_model).agent_editor_owns_input()
             })
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
+        });
+        let voice_input_model = input_view.as_ref(ctx).voice_input_model().clone();
+        ctx.subscribe_to_model(&voice_input_model, |view, _, event, ctx| {
+            view.handle_voice_input_event(event, ctx);
         });
         let attachment_model = ctx.add_model(|ctx| {
             TuiAttachmentModel::new(
@@ -2332,6 +2420,43 @@ impl TuiTerminalSessionView {
         render_warping_indicator_row(label, elapsed, auto_approve, ctx)
     }
 
+    /// Selects the single message that replaces the normal footer, preserving
+    /// the priority order between competing session states.
+    fn footer_hint(&self, ctx: &AppContext) -> Option<FooterHint<'_>> {
+        if self.exit_confirmation.is_armed() {
+            return Some(FooterHint::muted(CTRL_C_EXIT_HINT));
+        }
+        if matches!(
+            &self.conversation_restore_state,
+            ConversationRestoreState::Loading {
+                origin: TuiConversationRestoreOrigin::ConversationList,
+                ..
+            }
+        ) {
+            return Some(FooterHint::muted(LOADING_CONVERSATION_HINT));
+        }
+        if let Some((text, tone)) = self.transient_hint.current() {
+            let style = match tone {
+                TransientHintTone::Muted => FooterHintStyle::Muted,
+                TransientHintTone::Success => FooterHintStyle::Success,
+                TransientHintTone::Error => FooterHintStyle::Error,
+            };
+            return Some(FooterHint { text, style });
+        }
+        match self.input_view.as_ref(ctx).voice_state(ctx) {
+            TuiVoiceInputState::Listening => {
+                return Some(FooterHint::voice_input(
+                    "listening to voice input... · esc or enter to stop",
+                ));
+            }
+            TuiVoiceInputState::Transcribing => {
+                return Some(FooterHint::voice_input("Transcribing... · esc to cancel"));
+            }
+            TuiVoiceInputState::Idle => {}
+        }
+        None
+    }
+
     /// Builds the status footer under the input box. The row is left-aligned:
     /// in agent mode `[model] [cwd ↬ branch] • [usage] • [+N -M]`, and in shell
     /// mode `[shell mode] [cwd ↬ branch] • [+N -M]` (model and usage hidden).
@@ -2341,48 +2466,12 @@ impl TuiTerminalSessionView {
     /// lays out one row tall.
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
         let builder = TuiUiBuilder::from_app(ctx);
-        let muted = builder.muted_text_style();
-
-        // Replacing hints occupy the entire status row, in the existing
-        // priority order: ctrl-c → loading → transient.
-        if self.exit_confirmation.is_armed() {
-            return TuiFlex::row().child(
-                TuiText::new(CTRL_C_EXIT_HINT)
-                    .with_style(muted)
-                    .truncate()
-                    .finish(),
-            );
+        if let Some(hint) = self.footer_hint(ctx) {
+            return hint.render(&builder);
         }
-        if matches!(
-            &self.conversation_restore_state,
-            ConversationRestoreState::Loading {
-                origin: TuiConversationRestoreOrigin::ConversationList,
-                ..
-            }
-        ) {
-            return TuiFlex::row().child(
-                TuiText::new(LOADING_CONVERSATION_HINT)
-                    .with_style(muted)
-                    .truncate()
-                    .finish(),
-            );
-        }
-        if let Some((transient, tone)) = self.transient_hint.current() {
-            let style = match tone {
-                TransientHintTone::Muted => muted,
-                TransientHintTone::Success => builder.success_glyph_style(),
-                TransientHintTone::Error => builder.error_text_style(),
-            };
-            return TuiFlex::row().child(
-                TuiText::new(transient)
-                    .with_style(style)
-                    .truncate()
-                    .finish(),
-            );
-        }
-        let shell_mode = self.is_shell_mode(ctx);
 
         // Normal left-aligned sectioned status row.
+        let shell_mode = self.is_shell_mode(ctx);
         let git_metadata = self.git_status_metadata(ctx);
         let model_label = if shell_mode {
             None
@@ -2733,10 +2822,59 @@ impl TuiTerminalSessionView {
         }
     }
 
+    /// Asks the input-owned voice model to start recording.
+    fn start_voice_input(&mut self, source: VoiceInputStartSource, ctx: &mut ViewContext<Self>) {
+        let local_skills_available = self
+            .slash_commands_source
+            .as_ref(ctx)
+            .local_skills_available(ctx);
+        let started = self.input_view.update(ctx, |input, ctx| {
+            if source.clears_input() {
+                input.clear(ctx);
+            }
+            input.start_voice_input(local_skills_available, source, ctx)
+        });
+        if started && matches!(source, VoiceInputStartSource::SlashCommand) {
+            record_static_slash_command_accepted("/voice", true, ctx);
+        }
+    }
+
+    fn handle_voice_input_event(
+        &mut self,
+        event: &TuiVoiceInputEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            TuiVoiceInputEvent::Completed(text) => {
+                if !text.trim().is_empty() {
+                    self.input_view.update(ctx, |input, ctx| {
+                        input.insert_text(text, ctx);
+                    });
+                }
+            }
+            TuiVoiceInputEvent::Failed(hint) => {
+                self.show_transient_hint(hint.clone(), ctx);
+            }
+            TuiVoiceInputEvent::Cancelled => {
+                self.show_transient_hint("Voice input cancelled".to_owned(), ctx);
+            }
+            TuiVoiceInputEvent::StateChanged(_) => {
+                ctx.notify();
+            }
+        }
+    }
+
     fn handle_submitted_input(&mut self, input: &str, ctx: &mut ViewContext<Self>) {
         if self.is_conversation_restore_loading() {
             return;
         }
+
+        if voice_command_argument(input).is_some_and(|argument| !argument.trim().is_empty()) {
+            self.show_transient_hint(VOICE_USAGE_HINT.to_owned(), ctx);
+            self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+            return;
+        }
+
         match self
             .slash_commands_source
             .as_ref(ctx)
@@ -3045,6 +3183,14 @@ impl TuiTerminalSessionView {
                     },
                 );
                 record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            SlashCommandKind::Voice => {
+                if !voice_argument_is_empty(argument) {
+                    self.show_transient_hint(VOICE_USAGE_HINT.to_owned(), ctx);
+                    self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                    return;
+                }
+                self.start_voice_input(VoiceInputStartSource::SlashCommand, ctx);
             }
             SlashCommandKind::CreateNewProject => {
                 let Some(query) = argument
@@ -3519,11 +3665,27 @@ impl TuiView for TuiTerminalSessionView {
                     .finish(),
                 );
             }
-            let border_style = if self.is_shell_mode(ctx) {
-                builder.shell_mode_accent_style()
-            } else {
-                builder.accent_border_style()
-            };
+            let input =
+                if self.input_view.as_ref(ctx).voice_state(ctx) == TuiVoiceInputState::Listening {
+                    let input_view = self.input_view.clone();
+                    let builder = builder.clone();
+                    let clock = self.input_view.as_ref(ctx).voice_animation_clock(ctx);
+                    TuiAnimated::new(VOICE_INPUT_BORDER_REPAINT_INTERVAL, move || {
+                        bordered_input(
+                            &input_view,
+                            builder.voice_input_border_style(clock.elapsed()),
+                        )
+                    })
+                    .finish()
+                } else {
+                    let border_style = if self.is_shell_mode(ctx) {
+                        builder.shell_mode_accent_style()
+                    } else {
+                        builder.accent_border_style()
+                    };
+                    bordered_input(&self.input_view, border_style)
+                };
+
             if self.attachment_bar.as_ref(ctx).should_render(ctx) {
                 content = content.child(
                     TuiConstrainedBox::new(
@@ -3536,14 +3698,9 @@ impl TuiView for TuiTerminalSessionView {
                 );
             }
             content = content.child(
-                TuiConstrainedBox::new(
-                    TuiContainer::new(TuiChildView::new(&self.input_view).finish())
-                        .with_padding_x(1)
-                        .with_border_style(border_style)
-                        .finish(),
-                )
-                .with_max_rows(MAX_INPUT_TEXT_ROWS + 2)
-                .finish(),
+                TuiConstrainedBox::new(input)
+                    .with_max_rows(MAX_INPUT_TEXT_ROWS + 2)
+                    .finish(),
             );
             let footer = if matches!(input_target, TuiInputTarget::Disabled) {
                 self.render_footer(ctx).finish()
@@ -3650,6 +3807,9 @@ impl TypedActionView for TuiTerminalSessionView {
             TuiTerminalSessionAction::PasteFromClipboard => {
                 self.attachment_bar
                     .update(ctx, |bar, ctx| bar.paste_from_clipboard(ctx));
+            }
+            TuiTerminalSessionAction::StartVoiceInput => {
+                self.start_voice_input(VoiceInputStartSource::Keybinding, ctx);
             }
         }
     }

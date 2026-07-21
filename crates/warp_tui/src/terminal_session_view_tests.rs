@@ -35,10 +35,12 @@ use super::{
     COST_CONVERSATION_IN_PROGRESS_HINT, COST_EMPTY_CONVERSATION_HINT,
     COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT, ConversationRestoreState, FooterSegments,
     INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,
-    SHELL_MODE_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
-    TuiTerminalSessionEvent, TuiTerminalSessionView, attachment_focus_available,
+    SESSION_COMPOSER_OWNS_INPUT_FLAG, SHELL_MODE_HINT, TuiConversationRestoreOrigin,
+    TuiTerminalSessionAction, TuiTerminalSessionEvent, TuiTerminalSessionView,
+    VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT, attachment_focus_available,
     cost_command_unavailable_hint, export_file_success_message, log_bundle_success_message,
-    raw_prompt_if_not_blank, render_status_footer_row,
+    raw_prompt_if_not_blank, render_status_footer_row, voice_argument_is_empty,
+    voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -59,6 +61,7 @@ use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_sessio
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::tui_builder::TuiUiBuilder;
 use crate::usage::UsageToggle;
+use crate::voice_input::TuiVoiceInputState;
 use crate::zero_state_animation::{
     ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
 };
@@ -73,6 +76,42 @@ fn shell_mode_reserves_tab_even_when_attachments_render() {
     assert!(attachment_focus_available(false, true));
     assert!(!attachment_focus_available(true, true));
     assert!(!attachment_focus_available(false, false));
+}
+
+#[test]
+fn voice_accepts_exact_and_whitespace_only_arguments() {
+    assert_eq!(voice_command_argument("/voice"), Some(""));
+    assert_eq!(voice_command_argument("/voice   "), Some("   "));
+    assert_eq!(voice_command_argument("/voice text"), Some(" text"));
+    assert_eq!(voice_command_argument("/voice-command text"), None);
+    assert!(voice_argument_is_empty(None));
+    assert!(voice_argument_is_empty(Some(&String::new())));
+    assert!(voice_argument_is_empty(Some(&"   ".to_owned())));
+    assert!(!voice_argument_is_empty(Some(&"text".to_owned())));
+}
+#[test]
+fn voice_slash_command_rejects_arguments_before_prompt_fallback() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/voice transcribe this", ctx);
+            });
+            view.handle_submitted_input("/voice transcribe this", ctx);
+        });
+
+        assert_eq!(app.read(|ctx| input_text(&view, ctx)), "");
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some(VOICE_USAGE_HINT.to_owned())
+        );
+    });
 }
 
 #[test]
@@ -193,6 +232,58 @@ fn zero_state_initial_load_failure_shows_an_error_footer_hint() {
         );
     });
 }
+
+#[test]
+fn listening_voice_input_animates_the_input_border() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.terminal_model
+                .lock()
+                .simulate_block("echo ready", "ready\r\n");
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Listening, ctx);
+            });
+        });
+
+        let mut presenter = TuiPresenter::new();
+        let listening_frame = app.update(|ctx| {
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(view.id());
+            invalidation
+                .updated
+                .extend(view.as_ref(ctx).child_view_ids(ctx));
+            presenter.invalidate(&invalidation, ctx, fixture.window_id);
+            presenter.present(ctx, &view, TuiRect::new(0, 0, 100, 40))
+        });
+        assert!(
+            listening_frame.repaint_at.is_some(),
+            "the listening border should schedule its next animation frame"
+        );
+
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Transcribing, ctx);
+            });
+        });
+        let transcribing_frame = app.update(|ctx| {
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(view.id());
+            invalidation
+                .updated
+                .extend(view.as_ref(ctx).child_view_ids(ctx));
+            presenter.invalidate(&invalidation, ctx, fixture.window_id);
+            presenter.present(ctx, &view, TuiRect::new(0, 0, 100, 40))
+        });
+        assert!(
+            transcribing_frame.repaint_at.is_none(),
+            "the border should stop animating after recording stops"
+        );
+    });
+}
 fn mouse_moved(x: u16, y: u16) -> TuiEvent {
     TuiEvent::MouseMoved {
         position: TuiPoint::new(x, y),
@@ -252,6 +343,13 @@ fn render_retained_session(
         let scene = Rc::new(paint_ctx.scene.clone());
         (element, scene, buffer)
     })
+}
+fn render_footer_lines(
+    app: &mut App,
+    view: &ViewHandle<super::TuiTerminalSessionView>,
+    width: u16,
+) -> Vec<String> {
+    render_footer(app, view, width).to_lines()
 }
 
 /// Dispatches `event` into the retained session element tree with the session
@@ -1241,15 +1339,55 @@ fn zero_state_transitions_through_bootstrap_lifecycle() {
     });
 }
 
-fn render_footer_lines(
+fn render_footer(
     app: &mut App,
     view: &ViewHandle<super::TuiTerminalSessionView>,
     width: u16,
-) -> Vec<String> {
+) -> TuiBuffer {
     app.update(|ctx| {
         let footer = view.as_ref(ctx).render_footer(ctx).finish();
-        render_element(footer, ctx, width).to_lines()
+        render_element(footer, ctx, width)
     })
+}
+
+#[test]
+fn footer_renders_voice_listening_and_transcribing_states() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let expected_color = app.read(|ctx| {
+            TuiUiBuilder::from_app(ctx)
+                .voice_input_status_style()
+                .fg
+                .expect("voice input status should have a foreground color")
+        });
+
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Listening, ctx);
+            });
+        });
+        let listening_footer = render_footer(&mut app, &view, 80);
+        assert_eq!(
+            listening_footer.to_lines(),
+            vec!["listening to voice input... · esc or enter to stop"]
+        );
+        assert_eq!(listening_footer[(0, 0)].fg, expected_color);
+
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Transcribing, ctx);
+            });
+        });
+        let transcribing_footer = render_footer(&mut app, &view, 80);
+        assert_eq!(
+            transcribing_footer.to_lines(),
+            vec!["Transcribing... · esc to cancel"]
+        );
+        assert_eq!(transcribing_footer[(0, 0)].fg, expected_color);
+    });
 }
 
 /// A replacing hint occupies the whole status row, so no section separators,
@@ -1637,6 +1775,32 @@ fn auto_approve_uses_ctrl_shift_i() {
             session_context
                 .set
                 .insert(TuiTerminalSessionView::ui_name());
+            assert!(binding.in_context(&session_context));
+        });
+    });
+}
+
+#[test]
+fn voice_input_uses_ctrl_s_only_when_the_composer_owns_input() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let binding = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == VOICE_INPUT_BINDING_NAME)
+                .expect("voice-input binding");
+            assert_eq!(
+                *binding.trigger,
+                Trigger::Keystrokes(vec![Keystroke::parse("ctrl-s").unwrap()])
+            );
+
+            let mut session_context = Context::default();
+            session_context
+                .set
+                .insert(TuiTerminalSessionView::ui_name());
+            assert!(!binding.in_context(&session_context));
+
+            session_context.set.insert(SESSION_COMPOSER_OWNS_INPUT_FLAG);
             assert!(binding.in_context(&session_context));
         });
     });

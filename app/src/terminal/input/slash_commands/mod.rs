@@ -1256,6 +1256,7 @@ impl Input {
             }
             SlashCommandKind::AutoApprove
             | SlashCommandKind::ViewLogs
+            | SlashCommandKind::Voice
             | SlashCommandKind::NaturalLanguageDetection
             | SlashCommandKind::Exit
             | SlashCommandKind::Logout

@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
+#[cfg(feature = "voice_input")]
+use warpui::SingletonEntity;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
 use super::core::subscribe_to_shared_dependencies;
@@ -10,15 +12,21 @@ use super::{
     InlineItem, SlashCommandDataSource, SlashCommandDataSourceState, UpdatedActiveCommands,
 };
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
+#[cfg(feature = "voice_input")]
+use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::search::SyncDataSource;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::slash_command_menu::static_commands::Availability;
-use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
+use crate::search::slash_command_menu::static_commands::commands::{COMMAND_REGISTRY, VOICE};
+#[cfg(feature = "voice_input")]
+use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::TerminalModel;
 use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::view::resolve_ai_query_routing;
+#[cfg(feature = "voice_input")]
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 pub struct TuiDataSourceArgs {
     pub active_session: ModelHandle<ActiveSession>,
@@ -48,6 +56,25 @@ impl TuiSlashCommandDataSource {
             Self::recompute_active_commands,
             ctx,
         );
+
+        #[cfg(feature = "voice_input")]
+        {
+            ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+                if matches!(event, AISettingsChangedEvent::VoiceInputEnabled { .. }) {
+                    me.recompute_active_commands(ctx);
+                }
+            });
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+                if matches!(event, UserWorkspacesEvent::TeamsChanged) {
+                    me.recompute_active_commands(ctx);
+                }
+            });
+            ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
+                if matches!(event, AIRequestUsageModelEvent::RequestUsageUpdated) {
+                    me.recompute_active_commands(ctx);
+                }
+            });
+        }
 
         let mut me = Self {
             state: SlashCommandDataSourceState::new(
@@ -82,11 +109,19 @@ impl TuiSlashCommandDataSource {
     fn recompute_active_commands(&mut self, ctx: &mut ModelContext<Self>) {
         let availability = self.availability(ctx);
         let gates = self.common_command_gates(ctx);
+        #[cfg(feature = "voice_input")]
+        let voice_command_is_available = AISettings::as_ref(ctx).is_voice_input_enabled(ctx)
+            && UserWorkspaces::as_ref(ctx).is_voice_enabled()
+            && AIRequestUsageModel::as_ref(ctx).can_request_voice()
+            && self.local_skills_available(ctx);
+        #[cfg(not(feature = "voice_input"))]
+        let voice_command_is_available = false;
         let commands = HashMap::from_iter(
             COMMAND_REGISTRY
                 .all_commands_by_id()
                 .filter(|(_, command)| {
-                    self.command_passes_common_gates(command, availability, &gates)
+                    (command.name != VOICE.name || voice_command_is_available)
+                        && self.command_passes_common_gates(command, availability, &gates)
                 })
                 .map(|(id, command)| (id, command.clone())),
         );
