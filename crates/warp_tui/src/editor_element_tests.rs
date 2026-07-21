@@ -8,7 +8,7 @@ use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    Color, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
     TuiStyle,
 };
@@ -17,6 +17,7 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext, ModelHandle};
 
 use super::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
+use crate::tui_builder::TuiUiBuilder;
 
 /// A char-cell editor model seeded with `text`.
 fn model(ctx: &mut AppContext, text: &str) -> ModelHandle<CodeEditorModel> {
@@ -36,10 +37,14 @@ fn selection_span_uses_grapheme_width() {
             element.sel_char_range = Some(CharOffset::range(1..3));
             let buffer = render_buffer(ctx, element, 10, 1);
 
-            assert!(!buffer[(0, 0)].modifier.contains(Modifier::REVERSED));
-            assert!(buffer[(1, 0)].modifier.contains(Modifier::REVERSED));
-            assert!(buffer[(2, 0)].modifier.contains(Modifier::REVERSED));
-            assert!(!buffer[(3, 0)].modifier.contains(Modifier::REVERSED));
+            // The selection style uses a solid bg color (theme foreground);
+            // verify the highlight covers both display columns of the wide
+            // grapheme and leaves the surrounding cells untouched.
+            let selection_bg = TuiUiBuilder::from_app(ctx).selection_style().bg;
+            assert_ne!(Some(buffer[(0, 0)].bg), selection_bg);
+            assert_eq!(Some(buffer[(1, 0)].bg), selection_bg);
+            assert_eq!(Some(buffer[(2, 0)].bg), selection_bg);
+            assert_ne!(Some(buffer[(3, 0)].bg), selection_bg);
         });
     });
 }

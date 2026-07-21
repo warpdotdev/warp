@@ -27,6 +27,7 @@ use super::terminal_block::{block_content_rows, should_render_terminal_block};
 use super::tui_block_list_viewport_source::{
     AgentBlockRegistry, CLISubagentBlockRegistry, TuiBlockListViewportSource,
 };
+use super::tui_builder::TuiUiBuilder;
 use super::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
 
 /// Rows of blank space above every transcript block. Terminal blocks get it
@@ -665,8 +666,12 @@ impl TuiView for TuiTranscriptView {
             self.agent_blocks.clone(),
             self.cli_subagent_blocks.clone(),
         );
-        let viewport = TuiViewportedList::new(self.viewport.clone(), source)
-            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
+        let viewport = TuiViewportedList::new(
+            self.viewport.clone(),
+            source,
+            TuiUiBuilder::from_app(app).selection_style(),
+        )
+        .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
         let semantic_selection = SemanticSelection::as_ref(app);
         let selectable = TuiSelectable::new(self.selection.clone(), viewport)
             .with_word_boundaries_policy(semantic_selection.word_boundary_policy())

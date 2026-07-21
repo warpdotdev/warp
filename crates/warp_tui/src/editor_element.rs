@@ -29,11 +29,13 @@ use warp_editor::render::model::{
     CharCellTemporaryBlock, DisplayLattice, DisplayRow, DisplayRowKind,
 };
 use warpui_core::elements::tui::{
-    Modifier, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex, TuiGridPoint,
-    TuiLayoutContext, TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiParentElement,
-    TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex, TuiGridPoint, TuiLayoutContext,
+    TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiScreenPoint,
+    TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::{AppContext, ModelHandle};
+
+use crate::tui_builder::TuiUiBuilder;
 
 /// Display columns between the line-number column and the row content.
 const GUTTER_GAP: u16 = 2;
@@ -88,7 +90,7 @@ pub(crate) struct TuiEditorStyles {
     /// Whole-line overrides by 0-based logical line index; first match wins.
     pub line_overrides: Vec<(Range<usize>, TuiStyle)>,
     /// Character-range style overlays over buffer rows. Applied after the
-    /// row's base style and before selection reversal.
+    /// row's base style and before selection.
     pub text_overrides: Vec<(Range<CharOffset>, TuiStyle)>,
 }
 
@@ -134,6 +136,10 @@ pub(crate) struct TuiEditorElement {
     /// The provider's most recent resolution, refreshed in [`Self::build`].
     placeholder_ghost_text: Option<(String, TuiStyle)>,
     on_action: Option<TuiEditorActionHandler>,
+
+    /// Solid selection highlight: fg = terminal background, bg = theme
+    /// foreground. Computed once at construction from the active theme.
+    selection_style: TuiStyle,
 
     // ── Built during layout ─────────────────────────────────────────────────
     column: TuiFlex,
@@ -201,6 +207,7 @@ impl TuiEditorElement {
             placeholder_ghost_text_provider: None,
             placeholder_ghost_text: None,
             on_action: None,
+            selection_style: TuiUiBuilder::from_app(app).selection_style(),
             column: TuiFlex::column(),
             gutter_cols: 0,
             selected_spans: Vec::new(),
@@ -773,14 +780,14 @@ impl TuiElement for TuiEditorElement {
             }
         }
         if !self.selected_spans.is_empty() {
-            let reversed = TuiStyle::default().add_modifier(Modifier::REVERSED);
+            let selection_style = self.selection_style;
             for &(row_in_view, start_col, end_col) in &self.selected_spans {
                 let width = end_col.saturating_sub(start_col);
                 if row_in_view < size.height && width > 0 {
                     surface.set_style(
                         origin.offset(i32::from(start_col), i32::from(row_in_view)),
                         TuiSize::new(width.min(size.width.saturating_sub(start_col)), 1),
-                        reversed,
+                        selection_style,
                     );
                 }
             }

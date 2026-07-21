@@ -52,4 +52,11 @@ fn text_styles_follow_light_theme_foreground() {
     assert_eq!(selection_style.fg, Some(selection_foreground));
     assert_eq!(selection_style.bg, Some(selection_background));
     assert!(selection_style.add_modifier.contains(Modifier::BOLD));
+
+    let text_selection_style = builder.selection_style();
+    assert!(
+        text_selection_style
+            .sub_modifier
+            .contains(Modifier::REVERSED)
+    );
 }
