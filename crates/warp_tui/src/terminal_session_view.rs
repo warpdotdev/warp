@@ -882,7 +882,9 @@ impl TuiTerminalSessionView {
         });
         let zero_state_source = TuiZeroStateDataSource::new(&slash_commands_source);
         let slash_commands_mixer = ctx.add_model(|ctx| {
-            build_slash_command_mixer(slash_commands_source.clone(), zero_state_source, ctx)
+            // The TUI slash menu intentionally omits saved Agent Mode workflows
+            // (saved prompts); only static commands and skills are surfaced.
+            build_slash_command_mixer(slash_commands_source.clone(), zero_state_source, false, ctx)
         });
         let slash_commands = ctx.add_model(|ctx| {
             TuiSlashCommandModel::new(

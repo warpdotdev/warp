@@ -90,7 +90,13 @@ impl InlineSlashCommandView {
         );
         let zero_state_source = GuiZeroStateDataSource::new(&slash_commands_source);
         let mixer = ctx.add_model(|ctx| {
-            build_slash_command_mixer(slash_commands_source.clone(), zero_state_source, ctx)
+            build_slash_command_mixer(
+                slash_commands_source.clone(),
+                zero_state_source,
+                // The GUI slash menu surfaces saved Agent Mode workflows.
+                true,
+                ctx,
+            )
         });
 
         let menu_view = ctx.add_typed_action_view(|ctx| {
