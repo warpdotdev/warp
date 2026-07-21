@@ -79,7 +79,7 @@ pub fn create_buffer_init(
             Err(err) => {
                 log::warn!("Failed to map wgpu buffer range: {err:#}");
                 buffer.unmap();
-                return Err(super::Error::BufferMap(err));
+                return Err(err.into());
             }
         };
         mapping
