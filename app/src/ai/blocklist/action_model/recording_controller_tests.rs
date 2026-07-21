@@ -10,7 +10,14 @@ fn active_controller(recording_id: &str, conversation_id: AIConversationId) -> R
     let mut controller = RecordingController::new();
     controller.try_begin_start(conversation_id).unwrap();
     let (handle, _) = RecordingHandle::new_test(1, 1);
-    controller.finish_start(recording_id.to_string(), conversation_id, handle, 15);
+    controller.finish_start(
+        recording_id.to_string(),
+        conversation_id,
+        handle,
+        15,
+        None,
+        None,
+    );
     controller
 }
 

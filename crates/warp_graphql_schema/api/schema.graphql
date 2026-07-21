@@ -923,6 +923,7 @@ input CreateFileArtifactUploadTargetInput {
   mimeType: String
   runId: ID
   sizeBytes: Int
+  title: String
 }
 
 type CreateFileArtifactUploadTargetOutput implements Response {

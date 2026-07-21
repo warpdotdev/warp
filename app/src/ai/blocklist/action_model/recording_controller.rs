@@ -46,6 +46,10 @@ pub(crate) struct ActiveRecording {
     pub(crate) frame_rate: u32,
     /// Action groups committed to the video, in completion order.
     pub(crate) actions: Vec<computer_use::ActionLogEntry>,
+    /// Short agent-authored title shown in badges (from StartRecording.summary).
+    pub(crate) summary: Option<String>,
+    /// Optional longer description shown in detail views (from StartRecording.description).
+    pub(crate) description: Option<String>,
     /// The currently in-flight `UseComputer` group, if any. It is committed with
     /// its finish offset on success or discarded on failure/cancellation.
     pub(crate) pending_group: Option<PendingActionGroup>,
@@ -136,6 +140,8 @@ impl RecordingController {
         conversation_id: AIConversationId,
         handle: computer_use::RecordingHandle,
         frame_rate: u32,
+        summary: Option<String>,
+        description: Option<String>,
     ) {
         if matches!(
             self.state,
@@ -150,6 +156,8 @@ impl RecordingController {
                 started_at: Instant::now(),
                 frame_rate,
                 actions: Vec::new(),
+                summary,
+                description,
                 pending_group: None,
             }));
         }

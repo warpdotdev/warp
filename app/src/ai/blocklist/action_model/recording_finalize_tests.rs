@@ -30,6 +30,8 @@ fn cancellation_finalization_skips_upload_even_without_actions() {
             started_at: Instant::now(),
             frame_rate: 15,
             actions: Vec::new(),
+            summary: None,
+            description: None,
             pending_group: None,
         };
 
@@ -64,6 +66,8 @@ fn empty_actions_finalization_is_an_error_without_upload() {
             started_at: Instant::now(),
             frame_rate: 15,
             actions: Vec::new(),
+            summary: None,
+            description: None,
             pending_group: None,
         };
 
