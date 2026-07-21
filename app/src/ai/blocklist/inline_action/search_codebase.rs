@@ -14,8 +14,8 @@ use warpui::{
 use super::search_results_common::{
     CollapsibleSearchResultsState, render_collapsible_search_results,
 };
-use crate::ai::agent::FileContext;
 use crate::ai::agent::icons::yellow_running_icon;
+use crate::ai::agent::{FileContext, FileLocations};
 use crate::ai::blocklist::TextLocation;
 use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::block::find::FindState;
@@ -137,7 +137,11 @@ impl SearchCodebaseView {
                 action_index: self.action_index,
                 line_index,
             };
-            let file_display = file_context.to_string();
+            let file_display = FileLocations::from(file_context).to_user_message(
+                self.shell_launch_data.as_ref(),
+                self.current_working_directory.as_ref(),
+                None,
+            );
             detect_links(
                 &mut self.detected_links_state,
                 &file_display,
@@ -187,8 +191,6 @@ impl SearchCodebaseView {
         let appearance = Appearance::as_ref(app);
         let render_read_file_args = RenderReadFileArg::new(
             RenderContext {
-                shell_launch_data: self.shell_launch_data.as_ref(),
-                current_working_directory: self.current_working_directory.as_ref(),
                 detected_links_state: &self.detected_links_state,
                 secret_redaction_state: &self.secret_redaction_state,
             },
@@ -233,7 +235,13 @@ impl SearchCodebaseView {
         } else {
             render_read_files_text(
                 render_read_file_args,
-                file_contexts.iter().map(|fc| fc.to_string()),
+                file_contexts.iter().map(|file_context| {
+                    FileLocations::from(file_context).to_user_message(
+                        self.shell_launch_data.as_ref(),
+                        self.current_working_directory.as_ref(),
+                        None,
+                    )
+                }),
                 app,
                 appearance,
                 self.action_index,

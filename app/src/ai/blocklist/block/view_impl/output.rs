@@ -104,7 +104,7 @@ use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
-use crate::ai::paths::shell_native_absolute_path;
+use crate::ai::paths::{shell_native_absolute_path, shell_native_path_for_display};
 use crate::ai::skills::{
     SkillManager, SkillOpenOrigin, icon_override_for_skill_name, render_skill_button,
     skill_path_from_location,
@@ -1501,6 +1501,13 @@ fn render_search_codebase(
         .search_codebase_executor(app)
         .as_ref(app)
         .root_repo_for_action(id);
+    let root_repo_display = root_repo_path.map(|path| {
+        shell_native_path_for_display(
+            &path.to_string_lossy(),
+            props.shell_launch_data,
+            props.current_working_directory,
+        )
+    });
 
     let requested_action = match status.as_ref() {
         Some(status) => match status {
@@ -1510,11 +1517,11 @@ fn render_search_codebase(
                         ChildView::new(search_codebase_view).finish()
                     }
                     _ => {
-                        let root_repo_path = root_repo_path?;
+                        let root_repo_display = root_repo_display.as_deref()?;
                         renderable_action(
                             props,
                             id,
-                            format!("Search in {}", root_repo_path.to_string_lossy()).as_str(),
+                            format!("Search in {root_repo_display}").as_str(),
                             app,
                             footer,
                             appearance,
@@ -1526,7 +1533,7 @@ fn render_search_codebase(
                 }
             }
             AIActionStatus::Blocked => {
-                let root_repo_path = root_repo_path?;
+                let root_repo_display = root_repo_display.as_deref()?;
 
                 let buttons = props
                     .action_buttons
@@ -1536,7 +1543,7 @@ fn render_search_codebase(
                 renderable_action(
                     props,
                     id,
-                    &root_repo_path.to_string_lossy(),
+                    root_repo_display,
                     app,
                     footer,
                     appearance,
@@ -1560,11 +1567,11 @@ fn render_search_codebase(
                     ChildView::new(search_codebase_view).finish()
                 }
                 _ => {
-                    let root_repo_path = root_repo_path?;
+                    let root_repo_display = root_repo_display.as_deref()?;
                     renderable_action(
                         props,
                         id,
-                        format!("Searching in {}", root_repo_path.to_string_lossy()).as_str(),
+                        format!("Searching in {root_repo_display}").as_str(),
                         app,
                         footer,
                         appearance,
@@ -1611,7 +1618,11 @@ fn render_search_codebase(
                                 let skill = file_locations.and_then(|file_locations| {
                                     parsed_skill_for_common_locations(file_locations, app)
                                 });
-                                let grouped = group_file_contexts_for_display(files, None, None);
+                                let grouped = group_file_contexts_for_display(
+                                    files,
+                                    props.shell_launch_data,
+                                    props.current_working_directory,
+                                );
                                 return Some(render_read_files(
                                     props,
                                     id,
@@ -1624,15 +1635,12 @@ fn render_search_codebase(
                             }
                         }
                         SearchCodebaseResult::Failed { reason, .. } => {
-                            let root_repo_path = root_repo_path?;
+                            let root_repo_display = root_repo_display.as_deref()?;
                             let message = match reason {
                                 SearchCodebaseFailureReason::CodebaseNotIndexed => format!(
-                                    "Search in {} failed because the codebase isn't indexed",
-                                    root_repo_path.to_string_lossy(),
+                                    "Search in {root_repo_display} failed because the codebase isn't indexed",
                                 ),
-                                _ => {
-                                    format!("Search in {} failed", root_repo_path.to_string_lossy())
-                                }
+                                _ => format!("Search in {root_repo_display} failed"),
                             };
                             renderable_action(
                                 props,
@@ -1647,12 +1655,11 @@ fn render_search_codebase(
                             .finish()
                         }
                         SearchCodebaseResult::Cancelled => {
-                            let root_repo_path = root_repo_path?;
+                            let root_repo_display = root_repo_display.as_deref()?;
                             renderable_action(
                                 props,
                                 id,
-                                format!("Search in {} cancelled", root_repo_path.to_string_lossy())
-                                    .as_str(),
+                                format!("Search in {root_repo_display} cancelled").as_str(),
                                 app,
                                 footer,
                                 appearance,
@@ -1666,11 +1673,11 @@ fn render_search_codebase(
             },
         },
         None => {
-            let root_repo_path = root_repo_path?;
+            let root_repo_display = root_repo_display.as_deref()?;
             renderable_action(
                 props,
                 id,
-                format!("Search in {}", root_repo_path.to_string_lossy()).as_str(),
+                format!("Search in {root_repo_display}").as_str(),
                 app,
                 footer,
                 appearance,
@@ -1721,8 +1728,6 @@ impl<A: Action> LinkActionConstructors<A> {
     }
 }
 pub struct RenderContext<'a> {
-    pub shell_launch_data: Option<&'a ShellLaunchData>,
-    pub current_working_directory: Option<&'a String>,
     pub detected_links_state: &'a DetectedLinksState,
     pub secret_redaction_state: &'a SecretRedactionState,
 }
@@ -1754,8 +1759,6 @@ impl<'a> From<Props<'a>> for RenderReadFileArg<'a, AIBlockAction> {
     fn from(val: Props<'a>) -> Self {
         Self {
             render_context: RenderContext {
-                shell_launch_data: val.shell_launch_data,
-                current_working_directory: val.current_working_directory,
                 detected_links_state: val.detected_links_state,
                 secret_redaction_state: val.secret_redaction_state,
             },
@@ -1774,20 +1777,7 @@ pub fn render_read_files_text<A: Action>(
     action_index: usize,
 ) -> FormattedTextElement {
     let theme = appearance.theme();
-
-    let file_names = file_names
-        .into_iter()
-        .map(|name| {
-            shell_native_absolute_path(
-                name.as_ref(),
-                render_read_file_args.render_context.shell_launch_data,
-                render_read_file_args
-                    .render_context
-                    .current_working_directory,
-            )
-        })
-        .collect_vec()
-        .join("\n");
+    let file_names = join_display_paths(file_names);
     let mut formatted_files = render_requested_action_body_text(
         file_names.as_str().into(),
         appearance.ui_font_family(),
@@ -1823,6 +1813,26 @@ pub fn render_read_files_text<A: Action>(
         app,
     );
     formatted_files
+}
+
+fn join_display_paths(file_names: impl IntoIterator<Item = impl AsRef<str>>) -> String {
+    file_names
+        .into_iter()
+        .map(|name| name.as_ref().to_string())
+        .join("\n")
+}
+
+fn format_failed_read_paths(
+    failed_files: &[ReadFilesFailedFile],
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> String {
+    failed_files
+        .iter()
+        .map(|file| {
+            shell_native_path_for_display(&file.path, shell_launch_data, current_working_directory)
+        })
+        .join("\n")
 }
 
 /// Returns the display text for a `read_skill` action.
@@ -1967,16 +1977,11 @@ fn render_read_files_partial(
         app,
     );
 
-    let failed_paths = failed_files
-        .iter()
-        .map(|file| {
-            shell_native_absolute_path(
-                &file.path,
-                props.shell_launch_data,
-                props.current_working_directory,
-            )
-        })
-        .join("\n");
+    let failed_paths = format_failed_read_paths(
+        failed_files,
+        props.shell_launch_data,
+        props.current_working_directory,
+    );
     let failed_row = render_requested_action_row_for_text(
         failed_paths.into(),
         appearance.ui_font_family(),
@@ -2563,7 +2568,7 @@ fn create_formatted_text_for_grep(
     let display_path = if path == "." {
         "the current directory".to_string()
     } else {
-        shell_native_absolute_path(
+        shell_native_path_for_display(
             path,
             props.shell_launch_data,
             props.current_working_directory,
@@ -2666,7 +2671,7 @@ fn create_formatted_text_for_file_glob(
 
     let path = path
         .map(|path| {
-            shell_native_absolute_path(
+            shell_native_path_for_display(
                 path,
                 props.shell_launch_data,
                 props.current_working_directory,
@@ -2916,8 +2921,15 @@ fn render_read_mcp_resource(
 fn format_upload_artifact_text(
     request: &UploadArtifactRequest,
     result: Option<&UploadArtifactResult>,
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
 ) -> String {
-    let mut lines = vec![format!("Upload artifact: {}", request.file_path)];
+    let request_path = shell_native_path_for_display(
+        &request.file_path,
+        shell_launch_data,
+        current_working_directory,
+    );
+    let mut lines = vec![format!("Upload artifact: {request_path}")];
 
     if let Some(description) = request.description.as_deref() {
         lines.push(format!("Description: {description}"));
@@ -2931,6 +2943,11 @@ fn format_upload_artifact_text(
         }) => {
             lines.push(format!("Status: uploaded artifact {artifact_uid}"));
             if let Some(filepath) = filepath.as_deref() {
+                let filepath = shell_native_path_for_display(
+                    filepath,
+                    shell_launch_data,
+                    current_working_directory,
+                );
                 lines.push(format!("Uploaded file: {filepath}"));
             }
         }
@@ -2961,7 +2978,12 @@ fn render_upload_artifact(
             _ => None,
         });
 
-    let text = format_upload_artifact_text(request, result);
+    let text = format_upload_artifact_text(
+        request,
+        result,
+        props.shell_launch_data,
+        props.current_working_directory,
+    );
     let mut renderable_action = RenderableAction::new(&text, app);
 
     if status.as_ref().is_some_and(|status| status.is_blocked()) {

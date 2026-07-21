@@ -299,6 +299,76 @@ fn test_shell_native_absolute_path() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn test_shell_native_path_for_display() {
+    let cwd = Some("/foo/bar/buzz".to_string());
+
+    assert_eq!(
+        shell_native_path_for_display("/foo/bar/buzz/bazz/file.txt", None, cwd.as_ref()),
+        "bazz/file.txt"
+    );
+    assert_eq!(
+        shell_native_path_for_display("/foo/bar/buzz", None, cwd.as_ref()),
+        "."
+    );
+    assert_eq!(
+        shell_native_path_for_display("/foo/bar/nearby.txt", None, cwd.as_ref()),
+        "../nearby.txt"
+    );
+    assert_eq!(
+        shell_native_path_for_display("/foo/bazz", None, cwd.as_ref()),
+        "../../bazz"
+    );
+    assert_eq!(
+        shell_native_path_for_display("/outside.txt", None, cwd.as_ref()),
+        "/outside.txt"
+    );
+    assert_eq!(
+        shell_native_path_for_display("/absolute.txt", None, None),
+        "/absolute.txt"
+    );
+    assert_eq!(
+        shell_native_path_for_display("relative.txt", None, None),
+        "relative.txt"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn test_shell_native_path_for_display() {
+    let cwd = Some(r"C:\foo\bar\buzz".to_string());
+
+    assert_eq!(
+        shell_native_path_for_display(r"C:\foo\bar\buzz\bazz\file.txt", None, cwd.as_ref()),
+        r"bazz\file.txt"
+    );
+    assert_eq!(
+        shell_native_path_for_display(r"C:\foo\bar\buzz", None, cwd.as_ref()),
+        "."
+    );
+    assert_eq!(
+        shell_native_path_for_display(r"C:\foo\bar\nearby.txt", None, cwd.as_ref()),
+        r"..\nearby.txt"
+    );
+    assert_eq!(
+        shell_native_path_for_display(r"C:\foo\bazz", None, cwd.as_ref()),
+        r"..\..\bazz"
+    );
+    assert_eq!(
+        shell_native_path_for_display(r"C:\outside.txt", None, cwd.as_ref()),
+        r"C:\outside.txt"
+    );
+    assert_eq!(
+        shell_native_path_for_display(r"D:\other.txt", None, cwd.as_ref()),
+        r"D:\other.txt"
+    );
+    assert_eq!(
+        shell_native_path_for_display(r"\\server\share\file.txt", None, cwd.as_ref()),
+        r"\\server\share\file.txt"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn test_shell_native_git_bash_paths() {
@@ -330,6 +400,14 @@ fn test_shell_native_git_bash_paths() {
         shell_native_absolute_path("../project/file.txt", git_bash_shell.as_ref(), cwd.as_ref()),
         "/c/Users/username/project/file.txt"
     );
+    assert_eq!(
+        shell_native_path_for_display(
+            "/c/Users/username/project/file.txt",
+            git_bash_shell.as_ref(),
+            cwd.as_ref()
+        ),
+        "../project/file.txt"
+    );
 }
 
 #[cfg(windows)]
@@ -360,6 +438,14 @@ fn test_shell_native_wsl_paths() {
     assert_eq!(
         shell_native_absolute_path("../project/file.txt", wsl_shell.as_ref(), cwd.as_ref()),
         "/mnt/c/Users/username/project/file.txt"
+    );
+    assert_eq!(
+        shell_native_path_for_display(
+            "/mnt/c/Users/username/project/file.txt",
+            wsl_shell.as_ref(),
+            cwd.as_ref()
+        ),
+        "../project/file.txt"
     );
 
     let cwd = Some("/mnt/c/Users/username".to_string());

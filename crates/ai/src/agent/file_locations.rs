@@ -6,7 +6,7 @@ use warp_terminal::shell::ShellLaunchData;
 
 use crate::agent::action_result::FileContext;
 use crate::index::locations::CodeContextLocation;
-use crate::paths::shell_native_absolute_path;
+use crate::paths::shell_native_path_for_display;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileLocations {
@@ -22,11 +22,11 @@ impl FileLocations {
         current_working_directory: Option<&String>,
         file_line_count: Option<usize>,
     ) -> String {
-        let absolute_path =
-            shell_native_absolute_path(&self.name, shell_launch_data, current_working_directory);
+        let display_path =
+            shell_native_path_for_display(&self.name, shell_launch_data, current_working_directory);
 
         if self.lines.is_empty() {
-            return absolute_path;
+            return display_path;
         }
 
         let line_ranges = self
@@ -51,9 +51,9 @@ impl FileLocations {
             .collect_vec();
 
         if line_ranges.is_empty() {
-            absolute_path
+            display_path
         } else {
-            format!("{} ({})", absolute_path, line_ranges.join(", "))
+            format!("{} ({})", display_path, line_ranges.join(", "))
         }
     }
 
@@ -145,3 +145,7 @@ pub fn group_file_contexts_for_display(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "file_locations_tests.rs"]
+mod tests;

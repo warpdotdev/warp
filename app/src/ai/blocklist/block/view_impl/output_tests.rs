@@ -13,13 +13,13 @@ use warpui::App;
 use watcher::HomeDirectoryWatcher;
 
 use super::{
-    RecordingCardText, format_upload_artifact_text, parsed_skill_for_common_locations,
-    read_skill_display_text, should_decorate_recorded_use_computer, start_recording_card_text,
-    stop_recording_card_text,
+    RecordingCardText, format_failed_read_paths, format_upload_artifact_text, join_display_paths,
+    parsed_skill_for_common_locations, read_skill_display_text,
+    should_decorate_recorded_use_computer, start_recording_card_text, stop_recording_card_text,
 };
 use crate::ai::agent::{
-    RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
-    UploadArtifactResult,
+    ReadFilesFailedFile, RecordingStarted, RecordingStopped, StartRecordingResult,
+    StopRecordingResult, UploadArtifactResult,
 };
 use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
@@ -32,11 +32,43 @@ fn format_upload_artifact_text_includes_request_details() {
         description: Some("Daily summary".to_string()),
     };
 
-    let text = format_upload_artifact_text(&request, None);
+    let text = format_upload_artifact_text(&request, None, None, None);
 
     assert_eq!(
         text,
         "Upload artifact: reports/daily.txt\nDescription: Daily summary"
+    );
+}
+
+#[test]
+fn read_file_rows_consume_display_ready_paths_without_reabsolutizing() {
+    assert_eq!(
+        join_display_paths(["src/lib.rs (10-20)", "../../shared.rs", "/outside.rs"]),
+        "src/lib.rs (10-20)\n../../shared.rs\n/outside.rs"
+    );
+}
+
+#[test]
+fn failed_read_rows_use_invocation_cwd() {
+    let cwd = "/repo/worktree/deep".to_string();
+    let failed_files = vec![
+        ReadFilesFailedFile {
+            path: "/repo/worktree/deep/src/missing.rs".to_string(),
+            message: "not found".to_string(),
+        },
+        ReadFilesFailedFile {
+            path: "/repo/archive/missing.rs".to_string(),
+            message: "not found".to_string(),
+        },
+        ReadFilesFailedFile {
+            path: "/outside.rs".to_string(),
+            message: "not found".to_string(),
+        },
+    ];
+
+    assert_eq!(
+        format_failed_read_paths(&failed_files, None, Some(&cwd)),
+        "src/missing.rs\n../../archive/missing.rs\n/outside.rs"
     );
 }
 
@@ -54,7 +86,7 @@ fn format_upload_artifact_text_includes_success_summary() {
         size_bytes: 128,
     };
 
-    let text = format_upload_artifact_text(&request, Some(&result));
+    let text = format_upload_artifact_text(&request, Some(&result), None, None);
 
     assert_eq!(
         text,
@@ -74,6 +106,8 @@ fn format_upload_artifact_text_includes_terminal_status() {
         Some(&UploadArtifactResult::Error(
             "permission denied".to_string(),
         )),
+        None,
+        None,
     );
     assert_eq!(
         error_text,
@@ -81,8 +115,29 @@ fn format_upload_artifact_text_includes_terminal_status() {
     );
 
     let cancelled_text =
-        format_upload_artifact_text(&request, Some(&UploadArtifactResult::Cancelled));
+        format_upload_artifact_text(&request, Some(&UploadArtifactResult::Cancelled), None, None);
     assert_eq!(cancelled_text, "Upload artifact: reports/daily.txt");
+}
+
+#[test]
+fn format_upload_artifact_text_uses_invocation_cwd_for_local_paths() {
+    let cwd = "/repo/worktree".to_string();
+    let request = UploadArtifactRequest {
+        file_path: "/repo/worktree/reports/daily.txt".to_string(),
+        description: Some("Daily summary".to_string()),
+    };
+    let result = UploadArtifactResult::Success {
+        artifact_uid: "artifact-123".to_string(),
+        filepath: Some("/repo/archive/daily.txt".to_string()),
+        mime_type: "text/plain".to_string(),
+        description: Some("Daily summary".to_string()),
+        size_bytes: 128,
+    };
+
+    assert_eq!(
+        format_upload_artifact_text(&request, Some(&result), None, Some(&cwd)),
+        "Upload artifact: reports/daily.txt\nDescription: Daily summary\nStatus: uploaded artifact artifact-123\nUploaded file: ../archive/daily.txt"
+    );
 }
 
 #[test]

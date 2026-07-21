@@ -24,6 +24,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
+use ai::agent::file_locations::group_file_contexts_for_display;
 use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use base64::Engine as _;
 use chrono::Duration;
@@ -4636,14 +4637,19 @@ impl AIBlock {
                         ) = &result.result
                         {
                             if !FeatureFlag::SearchCodebaseUI.is_enabled() {
-                                for (line_index, file) in files.iter().enumerate() {
+                                let display_files = group_file_contexts_for_display(
+                                    files,
+                                    me.shell_launch_data.as_ref(),
+                                    me.current_working_directory.as_ref(),
+                                );
+                                for (line_index, display_file) in display_files.iter().enumerate() {
                                     let text_location = TextLocation::Action {
                                         action_index,
                                         line_index,
                                     };
                                     detect_links(
                                         &mut me.detected_links_state,
-                                        &file.to_string(),
+                                        display_file,
                                         text_location,
                                         me.current_working_directory.as_ref(),
                                         me.shell_launch_data.as_ref(),
