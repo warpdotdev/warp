@@ -4,6 +4,7 @@
 //! input-mode, inline-menu, or form policy. Embedding views provide that chrome
 //! and behavior while reusing model-backed editing and focus handling.
 
+use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
@@ -19,6 +20,21 @@ use crate::editor_interaction::{
     TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
     apply_editor_action, follow_editor_cursor,
 };
+
+#[derive(Clone, Copy)]
+pub(crate) enum TuiEditorVerticalDirection {
+    Up,
+    Down,
+}
+
+impl From<TuiEditorVerticalDirection> for TuiEditorCommand {
+    fn from(direction: TuiEditorVerticalDirection) -> Self {
+        match direction {
+            TuiEditorVerticalDirection::Up => Self::MoveUp,
+            TuiEditorVerticalDirection::Down => Self::MoveDown,
+        }
+    }
+}
 
 /// Events emitted when the editor content changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +154,35 @@ impl TuiEditorView {
     ) -> TuiEditorInteractionOutcome {
         self.editor_state
             .apply_command(&self.model, command, self.editor_behavior, ctx)
+    }
+
+    pub(crate) fn can_move_vertically(
+        &self,
+        direction: TuiEditorVerticalDirection,
+        ctx: &AppContext,
+    ) -> bool {
+        let model = self.model.as_ref(ctx);
+        let cursor_offset = model
+            .selection_model()
+            .as_ref(ctx)
+            .cursors(ctx)
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let render = model.render_state().as_ref(ctx);
+        let Some(char_cell) = render.char_cell() else {
+            return false;
+        };
+        let cursor_offset = CharOffset::from(cursor_offset.as_usize().saturating_sub(1));
+        let hidden = char_cell.hidden_line_ranges(ctx);
+        let lattice = char_cell.display_lattice(&hidden);
+        let Some(cursor) = lattice.offset_to_display_point(cursor_offset) else {
+            return false;
+        };
+        match direction {
+            TuiEditorVerticalDirection::Up => cursor.row > 0,
+            TuiEditorVerticalDirection::Down => cursor.row + 1 < lattice.rows().len(),
+        }
     }
 }
 

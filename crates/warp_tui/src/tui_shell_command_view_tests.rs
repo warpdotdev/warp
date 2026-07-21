@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
+use string_offset::CharOffset;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId, Appearance, TaskId,
     TerminalModel, queue_tui_permission_action,
@@ -21,8 +22,11 @@ use warpui_core::{
 use super::{
     ShellCommandViewState, TuiShellCommandView, TuiShellCommandViewAction, TuiShellCommandViewEvent,
 };
+use crate::editor_element::TuiEditorAction;
+use crate::editor_view::TuiEditorViewAction;
 use crate::test_fixtures::{TestHostView, add_test_action_model};
 use crate::tui_builder::TuiUiBuilder;
+use crate::tui_permission_prompt::TuiPermissionPromptAction;
 
 #[test]
 fn command_without_terminal_block_uses_fallback_row() {
@@ -173,6 +177,94 @@ fn finishing_command_editing_selects_yes_without_executing() {
                     .get_action_result(&view.action.id)
                     .is_none()
             );
+        });
+    });
+}
+
+#[test]
+fn command_editor_arrows_move_within_multiline_text_then_cycle_at_boundaries() {
+    App::test((), |mut app| async move {
+        app.update(super::init);
+        app.update(crate::option_selector::init);
+        let action = command_action("action-1", "first\nsecond\nthird");
+        let view = add_shell_view(
+            &mut app,
+            action.clone(),
+            Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
+        );
+        let (action_model, conversation_id, prompt, command_editor) = app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            (
+                view.action_model.clone(),
+                view.conversation_id,
+                view.permission_prompt.clone(),
+                view.command_editor.clone(),
+            )
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, conversation_id, ctx);
+        });
+        prompt.update(&mut app, |prompt, ctx| {
+            prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
+        });
+        command_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &TuiEditorViewAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+
+        let mut presenter = TuiPresenter::new();
+        app.update(|ctx| {
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(view.id());
+            invalidation.updated.insert(prompt.id());
+            invalidation.updated.insert(command_editor.id());
+            invalidation
+                .updated
+                .extend(prompt.as_ref(ctx).child_view_ids(ctx));
+            presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
+            presenter.present(ctx, &view, TuiRect::new(0, 0, 80, 16));
+        });
+
+        let dispatch = |app: &mut App, key: &str| {
+            let window_id = app.read(|ctx| view.window_id(ctx));
+            app.dispatch_keystroke(
+                window_id,
+                &[view.id(), prompt.id(), command_editor.id()],
+                &Keystroke::parse(key).expect("valid keystroke"),
+                false,
+            )
+            .expect("keystroke dispatch succeeds")
+        };
+
+        assert!(dispatch(&mut app, "down"));
+        assert!(app.read(|ctx| command_editor.as_ref(ctx).is_focused()));
+        assert!(dispatch(&mut app, "down"));
+        assert!(app.read(|ctx| command_editor.as_ref(ctx).is_focused()));
+        assert!(dispatch(&mut app, "down"));
+        app.read(|ctx| {
+            assert!(!command_editor.as_ref(ctx).is_focused());
+            assert_eq!(prompt.as_ref(ctx).highlighted_index(ctx), Some(0));
+        });
+
+        prompt.update(&mut app, |prompt, ctx| {
+            prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
+        });
+        command_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &TuiEditorViewAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+        assert!(dispatch(&mut app, "up"));
+        app.read(|ctx| {
+            assert!(!command_editor.as_ref(ctx).is_focused());
+            assert_eq!(prompt.as_ref(ctx).highlighted_index(ctx), Some(2));
         });
     });
 }
