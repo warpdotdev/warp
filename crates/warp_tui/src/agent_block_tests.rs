@@ -186,7 +186,7 @@ fn agent_block_renders_context_window_failure() {
 }
 
 #[test]
-fn out_of_credits_failure_matches_figma_rows_styles_and_links() {
+fn out_of_credits_failure_matches_gui_copy_warning_style_and_action() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let opened_urls = Rc::new(RefCell::new(Vec::new()));
@@ -200,22 +200,14 @@ fn out_of_credits_failure_matches_figma_rows_styles_and_links() {
 
         app.read(|ctx| {
             let presentation = FailedOutputPresentation::OutOfCredits {
-                title: "I’m sorry, I couldn’t complete that request.",
-                detail:
-                    "In order to use Warp’s AI features, subscribe to a Warp plan, or bring your own inference.",
-                can_use_own_api_keys: true,
+                message: "I'm sorry, I couldn't complete that request.\n\nYou've reached your credit limit."
+                    .to_owned(),
             };
-            let compare_plans_hover_state = MouseStateHandle::default();
-            let byok_hover_state = MouseStateHandle::default();
+            let subscribe_hover_state = MouseStateHandle::default();
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
-                render_failure_section(
-                    &presentation,
-                    &compare_plans_hover_state,
-                    &byok_hover_state,
-                    ctx,
-                ),
-                TuiRect::new(0, 0, 100, 4),
+                render_failure_section(&presentation, &subscribe_hover_state, ctx),
+                TuiRect::new(0, 0, 100, 5),
                 ctx,
             );
             assert_eq!(
@@ -226,10 +218,11 @@ fn out_of_credits_failure_matches_figma_rows_styles_and_links() {
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
                 vec![
-                    "! I’m sorry, I couldn’t complete that request.",
-                    "  In order to use Warp’s AI features, subscribe to a Warp plan, or bring your own inference.",
+                    "⚠ I'm sorry, I couldn't complete that request.",
                     "",
-                    "  Compare plans  or  Use your own API keys",
+                    "You've reached your credit limit.",
+                    "",
+                    "  Subscribe",
                 ]
             );
             let builder = TuiUiBuilder::from_app(ctx);
@@ -242,75 +235,26 @@ fn out_of_credits_failure_matches_figma_rows_styles_and_links() {
                 builder.error_text_style().fg.expect("error foreground")
             );
             assert_eq!(frame.buffer[(2, 0)].fg, primary_foreground);
-            assert_eq!(frame.buffer[(2, 1)].fg, primary_foreground);
-            assert_eq!(
-                frame.buffer[(17, 3)].fg,
-                builder.muted_text_style().fg.expect("muted foreground")
-            );
-            assert_eq!(frame.buffer[(2, 3)].fg, primary_foreground);
-            assert_eq!(frame.buffer[(21, 3)].fg, primary_foreground);
+            assert_eq!(frame.buffer[(0, 2)].fg, primary_foreground);
+            assert_eq!(frame.buffer[(2, 4)].fg, primary_foreground);
             assert!(
-                frame.buffer[(2, 3)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED)
-            );
-            assert!(
-                frame.buffer[(21, 3)]
+                frame.buffer[(2, 4)]
                     .modifier
                     .contains(Modifier::UNDERLINED)
             );
 
             dispatch_click_on_text(
-                render_failure_section(
-                    &presentation,
-                    &compare_plans_hover_state,
-                    &byok_hover_state,
-                    ctx,
-                ),
-                "Compare plans",
+                render_failure_section(&presentation, &subscribe_hover_state, ctx),
+                "Subscribe",
                 100,
-                4,
+                5,
                 ctx,
             );
-            dispatch_click_on_text(
-                render_failure_section(
-                    &presentation,
-                    &compare_plans_hover_state,
-                    &byok_hover_state,
-                    ctx,
-                ),
-                "Use your own API keys",
-                100,
-                4,
-                ctx,
-            );
-
-            let without_byok = FailedOutputPresentation::OutOfCredits {
-                title: "I’m sorry, I couldn’t complete that request.",
-                detail:
-                    "In order to use Warp’s AI features, subscribe to a Warp plan, or bring your own inference.",
-                can_use_own_api_keys: false,
-            };
-            let mut presenter = TuiPresenter::new();
-            let frame = presenter.present_element(
-                render_failure_section(
-                    &without_byok,
-                    &compare_plans_hover_state,
-                    &byok_hover_state,
-                    ctx,
-                ),
-                TuiRect::new(0, 0, 100, 4),
-                ctx,
-            );
-            assert_eq!(frame.buffer.to_lines()[3].trim_end(), "  Compare plans");
         });
 
         assert_eq!(
             &*opened_urls.borrow(),
-            &[
-                "https://www.warp.dev/pricing".to_owned(),
-                "https://docs.warp.dev/agent-platform/inference/bring-your-own-api-key/".to_owned(),
-            ]
+            &["https://www.warp.dev/pricing".to_owned()]
         );
     });
 }
@@ -320,6 +264,14 @@ fn failed_output_usage_notice_matches_gui_conditions() {
     let error = RenderableAIError::other("failed", false);
     assert!(should_show_failed_output_usage_notice(
         &error, true, false, false
+    ));
+    assert!(should_show_failed_output_usage_notice(
+        &RenderableAIError::QuotaLimit {
+            user_display_message: Some("You've reached your credit limit.".to_owned()),
+        },
+        true,
+        false,
+        false,
     ));
     assert!(!should_show_failed_output_usage_notice(
         &error, false, false, false

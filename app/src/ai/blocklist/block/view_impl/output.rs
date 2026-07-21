@@ -102,7 +102,9 @@ use crate::ai::blocklist::inline_action::web_search::WebSearchView;
 use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
-use crate::ai::blocklist::view_util::{format_credits, should_show_failed_output_usage_notice};
+use crate::ai::blocklist::view_util::{
+    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_credits, should_show_failed_output_usage_notice,
+};
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
 use crate::ai::skills::{
@@ -1261,7 +1263,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 output_items.add_child(
                     render_informational_footer(
                         app,
-                        "This response won't count towards your usage.".to_string(),
+                        FAILED_OUTPUT_USAGE_NOTICE_TEXT.to_string(),
                     )
                     .with_agent_output_item_spacing(app)
                     .finish(),
