@@ -8903,8 +8903,7 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         self.editor.update(ctx, |view, ctx| {
-            view.replace_first_n_characters(num_typeahead_chars_inserted, typeahead, ctx);
-            view.move_to_buffer_end(ctx);
+            view.insert_typeahead_text(num_typeahead_chars_inserted, typeahead, ctx);
         });
     }
 

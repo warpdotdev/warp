@@ -30,7 +30,7 @@ use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputType,
     InputTypeAutoDetectionSource, LLMId, TuiMcpAction,
 };
-use warp_editor::model::CoreEditorModel;
+use warp_editor::model::{CoreEditorModel, TypeaheadEditor};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::keymap::macros::*;
@@ -379,6 +379,19 @@ impl TuiInputView {
         self.model.update(ctx, |m, ctx| {
             m.clear_buffer(ctx);
             m.user_insert(text, ctx);
+        });
+        self.follow_cursor(ctx);
+        ctx.notify();
+    }
+
+    pub(crate) fn insert_typeahead_text(
+        &mut self,
+        previously_inserted: CharOffset,
+        text: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.model.update(ctx, |model, ctx| {
+            model.insert_typeahead_text(previously_inserted, text, ctx);
         });
         self.follow_cursor(ctx);
         ctx.notify();

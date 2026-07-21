@@ -1258,12 +1258,12 @@ impl TuiTerminalSessionView {
                 view.update_process_input_focus(ctx);
                 ctx.notify();
             }
+            ModelEvent::Typeahead => view.handle_typeahead_event(ctx),
             ModelEvent::BlockMetadataReceived(_)
             | ModelEvent::BlockWorkingDirectoryUpdated(_)
             | ModelEvent::BackgroundBlockStarted
             | ModelEvent::TerminalClear
             | ModelEvent::PromptUpdated
-            | ModelEvent::Typeahead
             | ModelEvent::Handler(_)
             | ModelEvent::FinishUpdate(_) => ctx.notify(),
             _ => {}
@@ -3122,6 +3122,18 @@ impl TuiView for TuiTerminalSessionView {
         } else {
             session
         }
+    }
+}
+
+impl TuiTerminalSessionView {
+    fn handle_typeahead_event(&mut self, ctx: &mut ViewContext<Self>) {
+        let typeahead = self.terminal_model.lock().take_typeahead_for_input();
+        if let Some((text, previously_inserted)) = typeahead {
+            self.input_view.update(ctx, |input, ctx| {
+                input.insert_typeahead_text(previously_inserted, &text, ctx);
+            });
+        }
+        ctx.notify();
     }
 }
 

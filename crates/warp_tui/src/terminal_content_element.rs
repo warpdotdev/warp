@@ -140,6 +140,9 @@ impl TuiElement for TuiTerminalContentElement {
                 }
                 | TuiEvent::Paste { .. } => {
                     if let Some(bytes) = pty_bytes_for_event(event, model) {
+                        if let Some(input) = possible_typeahead_for_event(event) {
+                            model.lock().push_user_input(&input);
+                        }
                         event_ctx.dispatch_typed_action(
                             TuiTerminalSessionAction::ForwardUserPtyBytes(bytes),
                         );
@@ -181,6 +184,30 @@ impl TuiElement for TuiTerminalContentElement {
     }
 }
 
+/// Returns the semantic input that may be echoed as typeahead by the shell.
+fn possible_typeahead_for_event(event: &TuiEvent) -> Option<String> {
+    match event {
+        TuiEvent::KeyDown {
+            chars,
+            is_composing: false,
+            ..
+        } if !chars.is_empty() => Some(chars.clone()),
+        TuiEvent::KeyDown {
+            keystroke,
+            is_composing: false,
+            ..
+        } if keystroke.key == "enter" => Some("\r".to_owned()),
+        TuiEvent::Paste { text } => Some(text.replace("\r\n", "\r").replace('\n', "\r")),
+        TuiEvent::KeyDown { .. }
+        | TuiEvent::ScrollWheel { .. }
+        | TuiEvent::LeftMouseDown { .. }
+        | TuiEvent::LeftMouseUp { .. }
+        | TuiEvent::LeftMouseDragged { .. }
+        | TuiEvent::MiddleMouseDown { .. }
+        | TuiEvent::RightMouseDown { .. }
+        | TuiEvent::MouseMoved { .. } => None,
+    }
+}
 /// Converts one semantic TUI input event to bytes for the foreground process.
 /// Composing key and pointer events are handled separately.
 fn pty_bytes_for_event(event: &TuiEvent, model: &Arc<FairMutex<TerminalModel>>) -> Option<Vec<u8>> {

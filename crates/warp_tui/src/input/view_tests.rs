@@ -333,6 +333,22 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
     view
 }
 
+#[test]
+fn typeahead_overwrites_incremental_prefix_and_moves_cursor_to_end() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| {
+                view.insert_typeahead_text(CharOffset::from(0), "ec", ctx);
+                view.insert_typeahead_text(CharOffset::from(2), "echo hi", ctx);
+            });
+
+            assert_eq!(text(&view, ctx), "echo hi");
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((7, 0)));
+        });
+    });
+}
+
 fn build_view_with_conversation_menu(
     ctx: &mut AppContext,
 ) -> (

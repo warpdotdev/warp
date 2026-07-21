@@ -16,7 +16,7 @@ use warpui_core::{App, AppContext};
 
 use super::{
     MouseReportPolicy, TuiTerminalContentElement, mouse_event_to_pty_bytes, paste_bytes,
-    pty_bytes_for_event,
+    possible_typeahead_for_event, pty_bytes_for_event,
 };
 
 /// Builds retained screen bounds anchored at `(x, y)`.
@@ -151,6 +151,35 @@ fn key_events_use_terminal_aware_pty_encoding() {
     );
 }
 
+#[test]
+fn semantic_input_is_reported_without_changing_pty_encoding() {
+    let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+    let character = key_down("é", "é", false);
+    assert_eq!(
+        possible_typeahead_for_event(&character).as_deref(),
+        Some("é")
+    );
+    assert_eq!(
+        pty_bytes_for_event(&character, &model),
+        Some("é".as_bytes().to_vec())
+    );
+
+    let enter = key_down("enter", "", false);
+    assert_eq!(possible_typeahead_for_event(&enter).as_deref(), Some("\r"));
+    assert_eq!(pty_bytes_for_event(&enter, &model), Some(vec![b'\r']));
+
+    let paste = TuiEvent::Paste {
+        text: "first\nsecond\r\nthird".to_owned(),
+    };
+    assert_eq!(
+        possible_typeahead_for_event(&paste).as_deref(),
+        Some("first\rsecond\rthird")
+    );
+    assert_eq!(
+        pty_bytes_for_event(&paste, &model),
+        Some(b"first\rsecond\rthird".to_vec())
+    );
+}
 #[test]
 fn sgr_mouse_events_use_area_relative_coordinates() {
     let area = bounds(10, 5, 20, 10);

@@ -65,6 +65,30 @@ impl BufferUpdateWrapper<'_> {
     }
 }
 
+/// Editor behavior shared by front-ends that insert shell typeahead.
+pub trait TypeaheadEditor: Entity {
+    type T: Entity;
+
+    fn replace_previous_typeahead(
+        &mut self,
+        previously_inserted: CharOffset,
+        text: &str,
+        ctx: &mut ModelContext<Self::T>,
+    );
+
+    fn move_typeahead_cursor_to_end(&mut self, ctx: &mut ModelContext<Self::T>);
+
+    fn insert_typeahead_text(
+        &mut self,
+        previously_inserted: CharOffset,
+        text: &str,
+        ctx: &mut ModelContext<Self::T>,
+    ) {
+        self.replace_previous_typeahead(previously_inserted, text, ctx);
+        self.move_typeahead_cursor_to_end(ctx);
+    }
+}
+
 pub trait CoreEditorModel: Entity {
     type T: Entity;
 
@@ -686,6 +710,46 @@ pub trait CoreEditorModel: Entity {
             selection.update_selection(action, autoscroll, ctx);
         });
         self.validate(ctx);
+    }
+}
+
+impl<M> TypeaheadEditor for M
+where
+    M: CoreEditorModel,
+{
+    type T = M::T;
+
+    fn replace_previous_typeahead(
+        &mut self,
+        previously_inserted: CharOffset,
+        text: &str,
+        ctx: &mut ModelContext<Self::T>,
+    ) {
+        let selection_model = self.buffer_selection_model().clone();
+        self.update_content(
+            |mut content, ctx| {
+                let start = CharOffset::from(1);
+                let end = std::cmp::min(
+                    start + previously_inserted.as_usize(),
+                    content.buffer().max_charoffset(),
+                );
+                content.apply_edit(
+                    BufferEditAction::InsertAtCharOffsetRanges {
+                        edits: &vec1![(text.to_owned(), start..end)],
+                    },
+                    EditOrigin::UserInitiated,
+                    selection_model,
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        self.validate(ctx);
+    }
+
+    fn move_typeahead_cursor_to_end(&mut self, ctx: &mut ModelContext<Self::T>) {
+        let end = self.content().as_ref(ctx).max_charoffset();
+        self.cursor_at(end, ctx);
     }
 }
 

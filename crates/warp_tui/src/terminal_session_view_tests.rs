@@ -1,6 +1,7 @@
 use instant::Instant;
 use warp::appearance::Appearance;
 use warp::settings::TuiUsageDisplayMode;
+use warp::terminal::model::ansi::{Handler, InputBufferValue};
 use warp::tui_export::{
     AIConversationId, AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel,
     ConversationStatus, ConversationUsageTotals, Harness, InputType, PtyIntent, PtyIntentEvent,
@@ -188,6 +189,58 @@ fn input_text(view: &ViewHandle<super::TuiTerminalSessionView>, ctx: &AppContext
         .as_ref(ctx)
         .text()
         .into_string()
+}
+
+#[test]
+fn typeahead_event_inserts_and_overwrites_the_tui_input() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.terminal_model.lock();
+                model.simulate_long_running_block("sleep 5", "");
+                model.finish_block();
+                model.input_buffer(InputBufferValue {
+                    buffer: "ec".to_owned(),
+                    session_id: None,
+                });
+            }
+            view.handle_typeahead_event(ctx);
+        });
+        assert_eq!(app.read(|ctx| input_text(&view, ctx)), "ec");
+
+        view.update(&mut app, |view, ctx| {
+            view.terminal_model.lock().input_buffer(InputBufferValue {
+                buffer: "echo hi".to_owned(),
+                session_id: None,
+            });
+            view.handle_typeahead_event(ctx);
+        });
+        assert_eq!(app.read(|ctx| input_text(&view, ctx)), "echo hi");
+    });
+}
+
+#[test]
+fn empty_typeahead_event_leaves_the_tui_input_unchanged() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("draft", ctx);
+            });
+            {
+                let mut model = view.terminal_model.lock();
+                model.simulate_long_running_block("sleep 5", "");
+                model.finish_block();
+            }
+            view.handle_typeahead_event(ctx);
+        });
+
+        assert_eq!(app.read(|ctx| input_text(&view, ctx)), "draft");
+    });
 }
 
 #[test]

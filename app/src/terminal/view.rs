@@ -431,7 +431,7 @@ use crate::terminal::model::block::{
 };
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::blocks::{
-    BlockFilter, BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, Gap,
+    BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, Gap,
     RemovableBlocklistItem,
 };
 use crate::terminal::model::escape_sequences::{
@@ -9476,26 +9476,8 @@ impl TerminalView {
     }
 
     fn handle_typeahead_event(&mut self, ctx: &mut ViewContext<Self>) {
-        let mut model = self.model.lock();
-        let completed_block_idx = model.block_list().prev_matching_block_from_index(
-            BlockFilter {
-                include_hidden: true,
-                include_background: false,
-            },
-            model.block_list().active_block_index(),
-        );
-        let was_typeahead_entered_during_ai_requested_command =
-            completed_block_idx.is_some_and(|idx| {
-                model
-                    .block_list()
-                    .block_at(idx)
-                    .is_some_and(|block| block.agent_interaction_metadata().is_some())
-            });
-
-        let Some((typeahead, num_typeahead_chars_inserted)) = model
-            .block_list_mut()
-            .early_output_mut()
-            .advance_typeahead()
+        let Some((typeahead, num_typeahead_chars_inserted)) =
+            self.model.lock().take_typeahead_for_input()
         else {
             #[cfg(feature = "integration_tests")]
             log::warn!("Received typeahead event, but typeahead was empty");
@@ -9503,20 +9485,13 @@ impl TerminalView {
             return;
         };
 
-        // We don't insert typeahead into the input buffer when it was entered during an
-        // agent-requested command - the agent is going to follow-up immediately after the
-        // command exists anyway, not to mention the expected semantics of typeahead are
-        // probably different with AI requested commands because the input remains interactive
-        // (for at least the first few seconds of the command's execution).
-        if !was_typeahead_entered_during_ai_requested_command {
-            #[cfg(feature = "integration_tests")]
-            log::info!("Writing typeahead to input editor: {typeahead}");
+        #[cfg(feature = "integration_tests")]
+        log::info!("Writing typeahead to input editor: {typeahead}");
 
-            self.input.update(ctx, |input, ctx| {
-                input.insert_typeahead_text(num_typeahead_chars_inserted, typeahead, ctx);
-            });
-            ctx.notify();
-        }
+        self.input.update(ctx, |input, ctx| {
+            input.insert_typeahead_text(num_typeahead_chars_inserted, &typeahead, ctx);
+        });
+        ctx.notify();
     }
 
     /// This function is invoked every time there is some form of view event
