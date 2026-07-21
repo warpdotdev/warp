@@ -1,9 +1,66 @@
+use warp_core::channel::Channel;
+
 use super::*;
 
 fn touch(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     File::create(&path).unwrap();
     path
+}
+
+#[test]
+fn tui_frontend_maps_all_channels_to_dedicated_filenames() {
+    assert_eq!(
+        logfile_name_for_frontend(LogFrontend::Tui, Channel::Dev),
+        "warp_tui_dev.log"
+    );
+    assert_eq!(
+        logfile_name_for_frontend(LogFrontend::Tui, Channel::Local),
+        "warp_tui_dev.log"
+    );
+    assert_eq!(
+        logfile_name_for_frontend(LogFrontend::Tui, Channel::Preview),
+        "warp_tui_preview.log"
+    );
+    for channel in [Channel::Stable, Channel::Oss, Channel::Integration] {
+        assert_eq!(
+            logfile_name_for_frontend(LogFrontend::Tui, channel),
+            "warp_tui.log"
+        );
+    }
+}
+
+#[test]
+fn frontend_directory_selection_keeps_gui_and_cli_paths_unchanged() {
+    let base = PathBuf::from("/tmp/warp-logs");
+    assert_eq!(
+        log_directory_for_frontend(base.clone(), LogFrontend::Gui),
+        base
+    );
+    assert_eq!(
+        log_directory_for_frontend(base.clone(), LogFrontend::Cli),
+        PathBuf::from("/tmp/warp-logs/oz")
+    );
+    assert_eq!(
+        log_directory_for_frontend(base, LogFrontend::Tui),
+        PathBuf::from("/tmp/warp-logs/tui")
+    );
+}
+
+#[test]
+fn tui_bundle_collection_ignores_legacy_oz_logs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let active = touch(tmp.path(), "warp_tui_preview.log");
+    let rotated = touch(tmp.path(), "warp_tui_preview.log.old.0");
+    let current_chunk = touch(tmp.path(), "warp_tui_preview.log.in_session.0");
+    let legacy = tmp.path().join("oz");
+    fs::create_dir(&legacy).unwrap();
+    touch(&legacy, "warp_preview.log");
+
+    let paths = collect_log_paths_in(tmp.path(), "warp_tui_preview.log").unwrap();
+
+    assert_eq!(paths, vec![active, current_chunk, rotated]);
+    assert!(!paths.iter().any(|path| path.starts_with(&legacy)));
 }
 
 #[test]
