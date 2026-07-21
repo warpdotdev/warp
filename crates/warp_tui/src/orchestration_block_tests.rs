@@ -12,7 +12,10 @@ use warp::tui_export::{
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App, ViewHandle};
-use warpui_core::TypedActionView as _;
+use warpui_core::elements::tui::TuiRect;
+use warpui_core::keymap::Keystroke;
+use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::{TuiView as _, TypedActionView as _, WindowInvalidation};
 
 use super::{
     CardMode, ConfigPage, OrchestrationBlockController, TuiOrchestrationBlock,
@@ -398,6 +401,7 @@ fn selector_actions_commit_edits_and_follow_the_dynamic_page_sequence() {
         let (block, _) = test_block(&mut app, &request("oz", remote("env-1", "warp")));
         act(&mut app, &block, TuiOrchestrationBlockAction::Configure);
         let selector = app.read(|ctx| block.as_ref(ctx).selector.clone());
+        assert!(app.read(|ctx| selector.is_focused(ctx)));
 
         selector.update(&mut app, |selector, ctx| {
             selector.handle_action(&TuiOptionSelectorAction::MoveDown, ctx);
@@ -447,6 +451,61 @@ fn selector_actions_commit_edits_and_follow_the_dynamic_page_sequence() {
                     page: ConfigPage::Harness
                 }
             );
+        });
+    });
+}
+
+#[test]
+fn model_selector_arrows_navigate_after_search_takes_focus() {
+    App::test((), |mut app| async move {
+        app.update(crate::option_selector::init);
+        let (block, _) = test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+        block.update(&mut app, |block, ctx| {
+            block.open_page(ConfigPage::Model, ctx);
+        });
+        let selector = app.read(|ctx| block.as_ref(ctx).selector.clone());
+        let mut presenter = TuiPresenter::new();
+        app.update(|ctx| {
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(block.id());
+            invalidation.updated.insert(selector.id());
+            invalidation
+                .updated
+                .extend(selector.as_ref(ctx).child_view_ids(ctx));
+            presenter.invalidate(&invalidation, ctx, block.window_id(ctx));
+            presenter.present(ctx, &block, TuiRect::new(0, 0, 80, 20));
+        });
+
+        let window_id = app.read(|ctx| block.window_id(ctx));
+        let up_handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[block.id(), selector.id()],
+                &Keystroke::parse("up").expect("valid keystroke"),
+                false,
+            )
+            .expect("keystroke dispatch succeeds");
+        assert!(up_handled);
+        let search_field = app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .search_field_for_test()
+                .expect("model page has a search field")
+        });
+        assert!(app.read(|ctx| search_field.as_ref(ctx).is_focused()));
+
+        let down_handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[block.id(), selector.id(), search_field.id()],
+                &Keystroke::parse("down").expect("valid keystroke"),
+                false,
+            )
+            .expect("keystroke dispatch succeeds");
+        assert!(down_handled);
+        app.read(|ctx| {
+            assert!(selector.is_focused(ctx));
+            assert_eq!(selector.as_ref(ctx).highlighted_index(), Some(0));
         });
     });
 }

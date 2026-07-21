@@ -73,6 +73,7 @@ pub(crate) fn init(app: &mut AppContext) {
     crate::terminal_session_view::init(app);
     crate::attachment_bar::init(app);
     crate::input::init(app);
+    crate::option_selector::init(app);
     register_editor_bindings(
         app,
         TuiEditorBindingTarget::Input,

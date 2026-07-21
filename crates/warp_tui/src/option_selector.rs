@@ -20,6 +20,8 @@ use warpui_core::elements::tui::{
     TuiHoverable, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiParentElement,
     TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
+use warpui_core::keymap::EditableBinding;
+use warpui_core::keymap::macros::*;
 use warpui_core::{
     AppContext, BlurContext, Entity, EntityId, FocusContext, TuiView, TypedActionView, ViewContext,
     ViewHandle,
@@ -27,6 +29,7 @@ use warpui_core::{
 
 use crate::editor_view::{TuiEditorView, TuiEditorViewEvent};
 use crate::inline_menu::keep_selected_visible;
+use crate::keybindings::TUI_BINDING_GROUP;
 use crate::tui_builder::TuiUiBuilder;
 
 /// Maximum option rows visible at once; longer lists scroll.
@@ -34,6 +37,29 @@ pub(crate) const MAX_VISIBLE_OPTION_ROWS: usize = 6;
 
 /// Validation copy shown when the custom-text editor is submitted empty.
 const CUSTOM_TEXT_EMPTY_ERROR: &str = "Enter a value to continue.";
+const SELECTOR_NAVIGATION_ACTIVE: &str = "TuiOptionSelectorNavigationActive";
+
+pub(crate) fn init(app: &mut AppContext) {
+    let predicate = id!(TuiOptionSelector::ui_name()) & id!(SELECTOR_NAVIGATION_ACTIVE);
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "tui:option-selector:previous",
+            "Select the previous option",
+            TuiOptionSelectorAction::MoveUp,
+        )
+        .with_context_predicate(predicate.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("up"),
+        EditableBinding::new(
+            "tui:option-selector:next",
+            "Select the next option",
+            TuiOptionSelectorAction::MoveDown,
+        )
+        .with_context_predicate(predicate)
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("down"),
+    ]);
+}
 
 /// Optional header rendered above a selector page.
 #[derive(Clone, Debug, PartialEq)]
@@ -391,7 +417,6 @@ impl TuiOptionSelector {
         self.custom_text.reset_editor(ctx);
         self.select_id(self.page.snapshot.selected_id.clone());
         self.sync_after_items_changed();
-        ctx.focus_self();
     }
 
     /// Replaces the current page and resets its transient interaction state.
@@ -433,6 +458,11 @@ impl TuiOptionSelector {
         (!self.custom_text.is_editing())
             .then(|| self.interaction.selection.selected_index())
             .flatten()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn search_field_for_test(&self) -> Option<ViewHandle<TuiEditorView>> {
+        self.search_field.clone()
     }
 
     /// Moves the option highlight upward.
@@ -1171,6 +1201,14 @@ impl Entity for TuiOptionSelector {
 impl TuiView for TuiOptionSelector {
     fn ui_name() -> &'static str {
         "TuiOptionSelector"
+    }
+
+    fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.focused || self.search_field_is_focused(app) {
+            context.set.insert(SELECTOR_NAVIGATION_ACTIVE);
+        }
+        context
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
