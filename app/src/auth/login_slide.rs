@@ -91,7 +91,7 @@ pub fn init(app: &mut AppContext) {
 
 impl LoginSlideSource {
     fn skip_requires_confirmation(self) -> bool {
-        !matches!(self, Self::AccountFirstOnboarding)
+        true
     }
 }
 

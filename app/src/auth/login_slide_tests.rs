@@ -1,8 +1,8 @@
 use super::{LoginPurpose, LoginSlideSource};
 
 #[test]
-fn account_first_skip_does_not_require_confirmation() {
-    assert!(!LoginSlideSource::AccountFirstOnboarding.skip_requires_confirmation());
+fn all_login_slide_sources_require_skip_confirmation() {
+    assert!(LoginSlideSource::AccountFirstOnboarding.skip_requires_confirmation());
     assert!(LoginSlideSource::OnboardingFlow.skip_requires_confirmation());
     assert!(LoginSlideSource::LoginExistingUserFromWelcome.skip_requires_confirmation());
     assert!(
