@@ -386,11 +386,12 @@ fn linux_capture_command_captures_at_1x_without_setpts() {
     );
 }
 
-/// The cut filtergraph emits one `trim`+`setpts=PTS-STARTPTS` branch per retained
-/// segment, concatenates them video-only, and burns the ASS subtitles into the
-/// concatenated stream mapped to `[vout]`.
+/// The cut-only filtergraph emits one `trim`+`setpts=PTS-STARTPTS` branch per
+/// retained segment, concatenates them video-only, and maps the result to
+/// `[vout]`. It contains no overlay/subtitles logic, which is handled in a
+/// separate `burn_overlays_into_cut` pass.
 #[test]
-fn build_cut_filtergraph_constructs_trim_setpts_concat_subtitles() {
+fn build_cut_only_filtergraph_constructs_trim_setpts_concat() {
     let segments = vec![
         KeepSegment {
             source_start: Duration::from_millis(500),
@@ -403,13 +404,16 @@ fn build_cut_filtergraph_constructs_trim_setpts_concat_subtitles() {
             output_start: Duration::from_millis(2000),
         },
     ];
-    let ass_path = Path::new("/tmp/warp-cut-test.ass");
-    let filter = super::build_cut_filtergraph(&segments, ass_path);
+    let filter = super::build_cut_only_filtergraph(&segments);
 
     assert!(filter.contains("[0:v]trim=start=0.500000:end=2.500000,setpts=PTS-STARTPTS[v0]"));
     assert!(filter.contains("[0:v]trim=start=4.500000:end=6.500000,setpts=PTS-STARTPTS[v1]"));
-    assert!(filter.contains("[v0][v1]concat=n=2:v=1:a=0[vcat]"));
-    assert!(filter.contains("[vcat]subtitles=filename='/tmp/warp-cut-test.ass'[vout]"));
+    assert!(filter.contains("[v0][v1]concat=n=2:v=1:a=0[vout]"));
+    // Cut-only filtergraph must not contain subtitles/overlay logic.
+    assert!(
+        !filter.contains("subtitles"),
+        "cut-only filtergraph should not contain subtitles filter, got {filter}"
+    );
     assert!(
         filter.ends_with("[vout]"),
         "filter should end with [vout], got {filter}"
@@ -512,15 +516,6 @@ async fn smart_cut_retains_only_selected_frames_in_order() {
     let source = dir.join("source.mp4");
     write_fixture_source(&source).await;
 
-    // Minimal ASS so the subtitles filter is a no-op (no dialogue rendered);
-    // the test exercises the cut, not the overlay.
-    let ass_path = source.with_extension("ass");
-    std::fs::write(
-        &ass_path,
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: 64\nPlayResY: 64\n",
-    )
-    .expect("write ass");
-
     // Keep frames 1-3 (PTS 0.1-0.4 s) and 7-9 (PTS 0.7-1.0 s); frames 0, 4, 5,
     // 6 are removed. At 10 fps each frame is 100 ms.
     let segments = vec![
@@ -535,9 +530,9 @@ async fn smart_cut_retains_only_selected_frames_in_order() {
             output_start: Duration::from_millis(300),
         },
     ];
-    let filter = super::build_cut_filtergraph(&segments, &ass_path);
+    let filter = super::build_cut_only_filtergraph(&segments);
     let output = dir.join("cut.mp4");
-    // Mirror the production burn-in encode, including the constant output frame
+    // Mirror the production cut encode, including the constant output frame
     // rate that ensures the cut's final frame is written.
     let cut = Command::new("ffmpeg")
         .args(["-y", "-hide_banner", "-i"])

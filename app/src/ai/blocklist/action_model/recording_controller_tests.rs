@@ -263,6 +263,37 @@ fn begin_and_commit_are_scoped_to_the_owning_conversation() {
 }
 
 #[test]
+fn begin_while_pending_auto_commits_prior_group() {
+    let owner = AIConversationId::new();
+    let mut controller = active_controller("recording", owner);
+
+    // Start the first group without committing it.
+    controller.begin_action_group(owner, vec!["click".to_string()]);
+    // Beginning a second group auto-commits the first with an implicit finish
+    // rather than silently discarding it.
+    controller.begin_action_group(owner, vec!["type".to_string()]);
+    // Commit the second group explicitly.
+    controller.commit_action_group(owner, Duration::from_millis(700));
+
+    let FinalizationClaim::Claimed { recording, .. } =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("active recording should be claimed");
+    };
+    // Both groups should be present: the auto-committed first and the
+    // explicitly-committed second.
+    assert_eq!(recording.actions.len(), 2);
+    assert_eq!(recording.actions[0].labels, ["click"]);
+    assert_eq!(recording.actions[1].labels, ["type"]);
+    assert_eq!(
+        recording.actions[1].finish_offset,
+        Duration::from_millis(700)
+    );
+    // Auto-committed group's finish is >= its own start.
+    assert!(recording.actions[0].finish_offset >= recording.actions[0].offset);
+}
+
+#[test]
 fn commit_after_finalization_is_noop() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);

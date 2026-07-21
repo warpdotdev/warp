@@ -96,15 +96,23 @@ async fn finalize_recording(
     uploader: FileArtifactUploader,
     server_conversation_token: Option<crate::ai::agent::api::ServerConversationToken>,
 ) -> StopRecordingResult {
-    // Conversation cancellation always discards the recording instead of
-    // publishing it, including when no action group was committed. This
-    // intentionally precedes the empty-actions error below: cancellation keeps
-    // its `Cancelled` result contract while still guaranteeing no video upload.
-    // Dropping the handle kill-on-drops ffmpeg and removes the partial output,
-    // so there is nothing to finalize or upload.
+    // Both early exits discard the recording without uploading. They share the
+    // same mechanism — dropping the whole `ActiveRecording` struct, which
+    // kill-on-drops ffmpeg and removes the partial capture — but return
+    // different results to distinguish a user-initiated cancellation from a
+    // genuine finalization error. The cancellation check intentionally comes
+    // first so its `Cancelled` contract holds even when no action group was
+    // committed.
     if !should_upload {
         drop(recording);
         return StopRecordingResult::Cancelled;
+    }
+    if recording.actions.is_empty() {
+        drop(recording);
+        return StopRecordingResult::Error(
+            "Recording contained no committed actions; no video artifact was published."
+                .to_string(),
+        );
     }
     let ActiveRecording {
         handle,
@@ -112,18 +120,6 @@ async fn finalize_recording(
         frame_rate,
         ..
     } = recording;
-    // A recording with no committed meaningful action group is an explicit
-    // finalization error rather than a published artifact: it is not uploaded,
-    // and dropping the handle kill-on-drops ffmpeg and removes the partial
-    // capture. This keeps the smart cut from silently publishing a video with
-    // no action timeline.
-    if actions.is_empty() {
-        drop(handle);
-        return StopRecordingResult::Error(
-            "Recording contained no committed actions; no video artifact was published."
-                .to_string(),
-        );
-    }
     let recorder = computer_use::create_recorder();
     let output = match recorder.stop(handle).await {
         Ok(output) => output,

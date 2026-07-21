@@ -176,6 +176,18 @@ impl RecordingController {
         if let RecordingState::Active(recording) = &mut self.state
             && recording.conversation_id == conversation_id
         {
+            // If a prior group was never committed or discarded, auto-commit it
+            // with the current clock as its implicit finish offset. This can
+            // happen when a `UseComputer` call completes and `begin_action_group`
+            // is called for the next call before `commit_action_group` fires.
+            if let Some(pending) = recording.pending_group.take() {
+                let implicit_finish = recording.started_at.elapsed().max(pending.start_offset);
+                recording.actions.push(computer_use::ActionLogEntry {
+                    offset: pending.start_offset,
+                    finish_offset: implicit_finish,
+                    labels: pending.labels,
+                });
+            }
             let start_offset = recording.started_at.elapsed();
             recording.pending_group = Some(PendingActionGroup {
                 start_offset,
