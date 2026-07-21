@@ -423,7 +423,6 @@ fn assert_footer_segments_absent(lines: &[String]) {
 }
 
 #[test]
-<<<<<<< HEAD
 fn orchestration_tab_icon_replaces_identity_only_while_active_or_blocked() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
@@ -464,10 +463,7 @@ fn orchestration_tab_icon_replaces_identity_only_while_active_or_blocked() {
 }
 
 #[test]
-fn footer_renders_agent_sections_left_aligned_with_separators() {
-=======
 fn footer_renders_agent_sections_left_aligned() {
->>>>>>> 66289422b (fix spacing)
     App::test((), |mut app| async move {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
@@ -563,9 +559,7 @@ fn footer_renders_bash_sections_without_model_or_usage() {
 
             assert_eq!(
                 lines,
-                vec![format!(
-                    "{SHELL_MODE_HINT} /home/user/warp ↬ main • +3 -1"
-                )],
+                vec![format!("{SHELL_MODE_HINT} /home/user/warp ↬ main • +3 -1")],
                 "bash footer leads with the shell-mode indicator and hides model/usage"
             );
             assert!(
