@@ -3048,7 +3048,7 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
 
     let error_text = match presentation {
         FailedOutputPresentation::Message(message) => message,
-        FailedOutputPresentation::OutOfCredits { message } => {
+        FailedOutputPresentation::OutOfCredits { message, .. } => {
             return render_out_of_credits_error(
                 &message,
                 props.subscribe_button_handle,
@@ -3201,12 +3201,13 @@ fn render_out_of_credits_error(
     })
     .finish();
 
-    let subscribe_button = out_of_credits_cta_button(OUT_OF_CREDITS_SUBSCRIBE_LABEL, subscribe_button_handle, app)
-        .build()
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
-        })
-        .finish();
+    let subscribe_button =
+        out_of_credits_cta_button(OUT_OF_CREDITS_SUBSCRIBE_LABEL, subscribe_button_handle, app)
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
+            })
+            .finish();
 
     Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)

@@ -186,7 +186,7 @@ fn agent_block_renders_context_window_failure() {
 }
 
 #[test]
-fn out_of_credits_failure_matches_gui_copy_warning_style_and_action() {
+fn out_of_credits_failure_uses_shared_copy_warning_style_and_tui_actions() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let opened_urls = Rc::new(RefCell::new(Vec::new()));
@@ -200,14 +200,21 @@ fn out_of_credits_failure_matches_gui_copy_warning_style_and_action() {
 
         app.read(|ctx| {
             let presentation = FailedOutputPresentation::OutOfCredits {
-                message: "I'm sorry, I couldn't complete that request.\n\nYou've reached your credit limit."
+                message: "I'm sorry, I couldn't complete that request.\n\nIn order to use Warp's AI features, subscribe to a Warp plan, or bring your own inference."
                     .to_owned(),
+                can_use_own_api_keys: true,
             };
-            let subscribe_hover_state = MouseStateHandle::default();
+            let compare_plans_hover_state = MouseStateHandle::default();
+            let byok_hover_state = MouseStateHandle::default();
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
-                render_failure_section(&presentation, &subscribe_hover_state, ctx),
-                TuiRect::new(0, 0, 100, 5),
+                render_failure_section(
+                    &presentation,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                TuiRect::new(0, 0, 100, 4),
                 ctx,
             );
             assert_eq!(
@@ -219,10 +226,9 @@ fn out_of_credits_failure_matches_gui_copy_warning_style_and_action() {
                     .collect::<Vec<_>>(),
                 vec![
                     "⚠ I'm sorry, I couldn't complete that request.",
+                    "  In order to use Warp's AI features, subscribe to a Warp plan, or bring your own inference.",
                     "",
-                    "You've reached your credit limit.",
-                    "",
-                    "  Subscribe",
+                    "  Compare plans  or  Use your own API keys",
                 ]
             );
             let builder = TuiUiBuilder::from_app(ctx);
@@ -235,26 +241,74 @@ fn out_of_credits_failure_matches_gui_copy_warning_style_and_action() {
                 builder.error_text_style().fg.expect("error foreground")
             );
             assert_eq!(frame.buffer[(2, 0)].fg, primary_foreground);
-            assert_eq!(frame.buffer[(0, 2)].fg, primary_foreground);
-            assert_eq!(frame.buffer[(2, 4)].fg, primary_foreground);
+            assert_eq!(frame.buffer[(2, 1)].fg, primary_foreground);
+            assert_eq!(frame.buffer[(2, 3)].fg, primary_foreground);
+            assert_eq!(
+                frame.buffer[(17, 3)].fg,
+                builder.muted_text_style().fg.expect("muted foreground")
+            );
+            assert_eq!(frame.buffer[(21, 3)].fg, primary_foreground);
             assert!(
-                frame.buffer[(2, 4)]
+                frame.buffer[(2, 3)]
+                    .modifier
+                    .contains(Modifier::UNDERLINED)
+            );
+            assert!(
+                frame.buffer[(21, 3)]
                     .modifier
                     .contains(Modifier::UNDERLINED)
             );
 
             dispatch_click_on_text(
-                render_failure_section(&presentation, &subscribe_hover_state, ctx),
-                "Subscribe",
+                render_failure_section(
+                    &presentation,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                "Compare plans",
                 100,
-                5,
+                4,
                 ctx,
             );
+            dispatch_click_on_text(
+                render_failure_section(
+                    &presentation,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                "Use your own API keys",
+                100,
+                4,
+                ctx,
+            );
+
+            let without_byok = FailedOutputPresentation::OutOfCredits {
+                message: "I'm sorry, I couldn't complete that request.\n\nOut of credits."
+                    .to_owned(),
+                can_use_own_api_keys: false,
+            };
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_failure_section(
+                    &without_byok,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                TuiRect::new(0, 0, 100, 4),
+                ctx,
+            );
+            assert_eq!(frame.buffer.to_lines()[3].trim_end(), "  Compare plans");
         });
 
         assert_eq!(
             &*opened_urls.borrow(),
-            &["https://www.warp.dev/pricing".to_owned()]
+            &[
+                "https://www.warp.dev/pricing".to_owned(),
+                "https://docs.warp.dev/agent-platform/inference/bring-your-own-api-key/".to_owned(),
+            ]
         );
     });
 }
