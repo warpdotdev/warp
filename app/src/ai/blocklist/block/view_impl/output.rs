@@ -1261,12 +1261,9 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 props.model.is_restored(),
             ) {
                 output_items.add_child(
-                    render_informational_footer(
-                        app,
-                        FAILED_OUTPUT_USAGE_NOTICE_TEXT.to_string(),
-                    )
-                    .with_agent_output_item_spacing(app)
-                    .finish(),
+                    render_informational_footer(app, FAILED_OUTPUT_USAGE_NOTICE_TEXT.to_string())
+                        .with_agent_output_item_spacing(app)
+                        .finish(),
                 );
 
                 output_items.add_child(
