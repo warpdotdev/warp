@@ -3,6 +3,10 @@ use std::ops::Range;
 use super::*;
 use crate::ai::agent::AnyFileContent;
 
+fn native_path(path: &str) -> String {
+    path.replace('/', std::path::MAIN_SEPARATOR_STR)
+}
+
 fn file_context(path: &std::path::Path, line_range: Option<Range<usize>>) -> FileContext {
     FileContext::new(
         path.to_string_lossy().to_string(),
@@ -24,7 +28,10 @@ fn search_codebase_render_and_detection_share_display_text_and_absolute_target()
     let cwd = cwd_path.to_string_lossy().to_string();
     let files = vec![file_context(&file_path, Some(7..9))];
     let display_files = search_codebase_display_files(&files, None, Some(&cwd));
-    assert_eq!(display_files, vec!["src/lib.rs (7-9)"]);
+    assert_eq!(
+        display_files,
+        vec![format!("{} (7-9)", native_path("src/lib.rs"))]
+    );
 
     let location = TextLocation::Action {
         action_index: 3,
@@ -62,10 +69,17 @@ fn legacy_and_search_codebase_ui_paths_format_their_actual_result_shapes() {
 
     assert_eq!(
         search_codebase_display_files(&files, None, Some(&cwd)),
-        vec!["src/lib.rs (40-45)", "src/other.rs", "src/lib.rs (10-20)",]
+        vec![
+            format!("{} (40-45)", native_path("src/lib.rs")),
+            native_path("src/other.rs"),
+            format!("{} (10-20)", native_path("src/lib.rs")),
+        ]
     );
     assert_eq!(
         grouped_search_codebase_display_files(&files, None, Some(&cwd)),
-        vec!["src/lib.rs (10-20, 40-45)", "src/other.rs"]
+        vec![
+            format!("{} (10-20, 40-45)", native_path("src/lib.rs")),
+            native_path("src/other.rs"),
+        ]
     );
 }

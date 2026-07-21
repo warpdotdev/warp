@@ -26,6 +26,10 @@ use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 
+fn native_path(path: &str) -> String {
+    path.replace('/', std::path::MAIN_SEPARATOR_STR)
+}
+
 #[test]
 fn format_upload_artifact_text_includes_request_details() {
     let request = UploadArtifactRequest {
@@ -79,7 +83,10 @@ fn file_glob_and_v2_renderer_format_explicit_and_omitted_directories() {
             Some(&cwd),
         )
         .raw_text(),
-        "Finding files that match **/*.rs in ../../archive\n"
+        format!(
+            "Finding files that match **/*.rs in {}\n",
+            native_path("../../archive")
+        )
     );
     assert_eq!(
         formatted_text_for_file_glob(&patterns, None, false, true, None, Some(&cwd)).raw_text(),
@@ -115,7 +122,11 @@ fn read_files_request_renderer_formats_paths_once_against_invocation_cwd() {
     ];
     assert_eq!(
         read_files_request_display_paths(&files, None, Some(&cwd)),
-        vec!["src/lib.rs (10-20)", "../../archive.rs", "/outside.rs",]
+        vec![
+            format!("{} (10-20)", native_path("src/lib.rs")),
+            native_path("../../archive.rs"),
+            native_path("/outside.rs"),
+        ]
     );
 }
 
@@ -130,7 +141,10 @@ fn read_files_grouped_success_renderer_formats_and_groups_actual_results() {
 
     assert_eq!(
         read_files_success_display_paths(&files, None, Some(&cwd)),
-        vec!["src/lib.rs (10-20, 40-45)", "../../archive.rs",]
+        vec![
+            format!("{} (10-20, 40-45)", native_path("src/lib.rs")),
+            native_path("../../archive.rs"),
+        ]
     );
 }
 
@@ -154,7 +168,12 @@ fn failed_read_rows_use_invocation_cwd() {
 
     assert_eq!(
         format_failed_read_paths(&failed_files, None, Some(&cwd)),
-        "src/missing.rs\n../../archive/missing.rs\n/outside.rs"
+        [
+            native_path("src/missing.rs"),
+            native_path("../../archive/missing.rs"),
+            native_path("/outside.rs"),
+        ]
+        .join("\n")
     );
 }
 
@@ -222,7 +241,11 @@ fn format_upload_artifact_text_uses_invocation_cwd_for_local_paths() {
 
     assert_eq!(
         format_upload_artifact_text(&request, Some(&result), None, Some(&cwd)),
-        "Upload artifact: reports/daily.txt\nDescription: Daily summary\nStatus: uploaded artifact artifact-123\nUploaded file: ../archive/daily.txt"
+        format!(
+            "Upload artifact: {}\nDescription: Daily summary\nStatus: uploaded artifact artifact-123\nUploaded file: {}",
+            native_path("reports/daily.txt"),
+            native_path("../archive/daily.txt")
+        )
     );
 }
 

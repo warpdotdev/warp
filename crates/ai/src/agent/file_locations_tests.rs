@@ -3,6 +3,10 @@
 use super::*;
 use crate::agent::action_result::{AnyFileContent, FileContext};
 
+fn native_path(path: &str) -> String {
+    path.replace('/', std::path::MAIN_SEPARATOR_STR)
+}
+
 fn file_context(name: &str, line_range: Option<Range<usize>>) -> FileContext {
     FileContext::new(
         name.to_string(),
@@ -22,7 +26,7 @@ fn to_user_message_formats_relative_paths_and_ranges() {
             lines: vec![],
         }
         .to_user_message(None, Some(&cwd), None),
-        "src/lib.rs"
+        native_path("src/lib.rs")
     );
     assert_eq!(
         FileLocations {
@@ -30,7 +34,7 @@ fn to_user_message_formats_relative_paths_and_ranges() {
             lines: vec![10..20, 40..45],
         }
         .to_user_message(None, Some(&cwd), None),
-        "../../bazz.rs (10-20, 40-45)"
+        format!("{} (10-20, 40-45)", native_path("../../bazz.rs"))
     );
     assert_eq!(
         FileLocations {
@@ -38,7 +42,7 @@ fn to_user_message_formats_relative_paths_and_ranges() {
             lines: vec![2..5],
         }
         .to_user_message(None, Some(&cwd), None),
-        "/outside.rs (2-5)"
+        format!("{} (2-5)", native_path("/outside.rs"))
     );
 }
 
@@ -52,7 +56,7 @@ fn to_user_message_preserves_range_clamping_and_whole_file_suppression() {
 
     assert_eq!(
         locations.to_user_message(None, Some(&cwd), Some(20)),
-        "src/lib.rs"
+        native_path("src/lib.rs")
     );
 
     let locations = FileLocations {
@@ -61,7 +65,7 @@ fn to_user_message_preserves_range_clamping_and_whole_file_suppression() {
     };
     assert_eq!(
         locations.to_user_message(None, Some(&cwd), Some(20)),
-        "src/lib.rs (5-20)"
+        format!("{} (5-20)", native_path("src/lib.rs"))
     );
 }
 
@@ -77,8 +81,8 @@ fn group_file_contexts_preserves_first_occurrence_order_and_sorts_ranges() {
     assert_eq!(
         group_file_contexts_for_display(&contexts, None, Some(&cwd)),
         vec![
-            "src/first.rs (10-20, 40-45)".to_string(),
-            "src/second.rs".to_string(),
+            format!("{} (10-20, 40-45)", native_path("src/first.rs")),
+            native_path("src/second.rs"),
         ]
     );
 }

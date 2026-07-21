@@ -2,6 +2,10 @@ use itertools::Itertools;
 
 use super::*;
 
+fn native_path(path: &str) -> String {
+    path.replace('/', std::path::MAIN_SEPARATOR_STR)
+}
+
 #[test]
 fn test_possible_file_paths_in_word() {
     let word = "/path/to/file:16:hello";
@@ -262,7 +266,10 @@ fn relative_display_paths_detect_the_original_absolute_file_and_line() {
         lines: std::iter::once(10..20).collect(),
     }
     .to_user_message(None, Some(&cwd), None);
-    assert_eq!(relative_display, "src/lib.rs (10-20)");
+    assert_eq!(
+        relative_display,
+        format!("{} (10-20)", native_path("src/lib.rs"))
+    );
 
     let relative_links = detect_file_paths(&cwd, &relative_display, None);
     let DetectedLinkType::FilePath {

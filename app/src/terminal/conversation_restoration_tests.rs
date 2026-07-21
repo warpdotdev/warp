@@ -15,6 +15,11 @@ use crate::terminal::view::ConversationRestorationInNewPaneType;
 #[cfg(feature = "local_fs")]
 use crate::util::link_detection::{DetectedLinkType, DetectedLinksState, detect_links};
 
+#[cfg(feature = "local_fs")]
+fn native_path(path: &str) -> String {
+    path.replace('/', std::path::MAIN_SEPARATOR_STR)
+}
+
 /// Helper: create a `DateTime<Local>` from a unix timestamp in seconds.
 fn ts(secs: i64) -> chrono::DateTime<Local> {
     Local.timestamp_opt(secs, 0).unwrap()
@@ -363,7 +368,10 @@ fn restored_tool_rows_keep_the_exchange_cwd_after_the_live_cwd_changes() {
     };
 
     let restored_display = locations.to_user_message(None, Some(&restored_exchange_cwd), None);
-    assert_eq!(restored_display, "src/lib.rs (7-9)");
+    assert_eq!(
+        restored_display,
+        format!("{} (7-9)", native_path("src/lib.rs"))
+    );
     assert_ne!(
         restored_display,
         locations.to_user_message(None, Some(&live_cwd), None),
