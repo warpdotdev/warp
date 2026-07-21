@@ -515,8 +515,8 @@ jobs:
     name: Build Release (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: prepare_release
-    # The Warp TUI is currently a dev-only, macOS-only artifact. Keep this job
-    # scoped to the dev channel; it rides the existing nightly dev cut.
+    # The Warp TUI is currently dev-only. Keep this job scoped to the dev
+    # channel; it rides the existing nightly dev cut.
     if: ${{ inputs.build_macos != false && inputs.channel == 'dev' }}
     timeout-minutes: 60
     strategy:
@@ -600,6 +600,91 @@ jobs:
         with:
           name: release-macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
+
+  release_linux_tui:
+    name: Build Release (Linux TUI ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: prepare_release
+    # Keep Linux TUI artifacts dev-only and workflow-local until the server's
+    # download endpoint and installer accept Linux payloads.
+    if: ${{ inputs.build_linux != false && inputs.channel == 'dev' }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: namespace-profile-ubuntu-20-04
+          - arch: aarch64
+            runner: namespace-profile-ubuntu-20-04-arm
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
+      # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
+      - name: Install and configure gcc-10
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-10 g++-10
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 60 --slave /usr/bin/g++ g++ /usr/bin/g++-10
+          gcc --version
+          g++ --version
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      # Namespace's User Bundled Cache persists target/ between jobs on the same profile.
+      - name: Clean stale bundle output
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
+        shell: bash
+
+      - name: Bundle TUI
+        id: bundle_tui
+        run: script/bundle --channel "$CHANNEL" --artifact tui --arch "${{ matrix.arch }}"
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Package and validate TUI tarball
+        run: |
+          archive="warp-tui-${CHANNEL}-linux-${{ matrix.arch }}.tar.gz"
+          bundle_dir="$(dirname "${{ steps.bundle_tui.outputs.executable_path }}")"
+          tar czf "$archive" -C "$bundle_dir" "warp-tui-${CHANNEL}" resources
+
+          test -x "$bundle_dir/warp-tui-${CHANNEL}"
+          test -s "$bundle_dir/resources/settings_schema.json"
+          test -s "$bundle_dir/resources/THIRD_PARTY_LICENSES.txt"
+          grep -q "\"warp_version\": \"${GIT_RELEASE_TAG}\"" \
+            "$bundle_dir/resources/bundled/metadata/version.json"
+          tar tzf "$archive" | grep -qx "warp-tui-${CHANNEL}"
+          tar tzf "$archive" | grep -qx "resources/settings_schema.json"
+          tar tzf "$archive" | grep -qx "resources/THIRD_PARTY_LICENSES.txt"
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Upload TUI as workflow artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
 
   release_linux_x86:
     name: Build Release (Linux x86_64)
@@ -1661,6 +1746,7 @@ jobs:
       - release_macos_universal
       - release_macos_cli
       - release_macos_tui
+      - release_linux_tui
       - release_linux_x86
       - release_linux_arm
       - release_linux_cli_x86
@@ -1686,6 +1772,9 @@ jobs:
           # failure there (it is intentionally skipped elsewhere).
           if [[ ${{ needs.release_macos_tui.result }} != 'success' && ${{ inputs.channel }} == 'dev' ]]; then
             FAILED+=('MacOS TUI')
+          fi
+          if [[ ${{ needs.release_linux_tui.result }} != 'success' && ${{ inputs.channel }} == 'dev' ]]; then
+            FAILED+=('Linux TUI')
           fi
           if [[ ${{ needs.release_linux_x86.result }} != 'success' ]]; then
               FAILED+=("Linux x86_64")
