@@ -110,6 +110,7 @@ use self::input_detection::InputDetectionState;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
+const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 const ORCHESTRATION_TAB_BAR_FOCUSED_FLAG: &str = "TuiOrchestrationTabBarFocused";
 const ORCHESTRATION_TAB_LABEL_MAX_COLUMNS: u16 = 20;
@@ -202,6 +203,18 @@ fn render_left_footer_hint(
         ),
         None => None,
     }
+}
+
+/// Separates the inline menu from the agent block's warping/summary footer
+/// without consuming any of the menu's result-row capacity.
+fn render_inline_menu_section(menu: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
+    TuiConstrainedBox::new(
+        TuiContainer::new(menu)
+            .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
+            .finish(),
+    )
+    .with_max_rows(MAX_INLINE_MENU_ROWS + INLINE_MENU_TOP_PADDING_ROWS)
+    .finish()
 }
 /// Entry point that requested conversation restoration.
 #[derive(Clone, Copy, Debug)]
@@ -3050,11 +3063,7 @@ impl TuiView for TuiTerminalSessionView {
                 || matches!(input_target, TuiInputTarget::Disabled))
         {
             if let (true, Some(menu)) = (input_target.agent_editor_owns_input(), inline_menu) {
-                content = content.child(
-                    TuiConstrainedBox::new(menu)
-                        .with_max_rows(MAX_INLINE_MENU_ROWS)
-                        .finish(),
-                );
+                content = content.child(render_inline_menu_section(menu));
             }
             let border_style = if self.is_shell_mode(ctx) {
                 builder.shell_mode_accent_style()
