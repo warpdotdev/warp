@@ -115,6 +115,27 @@ fn set_page(app: &mut App, selector: &ViewHandle<TuiOptionSelector>, snapshot: O
 }
 
 #[test]
+fn set_page_preserves_external_focus() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        let other = app.update(|ctx| ctx.add_tui_view(selector.window_id(ctx), |_| TestHostView));
+        other.update(&mut app, |_, ctx| ctx.focus_self());
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(selector.window_id(ctx))),
+            Some(other.id()),
+        );
+
+        set_page(&mut app, &selector, snapshot(&["a", "b"], Some("a")));
+
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(selector.window_id(ctx))),
+            Some(other.id()),
+        );
+        assert!(!selector.read(&app, |selector, _| selector.focused));
+    });
+}
+
+#[test]
 fn unfocused_selector_ignores_navigation_and_confirmation_keys() {
     App::test((), |mut app| async move {
         let (selector, _) = add_selector(&mut app);
@@ -625,6 +646,7 @@ fn custom_row_shortcut_renders_and_confirms_instead_of_its_digit() {
             let mut page = page(snapshot(&["yes", "no", "edit command"], Some("yes")), false);
             page.row_shortcuts.insert("edit command".to_owned(), 'e');
             selector.set_page(page, ctx);
+            ctx.focus_self();
         });
 
         let lines = render_lines(&app, &selector, 60);
@@ -1119,6 +1141,7 @@ fn enter_and_numpad_enter_are_consumed_by_the_selector_element() {
     App::test((), |mut app| async move {
         let (selector, _) = add_selector(&mut app);
         set_page(&mut app, &selector, snapshot(&["a"], Some("a")));
+        selector.update(&mut app, |_, ctx| ctx.focus_self());
         for key in ["enter", "numpadenter"] {
             assert!(dispatch(&app, &selector, &key_down(key)), "{key}");
         }

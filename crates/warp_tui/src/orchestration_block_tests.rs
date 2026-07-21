@@ -398,6 +398,7 @@ fn selector_actions_commit_edits_and_follow_the_dynamic_page_sequence() {
         let (block, _) = test_block(&mut app, &request("oz", remote("env-1", "warp")));
         act(&mut app, &block, TuiOrchestrationBlockAction::Configure);
         let selector = app.read(|ctx| block.as_ref(ctx).selector.clone());
+        assert!(app.read(|ctx| selector.is_focused(ctx)));
 
         selector.update(&mut app, |selector, ctx| {
             selector.handle_action(&TuiOptionSelectorAction::MoveDown, ctx);

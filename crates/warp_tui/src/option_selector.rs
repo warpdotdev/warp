@@ -391,7 +391,6 @@ impl TuiOptionSelector {
         self.custom_text.reset_editor(ctx);
         self.select_id(self.page.snapshot.selected_id.clone());
         self.sync_after_items_changed();
-        ctx.focus_self();
     }
 
     /// Replaces the current page and resets its transient interaction state.

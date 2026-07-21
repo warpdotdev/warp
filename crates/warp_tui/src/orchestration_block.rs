@@ -481,6 +481,7 @@ impl TuiOrchestrationBlock {
         self.selector.update(ctx, |selector, ctx| {
             selector.set_page(selector_page, ctx);
         });
+        ctx.focus(&self.selector);
         ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
         ctx.notify();
     }
