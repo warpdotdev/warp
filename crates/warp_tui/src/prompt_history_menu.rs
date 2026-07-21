@@ -225,6 +225,7 @@ impl TuiPromptHistoryMenuModel {
                 .map(|row| TuiInlineMenuRow {
                     title: prompt_history_title(&row.text),
                     description: None,
+                    state_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::Default,
                 })

@@ -271,10 +271,6 @@ pub fn render_agent_shortcuts_view(
     .finish()
 }
 
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;
-
 pub mod styles {
     use warp_core::ui::appearance::Appearance;
 

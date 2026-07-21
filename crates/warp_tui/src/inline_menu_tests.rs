@@ -1,6 +1,6 @@
 use warp::appearance::Appearance;
 use warpui_core::App;
-use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
+use warpui_core::elements::tui::{Color, Modifier, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 
 use super::{
@@ -71,6 +71,7 @@ fn renders_only_the_visible_row_window() {
             .map(|index| TuiInlineMenuRow {
                 title: format!("Conversation {index}"),
                 description: None,
+                state_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::Default,
             })
@@ -107,12 +108,14 @@ fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
             TuiInlineMenuRow {
                 title: "Current project".to_owned(),
                 description: Some("2 minutes ago".to_owned()),
+                state_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::Default,
             },
             TuiInlineMenuRow {
                 title: "Archived".to_owned(),
                 description: None,
+                state_suffix: None,
                 is_selectable: false,
                 style: TuiInlineMenuRowStyle::Default,
             },
@@ -151,6 +154,7 @@ fn conversation_like_snapshot_keeps_selection_visible_within_production_height()
                 .map(|index| TuiInlineMenuRow {
                     title: format!("Conversation {index}"),
                     description: None,
+                    state_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::Default,
                 })
@@ -185,12 +189,14 @@ fn slash_command_rows_match_figma_layout_and_colors() {
                     TuiInlineMenuRow {
                         title: "/agent".to_owned(),
                         description: Some("Start a new agent conversation".to_owned()),
+                        state_suffix: Some("(currently on)".to_owned()),
                         is_selectable: true,
                         style: TuiInlineMenuRowStyle::InlineMenuItem,
                     },
                     TuiInlineMenuRow {
                         title: "/plan".to_owned(),
                         description: Some("Create a plan".to_owned()),
+                        state_suffix: Some("(currently off)".to_owned()),
                         is_selectable: true,
                         style: TuiInlineMenuRowStyle::InlineMenuItem,
                     },
@@ -203,12 +209,14 @@ fn slash_command_rows_match_figma_layout_and_colors() {
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 render_inline_menu(&snapshot, &builder),
-                TuiRect::new(0, 0, 50, 2),
+                TuiRect::new(0, 0, 80, 2),
                 ctx,
             );
             let lines = frame.buffer.to_lines();
 
-            assert!(lines[0].starts_with("/agent                       Start"));
+            assert!(lines[0].starts_with(
+                "/agent                       Start a new agent conversation (currently on)"
+            ));
             assert!(lines[1].starts_with("/plan                        Create"));
             assert!(
                 !lines
@@ -219,6 +227,7 @@ fn slash_command_rows_match_figma_layout_and_colors() {
                 frame.buffer[(0, 0)].bg,
                 builder.slash_command_selection_background()
             );
+            assert_eq!(frame.buffer[(0, 0)].bg, Color::Rgb(208, 209, 254));
             assert_eq!(
                 frame.buffer[(0, 0)].fg,
                 builder
@@ -241,6 +250,30 @@ fn slash_command_rows_match_figma_layout_and_colors() {
                     .fg
                     .expect("slash-command descriptions use primary text")
             );
+            let suffix_column = lines[0]
+                .find("(currently on)")
+                .expect("state suffix should render");
+            assert_eq!(
+                frame.buffer[(u16::try_from(suffix_column).unwrap(), 0)].fg,
+                builder
+                    .slash_command_selection_state_suffix_style()
+                    .fg
+                    .expect("selected state suffix should use muted theme green")
+            );
+            let unselected_suffix_column = lines[1]
+                .find("(currently off)")
+                .expect("unselected state suffix should render");
+            assert_eq!(
+                frame.buffer[(u16::try_from(unselected_suffix_column).unwrap(), 1)].fg,
+                builder
+                    .success_glyph_style()
+                    .fg
+                    .expect("unselected state suffix should use theme green")
+            );
+            assert_eq!(
+                frame.buffer[(u16::try_from(unselected_suffix_column).unwrap(), 1)].fg,
+                Color::Rgb(180, 250, 114)
+            );
         });
     });
 }
@@ -252,6 +285,7 @@ fn long_slash_command_titles_are_ellipsized_before_the_description() {
         rows: vec![TuiInlineMenuRow {
             title: "/respond-to-pr-comments-in-blocklist".to_owned(),
             description: Some("Walk users through PR review comments".to_owned()),
+            state_suffix: None,
             is_selectable: true,
             style: TuiInlineMenuRowStyle::InlineMenuItem,
         }],
@@ -272,6 +306,7 @@ fn wide_slash_command_rows_expand_to_show_long_titles() {
             rows: vec![TuiInlineMenuRow {
                 title: "/respond-to-pr-comments-in-blocklist".to_owned(),
                 description: Some("Walk users through PR review comments".to_owned()),
+                state_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::InlineMenuItem,
             }],
@@ -299,6 +334,7 @@ fn boundary_width_preserves_useful_title_and_description_columns() {
             rows: vec![TuiInlineMenuRow {
                 title: "/agent".to_owned(),
                 description: Some("Start a new agent conversation".to_owned()),
+                state_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::InlineMenuItem,
             }],
@@ -322,6 +358,7 @@ fn narrow_slash_command_rows_use_the_full_width_for_titles() {
             rows: vec![TuiInlineMenuRow {
                 title: "/12345678901234567890".to_owned(),
                 description: Some("Description hidden at narrow widths".to_owned()),
+                state_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::InlineMenuItem,
             }],

@@ -46,7 +46,7 @@ use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestions
 use crate::model_menu::TuiModelMenuModel;
 use crate::prompt_history_menu::TuiPromptHistoryMenuModel;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
-use crate::test_fixtures::add_test_semantic_selection;
+use crate::test_fixtures::{add_test_conversation_selection, add_test_semantic_selection};
 use crate::tui_builder::TuiUiBuilder;
 
 const W: u16 = 80;
@@ -541,6 +541,7 @@ fn build_view_with_inline_menu_gate(
     let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
     let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::SlashCommands);
     let mixer = ctx.add_model(|_| SlashCommandMixer::new());
+    let conversation_selection = add_test_conversation_selection(ctx);
     let ids = [SlashCommandId::new(), SlashCommandId::new()];
     let rows = ids
         .iter()
@@ -556,6 +557,7 @@ fn build_view_with_inline_menu_gate(
             input_model.clone(),
             suggestions_mode.clone(),
             mixer,
+            conversation_selection,
             rows,
             0,
         )

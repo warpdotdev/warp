@@ -100,6 +100,7 @@ pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
 pub(crate) struct TuiInlineMenuRow {
     pub(crate) title: String,
     pub(crate) description: Option<String>,
+    pub(crate) state_suffix: Option<String>,
     pub(crate) is_selectable: bool,
     pub(crate) style: TuiInlineMenuRowStyle,
 }
@@ -659,14 +660,25 @@ fn build_inline_menu(
     allocated_width: u16,
     allocated_height: u16,
 ) -> Box<dyn TuiElement> {
+    let slash_command_row_text = snapshot
+        .rows
+        .iter()
+        .filter(|row| row.style == TuiInlineMenuRowStyle::InlineMenuItem)
+        .filter_map(|row| {
+            let mut description = row.description.clone()?;
+            if let Some(suffix) = &row.state_suffix {
+                description.push(' ');
+                description.push_str(suffix);
+            }
+            Some((row.title.clone(), description))
+        })
+        .collect::<Vec<_>>();
+
     let slash_command_columns = tui_two_column_layout(
         usize::from(allocated_width),
-        snapshot.rows.iter().filter_map(|row| {
-            if row.style != TuiInlineMenuRowStyle::InlineMenuItem {
-                return None;
-            }
-            Some((row.title.as_str(), row.description.as_deref()?))
-        }),
+        slash_command_row_text
+            .iter()
+            .map(|(title, description)| (title.as_str(), description.as_str())),
         SLASH_COMMAND_COLUMN_CONSTRAINTS,
     );
     let mut column = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
@@ -831,16 +843,20 @@ fn menu_result_row(
                 .finish(),
         });
     if let Some(description) = row.description.as_ref().filter(|_| show_description) {
-        let description = match row.style {
+        let description_prefix = match row.style {
             TuiInlineMenuRowStyle::Default => format!("  {description}"),
             TuiInlineMenuRowStyle::InlineMenuItem => description.clone(),
         };
-        content = content.child(
-            TuiText::new(description)
-                .with_style(description_style)
-                .truncate()
-                .finish(),
-        );
+        let mut description_spans = vec![(description_prefix, description_style)];
+        if let Some(suffix) = &row.state_suffix {
+            let suffix_style = if is_selected {
+                builder.slash_command_selection_state_suffix_style()
+            } else {
+                builder.success_glyph_style()
+            };
+            description_spans.push((format!(" {suffix}"), suffix_style));
+        }
+        content = content.child(TuiText::from_spans(description_spans).truncate().finish());
     }
     let mut container = TuiContainer::new(content.finish());
     if is_selected {

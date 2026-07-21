@@ -177,6 +177,18 @@ impl TuiUiBuilder {
             .bg(cell_color(background_fill))
             .add_modifier(Modifier::BOLD)
     }
+
+    /// Muted green state suffix over the slash-command selection background.
+    pub(crate) fn slash_command_selection_state_suffix_style(&self) -> TuiStyle {
+        let background = self.warp_theme.background().into_solid();
+        let green = ThemeFill::from(self.warp_theme.terminal_colors().normal.green).into_solid();
+        TuiStyle::default()
+            .fg(cell_color(ThemeFill::Solid(rounded_midpoint_color(
+                background, green,
+            ))))
+            .add_modifier(Modifier::BOLD)
+    }
+
     /// Bold accent prompt marker over the submitted-input background.
     pub(crate) fn input_prefix_style(&self) -> TuiStyle {
         self.accent_text_style()
@@ -431,6 +443,19 @@ impl TuiUiBuilder {
 /// Converts a theme fill into a terminal-cell color.
 fn cell_color(fill: ThemeFill) -> Color {
     CoreFill::from(fill).into()
+}
+
+fn rounded_midpoint_color(first: ColorU, second: ColorU) -> ColorU {
+    let channel_midpoint = |first, second| {
+        u8::try_from((u16::from(first) + u16::from(second)).div_ceil(2))
+            .expect("the midpoint of two color channels fits in u8")
+    };
+    ColorU::new(
+        channel_midpoint(first.r, second.r),
+        channel_midpoint(first.g, second.g),
+        channel_midpoint(first.b, second.b),
+        u8::MAX,
+    )
 }
 
 #[cfg(test)]

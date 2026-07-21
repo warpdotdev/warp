@@ -1,10 +1,11 @@
+use pathfinder_color::ColorU;
 use warp::tui_export::light_theme;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::elements::tui::{Color, Modifier};
 
-use super::TuiUiBuilder;
+use super::{TuiUiBuilder, rounded_midpoint_color};
 
 #[test]
 fn text_styles_follow_light_theme_foreground() {
@@ -58,5 +59,24 @@ fn text_styles_follow_light_theme_foreground() {
         text_selection_style
             .sub_modifier
             .contains(Modifier::REVERSED)
+    );
+    let background = theme.background().into_solid();
+    let green = ThemeFill::from(theme.terminal_colors().normal.green).into_solid();
+    let selected_state_suffix_color: Color =
+        CoreFill::from(ThemeFill::Solid(rounded_midpoint_color(background, green))).into();
+    assert_eq!(
+        builder.slash_command_selection_state_suffix_style().fg,
+        Some(selected_state_suffix_color)
+    );
+}
+
+#[test]
+fn selected_state_suffix_midpoint_matches_figma_dark_palette() {
+    assert_eq!(
+        rounded_midpoint_color(
+            ColorU::new(5, 5, 5, u8::MAX),
+            ColorU::new(180, 250, 114, u8::MAX),
+        ),
+        ColorU::new(93, 128, 60, u8::MAX)
     );
 }

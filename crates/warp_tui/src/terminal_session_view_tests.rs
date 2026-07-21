@@ -30,10 +30,11 @@ use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView as _, WindowInvalidation};
 
 use super::{
-    CTRL_C_EXIT_HINT, ConversationRestoreState, FooterSegments, INLINE_MENU_TOP_PADDING_ROWS,
-    LOADING_CONVERSATION_HINT, SHELL_MODE_HINT, TuiConversationRestoreOrigin,
-    TuiTerminalSessionAction, TuiTerminalSessionEvent, export_file_success_message,
-    log_bundle_success_message, raw_prompt_if_not_blank, render_status_footer_row,
+    CTRL_C_EXIT_HINT, ConversationRestoreState, FAST_FORWARD_FEEDBACK_DURATION, FooterSegments,
+    INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT, SHELL_MODE_HINT,
+    TuiConversationRestoreOrigin, TuiTerminalSessionAction, TuiTerminalSessionEvent,
+    export_file_success_message, log_bundle_success_message, raw_prompt_if_not_blank,
+    render_status_footer_row,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -227,6 +228,10 @@ fn toggle_model_menu_action_opens_and_closes_the_inline_model_menu() {
 #[test]
 fn fast_forward_slash_command_toggles_selected_conversation_off_on_off() {
     App::test((), |mut app| async move {
+        assert_eq!(
+            FAST_FORWARD_FEEDBACK_DURATION,
+            std::time::Duration::from_secs(3)
+        );
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
@@ -238,6 +243,7 @@ fn fast_forward_slash_command_toggles_selected_conversation_off_on_off() {
                     .pending_query_autoexecute_override(ctx),
                 AIConversationAutoexecuteMode::RespectUserSettings
             );
+            assert!(view.fast_forward_feedback_conversation_id.is_none());
         });
 
         // Invoking `/fast-forward` executes the TUI `FastForward` arm and toggles
@@ -252,6 +258,12 @@ fn fast_forward_slash_command_toggles_selected_conversation_off_on_off() {
                     .pending_query_autoexecute_override(ctx),
                 AIConversationAutoexecuteMode::RunToCompletion
             );
+            assert_eq!(
+                view.fast_forward_feedback_conversation_id,
+                view.conversation_selection
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+            );
         });
 
         // Invoking `/fast-forward` again toggles it back off.
@@ -264,6 +276,12 @@ fn fast_forward_slash_command_toggles_selected_conversation_off_on_off() {
                     .as_ref(ctx)
                     .pending_query_autoexecute_override(ctx),
                 AIConversationAutoexecuteMode::RespectUserSettings
+            );
+            assert_eq!(
+                view.fast_forward_feedback_conversation_id,
+                view.conversation_selection
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
             );
         });
     });

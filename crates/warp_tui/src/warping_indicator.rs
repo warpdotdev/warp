@@ -83,6 +83,8 @@ pub(crate) fn render_spinner(clock: AnimationClock, style: TuiStyle) -> Box<dyn 
 pub(crate) fn render_warping_indicator(
     label: impl Into<String>,
     elapsed: Duration,
+    fast_forward_enabled: bool,
+    highlight_fast_forward: bool,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
@@ -110,6 +112,15 @@ pub(crate) fn render_warping_indicator(
             .truncate()
             .finish()
     });
+    let fast_forward_style = if highlight_fast_forward {
+        builder.success_glyph_style()
+    } else {
+        builder.muted_text_style()
+    };
+    let fast_forward = format!(
+        "▶▶ Fast forward {}",
+        if fast_forward_enabled { "on" } else { "off" }
+    );
 
     TuiFlex::row()
         .child(spinner)
@@ -117,6 +128,16 @@ pub(crate) fn render_warping_indicator(
         .child(label.finish())
         .child(TuiText::new(" ").truncate().finish())
         .child(counter.finish())
+        .flex_child(TuiText::new("").truncate().finish())
+        .child(
+            TuiText::from_spans([
+                (fast_forward, fast_forward_style),
+                ("  Ctrl + C".to_owned(), builder.primary_text_style()),
+                (" to stop".to_owned(), builder.muted_text_style()),
+            ])
+            .truncate()
+            .finish(),
+        )
         .finish()
 }
 

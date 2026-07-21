@@ -27,6 +27,7 @@ This PR also removes the TUI's current force-enabled default for newly created c
    - `/fast-forward` appears in the static slash-command registry with a stable description such as `Toggle fast forward`, no argument, and no prompt text.
    - In the GUI it is available only when AI is enabled, Agent View is active, a conversation is active, and the conversation is not a cloud/ambient agent. It is not shown in cloud-mode slash menus.
    - In the TUI it is available wherever the existing TUI slash-command data source exposes non-cloud Agent conversations. The command takes no argument; `/fast-forward anything` is not treated as this command.
+   - The TUI slash-command row appends `(currently on)` or `(currently off)` in green based on the selected conversation's current override.
    - Accepting the row or submitting the exact command executes immediately and records the normal static-slash-command acceptance telemetry.
 
 2. **Toggle semantics**
@@ -43,9 +44,14 @@ This PR also removes the TUI's current force-enabled default for newly created c
 4. **Dynamic GUI hint**
    - The Agent Shortcuts overlay row for the existing fast-forward keybinding changes its action text to exactly `toggle on` while the selected conversation is off and exactly `toggle off` while it is on.
    - The row updates after toggling via slash command, keyboard shortcut, footer button, selecting a different conversation, creating a new conversation, or receiving the corresponding history/selection event; it must not display stale text.
-   - The row remains hidden in cloud zero-state contexts under the current shortcut-overlay rules. The TUI has no corresponding shortcut overlay, so its slash-menu description remains stable rather than inventing a second hint surface.
+   - The row remains hidden in cloud zero-state contexts under the current shortcut-overlay rules.
 
-5. **Safety and edge behavior**
+5. **TUI warping indicator**
+   - While a response is in progress, the warping row includes a right-aligned `▶▶ Fast forward on` or `▶▶ Fast forward off` indicator followed by the existing `Ctrl + C to stop` hint.
+   - The indicator reflects the selected conversation's current override.
+   - After the override changes, the fast-forward indicator is green for three seconds and then returns to the normal muted color.
+
+6. **Safety and edge behavior**
    - Direct dispatch of `TerminalAction::ToggleAutoexecuteMode` retains the existing cloud no-op/locked behavior and pending-blocked-action handling.
    - `/fast-forward` does not submit an AI prompt, create a conversation, change the active model, or alter unrelated queued-prompt/long-running-command state.
    - Empty/new-conversation state and conversation removal/replacement remain usable after the toggle; no stale selection may cause the hint or command to target another terminal surface.
@@ -71,7 +77,7 @@ This PR also removes the TUI's current force-enabled default for newly created c
 - **Add a new settings-backed `fast_forward` preference:** rejected. The request is a per-session/per-conversation control, and the existing `AIConversationAutoexecuteMode` plus history event already models the required state. Do not add an `AISettings` field or settings UI.
 - **Make `/fast-forward` a prompt prefix:** rejected. It is an immediate local action, like the existing keybinding/button, and must never be queued or sent to the model.
 - **Depend on PR #13886 for the TUI default change:** rejected after verification. #13886 is file-backed execution-profile work. The requester explicitly resolved this by requiring the force-enable removal in this same PR.
-- **Render dynamic text in both slash menus:** rejected. The TUI has no fast-forward shortcut overlay or existing footer label for this action; its row keeps a stable command description. Dynamic `toggle on`/`toggle off` belongs to the GUI Agent Shortcuts overlay named by the request.
+- **Store display state separately from the conversation override:** rejected. Both the TUI slash-row suffix and warping indicator derive on/off from `ConversationSelection`; only the warping indicator's three-second color feedback is transient view state.
 
 ### Proposed changes
 
@@ -83,7 +89,9 @@ This PR also removes the TUI's current force-enabled default for newly created c
    - preserve existing override state for selected existing conversations;
    - update the current force-enable regression test and add tests for initial, replacement, and on→off transitions.
 5. Extend `AgentShortcutsViewContext`/`render_agent_shortcuts_view` to receive the current `pending_query_autoexecute_override` state and render exactly `toggle on` or `toggle off`. Add redraw triggers for `UpdatedAutoexecuteOverride` and relevant selection/new-conversation events so the label tracks the selected state.
-6. Preserve the existing conversation-history write/event path and do not write settings. Keep cloud behavior unchanged: cloud commands are filtered out and direct `ToggleAutoexecuteMode` remains a safe no-op.
+6. Extend TUI inline-menu rows with an optional green trailing status and derive `/fast-forward`'s `(currently on/off)` suffix from `ConversationSelection`.
+7. Extend the TUI warping row with a right-aligned fast-forward status. Use `UpdatedAutoexecuteOverride` to start or restart a cancelable three-second success-color timer, then return to the normal muted style.
+8. Preserve the existing conversation-history write/event path and do not write settings. Keep cloud behavior unchanged: cloud commands are filtered out and direct `ToggleAutoexecuteMode` remains a safe no-op.
 
 ### Open questions resolved
 
@@ -106,6 +114,6 @@ All criteria must pass before the implementation PR is marked ready.
 7. **Dynamic shortcut copy:** a deterministic shortcut-rendering/helper test asserts `toggle on` for off and `toggle off` for on. Event-driven coverage proves the GUI overlay refreshes after `UpdatedAutoexecuteOverride`, selection changes, new conversation creation, and slash/keyboard/button toggles without stale text.
 8. **Cloud and safety behavior:** availability tests prove `/fast-forward` is absent from GUI cloud/ambient command results; an action test proves direct `ToggleAutoexecuteMode` remains a no-op/locked path in cloud context and still accepts pending blocked actions in local context.
 9. **No collateral behavior:** existing slash-command, conversation-selection, history toggle/persistence, GUI footer fast-forward, and TUI session tests pass; no global preference or settings serialization changes are introduced.
-10. **TUI visual proof:** run the built TUI, open the slash menu, capture the `/fast-forward` row and stable description, execute it, and capture the resulting session state/interaction. Attach the screenshot evidence to the task/PR; do not commit media.
+10. **TUI visual proof:** run the built TUI, open the slash menu, capture `/fast-forward` with its green current-state suffix, execute it, and capture the warping row's on/off indicator in both its transient green and normal muted states. Attach the screenshot evidence to the task/PR; do not commit media.
 11. **GUI visual proof:** run the built GUI in a local Agent conversation, capture `/fast-forward` in the slash menu, execute it, and capture the Agent Shortcuts overlay first showing `toggle on` and then `toggle off` after the second toggle (also verify the reverse transition via the existing shortcut or footer button). Attach screenshots through the UI verification workflow; do not commit media.
 12. **Formatting, lint, and presubmit:** `./script/format` passes, the repository's required clippy checks pass, and `./script/presubmit` completes successfully on the final implementation branch.

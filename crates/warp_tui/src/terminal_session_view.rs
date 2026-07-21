@@ -116,6 +116,7 @@ use self::input_detection::InputDetectionState;
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
+const FAST_FORWARD_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
@@ -442,6 +443,8 @@ pub(crate) struct TuiTerminalSessionView {
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
     /// shell submission).
     transient_hint: TransientHint,
+    fast_forward_feedback_conversation_id: Option<AIConversationId>,
+    fast_forward_feedback_timer: Option<SpawnedFutureHandle>,
     conversation_restore_state: ConversationRestoreState,
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
@@ -978,6 +981,7 @@ impl TuiTerminalSessionView {
                 suggestions_mode.clone(),
                 slash_commands_source.clone(),
                 slash_commands_mixer,
+                conversation_selection.clone(),
                 ctx,
             )
         });
@@ -1428,6 +1432,8 @@ impl TuiTerminalSessionView {
             size_info,
             terminal_resize_tx,
             transient_hint: TransientHint::default(),
+            fast_forward_feedback_conversation_id: None,
+            fast_forward_feedback_timer: None,
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
             exit_summary,
@@ -1956,9 +1962,17 @@ impl TuiTerminalSessionView {
             BlocklistAIHistoryEvent::AppendedExchange { .. }
                 | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
                 | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+                | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
         ) {
             ctx.notify();
         }
+        if matches!(
+            event,
+            BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
+        ) {
+            self.show_fast_forward_feedback(ctx);
+        }
+
         if matches!(
             event,
             BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
@@ -1985,6 +1999,25 @@ impl TuiTerminalSessionView {
             }
             _ => {}
         }
+    }
+
+    fn show_fast_forward_feedback(&mut self, ctx: &mut ViewContext<Self>) {
+        self.fast_forward_feedback_conversation_id = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx);
+        let timer = ctx.spawn(
+            Timer::after(FAST_FORWARD_FEEDBACK_DURATION),
+            |view, _, ctx| {
+                view.fast_forward_feedback_conversation_id = None;
+                view.fast_forward_feedback_timer = None;
+                ctx.notify();
+            },
+        );
+        if let Some(previous_timer) = self.fast_forward_feedback_timer.replace(timer) {
+            previous_timer.abort();
+        }
+        ctx.notify();
     }
 
     fn handle_pasted(&mut self, text: String, ctx: &mut ViewContext<Self>) {
@@ -3147,10 +3180,23 @@ impl TuiView for TuiTerminalSessionView {
                     } else {
                         "Warping..."
                     };
+                    let fast_forward_enabled = self
+                        .conversation_selection
+                        .as_ref(ctx)
+                        .pending_query_autoexecute_override(ctx)
+                        .is_autoexecute_any_action();
+                    let highlight_fast_forward =
+                        self.fast_forward_feedback_conversation_id == Some(conversation.id());
                     content = content.child(
-                        TuiContainer::new(render_warping_indicator(label, elapsed, ctx))
-                            .with_padding_top(1)
-                            .finish(),
+                        TuiContainer::new(render_warping_indicator(
+                            label,
+                            elapsed,
+                            fast_forward_enabled,
+                            highlight_fast_forward,
+                            ctx,
+                        ))
+                        .with_padding_top(1)
+                        .finish(),
                     );
                 }
             } else {
