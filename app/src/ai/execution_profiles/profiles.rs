@@ -194,13 +194,11 @@ impl AIExecutionProfilesModel {
                 .execution_profiles
                 .is_value_explicitly_set()
         {
-            let mut profile = super::create_default_from_legacy_settings(ctx);
-            let agent_model = AISettings::as_ref(ctx).agent_model.value();
-            if profile.base_model.is_none() && agent_model != "auto" {
-                profile.base_model = Some(LLMId::from(agent_model.as_str()));
-            }
             let mut profiles = ExecutionProfilesConfig::default();
-            profiles.insert(ExecutionProfileId::default_profile(), profile);
+            profiles.insert(
+                ExecutionProfileId::default_profile(),
+                super::create_default_from_legacy_settings(ctx),
+            );
             if let Err(error) = AISettings::handle(ctx).update(ctx, |settings, ctx| {
                 settings.execution_profiles.set_value(profiles.clone(), ctx)
             }) {

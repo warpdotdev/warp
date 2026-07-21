@@ -110,10 +110,14 @@ The new collection becomes the only runtime source for command allowlists, comma
 - `agent_mode_command_execution_denylist`.
 - `agent_mode_coding_file_read_allowlist`.
 - The one-time `PreferredAgentModeLLMId` private preference.
-- The TUI-only `agents.model` value when constructing a TUI default.
 - Current `AIExecutionProfile::default()` values for remaining fields.
 
 After migration, new clients stop consulting those scalar settings for execution-profile behavior. Rewire the remaining Settings-page allowlist/denylist/directory editors and the codebase-search permission speedbump to mutate the appropriate execution profile directly. Keep legacy keys intact for old clients during the rollout window; remove them only in a later cleanup after legacy-client support ends.
+
+The TUI has no separate global model setting. Its inline model picker mutates
+the active execution profile's `base_model`, and ordinary TUI requests resolve
+their model from that profile. Explicit per-surface child-agent overrides retain
+precedence over the profile default.
 
 
 ### Presence-based one-time migration
