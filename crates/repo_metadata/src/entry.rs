@@ -998,6 +998,7 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 /// `node_modules`, build output, vendored deps, etc.
 pub fn should_watch_repo_directory(
     path: &Path,
+    repo_root: &Path,
     gitignores: &[Gitignore],
     force_included_paths: &[PathBuf],
 ) -> bool {
@@ -1010,7 +1011,7 @@ pub fn should_watch_repo_directory(
         return true;
     }
 
-    if is_within_symlink(path) {
+    if is_within_symlink(path, repo_root) {
         return false;
     }
 
@@ -1031,12 +1032,15 @@ pub fn should_watch_repo_directory(
 /// The recursive watcher requires this check to be monotonic: if a symlinked
 /// directory is rejected, its descendants must be rejected as well even
 /// though their individual paths are not themselves symlinks.
-fn is_within_symlink(path: &Path) -> bool {
+fn is_within_symlink(path: &Path, repo_root: &Path) -> bool {
     // A valid path beneath a symlink can only be reached through a directory
     // symlink, so avoid a second `metadata` syscall to resolve its target.
-    path.ancestors().any(|ancestor| {
-        std::fs::symlink_metadata(ancestor).is_ok_and(|metadata| metadata.file_type().is_symlink())
-    })
+    path.ancestors()
+        .take_while(|ancestor| ancestor.starts_with(repo_root))
+        .any(|ancestor| {
+            std::fs::symlink_metadata(ancestor)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        })
 }
 
 /// Returns the [`WatchFilter`] used by repository file watchers.
@@ -1061,11 +1065,13 @@ fn is_within_symlink(path: &Path) -> bool {
 /// over-watch, never to miss events.
 #[cfg(feature = "local_fs")]
 pub fn repo_watch_filter(
+    repo_root: PathBuf,
     gitignores: Vec<Gitignore>,
     force_included_paths: Vec<PathBuf>,
 ) -> WatchFilter {
-    let should_watch =
-        move |path: &Path| should_watch_repo_directory(path, &gitignores, &force_included_paths);
+    let should_watch = move |path: &Path| {
+        should_watch_repo_directory(path, &repo_root, &gitignores, &force_included_paths)
+    };
     WatchFilter::with_filter(
         Arc::new(should_watch),
         Arc::new(|path: &Path| !should_ignore_git_path(path)),

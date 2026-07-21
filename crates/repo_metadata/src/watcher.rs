@@ -321,13 +321,14 @@ impl DirectoryWatcher {
     #[cfg(feature = "local_fs")]
     pub(crate) fn start_watching_directories(
         &mut self,
+        repo_root: &Path,
         directory_paths: Vec<StandardizedPath>,
         gitignores: Vec<Gitignore>,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), RepoMetadataError>> {
         let futures: Vec<_> = directory_paths
             .into_iter()
-            .map(|path| self.start_watching_directory(&path, gitignores.clone(), ctx))
+            .map(|path| self.start_watching_directory(repo_root, &path, gitignores.clone(), ctx))
             .collect();
 
         async move {
@@ -344,6 +345,7 @@ impl DirectoryWatcher {
     #[cfg(feature = "local_fs")]
     pub(crate) fn start_watching_directory(
         &mut self,
+        repo_root: &Path,
         directory_path: &StandardizedPath,
         gitignores: Vec<Gitignore>,
         ctx: &mut ModelContext<Self>,
@@ -363,7 +365,11 @@ impl DirectoryWatcher {
 
                     Some(watcher.register_path(
                         &local_path,
-                        repo_watch_filter(gitignores, force_included_paths),
+                        repo_watch_filter(
+                            repo_root.to_path_buf(),
+                            gitignores,
+                            force_included_paths,
+                        ),
                         RecursiveMode::Recursive,
                     ))
                 })

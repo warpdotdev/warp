@@ -199,14 +199,21 @@ fn should_watch_prunes_gitignored_directory() {
     let gitignores = vec![gitignore_rooted(&root, "node_modules/\n")];
 
     // Root and non-ignored dirs are watched; the gitignored dir is pruned.
-    assert!(super::should_watch_repo_directory(&root, &gitignores, &[]));
+    assert!(super::should_watch_repo_directory(
+        &root,
+        &root,
+        &gitignores,
+        &[]
+    ));
     assert!(super::should_watch_repo_directory(
         &root.join("src"),
+        &root,
         &gitignores,
         &[]
     ));
     assert!(!super::should_watch_repo_directory(
         &root.join("node_modules"),
+        &root,
         &gitignores,
         &[]
     ));
@@ -214,6 +221,7 @@ fn should_watch_prunes_gitignored_directory() {
     // what preserves the watcher's monotonicity invariant.
     assert!(!super::should_watch_repo_directory(
         &root.join("node_modules/foo"),
+        &root,
         &gitignores,
         &[]
     ));
@@ -231,11 +239,31 @@ fn should_watch_prunes_directory_symlinks_and_their_descendants() {
     // latter protects the watch filter's ancestor monotonicity invariant.
     assert!(!super::should_watch_repo_directory(
         &root.join("result"),
+        &root,
         &[],
         &[]
     ));
     assert!(!super::should_watch_repo_directory(
         &root.join("result/tree"),
+        &root,
+        &[],
+        &[]
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn should_watch_ignores_symlinks_above_repo_root() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let real_parent = temp_dir.path().join("real-parent");
+    let symlinked_parent = temp_dir.path().join("linked-parent");
+    fs::create_dir_all(real_parent.join("repo/src")).unwrap();
+    std::os::unix::fs::symlink(&real_parent, &symlinked_parent).unwrap();
+
+    let repo_root = symlinked_parent.join("repo");
+    assert!(super::should_watch_repo_directory(
+        &repo_root.join("src"),
+        &repo_root,
         &[],
         &[]
     ));
@@ -259,11 +287,13 @@ fn should_watch_allows_symlinked_force_included_paths() {
     // directories, so the explicit force-included path remains watchable.
     assert!(super::should_watch_repo_directory(
         &root.join(".agents/skills/linked"),
+        &root,
         &[],
         &force_included
     ));
     assert!(super::should_watch_repo_directory(
         &root.join(".agents/skills/linked/SKILL.md"),
+        &root,
         &[],
         &force_included
     ));
@@ -282,22 +312,26 @@ fn should_watch_descends_to_force_included_under_ignored_ancestor() {
     // prefix to reach the force-included path, and into its subtree.
     assert!(super::should_watch_repo_directory(
         &root.join(".agents"),
+        &root,
         &gitignores,
         &force_included
     ));
     assert!(super::should_watch_repo_directory(
         &root.join(".agents/skills"),
+        &root,
         &gitignores,
         &force_included
     ));
     assert!(super::should_watch_repo_directory(
         &root.join(".agents/skills/test"),
+        &root,
         &gitignores,
         &force_included
     ));
     // A sibling ignored dir that is not force-included is still pruned.
     assert!(!super::should_watch_repo_directory(
         &root.join(".agents/other"),
+        &root,
         &gitignores,
         &force_included
     ));
@@ -316,21 +350,25 @@ fn should_watch_handles_nested_ignored_ancestor_with_deeper_force_included() {
     // prefix and into it, while pruning the ignored sibling.
     assert!(super::should_watch_repo_directory(
         &root.join("a"),
+        &root,
         &gitignores,
         &force_included
     ));
     assert!(super::should_watch_repo_directory(
         &root.join("a/b"),
+        &root,
         &gitignores,
         &force_included
     ));
     assert!(super::should_watch_repo_directory(
         &root.join("a/b/c"),
+        &root,
         &gitignores,
         &force_included
     ));
     assert!(!super::should_watch_repo_directory(
         &root.join("a/b/other"),
+        &root,
         &gitignores,
         &force_included
     ));
@@ -348,6 +386,7 @@ fn should_watch_descends_dir_only_reinclude_negation() {
     // `parentdir` itself is not matched by `parentdir/*`, so we descend.
     assert!(super::should_watch_repo_directory(
         &root.join("parentdir"),
+        &root,
         &gitignores,
         &[]
     ));
@@ -355,6 +394,7 @@ fn should_watch_descends_dir_only_reinclude_negation() {
     // still watched even though `parentdir/*` matched it first.
     assert!(super::should_watch_repo_directory(
         &root.join("parentdir/sub"),
+        &root,
         &gitignores,
         &[]
     ));
@@ -378,11 +418,13 @@ fn should_watch_preserves_git_internal_allowlist() {
     fs::create_dir_all(repo.join(".git/objects")).unwrap();
     assert!(super::should_watch_repo_directory(
         &repo.join(".git/refs/heads"),
+        &repo,
         &[],
         &[]
     ));
     assert!(!super::should_watch_repo_directory(
         &repo.join(".git/objects"),
+        &repo,
         &[],
         &[]
     ));
@@ -925,10 +967,16 @@ fn gitignore_affects_descend_predicate_but_not_emitted_events() {
     // registration, while a tracked dir is still descended into.
     assert!(!should_watch_repo_directory(
         &node_modules,
+        &root_path,
         &gitignores,
         &[]
     ));
-    assert!(should_watch_repo_directory(&src, &gitignores, &[]));
+    assert!(should_watch_repo_directory(
+        &src,
+        &root_path,
+        &gitignores,
+        &[]
+    ));
 
     // Emit predicate building block (`!should_ignore_git_path`): gitignored,
     // non-`.git` paths are NOT suppressed, so their events still flow. Only
