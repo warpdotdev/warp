@@ -251,6 +251,41 @@ fn test_powershell_escape() {
     assert_eq!(shell_family.escape(""), "''");
     assert_eq!(shell_family.escape("foo '\"' bar"), "foo` `'`\"`'` bar");
 }
+#[test]
+fn test_powershell_autosuggestion_normalizes_json_escaped_backslashes() {
+    let powershell = ShellFamily::PowerShell;
+    let escaped_unc =
+        r#"cat \\\\WSL$\\Ubuntu\\home\\dev\\.intelligent-terminal\\shell-integration_v2.sh"#;
+    let normalized_unc =
+        r#"cat \\WSL$\Ubuntu\home\dev\.intelligent-terminal\shell-integration_v2.sh"#;
+
+    assert_eq!(
+        powershell.normalize_autosuggestion(escaped_unc),
+        normalized_unc
+    );
+    assert_eq!(
+        powershell.normalize_autosuggestion(normalized_unc),
+        normalized_unc
+    );
+    assert_eq!(
+        powershell.normalize_autosuggestion(r#"cat "C:\\\\Program Files\\Warp""#),
+        r#"cat "C:\Program Files\Warp""#
+    );
+    assert_eq!(
+        powershell.normalize_autosuggestion(r#"Write-Output "already correct""#),
+        r#"Write-Output "already correct""#
+    );
+
+    let command = r#"cat \\\\server\\share\\file"#;
+    assert_eq!(
+        ShellFamily::Posix.normalize_autosuggestion(command),
+        command
+    );
+    assert_eq!(
+        powershell.normalize_autosuggestion(command),
+        r#"cat \\server\share\file"#
+    );
+}
 
 #[test]
 fn test_posix_unescape() {

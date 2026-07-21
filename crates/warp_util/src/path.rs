@@ -254,6 +254,18 @@ impl ShellFamily {
         Cow::Owned(result)
     }
 
+    /// Normalizes command text returned by shell autosuggestion producers.
+    ///
+    /// PowerShell treats backslashes as ordinary path separators, but a suggestion
+    /// that has passed through JSON serialization can contain doubled separators.
+    /// Collapse those redundant separators while preserving the two-character UNC
+    /// prefix at the start of a path token. Other shell families are unchanged.
+    pub fn normalize_autosuggestion<'s>(&self, input: &'s str) -> Cow<'s, str> {
+        match self {
+            Self::Posix => Cow::Borrowed(input),
+            Self::PowerShell => normalize_powershell_autosuggestion(input),
+        }
+    }
     /// Escapes the path to treat it as a single word within the shell.
     ///
     /// This function returns a [`Cow::Borrowed`] of the input string where possible and only
@@ -285,6 +297,58 @@ impl ShellFamily {
     }
 }
 
+fn normalize_powershell_autosuggestion<'s>(input: &'s str) -> Cow<'s, str> {
+    if !input.as_bytes().windows(2).any(|window| window == b"\\\\") {
+        return Cow::Borrowed(input);
+    }
+
+    let mut normalized = String::with_capacity(input.len());
+    let mut token_start = true;
+    let mut quote = None;
+    let mut changed = false;
+    let mut chars = input.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        if character == '\\' {
+            let mut run_length = 1;
+            while chars.peek() == Some(&'\\') {
+                chars.next();
+                run_length += 1;
+            }
+
+            // A token-start run is a UNC prefix. Keep exactly two separators;
+            // all other runs represent redundant JSON-style path separators.
+            let normalized_length = if token_start { run_length.min(2) } else { 1 };
+            if normalized_length != run_length {
+                changed = true;
+            }
+            normalized.extend(std::iter::repeat_n('\\', normalized_length));
+            token_start = false;
+            continue;
+        }
+
+        normalized.push(character);
+        if let Some(active_quote) = quote {
+            if character == active_quote {
+                quote = None;
+                token_start = false;
+            } else if token_start && !character.is_whitespace() {
+                token_start = false;
+            }
+        } else if character == '\'' || character == '"' {
+            quote = Some(character);
+        } else {
+            token_start =
+                character.is_whitespace() || matches!(character, ';' | '|' | '&' | '(' | ')');
+        }
+    }
+
+    if changed {
+        Cow::Owned(normalized)
+    } else {
+        Cow::Borrowed(input)
+    }
+}
 /// Returns `true` iff the given string is a valid POSIX portable pathname.
 /// Source: https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_271
 pub fn is_posix_portable_pathname(s: &str) -> bool {

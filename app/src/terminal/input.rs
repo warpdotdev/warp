@@ -16321,9 +16321,17 @@ impl Autosuggester for Input {
             return;
         }
 
-        let autosuggestion_result_substring = result
+        let shell_family = self
+            .editor
+            .as_ref(ctx)
+            .shell_family()
+            .unwrap_or(ShellFamily::Posix);
+        let normalized_autosuggestion = result
             .autosuggestion_result
-            .as_ref()
+            .as_deref()
+            .map(|result| shell_family.normalize_autosuggestion(result).into_owned());
+        let autosuggestion_result_substring = normalized_autosuggestion
+            .as_deref()
             .and_then(|result| result.strip_prefix(buffer_text.as_str()));
 
         if let Some(autosuggestion) = autosuggestion_result_substring {

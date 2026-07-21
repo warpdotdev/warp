@@ -3526,10 +3526,15 @@ impl EditorView {
             // If we switched to AI input, clear the next command state.
             // This way when switching back to shell input, there should be no next command suggestion populated.
             self.clear_next_command_state(ctx);
-        } else if let Some(command) = self
-            .next_command_state(ctx)
-            .command_suggestion()
-            .map(|command| command.to_owned())
+        } else if let Some(command) =
+            self.next_command_state(ctx)
+                .command_suggestion()
+                .map(|command| {
+                    self.shell_family
+                        .unwrap_or(ShellFamily::Posix)
+                        .normalize_autosuggestion(command)
+                        .into_owned()
+                })
         {
             // Check if this suggestion is ignored before applying it
             let is_ignored = IgnoredSuggestionsModel::as_ref(ctx)
