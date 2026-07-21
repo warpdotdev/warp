@@ -511,6 +511,12 @@ codegen-units = 1
 [profile.release-cli-debug_assertions]
 inherits = "release-cli"
 debug-assertions = true
+# Windows-safe shorthand profiles for CLI/TUI release builds.
+[profile.rcli]
+inherits = "release-cli"
+
+[profile.rclida]
+inherits = "release-cli-debug_assertions"
 
 [profile.release-wasm]
 inherits = "release"

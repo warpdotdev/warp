@@ -3,6 +3,8 @@
 # Bundle the application for release.
 
 Param (
+    [ValidateSet('app', 'tui')]
+    [String]$ARTIFACT = 'app',
     # Build dev bundles by default.
     [Switch]$DEBUG_BUILD = $False,
 
@@ -15,12 +17,16 @@ Param (
     [Alias('release-tag')]
     [String]$RELEASE_TAG = '',
     [String]$FEATURES = 'release_bundle,crash_reporting,gui',
-
-    # Builds only the Warp binary, skips the installer.
+    # Builds only the binary, skipping the installer/package.
     [Switch]$SKIP_BUILD_INSTALLER = $False,
-    # Builds only the installer, skips the Warp binary. Use this if the Warp
-    # binary has already been built.
+    # Builds only the installer/package, skipping the binary. Use this after
+    # the binary has already been built (and signed for release artifacts).
     [Switch]$SKIP_BUILD_BINARY = $False,
+
+    # Require the TUI executable and bundled PTY runtime to have valid
+    # Authenticode signatures before packaging. Signing itself intentionally
+    # remains a post-build release step.
+    [Switch]$REQUIRE_AUTHENTICODE = $False,
 
     [ValidateSet('x64', 'arm64')]
     [String]$ARCH = '',
@@ -69,15 +75,39 @@ if ($DEBUG_BUILD) {
     # For dev bundles, we want to enable debug assertions to
     # catch violations that would otherwise silently pass in
     # a normal release build (e.g. in stable).
-    $CARGO_PROFILE = 'rltoda'
+    $CARGO_PROFILE = if ($ARTIFACT -eq 'tui') { 'rclida' } else { 'rltoda' }
 } else {
-    $CARGO_PROFILE = 'rlto'
+    $CARGO_PROFILE = if ($ARTIFACT -eq 'tui') { 'rcli' } else { 'rlto' }
 }
 
 if ($CARGO_PROFILE -eq 'dev') {
     $CARGO_TARGET_OUTPUT_DIR = "$CARGO_TARGET_DIR" + '\' + $PLATFORM_TARGET + '\debug'
 } else {
     $CARGO_TARGET_OUTPUT_DIR = "$CARGO_TARGET_DIR" + '\' + $PLATFORM_TARGET + '\' + "$CARGO_PROFILE"
+}
+
+if ($ARTIFACT -eq 'tui') {
+    try {
+        & "$WINDOWS_INSTALLER_DIR\bundle_tui.ps1" `
+            -CheckOnly:$CHECK_ONLY `
+            -Channel "$CHANNEL" `
+            -ReleaseTag "$RELEASE_TAG" `
+            -CargoProfile "$CARGO_PROFILE" `
+            -PlatformTarget "$PLATFORM_TARGET" `
+            -CargoTargetOutputDir "$CARGO_TARGET_OUTPUT_DIR" `
+            -Arch "$ARCH" `
+            -SkipPackage:$SKIP_BUILD_INSTALLER `
+            -SkipBuildBinary:$SKIP_BUILD_BINARY `
+            -RequireAuthenticode:$REQUIRE_AUTHENTICODE
+        $TUI_BUNDLE_SUCCEEDED = $?
+    } catch {
+        Write-Error -ErrorRecord $_ -ErrorAction Continue
+        exit 1
+    }
+    if (-Not $TUI_BUNDLE_SUCCEEDED) {
+        exit 1
+    }
+    exit 0
 }
 $BUNDLE_ID = "dev.warp.$app_name"
 

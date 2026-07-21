@@ -114,6 +114,10 @@ fn main() -> Result<()> {
     }
 
     if target_os == "windows" {
+        println!("cargo:rerun-if-env-changed=CARGO_BIN_NAME");
+        println!("cargo:rerun-if-env-changed=CARGO_FULL_PROFILE");
+        println!("cargo:rerun-if-env-changed=GIT_RELEASE_TAG");
+        println!("cargo:rerun-if-env-changed=WARP_APP_NAME");
         // Retrieve the Cargo profile name so that we can put a copy of ConPTY in
         // the correct target subdirectory.
         //

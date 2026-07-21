@@ -11,10 +11,14 @@
 #   destination_directory: The directory where resources should be installed.
 #                          Resources will be copied to subdirectories within
 #                          this path (e.g., $DEST_DIR\skills).
+#   artifact:              (Optional) Artifact type (app or tui). TUI bundles
+#                          omit attribution for GUI-only runtime components.
 
 Param(
     [Parameter(Mandatory = $true)]
     [String]$DestinationDir,
+    [ValidateSet('app', 'tui')]
+    [String]$Artifact = 'app',
 
     [Parameter(Mandatory = $false)]
     [String]$Channel = '',
@@ -131,11 +135,14 @@ $AdditionalLicenses = @(
     @{ Name = 'Windows Terminal'; License = 'MIT'; Path = 'app\assets\windows\LICENSE-WINDOWS-TERMINAL' },
     @{ Name = 'GitHub Desktop'; License = 'MIT'; Path = 'app\src\code_review\GITHUB-DESKTOP-LICENSE' }
 )
-# Windows-only components:
 $AdditionalLicenses += @(
-    @{ Name = 'OpenConsole / ConPTY (Windows Terminal)'; License = 'MIT'; Path = 'app\assets\windows\LICENSE-WINDOWS-TERMINAL' },
-    @{ Name = 'DirectX Shader Compiler'; License = 'NCSA'; Path = 'app\assets\windows\LICENSE-DXC' }
+    @{ Name = 'OpenConsole / ConPTY (Windows Terminal)'; License = 'MIT'; Path = 'app\assets\windows\LICENSE-WINDOWS-TERMINAL' }
 )
+if ($Artifact -eq 'app') {
+    $AdditionalLicenses += @(
+        @{ Name = 'DirectX Shader Compiler'; License = 'NCSA'; Path = 'app\assets\windows\LICENSE-DXC' }
+    )
+}
 
 $LicensesOutput = Join-Path $DestinationDir 'THIRD_PARTY_LICENSES.txt'
 Write-Output "Generating third-party licenses at $LicensesOutput"

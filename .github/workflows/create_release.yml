@@ -23,6 +23,10 @@ on:
         description: Build Windows artifacts.
         type: boolean
         default: true
+      build_windows_tui:
+        description: Build the non-publishing Windows TUI x64 proof of concept.
+        type: boolean
+        default: false
       build_macos:
         description: Build macOS artifacts.
         type: boolean
@@ -48,6 +52,10 @@ on:
         description: Build Windows artifacts.
         type: boolean
         default: true
+      build_windows_tui:
+        description: Build the non-publishing Windows TUI x64 proof of concept.
+        type: boolean
+        default: false
       build_macos:
         description: Build macOS artifacts.
         type: boolean
@@ -1651,6 +1659,252 @@ jobs:
         with:
           name: release-windows-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.installer_path }}
+
+  # Opt-in x64 proof of concept for the native build/sign/package/install path.
+  # It is intentionally dev-only and cannot run during a publishing workflow.
+  release_windows_tui_poc:
+    name: Build Release PoC (Windows TUI x64)
+    runs-on: windows-latest-large
+    needs: prepare_release
+    if: ${{ inputs.build_windows_tui == true && inputs.channel == 'dev' && needs.prepare_release.outputs.should_publish == 'false' }}
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    env:
+      TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+      TRUSTED_SIGNING_ACCOUNT: warpdotdev
+      TRUSTED_SIGNING_CERT_PROFILE: warpterminal
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: windows
+          cache_key: tui-x64
+          is_self_hosted: false
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      - name: Test Windows TUI packaging and installation
+        shell: pwsh
+        run: script/windows/test_tui_packaging.ps1
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Build Windows TUI binary
+        id: build_tui
+        shell: bash
+        run: script/bundle -Artifact tui -Channel "$CHANNEL" -skip_build_installer -Arch x64
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Sign the TUI and PTY runtime with Azure Trusted Signing
+        uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ env.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.TRUSTED_SIGNING_CERT_PROFILE }}
+          files: |
+            ${{ steps.build_tui.outputs.binary_path }}
+            ${{ github.workspace }}\app\assets\windows\x64\conpty.dll
+            ${{ github.workspace }}\app\assets\windows\x64\OpenConsole.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signed Windows payload
+        shell: pwsh
+        env:
+          BINARY_PATH: ${{ steps.build_tui.outputs.binary_path }}
+          CONPTY_PATH: ${{ github.workspace }}\app\assets\windows\x64\conpty.dll
+          OPEN_CONSOLE_PATH: ${{ github.workspace }}\app\assets\windows\x64\OpenConsole.exe
+        run: |
+          $Payload = @(
+            $env:BINARY_PATH,
+            $env:CONPTY_PATH,
+            $env:OPEN_CONSOLE_PATH
+          )
+          foreach ($Path in $Payload) {
+            $Signature = Get-AuthenticodeSignature -FilePath $Path
+            if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+              throw "Invalid Authenticode signature for '$Path': $($Signature.Status) ($($Signature.StatusMessage))"
+            }
+          }
+
+      - name: Smoke test signed Windows TUI binary
+        shell: pwsh
+        env:
+          BINARY_PATH: ${{ steps.build_tui.outputs.binary_path }}
+          RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+        run: |
+          $ProductVersion = (Get-Item $env:BINARY_PATH).VersionInfo.ProductVersion
+          if ($ProductVersion -cne $env:RELEASE_TAG) {
+            throw "Embedded product version '$ProductVersion' does not match '$env:RELEASE_TAG'"
+          }
+          $Output = & $env:BINARY_PATH --help | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            throw "Warp TUI --help exited with code $LASTEXITCODE"
+          }
+          if ($Output -notmatch 'Usage:') {
+            throw "Warp TUI --help did not contain a usage section"
+          }
+          Write-Output $Output
+
+      - name: Package signed Windows TUI
+        id: package_tui
+        shell: bash
+        run: script/bundle -Artifact tui -Channel "$CHANNEL" -skip_build_binary -require_authenticode -Arch x64
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Inspect Windows TUI archives
+        shell: pwsh
+        env:
+          ARCHIVE_PATH: ${{ steps.package_tui.outputs.archive_path }}
+          SYMBOLS_PATH: ${{ steps.package_tui.outputs.symbols_path }}
+          RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          function Assert-ZipEntries {
+            param(
+              [String]$Path,
+              [String[]]$RequiredEntries
+            )
+
+            $Zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+            try {
+              $Entries = @($Zip.Entries | ForEach-Object { $_.FullName })
+              foreach ($RequiredEntry in $RequiredEntries) {
+                if ($RequiredEntry -notin $Entries) {
+                  throw "Archive '$Path' is missing '$RequiredEntry'"
+                }
+              }
+            } finally {
+              $Zip.Dispose()
+            }
+          }
+
+          $RequiredPayloadEntries = @(
+            'warp-tui/manifest.json',
+            'warp-tui/warp-tui-dev.exe',
+            'warp-tui/conpty.dll',
+            'warp-tui/x64/OpenConsole.exe',
+            'warp-tui/resources/bundled/metadata/version.json',
+            'warp-tui/resources/THIRD_PARTY_LICENSES.txt',
+            'warp-tui/resources/settings_schema.json'
+          )
+          Assert-ZipEntries -Path $env:ARCHIVE_PATH -RequiredEntries $RequiredPayloadEntries
+
+          $Archive = [System.IO.Compression.ZipFile]::OpenRead($env:ARCHIVE_PATH)
+          try {
+            $ManifestEntry = $Archive.GetEntry('warp-tui/manifest.json')
+            $Reader = [System.IO.StreamReader]::new($ManifestEntry.Open())
+            try {
+              $Manifest = $Reader.ReadToEnd() | ConvertFrom-Json
+            } finally {
+              $Reader.Dispose()
+            }
+          } finally {
+            $Archive.Dispose()
+          }
+
+          if (
+            $Manifest.format_version -ne 1 -or
+            $Manifest.channel -cne 'dev' -or
+            $Manifest.architecture -cne 'x86_64' -or
+            $Manifest.version -cne $env:RELEASE_TAG -or
+            $Manifest.executable -cne 'warp-tui-dev.exe' -or
+            $Manifest.command -cne 'warp-dev'
+          ) {
+            throw "Unexpected Warp TUI manifest: $($Manifest | ConvertTo-Json -Compress)"
+          }
+
+          $RequiredSymbolEntries = @(
+            'warp-tui-symbols/warp-tui-dev.pdb',
+            'warp-tui-symbols/conpty.pdb',
+            'warp-tui-symbols/x64/OpenConsole.pdb'
+          )
+          Assert-ZipEntries -Path $env:SYMBOLS_PATH -RequiredEntries $RequiredSymbolEntries
+
+      - name: Install and smoke test signed Windows TUI package
+        shell: pwsh
+        env:
+          ARCHIVE_PATH: ${{ steps.package_tui.outputs.archive_path }}
+          INSTALLER_PATH: ${{ steps.package_tui.outputs.installer_path }}
+          RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+        run: |
+          $InstallRoot = Join-Path $env:RUNNER_TEMP 'warp-tui-poc'
+          & $env:INSTALLER_PATH `
+            -ArchivePath $env:ARCHIVE_PATH `
+            -InstallRoot $InstallRoot `
+            -NoPathUpdate
+
+          $CurrentVersion = (Get-Content (Join-Path $InstallRoot 'current.txt') -Raw).Trim()
+          if ($CurrentVersion -cne $env:RELEASE_TAG) {
+            throw "Installed version '$CurrentVersion' does not match '$env:RELEASE_TAG'"
+          }
+
+          $Launcher = Join-Path $InstallRoot 'bin\warp-dev.cmd'
+          $Output = & $Launcher --help | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installed Warp TUI --help exited with code $LASTEXITCODE"
+          }
+          if ($Output -notmatch 'Usage:') {
+            throw "Installed Warp TUI --help did not contain a usage section"
+          }
+          Write-Output $Output
+
+      - name: Exercise packaged ConPTY runtime
+        shell: pwsh
+        env:
+          CARGO_BIN_NAME: dev
+          CARGO_FULL_PROFILE: rclida
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          WARP_APP_NAME: WarpTuiDev
+        run: |
+          $InstallRoot = Join-Path $env:RUNNER_TEMP 'warp-tui-poc'
+          $env:WARP_CONPTY_SMOKE_ROOT = Join-Path $InstallRoot "versions\$env:RELEASE_TAG"
+          cargo test `
+            --locked `
+            -p warp `
+            --profile rclida `
+            --target x86_64-pc-windows-msvc `
+            --lib `
+            terminal::local_tty::windows::tests::spawns_powershell_with_packaged_conpty `
+            -- `
+            --exact `
+            --ignored `
+            --nocapture
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged ConPTY runtime smoke failed with code $LASTEXITCODE"
+          }
+
+      - name: Upload Windows TUI PoC artifacts
+        if: ${{ !cancelled() && steps.package_tui.outcome == 'success' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-windows-tui-x64-${{ steps.get-config.outputs.channel }}-poc
+          path: |
+            ${{ steps.package_tui.outputs.archive_path }}
+            ${{ steps.package_tui.outputs.symbols_path }}
+            ${{ steps.package_tui.outputs.installer_path }}
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
 
   send_slack_notif_if_unsuccessful:
     name: Send Slack notification if any release jobs were unsuccessful

@@ -527,3 +527,7 @@ impl Drop for Pty {
         self.close_pseudoconsole();
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
