@@ -367,6 +367,12 @@ pub(crate) enum TuiTerminalSessionAction {
     TogglePlan,
     /// Return keyboard focus from tabs to the session's default interaction target.
     FocusDefaultInteractionTarget,
+    /// Return to the main/root orchestration agent and focus its input.
+    ///
+    /// When a child tab is selected, switches the focused session to the
+    /// root/main agent; when the root is already selected, only clears tab
+    /// focus and restores input focus.
+    FocusMainOrchestrationTab,
     /// Navigate the orchestration tabs using their semantic order.
     NavigateOrchestrationTabs(TuiOrchestrationTabNavigationAction),
     /// Move focus from the prompt input into the attachment bar.
@@ -524,14 +530,32 @@ pub(crate) fn init(app: &mut AppContext) {
 
     let tab_context =
         id!(TuiTerminalSessionView::ui_name()) & id!(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
-    app.register_editable_bindings([EditableBinding::new(
-        "tui:orchestration_tabs:focus_input",
-        "Return focus to the session input",
-        TuiTerminalSessionAction::FocusDefaultInteractionTarget,
-    )
-    .with_context_predicate(tab_context)
-    .with_group(TUI_BINDING_GROUP)
-    .with_key_binding("shift-down")]);
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "tui:orchestration_tabs:focus_input",
+            "Return focus to the session input",
+            TuiTerminalSessionAction::FocusDefaultInteractionTarget,
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("down"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:focus_input",
+            "Return focus to the session input",
+            TuiTerminalSessionAction::FocusDefaultInteractionTarget,
+        )
+        .with_context_predicate(tab_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-down"),
+        EditableBinding::new(
+            "tui:orchestration_tabs:focus_main",
+            "Return to the main agent and focus its input",
+            TuiTerminalSessionAction::FocusMainOrchestrationTab,
+        )
+        .with_context_predicate(tab_context)
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("escape"),
+    ]);
 }
 
 impl TuiTerminalSessionView {
@@ -3114,6 +3138,14 @@ impl TypedActionView for TuiTerminalSessionView {
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
             TuiTerminalSessionAction::FocusDefaultInteractionTarget => {
                 self.set_orchestration_tab_focus(false, ctx)
+            }
+            TuiTerminalSessionAction::FocusMainOrchestrationTab => {
+                let main_tab_key = self.orchestration_tab_bar.as_ref(ctx).main_tab_key();
+                if let Some(key) = main_tab_key {
+                    self.switch_to_orchestration_tab(Some(key), false, ctx);
+                } else {
+                    self.set_orchestration_tab_focus(false, ctx);
+                }
             }
             TuiTerminalSessionAction::NavigateOrchestrationTabs(action) => {
                 let key = action.target(self.orchestration_tab_bar.as_ref(ctx));

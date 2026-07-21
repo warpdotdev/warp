@@ -219,6 +219,17 @@ fn view_navigation_uses_semantic_order() {
 }
 
 #[test]
+fn main_tab_key_returns_the_configured_main_tab_key() {
+    let mut cfg = config(vec![tab(2, "two"), tab(3, "three")]);
+    cfg.main_tab = Some(tab(1, "main"));
+    let bar = view(cfg);
+    assert_eq!(bar.main_tab_key(), Some(key(1)));
+
+    let no_main = view(config(vec![tab(1, "one")]));
+    assert_eq!(no_main.main_tab_key(), None);
+}
+
+#[test]
 fn render_composes_selected_and_leading_styles() {
     App::test((), |app| async move {
         app.read(|app| {

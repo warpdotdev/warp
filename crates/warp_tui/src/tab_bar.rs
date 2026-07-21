@@ -308,6 +308,14 @@ impl TuiTabBarView {
         }
         .map(|tab| tab.key.clone())
     }
+
+    /// Returns the configured main-tab's stable key, if any.
+    ///
+    /// Callers (e.g. the terminal-session Escape binding) use this to return
+    /// focus to the root/main agent without duplicating tab-bar configuration.
+    pub(crate) fn main_tab_key(&self) -> Option<String> {
+        self.config.main_tab.as_ref().map(|tab| tab.key.clone())
+    }
 }
 
 /// Validates tab identities and label widths, returning the live key set.
