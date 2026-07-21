@@ -2620,6 +2620,9 @@ impl TuiTerminalSessionView {
                 }
                 self.cancel_active_conversation(ctx);
                 let terminal_surface_id = ctx.view_id();
+                self.transcript.update(ctx, |transcript, ctx| {
+                    transcript.clear_for_new_conversation(ctx);
+                });
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
                     history.clear_conversations_for_terminal_surface(terminal_surface_id, ctx);
                 });

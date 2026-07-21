@@ -1654,6 +1654,10 @@ impl TerminalModel {
     pub fn block_list_mut(&mut self) -> &mut BlockList {
         &mut self.block_list
     }
+    /// Clears all completed blocks and resets the active block's screen.
+    pub fn clear_blocks(&mut self) {
+        self.block_list.clear_screen(ansi::ClearMode::ResetAndClear);
+    }
 
     pub fn remove_image_id_to_metadata_entry(&mut self, image_id: u32) {
         self.image_id_to_metadata.remove(&image_id);

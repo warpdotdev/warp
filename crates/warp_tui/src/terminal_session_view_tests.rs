@@ -5,7 +5,9 @@ use warp::tui_export::{
     AIConversationId, AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel,
     ConversationStatus, ConversationUsageTotals, Harness, InputType, PtyIntent, PtyIntentEvent,
     SizeInfo, SizeUpdate, export_conversation_markdown, register_tui_session_view_test_singletons,
+    slash_commands,
 };
+use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
 use warpui::{
@@ -90,6 +92,7 @@ fn inline_menu_padding_preserves_result_capacity() {
 
 fn focus_test_fixture(app: &mut App) -> FocusTestFixture {
     register_tui_session_view_test_singletons(app);
+    app.update(MockTelemetryContextProvider::register);
     add_test_semantic_selection(app);
     app.update(TuiAutoupdater::register);
     let (window_id, _) = app.update(|ctx| {
@@ -424,6 +427,46 @@ fn assert_footer_segments_absent(lines: &[String]) {
     );
 }
 
+#[test]
+fn new_slash_command_clears_shell_commands_from_transcript() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, _| {
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.block_list_mut().set_bootstrapped();
+            terminal_model.simulate_block("echo before-new", "before-new\r\n");
+        });
+
+        view.read(&app, |view, ctx| {
+            assert!(!view.transcript.as_ref(ctx).is_empty());
+            assert!(
+                view.terminal_model
+                    .lock()
+                    .block_list()
+                    .blocks()
+                    .iter()
+                    .any(|block| block.command_to_string() == "echo before-new")
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::NEW, None, ctx);
+        });
+
+        view.read(&app, |view, ctx| {
+            assert!(
+                view.transcript.as_ref(ctx).is_empty(),
+                "/new should clear both agent and shell transcript blocks"
+            );
+            assert_eq!(
+                view.terminal_model.lock().block_list().blocks().len(),
+                1,
+                "/new should leave only the active prompt block"
+            );
+        });
+    });
+}
 #[test]
 fn orchestration_tab_icon_replaces_identity_only_while_active_or_blocked() {
     App::test((), |mut app| async move {

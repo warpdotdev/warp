@@ -467,6 +467,12 @@ impl TuiTranscriptView {
         self.clear_agent_blocks(ctx);
         self.viewport.scroll_to_end();
     }
+    /// Clears agent and terminal blocks before starting a new conversation.
+    pub(super) fn clear_for_new_conversation(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_agent_blocks(ctx);
+        self.model.lock().clear_blocks();
+        self.viewport.scroll_to_end();
+    }
 
     fn mark_exchange_dirty(&mut self, exchange_id: AIAgentExchangeId, ctx: &mut ViewContext<Self>) {
         if let Some(view_id) = self.view_id_for_exchange(exchange_id, ctx) {
