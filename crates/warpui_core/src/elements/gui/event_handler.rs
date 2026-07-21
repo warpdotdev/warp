@@ -6,7 +6,7 @@ use super::{
     AfterLayoutContext, AppContext, DispatchEventResult, Element, Event, EventContext,
     LayoutContext, PaintContext, Point, SizeConstraint, ZIndex,
 };
-use crate::event::{DispatchedEvent, KeyState, ModifiersState};
+use crate::event::{DispatchedEvent, EventDiscriminants, KeyState, ModifiersState};
 use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
 
@@ -249,7 +249,10 @@ impl Element for EventHandler {
         }
 
         let Some(z_index) = self.child_max_z_index else {
-            log::error!("Dispatching event on EventHandler element which was never painted");
+            log::error!(
+                "Dispatching event on EventHandler element which was never painted: event={:?}",
+                EventDiscriminants::from(event.raw_event())
+            );
             return false;
         };
         match event.at_z_index(z_index, ctx) {
