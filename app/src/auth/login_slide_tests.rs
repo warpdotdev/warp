@@ -22,7 +22,7 @@ fn account_first_copy_matches_product_spec() {
     assert_eq!(
         LoginPurpose::AccountFirst.work_email_callout_copy(),
         Some((
-            "Use your work email if you have one",
+            "Use a work email to find teammates",
             "Signing in with a work email helps us find your teammates and may unlock special offers.",
         ))
     );
