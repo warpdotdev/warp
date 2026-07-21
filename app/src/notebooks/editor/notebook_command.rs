@@ -743,7 +743,10 @@ impl RunnableCommandModel for NotebookCommand {
                             self.mouse_state_handles
                                 .mermaid_fullscreen_button_state
                                 .clone(),
-                            "Open full screen",
+                            crate::menu_label(
+                                "notebook.mermaid.open_full_screen_label",
+                                "Open full screen",
+                            ),
                             None,
                         )
                         .on_click(move |ctx, app, _| {
@@ -776,7 +779,7 @@ impl RunnableCommandModel for NotebookCommand {
                     appearance,
                     Icon::Copy,
                     self.mouse_state_handles.copy_button_state.clone(),
-                    "Copy",
+                    crate::menu_label("notebook.code_block.copy_label", "Copy"),
                     custom_action_to_display(CustomAction::Copy),
                 )
                 .on_click(move |ctx, app, _| {
@@ -803,7 +806,10 @@ impl RunnableCommandModel for NotebookCommand {
                         appearance,
                         Icon::TerminalInput,
                         self.mouse_state_handles.insert_button_state.clone(),
-                        "Run in terminal",
+                        crate::menu_label(
+                            "notebook.code_block.run_in_terminal_label",
+                            "Run in terminal",
+                        ),
                         NotebookKeybindings::as_ref(ctx).run_commands_keybinding(),
                     )
                     .on_click(move |ctx, app, _| {

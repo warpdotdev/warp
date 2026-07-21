@@ -130,51 +130,87 @@ fn user_facing_git_error(raw: &str) -> &'static str {
     if lower.contains("no changes added to commit") {
         // Distinct from a clean tree: changes exist but nothing is staged
         // (e.g. "include unstaged" off with an empty index).
-        "No staged changes to commit."
+        crate::menu_label(
+            "codereview.git_dialog.error.no_staged_changes",
+            "No staged changes to commit.",
+        )
     } else if lower.contains("nothing to commit") {
-        "No changes to commit."
+        crate::menu_label(
+            "codereview.git_dialog.error.no_changes",
+            "No changes to commit.",
+        )
     } else if lower.contains("please tell me who you are")
         || lower.contains("author identity unknown")
     {
-        "Git identity not configured. Set user.name and user.email."
+        crate::menu_label(
+            "codereview.git_dialog.error.git_identity_not_configured",
+            "Git identity not configured. Set user.name and user.email.",
+        )
     } else if lower.contains("updates were rejected")
         || lower.contains("non-fast-forward")
         || lower.contains("fetch first")
     {
-        "Remote has new changes \u{2014} pull before pushing."
+        crate::menu_label(
+            "codereview.git_dialog.error.remote_has_new_changes",
+            "Remote has new changes \u{2014} pull before pushing.",
+        )
     } else if lower.contains("does not appear to be a git repository")
         || lower.contains("no configured push destination")
         || lower.contains("no such remote")
     {
-        "No remote configured for this branch."
+        crate::menu_label(
+            "codereview.git_dialog.error.no_remote_configured",
+            "No remote configured for this branch.",
+        )
     } else if lower.contains("authentication failed")
         || lower.contains("permission denied (publickey)")
     {
-        "Authentication failed. Check your Git credentials."
+        crate::menu_label(
+            "codereview.git_dialog.error.authentication_failed",
+            "Authentication failed. Check your Git credentials.",
+        )
     } else if lower.contains("could not resolve host")
         || lower.contains("network is unreachable")
         || lower.contains("connection timed out")
     {
-        "Network error. Check your connection."
+        crate::menu_label(
+            "codereview.git_dialog.error.network_error",
+            "Network error. Check your connection.",
+        )
     } else if lower.contains("repository not found") {
-        "Remote repository not found."
+        crate::menu_label(
+            "codereview.git_dialog.error.remote_repository_not_found",
+            "Remote repository not found.",
+        )
     } else if lower.contains("failed to execute gh command") {
         // `run_gh_command` wraps spawn failures with this prefix, which is
         // the reliable "gh binary missing" signal.
-        "GitHub CLI (gh) not installed. See https://cli.github.com/."
+        crate::menu_label(
+            "codereview.git_dialog.error.gh_not_installed",
+            "GitHub CLI (gh) not installed. See https://cli.github.com/.",
+        )
     } else if lower.contains("not logged in")
         || lower.contains("authentication required")
         || lower.contains("gh auth login")
     {
         // Phrases mirror `context_chips::current_prompt::is_gh_auth_error`,
         // which has been vetted against real `gh` failure output.
-        "GitHub CLI not authenticated. Run `gh auth login`."
+        crate::menu_label(
+            "codereview.git_dialog.error.gh_not_authenticated",
+            "GitHub CLI not authenticated. Run `gh auth login`.",
+        )
     } else if lower.contains("another git operation is in progress") {
         // Daemon-side guard for a repo mid-merge/rebase/cherry-pick or with a
         // held index lock (see `git_operation_in_progress`).
-        "Another git operation is in progress. Finish or abort it first."
+        crate::menu_label(
+            "codereview.git_dialog.error.another_git_operation_in_progress",
+            "Another git operation is in progress. Finish or abort it first.",
+        )
     } else {
-        "Git operation failed."
+        crate::menu_label(
+            "codereview.git_dialog.error.git_operation_failed",
+            "Git operation failed.",
+        )
     }
 }
 
@@ -195,7 +231,7 @@ fn render_branch_section(
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Branch",
+        crate::menu_label("codereview.git_dialog.branch_label", "Branch"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -279,11 +315,13 @@ fn render_file_changes_box(
     let total_additions: usize = file_changes.iter().map(|f| f.additions).sum();
     let total_deletions: usize = file_changes.iter().map(|f| f.deletions).sum();
 
+    let file_count_label = if total_files == 1 {
+        crate::menu_label("codereview.git_dialog.file_count_singular", "file")
+    } else {
+        crate::menu_label("codereview.git_dialog.file_count_plural", "files")
+    };
     let files_text = Text::new(
-        format!(
-            "{total_files} {}",
-            if total_files == 1 { "file" } else { "files" }
-        ),
+        format!("{total_files} {file_count_label}"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -489,8 +527,11 @@ impl GitDialog {
         // segmented intent selector inside the dialog is the sole UI that
         // communicates which of commit / commit-and-push / commit-and-create-PR
         // will actually run on click.
-        let (confirm_button, cancel_button, close_button) =
-            Self::build_dialog_buttons("Confirm", None, ctx);
+        let (confirm_button, cancel_button, close_button) = Self::build_dialog_buttons(
+            crate::menu_label("codereview.git_dialog.button.confirm", "Confirm"),
+            None,
+            ctx,
+        );
         ctx.subscribe_to_model(&diff_state_model, Self::handle_diff_state_event);
         let state = commit::new_state(
             repo_location.to_local_path(),
@@ -594,16 +635,22 @@ impl GitDialog {
             button.on_click(|ctx| ctx.dispatch_typed_action(GitDialogAction::Confirm))
         });
         let cancel_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Cancel", NakedTheme)
-                .with_size(ButtonSize::Small)
-                .with_height(32.)
-                .on_click(|ctx| ctx.dispatch_typed_action(GitDialogAction::Cancel))
+            ActionButton::new(
+                crate::menu_label("codereview.git_dialog.button.cancel", "Cancel"),
+                NakedTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .with_height(32.)
+            .on_click(|ctx| ctx.dispatch_typed_action(GitDialogAction::Cancel))
         });
         let close_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::X)
                 .with_size(ButtonSize::Small)
-                .with_tooltip("ESC")
+                .with_tooltip(crate::menu_label(
+                    "codereview.git_dialog.button.esc_tooltip",
+                    "ESC",
+                ))
                 .on_click(|ctx| ctx.dispatch_typed_action(GitDialogAction::Cancel))
         });
         (confirm_button, cancel_button, close_button)
@@ -738,15 +785,26 @@ impl GitDialog {
 
     fn title(&self) -> &'static str {
         match &self.mode {
-            GitDialogMode::Commit(_) => "Commit your changes",
+            GitDialogMode::Commit(_) => {
+                crate::menu_label("codereview.git_dialog.title.commit", "Commit your changes")
+            }
             GitDialogMode::Push(state) => {
                 if state.publish {
-                    "Publish branch"
+                    crate::menu_label(
+                        "codereview.git_dialog.title.publish_branch",
+                        "Publish branch",
+                    )
                 } else {
-                    "Push changes"
+                    crate::menu_label(
+                        "codereview.git_dialog.title.push_changes",
+                        "Push changes",
+                    )
                 }
             }
-            GitDialogMode::CreatePr(_) => "Create pull request",
+            GitDialogMode::CreatePr(_) => crate::menu_label(
+                "codereview.git_dialog.title.create_pull_request",
+                "Create pull request",
+            ),
         }
     }
 

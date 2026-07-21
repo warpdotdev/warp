@@ -1586,7 +1586,6 @@ pub fn slash_command_is_submitted_as_prompt(command: &StaticCommand) -> bool {
         || command.name == commands::PLAN.name
         || command.name == commands::ORCHESTRATE.name
 }
-
 /// Returns true when the conversation with `conversation_id` is associated with an Oz
 /// `AmbientAgentTask`. Callers deciding between `/fork` and `/continue-locally` should also
 /// check the same `CLOUD_AGENT` context that gates `/continue-locally`.

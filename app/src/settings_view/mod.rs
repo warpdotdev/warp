@@ -1148,7 +1148,7 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn new(page: Option<SettingsSection>, ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Settings"));
+        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(crate::menu_label("settings.pane_menu.settings_title", "Settings")));
 
         let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
         // Main settings page with accounts info
@@ -1667,28 +1667,28 @@ impl SettingsView {
 
         if ContextFlag::CreateNewSession.is_enabled() {
             items.extend(vec![
-                MenuItemFields::new("Split pane right")
+                MenuItemFields::new(crate::menu_label("settings.pane_menu.split_right", "Split pane right"))
                     .with_on_select_action(SettingsAction::Split(Direction::Right))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_right",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane left")
+                MenuItemFields::new(crate::menu_label("settings.pane_menu.split_left", "Split pane left"))
                     .with_on_select_action(SettingsAction::Split(Direction::Left))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_left",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane down")
+                MenuItemFields::new(crate::menu_label("settings.pane_menu.split_down", "Split pane down"))
                     .with_on_select_action(SettingsAction::Split(Direction::Down))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_down",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane up")
+                MenuItemFields::new(crate::menu_label("settings.pane_menu.split_up", "Split pane up"))
                     .with_on_select_action(SettingsAction::Split(Direction::Up))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_up",
@@ -1717,7 +1717,7 @@ impl SettingsView {
             );
 
             items.push(
-                MenuItemFields::new("Close pane")
+                MenuItemFields::new(crate::menu_label("settings.pane_menu.close_pane", "Close pane"))
                     .with_on_select_action(SettingsAction::Close)
                     .with_key_shortcut_label(
                         custom_tag_to_keystroke(CustomAction::CloseCurrentSession.into())

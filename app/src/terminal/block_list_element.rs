@@ -60,8 +60,8 @@ use super::view::{
 };
 use super::warpify::render::{draw_flag_pole, render_subshell_flag};
 use super::{HEIGHT_FUDGE_FACTOR_LINES, TerminalModel, heights_approx_eq};
-use crate::ai::blocklist::{ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, ai_brand_color};
-use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
+use crate::ai::blocklist::{ai_brand_color, attach_as_agent_mode_context_text};
+use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ask_ai_assistant_text};
 use crate::appearance::Appearance;
 use crate::drive::settings::WarpDriveSettings;
 use crate::features::FeatureFlag;
@@ -1166,13 +1166,13 @@ impl BlockListElement {
                 } else {
                     (
                         Some(TerminalAction::AskAIAssistant { block_index }),
-                        *ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
+                        attach_as_agent_mode_context_text(),
                     )
                 }
             } else {
                 (
                     Some(TerminalAction::AskAIAssistant { block_index }),
-                    ASK_AI_ASSISTANT_TEXT,
+                    ask_ai_assistant_text(),
                 )
             };
 

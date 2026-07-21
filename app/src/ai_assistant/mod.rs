@@ -33,7 +33,9 @@ mod test_util;
 pub const PROMPT_CHARACTER_LIMIT: usize = 1000;
 
 pub const AI_ASSISTANT_FEATURE_NAME: &str = "Warp AI";
-pub const ASK_AI_ASSISTANT_TEXT: &str = "Ask Warp AI";
+pub fn ask_ai_assistant_text() -> &'static str {
+    crate::menu_label("terminal.context_menu.ask_warp_ai", "Ask Warp AI")
+}
 
 pub const AI_ASSISTANT_SVG_PATH: &str = "bundled/svg/ai-assistant.svg";
 

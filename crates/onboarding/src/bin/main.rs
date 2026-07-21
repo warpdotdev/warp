@@ -168,6 +168,8 @@ impl OnboardingMainView {
             | AgentOnboardingEvent::UpgradePasteTokenFromClipboardRequested
             | AgentOnboardingEvent::LoginFromWelcomeRequested
             | AgentOnboardingEvent::PrivacySettingsFromTerminalThemeSlideRequested
+            | AgentOnboardingEvent::AddApiKeyRequested
+            | AgentOnboardingEvent::AddCustomEndpointRequested
             | AgentOnboardingEvent::AppBecameActive => {
                 // No-op in the standalone demo binary
             }

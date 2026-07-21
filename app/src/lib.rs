@@ -193,11 +193,11 @@ pub mod workflows;
 pub mod workspace;
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ::settings::{Setting, ToggleableSetting};
 #[cfg(feature = "local_tty")]
@@ -1261,6 +1261,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         ctx.add_singleton_model(move |ctx| {
             plugin::PluginHost::new(ctx).expect("Could not instantiate PluginHost")
         });
+        i18n::init_locale();
         let app_state = initialize_app(
             &launch_mode,
             timer,
@@ -1287,6 +1288,86 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             other => launch(ctx, app_state, other),
         }
     })
+}
+
+/// Cache of resolved `menu_label` results, keyed by `(locale, key)`.
+///
+/// `menu_label` historically leaked a fresh `String` per call (`Box::leak`) so it
+/// could hand back a `&'static str`. That's fine for one-shot lookups, but many
+/// call sites live inside menu-update closures and render paths that run on
+/// every menu validation / re-render, so the leaks were unbounded. We keep the
+/// leak-per-distinct-result semantics (the strings genuinely need to live for
+/// `'static`) but memoize: each `(locale, key)` pair is resolved and leaked at
+/// most once. The cache is keyed on locale too, so a runtime locale switch
+/// re-resolves rather than serving a stale translation.
+fn menu_label_cache() -> &'static Mutex<HashMap<(String, String), &'static str>> {
+    static CACHE: OnceLock<Mutex<HashMap<(String, String), &'static str>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Looks up the translation key using the user's chosen locale.
+/// Falls back to the English (en) translation, then to the provided fallback string.
+///
+/// Results are memoized per `(locale, key)` (see [`menu_label_cache`]) so repeated
+/// calls from render/menu-update paths don't leak unboundedly.
+pub fn menu_label(key: &str, fallback: &str) -> &'static str {
+    let locale = i18n::current_locale();
+    let cache_key = (locale.to_string(), key.to_string());
+
+    if let Some(cached) = menu_label_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&cache_key).copied())
+    {
+        return cached;
+    }
+
+    let resolved: &'static str = match i18n::lookup(key, locale) {
+        i18n::TranslationLookup::Found(v) => Box::leak(v.into_owned().into_boxed_str()),
+        i18n::TranslationLookup::Missing => match i18n::lookup(key, "en") {
+            i18n::TranslationLookup::Found(v) => Box::leak(v.into_owned().into_boxed_str()),
+            i18n::TranslationLookup::Missing => Box::leak(fallback.to_string().into_boxed_str()),
+        },
+    };
+
+    if let Ok(mut cache) = menu_label_cache().lock() {
+        // Another thread may have inserted the same key concurrently; either way
+        // the resolved `&'static str` is byte-identical to what we'd store.
+        cache.entry(cache_key).or_insert(resolved);
+    }
+
+    resolved
+}
+
+#[cfg(test)]
+mod menu_label_tests {
+    use super::*;
+
+    #[test]
+    fn test_menu_label_returns_static_str() {
+        let result = menu_label("test.key", "fallback");
+        let _static_ref: &'static str = result;
+    }
+
+    #[test]
+    fn test_menu_label_fallback_for_missing_key() {
+        let result = menu_label("definitely.missing.key.xyz", "hello world");
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_menu_label_english_fallback() {
+        i18n::init_locale();
+        // With default locale (en), should return English translation
+        let _result = menu_label("test.key", "fallback");
+    }
+
+    #[test]
+    fn test_menu_label_consistency() {
+        let r1 = menu_label("test.key", "fallback");
+        let r2 = menu_label("test.key", "fallback");
+        assert_eq!(r1, r2);
+    }
 }
 
 pub struct UpdateQuakeModeEventArg {

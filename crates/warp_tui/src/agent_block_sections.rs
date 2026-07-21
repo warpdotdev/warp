@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentTodo, AIAgentTodoList, MessageId, TodoStatus,
-    format_elapsed_seconds,
+    format_elapsed_seconds, menu_label,
 };
 use warpui_core::AppContext;
 use warpui_core::elements::CrossAxisAlignment;
@@ -113,8 +113,12 @@ pub(crate) fn render_thinking_section(
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let header = match finished_duration {
-        Some(duration) => format!("Thought for {}", format_elapsed_seconds(duration)),
-        None => "Thinking...".to_owned(),
+        Some(duration) => menu_label(
+            "tui.agent_block.thinking_finished",
+            "Thought for {duration}",
+        )
+        .replace("{duration}", &format_elapsed_seconds(duration)),
+        None => menu_label("tui.agent_block.thinking_running", "Thinking...").to_owned(),
     };
     render_collapsible_message_section(
         states,
@@ -138,7 +142,7 @@ pub(crate) fn render_summarization_section(
     render_collapsible_message_section(
         states,
         message_id,
-        "Conversation summarized".to_owned(),
+        menu_label("tui.agent_block.summarized", "Conversation summarized").to_owned(),
         finished,
         body,
         app,

@@ -898,7 +898,11 @@ impl FileNotebookView {
                         .with_text_and_icon_label(
                             TextAndIcon::new(
                                 TextAndIconAlignment::TextFirst,
-                                "Try again".to_string(),
+                                crate::menu_label(
+                                    "notebook.file_pane.try_again_label",
+                                    "Try again",
+                                )
+                                .to_string(),
                                 Icon::Refresh.to_warpui_icon(error_text_color),
                                 MainAxisSize::Min,
                                 MainAxisAlignment::Center,
@@ -937,7 +941,13 @@ impl FileNotebookView {
         Align::new(
             appearance
                 .ui_builder()
-                .paragraph("Missing source file".to_string())
+                .paragraph(
+                    crate::menu_label(
+                        "notebook.file_pane.missing_source_file",
+                        "Missing source file",
+                    )
+                    .to_string(),
+                )
                 .with_style(self.state_style(appearance))
                 .build()
                 .finish(),
@@ -1150,9 +1160,12 @@ impl BackingView for FileNotebookView {
         if let Some(SourceFile::FileBased { .. }) = self.file_state.source() {
             actions.push(MenuItem::Separator);
             actions.push(
-                MenuItemFields::new("Refresh file")
-                    .with_on_select_action(FileNotebookAction::ReloadFile)
-                    .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "notebook.file_pane.refresh_file",
+                    "Refresh file",
+                ))
+                .with_on_select_action(FileNotebookAction::ReloadFile)
+                .into_item(),
             );
 
             #[cfg(feature = "local_fs")]
@@ -1160,13 +1173,16 @@ impl BackingView for FileNotebookView {
                 // The markdown rendered/raw toggle is always visible in the pane header, so we don't
                 // duplicate it in the overflow menu. Keep "Open in editor" available for local files.
                 actions.push(
-                    MenuItemFields::new("Open in editor")
-                        .with_on_select_action(FileNotebookAction::OpenInEditor)
-                        .into_item(),
+                    MenuItemFields::new(crate::menu_label(
+                        "notebook.file_pane.open_in_editor",
+                        "Open in editor",
+                    ))
+                    .with_on_select_action(FileNotebookAction::OpenInEditor)
+                    .into_item(),
                 );
                 actions.extend([
                     MenuItem::Separator,
-                    MenuItemFields::new("Copy file path")
+                    MenuItemFields::new(crate::menu_label("code.copy_file_path", "Copy file path"))
                         .with_on_select_action(FileNotebookAction::CopyFilePath)
                         .into_item(),
                 ]);

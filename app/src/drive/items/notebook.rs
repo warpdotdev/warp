@@ -58,7 +58,7 @@ impl WarpDriveItem for WarpDriveNotebook {
     fn preview(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
         let title_text = self.notebook.model().title.clone();
         let title_to_render = if title_text.is_empty() {
-            "Untitled".to_string()
+            crate::menu_label("drive.placeholder.untitled", "Untitled").to_string()
         } else {
             title_text
         };

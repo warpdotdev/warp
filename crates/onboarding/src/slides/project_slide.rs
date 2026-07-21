@@ -123,7 +123,7 @@ impl ProjectSlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph("Open a project")
+            .paragraph(crate::menu_label("onboarding.project.title", "Open a project"))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -134,7 +134,10 @@ impl ProjectSlide {
 
         let subtitle = appearance
             .ui_builder()
-            .paragraph("Set up a project to optimize it for coding in Warp.")
+            .paragraph(crate::menu_label(
+                "onboarding.project.subtitle",
+                "Set up a project to optimize it for coding in Warp.",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(20.),
                 font_weight: Some(Weight::Normal),
@@ -212,7 +215,10 @@ impl ProjectSlide {
                 let folder_text = Container::new(
                     appearance
                         .ui_builder()
-                        .paragraph("Open local folder")
+                        .paragraph(crate::menu_label(
+                            "onboarding.project.open_local_folder",
+                            "Open local folder",
+                        ))
                         .with_style(UiComponentStyles {
                             font_color: Some(text_color),
                             ..Default::default()
@@ -279,7 +285,9 @@ impl ProjectSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(
+                    crate::menu_label("common.back", "Back").into(),
+                ),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -296,15 +304,15 @@ impl ProjectSlide {
         let (label, keystroke, action) = match settings {
             ProjectOnboardingSettings::Project { .. } => (
                 if theme_picker_last {
-                    "Next"
+                    crate::menu_label("common.next", "Next")
                 } else {
-                    "Get Warping"
+                    crate::menu_label("common.get_warping", "Get Warping")
                 },
                 Keystroke::parse("enter").unwrap_or_default(),
                 ProjectSlideAction::NextClicked,
             ),
             ProjectOnboardingSettings::NoProject => (
-                "Skip",
+                crate::menu_label("common.skip", "Skip"),
                 Keystroke::parse("cmdorctrl-enter").unwrap_or_default(),
                 ProjectSlideAction::SkipClicked,
             ),
@@ -407,8 +415,14 @@ impl ProjectSlide {
             appearance,
             self.initialize_projects_automatically_mouse_state.clone(),
             initialize_projects_automatically,
-            "Initialize project automatically",
-            "Prepares the project environment, builds an index of your code, and generates project rules—giving the agent deeper understanding and better performance.",
+            crate::menu_label(
+                "onboarding.project.initialize_title",
+                "Initialize project automatically",
+            ),
+            crate::menu_label(
+                "onboarding.project.initialize_description",
+                "Prepares the project environment, builds an index of your code, and generates project rules—giving the agent deeper understanding and better performance.",
+            ),
             ProjectSlideAction::ToggleInitializeProjectsAutomatically,
         );
 

@@ -16,6 +16,7 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
+use crate::menu_label;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::result_renderer::ItemHighlightState;
@@ -42,12 +43,12 @@ impl InlineMenuAction for AcceptSkill {
         // If no item is selected, show "No skills found" message with escape hint
         if args.inline_menu_model.selected_item().is_none() {
             return Some(Message::new(vec![
-                MessageItem::text("No skills found"),
+                MessageItem::text(menu_label("terminal.skills.empty", "No skills found")),
                 MessageItem::keystroke(Keystroke {
                     key: "escape".to_owned(),
                     ..Default::default()
                 }),
-                MessageItem::text(" to dismiss"),
+                MessageItem::text(menu_label("terminal.skills.to_dismiss", " to dismiss")),
             ]));
         }
 
@@ -300,7 +301,7 @@ impl SearchItem for SkillSearchItem {
             let badge_text_color =
                 inline_styles::disabled_text_color(theme, background_color.into());
             let badge_text = Text::new_inline(
-                "Project Skill".to_string(),
+                menu_label("terminal.skills.project_badge", "Project Skill").to_string(),
                 appearance.ui_font_family(),
                 badge_font_size,
             )

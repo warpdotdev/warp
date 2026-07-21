@@ -9,7 +9,8 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
     AgentConversationsModelEvent, AgentManagementFilters, ConversationSelectionHandle, Harness,
-    HarnessFilter, agent_conversations_cloud_metadata_load_failed, query_conversation_entries,
+    HarnessFilter, agent_conversations_cloud_metadata_load_failed, menu_label,
+    query_conversation_entries,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
@@ -174,16 +175,21 @@ impl TuiConversationMenuModel {
         };
         let status = if list.rows().is_empty() {
             Some(if list.is_loading() {
-                TuiInlineMenuStatus::Loading("Loading conversations…".to_owned())
+                TuiInlineMenuStatus::Loading(
+                    menu_label("tui.conversation_menu.loading", "Loading conversations…")
+                        .to_owned(),
+                )
             } else {
-                TuiInlineMenuStatus::Empty("No conversations found".to_owned())
+                TuiInlineMenuStatus::Empty(
+                    menu_label("tui.conversation_menu.empty", "No conversations found").to_owned(),
+                )
             })
         } else {
             None
         };
         Some(TuiInlineMenuSnapshot {
             header: Some(TuiInlineMenuHeader {
-                title: Some("Conversations".to_owned()),
+                title: Some(menu_label("tui.conversation_menu.title", "Conversations").to_owned()),
                 tabs: Vec::new(),
             }),
             rows: list

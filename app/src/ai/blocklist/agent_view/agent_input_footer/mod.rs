@@ -115,20 +115,6 @@ use crate::workspace::WorkspaceAction;
 use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
-const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
-
-const FAST_FORWARD_ON_TOOLTIP: &str = "Turn off auto-approve all agent actions";
-const FAST_FORWARD_OFF_TOOLTIP: &str = "Auto-approve all agent actions for this task";
-const FAST_FORWARD_LOCKED_TOOLTIP: &str =
-    "Fast forward is always enabled for cloud agent conversations";
-
-const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
-const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
-
-const LIVE_REMOTE_VM_INDICATOR_TOOLTIP: &str = "Connected to a live cloud agent session. Your next prompt continues on the running remote machine.";
-const NEW_CLOUD_VM_INDICATOR_TOOLTIP: &str = "Not connected to cloud agent. Your next prompt starts a new cloud machine to continue this conversation.";
-
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
 
 /// Voice input state for the CLI agent footer. Unlike the editor-based voice
@@ -358,9 +344,15 @@ impl AgentInputFooter {
             button.set_active(is_nld_enabled, ctx);
             button.set_tooltip(
                 Some(if is_nld_enabled {
-                    DISABLE_NLD_TOOLTIP
+                    crate::menu_label(
+                        "agent.input_footer.nld_disable_tooltip",
+                        "Disable terminal command autodetection",
+                    )
                 } else {
-                    ENABLE_NLD_TOOLTIP
+                    crate::menu_label(
+                        "agent.input_footer.nld_enable_tooltip",
+                        "Enable terminal command autodetection",
+                    )
                 }),
                 ctx,
             );
@@ -375,9 +367,15 @@ impl AgentInputFooter {
                 button.set_active(is_nld_enabled, ctx);
                 button.set_tooltip(
                     Some(if is_nld_enabled {
-                        DISABLE_NLD_TOOLTIP
+                        crate::menu_label(
+                            "agent.input_footer.nld_disable_tooltip",
+                            "Disable terminal command autodetection",
+                        )
                     } else {
-                        ENABLE_NLD_TOOLTIP
+                        crate::menu_label(
+                            "agent.input_footer.nld_enable_tooltip",
+                            "Enable terminal command autodetection",
+                        )
                     }),
                     ctx,
                 );
@@ -387,7 +385,10 @@ impl AgentInputFooter {
         let mic_button = ctx.add_typed_action_view(|_ctx| {
             let button = ActionButton::new("", ActiveMicButtonTheme)
                 .with_icon(Icon::Microphone)
-                .with_tooltip("Voice input")
+                .with_tooltip(crate::menu_label(
+                    "agent.input_footer.voice_input_tooltip",
+                    "Voice input",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left);
             #[cfg(feature = "voice_input")]
@@ -423,7 +424,10 @@ impl AgentInputFooter {
         let file_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::Plus)
-                .with_tooltip("Attach file")
+                .with_tooltip(crate::menu_label(
+                    "agent.input_footer.attach_file_tooltip",
+                    "Attach file",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -437,7 +441,10 @@ impl AgentInputFooter {
         let fast_forward_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", FastForwardButtonTheme)
                 .with_icon(Icon::FastForward)
-                .with_tooltip(FAST_FORWARD_OFF_TOOLTIP)
+                .with_tooltip(crate::menu_label(
+                    "agent.input_footer.fast_forward_off_tooltip",
+                    "Auto-approve all agent actions for this task",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .with_disabled_theme(FastForwardLockedTheme)
@@ -452,7 +459,10 @@ impl AgentInputFooter {
         let handoff_to_cloud_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::UploadCloud)
-                .with_tooltip("Hand off to cloud (or type &)")
+                .with_tooltip(crate::menu_label(
+                    "agent.input_footer.handoff_to_cloud_tooltip",
+                    "Hand off to cloud (or type &)",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -463,39 +473,54 @@ impl AgentInputFooter {
         // CLI agent-specific buttons (only rendered when a CLI agent session is active).
         let cli_button_size = ButtonSize::AgentInputButton;
         let file_explorer_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("File explorer", AgentInputButtonTheme)
-                .with_icon(Icon::FileCopy)
-                .with_tooltip("Open file explorer")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_keybinding(
-                    KeystrokeSource::Binding(TOGGLE_PROJECT_EXPLORER_BINDING_NAME),
-                    ctx,
-                )
-                .with_compact_keybinding(true)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::ToggleFileExplorer);
-                })
+            ActionButton::new(
+                crate::menu_label("agent.input_footer.file_explorer_label", "File explorer"),
+                AgentInputButtonTheme,
+            )
+            .with_icon(Icon::FileCopy)
+            .with_tooltip(crate::menu_label(
+                "agent.input_footer.open_file_explorer_tooltip",
+                "Open file explorer",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_keybinding(
+                KeystrokeSource::Binding(TOGGLE_PROJECT_EXPLORER_BINDING_NAME),
+                ctx,
+            )
+            .with_compact_keybinding(true)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::ToggleFileExplorer);
+            })
         });
         let rich_input_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Rich Input", AgentInputButtonTheme)
-                .with_icon(Icon::TextInput)
-                .with_tooltip("Open Rich Input")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_keybinding(
-                    KeystrokeSource::Binding(OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING),
-                    ctx,
-                )
-                .with_compact_keybinding(true)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::ToggleRichInput);
-                })
+            ActionButton::new(
+                crate::menu_label("agent.input_footer.rich_input_label", "Rich Input"),
+                AgentInputButtonTheme,
+            )
+            .with_icon(Icon::TextInput)
+            .with_tooltip(crate::menu_label(
+                "agent.input_footer.open_rich_input_tooltip",
+                "Open Rich Input",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_keybinding(
+                KeystrokeSource::Binding(OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING),
+                ctx,
+            )
+            .with_compact_keybinding(true)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::ToggleRichInput);
+            })
         });
         let settings_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::Settings)
-                .with_tooltip("Open coding agent settings")
+                .with_tooltip(crate::menu_label(
+                    "agent.input_footer.open_coding_agent_settings_tooltip",
+                    "Open coding agent settings",
+                ))
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -504,64 +529,99 @@ impl AgentInputFooter {
         });
 
         let install_plugin_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Enable notifications", InstallPluginButtonTheme)
-                .with_icon(Icon::Download)
-                .with_tooltip(
-                    "Install the Warp plugin to enable rich agent notifications within Warp",
-                )
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::InstallPlugin);
-                })
+            ActionButton::new(
+                crate::menu_label(
+                    "agent.input_footer.enable_notifications_label",
+                    "Enable notifications",
+                ),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Download)
+            .with_tooltip(crate::menu_label(
+                "agent.input_footer.plugin_install_rich_notifications_tooltip",
+                "Install the Warp plugin to enable rich agent notifications within Warp",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::InstallPlugin);
+            })
         });
 
         let plugin_instructions_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Notifications setup instructions", InstallPluginButtonTheme)
-                .with_icon(Icon::Info)
-                .with_tooltip("View instructions to install the Warp plugin")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(
-                        AgentInputFooterAction::OpenPluginInstallInstructionsPane,
-                    );
-                })
+            ActionButton::new(
+                crate::menu_label(
+                    "agent.input_footer.notifications_setup_label",
+                    "Notifications setup instructions",
+                ),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Info)
+            .with_tooltip(crate::menu_label(
+                "agent.input_footer.plugin_install_instructions_tooltip",
+                "View instructions to install the Warp plugin",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(
+                    AgentInputFooterAction::OpenPluginInstallInstructionsPane,
+                );
+            })
         });
 
         let update_plugin_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Update Warp plugin", InstallPluginButtonTheme)
-                .with_icon(Icon::Download)
-                .with_tooltip("A new version of the Warp plugin is available")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::UpdatePlugin);
-                })
+            ActionButton::new(
+                crate::menu_label(
+                    "agent.input_footer.update_plugin_label",
+                    "Update Warp plugin",
+                ),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Download)
+            .with_tooltip(crate::menu_label(
+                "agent.input_footer.plugin_update_available_tooltip",
+                "A new version of the Warp plugin is available",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::UpdatePlugin);
+            })
         });
 
         let update_instructions_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Plugin update instructions", InstallPluginButtonTheme)
-                .with_icon(Icon::Info)
-                .with_tooltip("View instructions to update the Warp plugin")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(
-                        AgentInputFooterAction::OpenPluginUpdateInstructionsPane,
-                    );
-                })
+            ActionButton::new(
+                crate::menu_label(
+                    "agent.input_footer.plugin_update_instructions_label",
+                    "Plugin update instructions",
+                ),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Info)
+            .with_tooltip(crate::menu_label(
+                "agent.input_footer.plugin_update_instructions_tooltip",
+                "View instructions to update the Warp plugin",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::OpenPluginUpdateInstructionsPane);
+            })
         });
 
         let dismiss_plugin_chip_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", InstallPluginButtonTheme)
                 .with_icon(Icon::X)
                 .with_size(cli_button_size)
-                .with_tooltip("Dismiss")
+                .with_tooltip(crate::menu_label(
+                    "agent.input_footer.dismiss_tooltip",
+                    "Dismiss",
+                ))
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .with_adjoined_side(AdjoinedSide::Left)
                 .on_click(|ctx| {
@@ -634,8 +694,20 @@ impl AgentInputFooter {
                 let is_open = matches!(new_input_state, CLIAgentInputState::Open { .. });
                 me.rich_input_button.update(ctx, |button, ctx| {
                     if is_open {
-                        button.set_label("Hide Rich Input", ctx);
-                        button.set_tooltip(Some("Hide Rich Input"), ctx);
+                        button.set_label(
+                            crate::menu_label(
+                                "agent.input_footer.hide_rich_input_label",
+                                "Hide Rich Input",
+                            ),
+                            ctx,
+                        );
+                        button.set_tooltip(
+                            Some(crate::menu_label(
+                                "agent.input_footer.hide_rich_input_label",
+                                "Hide Rich Input",
+                            )),
+                            ctx,
+                        );
                         button.set_keybinding(
                             Some(KeystrokeSource::Binding(
                                 OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING,
@@ -643,8 +715,17 @@ impl AgentInputFooter {
                             ctx,
                         );
                     } else {
-                        button.set_label("Rich Input", ctx);
-                        button.set_tooltip(Some("Open Rich Input"), ctx);
+                        button.set_label(
+                            crate::menu_label("agent.input_footer.rich_input_label", "Rich Input"),
+                            ctx,
+                        );
+                        button.set_tooltip(
+                            Some(crate::menu_label(
+                                "agent.input_footer.open_rich_input_tooltip",
+                                "Open Rich Input",
+                            )),
+                            ctx,
+                        );
                         button.set_keybinding(
                             Some(KeystrokeSource::Binding(
                                 OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING,
@@ -660,7 +741,10 @@ impl AgentInputFooter {
         let start_remote_control_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("/remote-control", RemoteControlButtonTheme)
                 .with_icon(Icon::Phone01)
-                .with_tooltip(START_REMOTE_CONTROL_TOOLTIP)
+                .with_tooltip(crate::menu_label(
+                    "agent.input_footer.remote_control_start_tooltip",
+                    "Start remote control",
+                ))
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -669,21 +753,30 @@ impl AgentInputFooter {
         });
 
         let stop_remote_control_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Stop sharing", RemoteControlButtonTheme)
-                .with_icon(Icon::StopFilled)
-                .with_icon_ansi_color(AnsiColorIdentifier::Red)
-                .with_tooltip("Stop sharing")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::StopRemoteControl);
-                })
+            ActionButton::new(
+                crate::menu_label("agent.input_footer.stop_sharing_label", "Stop sharing"),
+                RemoteControlButtonTheme,
+            )
+            .with_icon(Icon::StopFilled)
+            .with_icon_ansi_color(AnsiColorIdentifier::Red)
+            .with_tooltip(crate::menu_label(
+                "agent.input_footer.stop_sharing_tooltip",
+                "Stop sharing",
+            ))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::StopRemoteControl);
+            })
         });
 
         let context_window_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::ContextRemaining100)
-                .with_tooltip("Context window usage")
+                .with_tooltip(crate::menu_label(
+                    "agent.input_footer.context_window_usage_tooltip",
+                    "Context window usage",
+                ))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
         });
@@ -693,7 +786,7 @@ impl AgentInputFooter {
         let live_session_indicator = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::CloudFilled)
-                .with_tooltip(LIVE_REMOTE_VM_INDICATOR_TOOLTIP)
+                .with_tooltip(crate::menu_label("agent.input_footer.live_cloud_session_tooltip", "Connected to a live cloud agent session. Your next prompt continues on the running remote machine."))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
         });
@@ -701,7 +794,7 @@ impl AgentInputFooter {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::CloudOffline)
                 .with_icon_ansi_color(AnsiColorIdentifier::Yellow)
-                .with_tooltip(NEW_CLOUD_VM_INDICATOR_TOOLTIP)
+                .with_tooltip(crate::menu_label("agent.input_footer.new_cloud_vm_tooltip", "Not connected to cloud agent. Your next prompt starts a new cloud machine to continue this conversation."))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
         });
@@ -1267,9 +1360,11 @@ impl AgentInputFooter {
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
             toast_stack.add_ephemeral_toast(
                 DismissibleToast::error(
-                    "Could not automatically install plugin. \
-                     Please click the chip again for manual installation steps."
-                        .to_owned(),
+                    crate::menu_label(
+                        "agent.input_footer.auto_install_failed_toast",
+                        "Could not automatically install plugin. Please click the chip again for manual installation steps.",
+                    )
+                    .to_owned(),
                 ),
                 window_id,
                 ctx,
@@ -1362,7 +1457,11 @@ impl AgentInputFooter {
                 else {
                     return Err((
                         PluginInstallError {
-                            message: "No plugin manager available".to_owned(),
+                            message: crate::menu_label(
+                                "agent.input_footer.no_plugin_manager_toast",
+                                "No plugin manager available",
+                            )
+                            .to_owned(),
                             log: String::new(),
                         },
                         None,
@@ -1418,10 +1517,16 @@ impl AgentInputFooter {
                                 DismissibleToast::error(format!("{error_label}: {err}"));
                             if let Some(log_path) = log_path {
                                 toast = toast.with_link(
-                                    ToastLink::new("See logs for details".to_owned())
-                                        .with_onclick_action(WorkspaceAction::OpenFilePath {
-                                            path: log_path,
-                                        }),
+                                    ToastLink::new(
+                                        crate::menu_label(
+                                            "agent.input_footer.see_logs_label",
+                                            "See logs for details",
+                                        )
+                                        .to_owned(),
+                                    )
+                                    .with_onclick_action(
+                                        WorkspaceAction::OpenFilePath { path: log_path },
+                                    ),
                                 );
                             }
                             toast
@@ -1445,10 +1550,19 @@ impl AgentInputFooter {
             .cli_agent(ctx)
             .and_then(plugin_manager_for)
             .map(|m| m.install_success_message())
-            .unwrap_or("Warp plugin installed. Please restart the session to activate.");
+            .unwrap_or(crate::menu_label(
+                "agent.input_footer.plugin_installed_toast",
+                "Warp plugin installed. Please restart the session to activate.",
+            ));
         self.handle_plugin_operation(
-            "Installing Warp plugin...",
-            "Failed to install Warp plugin",
+            crate::menu_label(
+                "agent.input_footer.plugin_installing_toast",
+                "Installing Warp plugin...",
+            ),
+            crate::menu_label(
+                "agent.input_footer.plugin_install_failed_toast",
+                "Failed to install Warp plugin",
+            ),
             success_msg,
             PluginChipTelemetryKind::Install,
             |manager| async move { manager.install().await },
@@ -1462,10 +1576,19 @@ impl AgentInputFooter {
             .cli_agent(ctx)
             .and_then(plugin_manager_for)
             .map(|m| m.update_success_message())
-            .unwrap_or("Warp plugin updated. Please restart the session to activate.");
+            .unwrap_or(crate::menu_label(
+                "agent.input_footer.plugin_updated_toast",
+                "Warp plugin updated. Please restart the session to activate.",
+            ));
         self.handle_plugin_operation(
-            "Updating Warp plugin...",
-            "Failed to update Warp plugin",
+            crate::menu_label(
+                "agent.input_footer.plugin_updating_toast",
+                "Updating Warp plugin...",
+            ),
+            crate::menu_label(
+                "agent.input_footer.plugin_update_failed_toast",
+                "Failed to update Warp plugin",
+            ),
             success_msg,
             PluginChipTelemetryKind::Update,
             |manager| async move { manager.update().await },
@@ -1804,7 +1927,13 @@ impl AgentInputFooter {
         match &self.cli_voice_input_state {
             CLIVoiceInputState::Stopped => {
                 if !crate::ai::AIRequestUsageModel::as_ref(ctx).can_request_voice() {
-                    self.show_cli_voice_error_toast("Voice input limit reached", ctx);
+                    self.show_cli_voice_error_toast(
+                        crate::menu_label(
+                            "agent.input_footer.voice_quota_toast",
+                            "Voice input limit reached",
+                        ),
+                        ctx,
+                    );
                     return;
                 }
 
@@ -1928,13 +2057,25 @@ impl AgentInputFooter {
             }
             Err(e) => match e {
                 TranscribeError::QuotaLimit => {
-                    self.show_cli_voice_error_toast("Voice input limit reached", ctx);
+                    self.show_cli_voice_error_toast(
+                        crate::menu_label(
+                            "agent.input_footer.voice_quota_toast",
+                            "Voice input limit reached",
+                        ),
+                        ctx,
+                    );
                 }
                 _ => {
                     report_error!(
                         anyhow::Error::new(e).context("Failed to transcribe CLI voice input")
                     );
-                    self.show_cli_voice_error_toast("Failed to transcribe voice input", ctx);
+                    self.show_cli_voice_error_toast(
+                        crate::menu_label(
+                            "agent.input_footer.voice_transcribe_failed_toast",
+                            "Failed to transcribe voice input",
+                        ),
+                        ctx,
+                    );
                 }
             },
         }
@@ -1974,9 +2115,10 @@ impl AgentInputFooter {
     fn show_cli_microphone_access_toast(&self, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from(
+            let toast = DismissibleToast::error(String::from(crate::menu_label(
+                "agent.input_footer.voice_mic_access_toast",
                 "Failed to start voice input (you may need to enable Microphone access)",
-            ));
+            )));
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }
@@ -2017,11 +2159,20 @@ impl AgentInputFooter {
             Icon::FastForward
         };
         let tooltip = if is_force_enabled {
-            FAST_FORWARD_LOCKED_TOOLTIP
+            crate::menu_label(
+                "agent.input_footer.fast_forward_locked_tooltip",
+                "Fast forward is always enabled for cloud agent conversations",
+            )
         } else if is_active {
-            FAST_FORWARD_ON_TOOLTIP
+            crate::menu_label(
+                "agent.input_footer.fast_forward_on_tooltip",
+                "Turn off auto-approve all agent actions",
+            )
         } else {
-            FAST_FORWARD_OFF_TOOLTIP
+            crate::menu_label(
+                "agent.input_footer.fast_forward_off_tooltip",
+                "Auto-approve all agent actions for this task",
+            )
         };
 
         self.fast_forward_button.update(ctx, |button, ctx| {
@@ -2040,9 +2191,15 @@ impl AgentInputFooter {
             .get()
             .is_anonymous_or_logged_out();
         let tooltip = if login_required {
-            START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP
+            crate::menu_label(
+                "agent.input_footer.remote_control_login_tooltip",
+                "Log in to use /remote-control",
+            )
         } else {
-            START_REMOTE_CONTROL_TOOLTIP
+            crate::menu_label(
+                "agent.input_footer.remote_control_start_tooltip",
+                "Start remote control",
+            )
         };
         self.start_remote_control_button.update(ctx, |button, ctx| {
             button.set_disabled(login_required, ctx);
@@ -2074,6 +2231,11 @@ impl AgentInputFooter {
             self.prompt_cache_expired = is_cache_expired;
             self.context_window_button.update(ctx, |button, ctx| {
                 button.set_icon(Some(icon), ctx);
+                if is_cache_expired {
+                    button.set_theme(WarningAgentInputButtonTheme, ctx);
+                } else {
+                    button.set_theme(AgentInputButtonTheme, ctx);
+                }
                 button.set_tooltip(Some(tooltip), ctx);
             });
 
@@ -2843,6 +3005,43 @@ impl ActionButtonTheme for InstallPluginButtonTheme {
 
     fn should_opt_out_of_contrast_adjustment(&self) -> bool {
         true
+    }
+}
+
+/// Yellow-tinted variant of [`AgentInputButtonTheme`] used to flag a warning
+/// state on an input chip (e.g. expired prompt cache); slightly darker on hover.
+struct WarningAgentInputButtonTheme;
+
+impl ActionButtonTheme for WarningAgentInputButtonTheme {
+    fn background(&self, hovered: bool, appearance: &Appearance) -> Option<Fill> {
+        let yellow = appearance.theme().ansi_fg_yellow();
+        let base = appearance.theme().surface_1();
+        Some(if hovered {
+            base.blend(&Fill::Solid(yellow).with_opacity(45))
+        } else {
+            base.blend(&Fill::Solid(yellow).with_opacity(30))
+        })
+    }
+
+    fn text_color(
+        &self,
+        hovered: bool,
+        background: Option<Fill>,
+        appearance: &Appearance,
+    ) -> ColorU {
+        AgentInputButtonTheme.text_color(hovered, background, appearance)
+    }
+
+    fn border(&self, appearance: &Appearance) -> Option<ColorU> {
+        AgentInputButtonTheme.border(appearance)
+    }
+
+    fn should_opt_out_of_contrast_adjustment(&self) -> bool {
+        AgentInputButtonTheme.should_opt_out_of_contrast_adjustment()
+    }
+
+    fn font_properties(&self) -> Option<warpui::fonts::Properties> {
+        AgentInputButtonTheme.font_properties()
     }
 }
 

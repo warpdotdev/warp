@@ -3,7 +3,7 @@
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AcceptSkill, ActiveSession, ActiveSessionEvent, SkillReference, TuiSlashCommandDataSource,
-    query_selectable_skills,
+    menu_label, query_selectable_skills,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
@@ -161,7 +161,7 @@ impl TuiSkillMenuModel {
         };
         Some(TuiInlineMenuSnapshot {
             header: Some(TuiInlineMenuHeader {
-                title: Some("Skills".to_owned()),
+                title: Some(menu_label("tui.skills_menu.title", "Skills").to_owned()),
                 tabs: Vec::new(),
             }),
             rows: list
@@ -177,10 +177,11 @@ impl TuiSkillMenuModel {
             selected_index: list.selected_index(),
             scroll_offset: list.scroll_offset(),
             max_visible_rows: MAX_VISIBLE_ROWS,
-            status: list
-                .rows()
-                .is_empty()
-                .then(|| TuiInlineMenuStatus::Empty("No skills found".to_owned())),
+            status: list.rows().is_empty().then(|| {
+                TuiInlineMenuStatus::Empty(
+                    menu_label("terminal.skills.empty", "No skills found").to_owned(),
+                )
+            }),
         })
     }
 

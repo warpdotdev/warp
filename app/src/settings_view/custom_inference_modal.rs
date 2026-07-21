@@ -222,7 +222,7 @@ impl CustomEndpointModal {
             });
         }
         let remove_endpoint_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Remove", DangerSecondaryTheme)
+            ActionButton::new(crate::menu_label("common.remove", "Remove"), DangerSecondaryTheme)
                 .with_icon(Icon::Trash)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CustomEndpointModalAction::RemoveEndpoint);
@@ -922,7 +922,7 @@ impl View for CustomEndpointModal {
                     ButtonVariant::Secondary,
                     self.cancel_button_mouse_state.clone(),
                 )
-                .with_text_label("Cancel".to_string())
+                .with_text_label(crate::menu_label("common.cancel", "Cancel").to_string())
                 .with_style(button_style)
                 .build()
                 .on_click(move |ctx, _, _| {
@@ -935,9 +935,13 @@ impl View for CustomEndpointModal {
             .ui_builder()
             .button(ButtonVariant::Accent, self.save_button_mouse_state.clone())
             .with_text_label(if is_editing {
-                "Save".to_string()
+                crate::menu_label("common.save", "Save").to_string()
             } else {
-                "Add endpoint".to_string()
+                crate::menu_label(
+                    "settings.modals.custom_inference.add_endpoint",
+                    "Add endpoint",
+                )
+                .to_string()
             })
             .with_style(button_style);
         if !is_valid {

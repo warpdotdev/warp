@@ -6547,6 +6547,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "i18n"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "regex",
+ "serde_yaml 0.8.26",
+ "sys-locale",
+]
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9417,6 +9427,7 @@ dependencies = [
  "ai",
  "anyhow",
  "cfg-if",
+ "i18n",
  "instant",
  "log",
  "pathfinder_color",
@@ -15175,6 +15186,7 @@ dependencies = [
  "http_client",
  "http_server",
  "hyper",
+ "i18n",
  "image",
  "indexmap 2.12.0",
  "infer",

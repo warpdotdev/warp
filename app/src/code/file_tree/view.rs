@@ -2344,59 +2344,72 @@ impl FileTreeView {
                     let path_local = item.path().to_local_path_lossy();
                     if !is_file_content_binary(&path_local) {
                         items.extend([
-                            MenuItemFields::new("Open in new pane")
-                                .with_on_select_action(FileTreeAction::OpenInNewPane {
-                                    id: id.clone(),
-                                })
-                                .into_item(),
-                            MenuItemFields::new("Open in new tab")
-                                .with_on_select_action(FileTreeAction::OpenInNewTab {
-                                    id: id.clone(),
-                                })
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "code.file_tree.open_in_new_pane",
+                                "Open in new pane",
+                            ))
+                            .with_on_select_action(FileTreeAction::OpenInNewPane { id: id.clone() })
+                            .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "code.file_tree.open_in_new_tab",
+                                "Open in new tab",
+                            ))
+                            .with_on_select_action(FileTreeAction::OpenInNewTab { id: id.clone() })
+                            .into_item(),
                         ]);
                     } else {
                         items.push(
-                            MenuItemFields::new("Open file")
-                                .with_on_select_action(FileTreeAction::ItemClicked {
-                                    id: id.clone(),
-                                })
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "code.file_tree.open_file",
+                                "Open file",
+                            ))
+                            .with_on_select_action(FileTreeAction::ItemClicked { id: id.clone() })
+                            .into_item(),
                         );
                     }
                 }
                 FileTreeItem::DirectoryHeader { .. } => {
                     items.push(
-                        MenuItemFields::new("New file")
-                            .with_on_select_action(FileTreeAction::NewFileBelowDirectory {
-                                id: id.clone(),
-                            })
-                            .into_item(),
+                        MenuItemFields::new(crate::menu_label(
+                            "code.file_tree.new_file",
+                            "New file",
+                        ))
+                        .with_on_select_action(FileTreeAction::NewFileBelowDirectory {
+                            id: id.clone(),
+                        })
+                        .into_item(),
                     );
                     items.push(MenuItem::Separator);
                     if self.has_terminal_session {
                         items.push(
-                            MenuItemFields::new("cd to directory")
-                                .with_on_select_action(FileTreeAction::CDToDirectory {
-                                    id: id.clone(),
-                                })
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "code.file_tree.cd_to_directory",
+                                "cd to directory",
+                            ))
+                            .with_on_select_action(FileTreeAction::CDToDirectory { id: id.clone() })
+                            .into_item(),
                         );
                     }
                     items.push(
-                        MenuItemFields::new("Open in new tab")
-                            .with_on_select_action(FileTreeAction::OpenInNewTab { id: id.clone() })
-                            .into_item(),
+                        MenuItemFields::new(crate::menu_label(
+                            "code.file_tree.open_in_new_tab_directory",
+                            "Open in new tab",
+                        ))
+                        .with_on_select_action(FileTreeAction::OpenInNewTab { id: id.clone() })
+                        .into_item(),
                     );
                 }
             };
 
             let open_text = if cfg!(target_os = "macos") {
-                "Reveal in Finder"
+                crate::menu_label("code.file_tree.reveal_in_finder", "Reveal in Finder")
             } else if cfg!(target_os = "windows") {
-                "Reveal in Explorer"
+                crate::menu_label("code.file_tree.reveal_in_explorer", "Reveal in Explorer")
             } else {
-                "Reveal in file manager"
+                crate::menu_label(
+                    "code.file_tree.reveal_in_file_manager",
+                    "Reveal in file manager",
+                )
             };
             items.push(
                 MenuItemFields::new(open_text)
@@ -2409,12 +2422,12 @@ impl FileTreeView {
             let is_repo_root_dir = id.index == 0;
             if !is_repo_root_dir {
                 items.push(
-                    MenuItemFields::new("Rename")
+                    MenuItemFields::new(crate::menu_label("code.file_tree.rename", "Rename"))
                         .with_on_select_action(FileTreeAction::Rename { id: id.clone() })
                         .into_item(),
                 );
                 items.push(
-                    MenuItemFields::new("Delete")
+                    MenuItemFields::new(crate::menu_label("code.file_tree.delete", "Delete"))
                         .with_on_select_action(FileTreeAction::Delete { id: id.clone() })
                         .into_item(),
                 );
@@ -2426,9 +2439,12 @@ impl FileTreeView {
                 items.push(MenuItem::Separator);
             }
             items.push(
-                MenuItemFields::new("Attach as context")
-                    .with_on_select_action(FileTreeAction::AttachAsContext { id: id.clone() })
-                    .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "code.file_tree.attach_as_context",
+                    "Attach as context",
+                ))
+                .with_on_select_action(FileTreeAction::AttachAsContext { id: id.clone() })
+                .into_item(),
             );
         }
 
@@ -2436,12 +2452,15 @@ impl FileTreeView {
             items.push(MenuItem::Separator);
         }
         items.extend([
-            MenuItemFields::new("Copy path")
+            MenuItemFields::new(crate::menu_label("code.file_tree.copy_path", "Copy path"))
                 .with_on_select_action(FileTreeAction::CopyPath { id: id.clone() })
                 .into_item(),
-            MenuItemFields::new("Copy relative path")
-                .with_on_select_action(FileTreeAction::CopyRelativePath { id: id.clone() })
-                .into_item(),
+            MenuItemFields::new(crate::menu_label(
+                "code.file_tree.copy_relative_path",
+                "Copy relative path",
+            ))
+            .with_on_select_action(FileTreeAction::CopyRelativePath { id: id.clone() })
+            .into_item(),
         ]);
 
         items
@@ -2757,7 +2776,10 @@ impl FileTreeView {
             )
             .with_child(
                 Text::new(
-                    "Project explorer unavailable",
+                    crate::menu_label(
+                        "code.file_tree.unavailable_title",
+                        "Project explorer unavailable",
+                    ),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() + 2.,
                 )
@@ -2944,13 +2966,19 @@ impl View for FileTreeView {
 
     #[cfg(not(feature = "local_fs"))]
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        self.render_error_state(REMOTE_TEXT.to_string(), app)
+        self.render_error_state(
+            crate::menu_label("code.file_tree.remote_text", REMOTE_TEXT).to_string(),
+            app,
+        )
     }
 
     #[cfg(feature = "local_fs")]
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         if matches!(self.enablement, CodingPanelEnablementState::Disabled) {
-            return self.render_error_state(DISABLED_TEXT.to_string(), app);
+            return self.render_error_state(
+                crate::menu_label("code.file_tree.disabled_text", DISABLED_TEXT).to_string(),
+                app,
+            );
         }
 
         if matches!(
@@ -2971,7 +2999,10 @@ impl View for FileTreeView {
                 return if has_remote_server {
                     self.render_loading_state(app)
                 } else {
-                    self.render_error_state(REMOTE_TEXT.to_string(), app)
+                    self.render_error_state(
+                        crate::menu_label("code.file_tree.remote_text", REMOTE_TEXT).to_string(),
+                        app,
+                    )
                 };
             }
 
@@ -2979,7 +3010,10 @@ impl View for FileTreeView {
                 self.enablement,
                 CodingPanelEnablementState::UnsupportedSession
             ) {
-                return self.render_error_state(WSL_TEXT.to_string(), app);
+                return self.render_error_state(
+                    crate::menu_label("code.file_tree.wsl_text", WSL_TEXT).to_string(),
+                    app,
+                );
             }
 
             return self.render_loading_state(app);

@@ -59,7 +59,11 @@ pub(super) fn new_state(publish: bool, commits: Vec<Commit>) -> PushState {
 }
 
 pub(super) fn confirm_label(publish: bool) -> &'static str {
-    if publish { "Publish" } else { "Push" }
+    if publish {
+        crate::menu_label("codereview.git_dialog.button.publish", "Publish")
+    } else {
+        crate::menu_label("codereview.git_dialog.button.push", "Push")
+    }
 }
 
 pub(super) fn confirm_icon(publish: bool) -> Icon {
@@ -72,9 +76,9 @@ pub(super) fn confirm_icon(publish: bool) -> Icon {
 
 fn loading_label(publish: bool) -> &'static str {
     if publish {
-        "Publishing…"
+        crate::menu_label("codereview.git_dialog.loading.publishing", "Publishing…")
     } else {
-        "Pushing…"
+        crate::menu_label("codereview.git_dialog.loading.pushing", "Pushing…")
     }
 }
 
@@ -124,9 +128,15 @@ pub(super) fn finish_push(
     match result {
         Ok(_) => {
             let toast_msg = if publish {
-                "Branch successfully published."
+                crate::menu_label(
+                    "codereview.git_dialog.success.branch_published",
+                    "Branch successfully published.",
+                )
             } else {
-                "Changes successfully pushed."
+                crate::menu_label(
+                    "codereview.git_dialog.success.changes_pushed",
+                    "Changes successfully pushed.",
+                )
             };
             show_toast(toast_msg, ctx);
         }
@@ -175,7 +185,10 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Included commits",
+        crate::menu_label(
+            "codereview.git_dialog.included_commits",
+            "Included commits",
+        ),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -197,15 +210,12 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
         .soft_wrap(false)
         .finish();
 
-        let stats_text = format!(
-            "{} {}",
-            commit.files_changed,
-            if commit.files_changed == 1 {
-                "file"
-            } else {
-                "files"
-            },
-        );
+        let file_count_label = if commit.files_changed == 1 {
+            crate::menu_label("codereview.git_dialog.file_count_singular", "file")
+        } else {
+            crate::menu_label("codereview.git_dialog.file_count_plural", "files")
+        };
+        let stats_text = format!("{} {file_count_label}", commit.files_changed);
 
         let mut stats_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)

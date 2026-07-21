@@ -1,0 +1,2584 @@
+en:
+  # ── Menu Bar ──
+  menu:
+    file: "File"
+    edit: "Edit"
+    window: "Window"
+
+
+
+
+
+
+  # ── Tab Context Menu ──
+  tab:
+    rename: "Rename tab"
+    reset_name: "Reset tab name"
+    shared_session:
+      stop_sharing: Stop sharing
+      share_session: Share session
+      stop_sharing_all: Stop sharing all
+      copy_link: Copy link
+    metadata:
+      copy_tab_title: Copy tab title
+      copy_pane_title: Copy pane title
+      copy_tab_title_v2: Copy tab title
+      copy_branch: Copy branch
+      copy_working_directory: Copy working directory
+      copy_pull_request_link: Copy pull request link
+    modify:
+      rename_tab: Rename tab
+      reset_tab_name: Reset tab name
+      move_tab_down: Move Tab Down
+      move_tab_right: Move Tab Right
+      move_tab_up: Move Tab Up
+      move_tab_left: Move Tab Left
+    close:
+
+  # ── Workspace / Toolbar ──
+      close_tab: Close tab
+      close_other_tabs: Close other tabs
+      close_tabs_below: Close Tabs Below
+      close_tabs_to_the_right: Close Tabs to the Right
+    config:
+      save_as_new_config: Save as new config
+    pin:
+      unpin_tab: Unpin tab
+      pin_tab: Pin tab
+    group:
+      new_group_with_tab: New group with tab
+    color:
+      default_no_color: Default (no color)
+    indicator:
+      cloud_agent_run_tooltip: Cloud agent run
+  terminal:
+    share_block:
+      command: "Command"
+      command_and_output: "Command and Output"
+      copy: "Copy"
+      create_link: "Create link"
+      creating_block: "Creating block..."
+      get_embed: "Get embed"
+      keybinding_copy: "Copy"
+      link_copied: "Link copied."
+      output: "Output"
+      share_block: "Share block"
+      creation_failed_message: "Something went wrong. Please try again."
+      embed_code_copied: "Embed code copied."
+      embed_title_default: "embedded warp block"
+      error_generating_embed: "Error generating embed snippet"
+      manage_shared_blocks: "Manage shared blocks"
+      redact_secrets: "Redact secrets (API keys, passwords, IP addresses, PII etc.)"
+      show_prompt: "Show prompt"
+      title_placeholder: "Title (optional)"
+    context_menu:
+      ai_command_search: "AI command search"
+      ask_warp_ai: "Ask Warp AI"
+      attach_as_agent_context: "Attach as agent context"
+      clear_blocks: "Clear Blocks"
+      close_pane: "Close pane"
+      command_search: "Command search"
+      copy: "Copy"
+      copy_command: "Copy command"
+      copy_commands: "Copy commands"
+      copy_conversation_id: "Copy conversation ID"
+      copy_conversation_text: "Copy conversation text"
+      copy_debugging_id: "Copy debugging ID"
+      copy_debugging_link: "Copy debugging link"
+      copy_filtered_output: "Copy filtered output"
+      copy_git_branch: "Copy git branch"
+      copy_output: "Copy output"
+      copy_output_as_markdown: "Copy output as Markdown"
+      copy_path: "Copy path"
+      copy_prompt: "Copy prompt"
+      copy_right_prompt: "Copy right prompt"
+      copy_share_link: "Copy share link"
+      copy_url: "Copy URL"
+      copy_working_directory: "Copy working directory"
+      cut: "Cut"
+      edit_agent_toolbelt: "Edit agent toolbelt"
+      edit_cli_agent_toolbelt: "Edit CLI agent toolbelt"
+      edit_prompt: "Edit prompt"
+      find_within_block_one: "Find within block"
+      find_within_block_other: "Find within blocks"
+      fork: "Fork"
+      fork_from_here: "Fork from here"
+      fork_from_here_dev_only: "Fork from here (dev only)"
+      fork_from_last_query: "Fork from last query"
+      insert_into_input: "Insert into input"
+      open_in_editor: "Open in editor"
+      open_in_warp: "Open in Warp"
+      paste: "Paste"
+      rewind_to_before_here: "Rewind to before here"
+      save_as_prompt: "Save as prompt"
+      save_as_workflow: "Save as workflow"
+      scroll_to_bottom_of_block_one: "Scroll to bottom of block"
+      scroll_to_bottom_of_block_other: "Scroll to bottom of blocks"
+      scroll_to_top_of_block_one: "Scroll to top of block"
+      scroll_to_top_of_block_other: "Scroll to top of blocks"
+      select_all: "Select all"
+      share_block_dots: "Share block..."
+      share_conversation: "Share conversation"
+      share_dots: "Share..."
+      show_containing_folder: "Show containing folder"
+      show_in_finder: "Show in Finder"
+      split_pane_down: "Split pane down"
+      split_pane_left: "Split pane left"
+      split_pane_right: "Split pane right"
+      split_pane_up: "Split pane up"
+      toggle_block_filter: "Toggle block filter"
+      toggle_bookmark: "Toggle bookmark"
+    auto_reload_settings_updated: Auto-reload settings updated
+    auto_reload_enable_failed: Failed to enable auto-reload. Please try updating your settings in Billing & usage.
+    auto_reload_when_enabled_prefix: 'When enabled, '
+    auto_reload_term: auto-reload
+    auto_reload_when_enabled_suffix: ' will automatically purchase your selected package when you run out. '
+    learn_more: Learn more
+    cancel: Cancel
+    saving: Saving...
+    enable: Enable
+    team_data_not_found: Oops, something went wrong; your team's data could not be found.
+    enable_auto_reload_title: Enable auto reload?
+    banner:
+      more_info: "More info"
+      more_info_lowercase: "more info"
+      learn_more: "Learn more"
+      slow_bootstrap_text: "Seems like your shell is taking a while to start...  "
+      slow_bootstrap_show_init: "Show initialization block"
+      controlmaster_part1: "Seems like your completions are not working ("
+      controlmaster_part2: "). Enabling the SSH extension in "
+      controlmaster_settings: "settings"
+      controlmaster_part3: " may resolve this issue."
+      incompatible_config_text: "Your shell configuration is incompatible with Warp...  "
+      p10k_part1: "Powerlevel10k now supports Warp!  "
+      p10k_part2: "You seem to be running an older (unsupported) version, please follow "
+      p10k_instructions: "these instructions"
+      p10k_part3: " to update to the latest version."
+      pure_text: "Pure is not yet supported in Warp. You might consider one of the supported prompts as an alternative.  "
+    dialog:
+      emacs_intent: "Did you intend "
+      emacs_move_cursor: " to move the cursor?"
+      emacs_yes: "Yes, use Emacs-style bindings"
+      emacs_no: "No, keep IDE bindings"
+    notification:
+      latest_output: "Latest output: "
+      error_prefix: "Error: "
+      waiting_for_password: " is waiting for a password"
+      discovery_long_running: "Warp can notify you when long-running commands finish."
+      discovery_agent_finished: "Warp can notify you when an agent finishes responding."
+      discovery_needs_attention: "Warp can notify you when a command or agent needs your attention."
+      discovery_password_prompt: "Warp can notify you when you're prompted to enter a password."
+      discovery_a11y: "You can enable notifications through the command palette."
+      default_title: "Notification"
+      password_body: "Command is waiting for a password"
+      ai_perm_read_files: "Oz needs your permission to read files"
+      ai_perm_search_codebase: "Oz needs your permission to search your codebase"
+      ai_perm_edit_file: "Oz needs your permission to edit a file"
+      ai_perm_interact_shell: "Oz needs your permission to interact with a running shell command"
+      ai_confirmation_continue: "Oz needs your confirmation to continue"
+      ai_unknown_error: "An unknown error occurred"
+    ai:
+      default_ask_suggestion: "What happened here?"
+    skills:
+      empty: "No skills found"
+      project_badge: "Project Skill"
+      remote_execution_error: "Local skills cannot run on a remote machine. Try forking the conversation locally and running the skill."
+      to_dismiss: " to dismiss"
+  workspace:
+    settings: "Settings"
+    agent: "Agent"
+    terminal: "Terminal"
+    toast:
+      check_latest_version: "Check out the latest version and try again."
+    local_docker_sandbox: "Local Docker Sandbox"
+    whats_new: "What's new"
+    keyboard_shortcuts: "Keyboard shortcuts"
+    new_worktree_config: "New worktree config"
+    new_tab_config: "New tab config"
+    reopen_closed_session: "Reopen closed session"
+    rearrange_toolbar_items: "Re-arrange toolbar items"
+    update_warp_manually: "Update Warp manually"
+    update_and_relaunch_warp: "Update and relaunch Warp"
+    documentation: "Documentation"
+    feedback: "Feedback"
+    view_warp_logs: "View Warp logs"
+    slack: "Join our Slack community"
+    sign_up: "Sign up"
+    billing_and_usage: "Billing and usage"
+    upgrade: "Upgrade"
+    invite_a_friend: "Invite a friend"
+    log_out: "Log out"
+    cloud_agent: "Cloud Agent"
+    install_update_tab: "Install Update"
+    reset_pane_name: "Reset pane name"
+    reset_active_pane_name: "Reset active pane name"
+    staging_api_call_failed: "Staging API call failed. Did your IP address change?"
+    failed_load_conversation_data: "Failed to load conversation data."
+    untitled_pane: "Untitled pane"
+    conversation: "Conversation"
+    learn_more: "Learn more"
+    troubleshoot_notifications: "Troubleshoot notifications"
+    cannot_open_new_terminal_session: "Cannot open a new terminal session"
+    workflow_no_longer_available: "This workflow is no longer available."
+    plan_synced_to_warp_drive: "Plan synced to your Warp Drive"
+    view: "View"
+    undo: "Undo"
+    open_file: "Open file"
+    rename_pane: "Rename pane"
+    rename_active_pane: "Rename active pane"
+    tab_configs_chip: "Access your tab configs here."
+    failed_delete_conversation: "Failed to delete conversation. Please exit the agent view and try again."
+    update_warp: "Update Warp"
+    version_deprecation: "Your app is out of date and some features may not work as expected. Please update immediately."
+    version_deprecation_without_permissions: "Some Warp features may not work as expected without updating immediately, but Warp is unable to perform the update."
+    unable_update_new_version: "A new version is available but Warp is unable to perform the update."
+    unable_launch_new_version: "Warp was unable to launch the new installed version."
+    update_now: "Update now"
+    app_needs_update: "Your app is out of date and needs to update."
+    restart_and_update_now: "Restart app and update now"
+    search_repos: "Search repos"
+    search_tabs: "Search tabs..."
+    resource_not_found: "Resource not found or access denied"
+    conversation_not_synced: "Your conversation hasn't synced to the cloud yet. Try sending another message, then hand off again."
+    couldnt_save_conversation: "Couldn't save your conversation locally. Try sending another message, then hand off again."
+    failed_sample_process: "Failed to sample process (check logs)"
+    agent_management_panel: "Agent management panel"
+    tabs_panel: "Tabs panel"
+    project_explorer: "Project explorer"
+    global_search: "Global search"
+    warp_drive: "Warp Drive"
+    agent_conversations: "Agent conversations"
+    tools_panel: "Tools panel"
+    code_review_panel: "Code review panel"
+    notifications: "Notifications"
+    warp_essentials: "Warp Essentials"
+    login_expired: "Your login has expired."
+    please_sign_in_again: "Please sign in again to restore access to cloud-based features."
+    sign_in: "Sign in"
+    fix_with_oz: "Fix with Oz"
+    linear_issue: "Linear Issue"
+    more_info: "More info"
+
+  # ── Workspace Conversation List ──
+  workspace.conversation_list:
+
+  # ── Workspace Global Search ──
+  workspace.global_search:
+
+  # ── Workspace Bindings ──
+  workspace.binding:
+    toggle_project_explorer: "Toggle project explorer"
+    create_team_notebook: "Create a new team notebook"
+    create_personal_notebook: "Create a new personal notebook"
+    create_team_workflow: "Create a new team workflow"
+    create_personal_workflow: "Create a new personal workflow"
+    create_team_folder: "Create a new team folder"
+    create_personal_folder: "Create a new personal folder"
+    create_new_tab: "Create new tab"
+    new_terminal_tab: "New Terminal Tab"
+    new_agent_tab: "New Agent Tab"
+    new_cloud_agent_tab: "New Cloud Agent Tab"
+    open_left_panel: "Open Left Panel"
+    toggle_code_review: "Toggle code review"
+    toggle_vertical_tabs_panel: "Toggle vertical tabs panel"
+    left_panel_agent_conversations: "Left Panel: Agent conversations"
+    left_panel_project_explorer: "Left Panel: Project explorer"
+    left_panel_global_search: "Left Panel: Global search"
+    left_panel_warp_drive: "Left Panel: Warp Drive"
+    open_global_search: "Open global search"
+    toggle_warp_drive: "Toggle Warp Drive"
+    toggle_agent_conversation_list_view: "Toggle Agent conversation list view"
+    close_focused_panel: "Close focused panel"
+    toggle_command_palette: "Toggle command palette"
+    move_tab_left: "Move tab left"
+    move_tab_right: "Move tab right"
+    close_window: "Close Window"
+    close_tabs_to_the_right: "Close tabs to the right"
+    toggle_navigation_palette: "Toggle navigation palette"
+    create_team_env_vars: "Create new team environment variables"
+    create_personal_env_vars: "Create new personal environment variables"
+    create_personal_prompt: "Create a new personal prompt"
+    create_team_prompt: "Create a new team prompt"
+    open_repository: "Open repository"
+    open_ai_rules: "Open AI Rules"
+    open_mcp_servers: "Open MCP Servers"
+    switch_focus_left: "Switch Focus to Left Panel"
+    switch_focus_right: "Switch Focus to Right Panel"
+    import_to_personal_drive: "Import To Personal Drive"
+    import_to_team_drive: "Import To Team Drive"
+    open_theme_picker: "Open theme picker"
+    sample_process: "Sample Process"
+    dump_heap_profile: "Write heap profile to disk"
+    open_tab_configs_menu: "Open tab configs menu"
+    increase_zoom_level: "Increase zoom level"
+    decrease_zoom_level: "Decrease zoom level"
+    reset_zoom_level: "Reset zoom level to default"
+    increase_font_size: "Increase font size"
+    decrease_font_size: "Decrease font size"
+    reset_font_size: "Reset font size to default"
+    toggle_keyboard_shortcuts: "Toggle keyboard shortcuts"
+    open_keybindings_editor: "Open keybindings editor"
+    toggle_sticky_command_header: "Toggle sticky command header"
+    rename_current_tab: "Rename the current tab"
+    rename_current_pane: "Rename the current pane"
+    quit_warp: "Quit Warp"
+    close_current_tab: "Close the current tab"
+    close_other_tabs: "Close other tabs"
+    turn_notifications_on: "Turn notifications on"
+    turn_notifications_off: "Turn notifications off"
+    launch_configuration_palette: "Launch configuration palette"
+    toggle_files_palette: "Toggle Files Palette"
+    search_warp_drive: "Search Warp Drive"
+    install_update_and_relaunch: "Install update and relaunch"
+    check_for_updates: "Check for updates"
+    log_out: "Log out"
+    toggle_resource_center: "Toggle resource center"
+    export_warp_drive_objects: "Export all Warp Drive objects"
+    install_oz_cli: "Install Oz CLI command"
+    uninstall_oz_cli: "Uninstall Oz CLI command"
+    view_latest_changelog: "View latest changelog"
+    toggle_warp_ai: "Toggle Warp AI"
+    toggle_mouse_reporting: "Toggle Mouse Reporting"
+    activate_previous_pane: "Activate previous pane"
+    activate_next_pane: "Activate next pane"
+    switch_to_last_tab: "Switch to last tab"
+    activate_previous_tab: "Activate previous tab"
+    activate_next_tab: "Activate next tab"
+    jump_to_latest_agent_task: "Jump to latest agent task"
+    toggle_notification_mailbox: "Toggle notification mailbox"
+    toggle_agent_management_view: "Toggle the agent management view"
+    open_settings: "Open Settings"
+    open_settings_account: "Open Settings: Account"
+    open_settings_appearance: "Open Settings: Appearance"
+    open_settings_features: "Open Settings: Features"
+    open_settings_shared_blocks: "Open Settings: Shared Blocks"
+    open_settings_keyboard_shortcuts: "Open Settings: Keyboard Shortcuts"
+    open_settings_about: "Open Settings: About"
+    open_settings_teams: "Open Settings: Teams"
+    open_settings_privacy: "Open Settings: Privacy"
+    open_settings_warpify: "Open Settings: Warpify"
+    open_settings_ai: "Open Settings: AI"
+    open_settings_billing_and_usage: "Open Settings: Billing and usage"
+    open_settings_code: "Open Settings: Code"
+    open_settings_referrals: "Open Settings: Referrals"
+    open_settings_environments: "Open Settings: Environments"
+    open_settings_mcp_servers: "Open Settings: MCP Servers"
+    invite_people: "Invite People..."
+    join_slack_community: "Join our Slack community (opens external link)"
+    view_user_docs: "View user docs (opens external link)"
+    send_feedback: "Send feedback (opens external link)"
+    view_warp_logs: "View Warp logs"
+    open_settings_file: "Open settings file"
+    switch_to_next_tab: "Switch to next tab"
+    switch_to_previous_tab: "Switch to previous tab"
+    create_new_window: "Create New Window"
+    zoom_in: "Zoom In"
+    zoom_out: "Zoom Out"
+    reset_zoom: "Reset Zoom"
+    save_new_launch_configuration: "Save new launch configuration"
+    copy_access_token: "Copy access token to clipboard"
+    view_privacy_policy: "View privacy policy (opens external link)"
+    switch_to_first_tab: "Switch to 1st tab"
+    switch_to_second_tab: "Switch to 2nd tab"
+    switch_to_third_tab: "Switch to 3rd tab"
+    switch_to_fourth_tab: "Switch to 4th tab"
+    switch_to_fifth_tab: "Switch to 5th tab"
+    switch_to_sixth_tab: "Switch to 6th tab"
+    switch_to_seventh_tab: "Switch to 7th tab"
+    switch_to_eighth_tab: "Switch to 8th tab"
+    toggle_hidden_files_in_project_explorer: "Toggle hidden files in Project Explorer"
+    move_tab_up: "move tab up"
+    move_tab_down: "move tab down"
+    close_tabs_below: "close tabs below"
+    create_new_tab_group: "Create new tab group"
+    create_tab_group_from_active: "Create tab group from active or selected tab(s)"
+    remove_active_from_group: "Remove active or selected tab(s) from group"
+    pin_current_tab: "Pin current tab"
+    unpin_current_tab: "Unpin current tab"
+    pin_current_tab_group: "Pin current tab group"
+    unpin_current_tab_group: "Unpin current tab group"
+
+  # ── Workspace Tab Group ──
+  workspace.tab_group:
+    move_up: "Move group up"
+    move_down: "Move group down"
+    move_left: "Move group left"
+    move_right: "Move group right"
+    close_all: "Close all tabs in group"
+    close_others: "Close other tabs"
+    close_above: "Close tabs above"
+    close_below: "Close tabs below"
+    close_left: "Close tabs to the left"
+    close_right: "Close tabs to the right"
+    ungroup: "Ungroup tabs"
+    new_tab_in_group: "New tab in group"
+    rename: "Rename"
+
+  # ── Workspace Tab Grouping ──
+  workspace.tab_grouping:
+    remove_from_group: "Remove from group"
+    create_group: "Create group from tabs"
+    move_to_group: "Move to group"
+    untitled_group: "Untitled group"
+
+  # ── Workspace Debug ──
+  workspace.debug:
+    dump_debug_info: "Dump debug info"
+    log_review_comment_send_status: "[Debug] Log review comment send status for active tab"
+    trigger_panic: "Trigger a panic (for testing sentry-rust)"
+    open_view_tree_debugger: "Open view tree debugger"
+    view_first_time_user_experience: "[Debug] View first-time user experience"
+    open_build_plan_migration_modal: "[Debug] Open Build Plan Migration Modal"
+    reset_build_plan_migration_modal_state: "[Debug] Reset Build Plan Migration Modal State"
+    undismiss_aws_login_banner: "[Debug] Un-dismiss AWS login banner"
+    open_oz_launch_modal: "[Debug] Open Oz Launch Modal"
+    reset_oz_launch_modal_state: "[Debug] Reset Oz Launch Modal State"
+    open_openwarp_launch_modal: "[Debug] Open OpenWarp Launch Modal"
+    reset_openwarp_launch_modal_state: "[Debug] Reset OpenWarp Launch Modal State"
+    open_orchestration_launch_modal: "[Debug] Open Orchestration Launch Modal"
+    reset_orchestration_launch_modal_state: "[Debug] Reset Orchestration Launch Modal State"
+    install_opencode_warp_plugin: "[Debug] Install OpenCode Warp plugin"
+    use_local_opencode_warp_plugin: "[Debug] Use local OpenCode Warp plugin (testing only)"
+    open_session_config_modal: "[Debug] Open Session Config Modal"
+    start_hoa_onboarding_flow: "[Debug] Start HOA Onboarding Flow"
+    set_a11y_concise: "[a11y] Set concise accessibility announcements"
+    set_a11y_verbose: "[a11y] Set verbose accessibility announcements"
+
+  # ── Appearance ──
+  appearance:
+
+  # ── Dialogs ──
+  # ── Provider Keys ──
+  provider_keys:
+    add_api_key: "Add API key"
+    description: "Use your own API keys from model providers for Warp Agent."
+    openai_api_key: "OpenAI API key"
+    anthropic_api_key: "Anthropic API key"
+    google_api_key: "Google API key"
+    cancel: "Cancel"
+    add_keys: "Add keys"
+
+  # ── Free AI Removal ──
+  # ── Auth ──
+  # ── Settings ──
+    choose_ai_execution_profile: Choose an AI execution profile
+    choose_agent_model: Choose an agent model
+    followups_use_original_model: Follow-ups use the original run's model
+    default_model: default
+    request_edit_access_to_change_model: Request edit access to change model
+    auto_select_best_model: auto-select the best model for the task
+    new_models_available: New models available
+    manage: Manage
+    manage_api_keys: Manage API keys
+    profiles: Profiles
+    manage_profiles: Manage profiles
+    custom_models: Custom models
+    cost: Cost
+    intelligence: Intelligence
+    speed: Speed
+    model_specs: Model Specs
+    model_specs_description: Warp’s benchmarks for how well a model performs in our harness, the rate at which it consumes credits, and task speed.
+    auto_mode: Auto mode
+    auto_mode_description: Auto will select the best model for the task. Cost-efficiency optimizes for cost, Responsiveness optimizes for response speed.
+    reasoning_level: Reasoning level
+    reasoning_level_description: Increased reasoning levels consume more credits and have higher latency, but higher performance for complicated tasks.
+  root_view:
+    mac_hide_all_windows: "Hide All Windows"
+    mac_show_dedicated_hotkey_window: "Show Dedicated Hotkey Window"
+    mac_hide_dedicated_hotkey_window: "Hide Dedicated Hotkey Window"
+    toggle_fullscreen: "Toggle fullscreen"
+    create_environment_pane_title: "Create Environment"
+  settings:
+    execution_profile:
+      apply_code_diffs: "Apply code diffs:"
+      ask_questions: "Ask questions:"
+      autosync_plans_to_warp_drive: "Auto-sync plans to Warp Drive:"
+      base_model: "Base model:"
+      call_mcp_servers: "Call MCP servers:"
+      call_web_tools: "Call web tools:"
+      command_allowlist: "Command allowlist:"
+      command_denylist: "Command denylist:"
+      computer_use_model: "Computer use:"
+      computer_use_permission: "Computer use:"
+      directory_allowlist: "Directory allowlist:"
+      execute_commands: "Execute commands:"
+      full_terminal_use: "Full terminal use:"
+      interact_with_running_commands: "Interact with running commands:"
+      mcp_allowlist: "MCP allowlist:"
+      mcp_denylist: "MCP denylist:"
+      models_section: "MODELS"
+      none: "None"
+      "off": "Off"
+      "on": "On"
+      permission_agent_decides: "Agent decides"
+      permission_always_allow: "Always allow"
+      permission_always_ask: "Always ask"
+      permission_ask_on_first_write: "Ask on first write"
+      permission_ask_unless_auto_approve: "Ask unless auto-approve"
+      permission_never: "Never"
+      permission_never_ask: "Never ask"
+      permission_unknown: "Unknown"
+      permissions_section: "PERMISSIONS"
+      read_files: "Read files:"
+      run_agents: "Run agents:"
+    about: "About"
+    account:
+      sign_up: "Sign up"
+      free_plan: "Free"
+      contact_support: "Contact support"
+      manage_billing: "Manage billing"
+      upgrade_to_turbo: "Upgrade to Turbo plan"
+      upgrade_to_lightspeed: "Upgrade to Lightspeed plan"
+      compare_plans: "Compare plans"
+      settings_sync: "Settings sync"
+      refer_a_friend: "Refer a friend"
+      version: "Version"
+      not_yet_loaded: "Not yet loaded"
+      staging_iap: "Staging IAP credentials"
+      refresh: "Refresh"
+      referral_cta: "Earn rewards by sharing Warp with friends & colleagues"
+      log_out: "Log out"
+    ai:
+      add_custom_endpoint: "Add custom endpoint"
+      agent:
+        git_operations_autogen_description: "Generates a commit message based on your current changes to your git repo"
+    appearance:
+      category:
+        blocks: "Blocks"
+        cursor: "Cursor"
+        full_screen_apps: "Full-screen Apps"
+        icon: "Icon"
+        input: "Input"
+        panes: "Panes"
+        tabs: "Tabs"
+        text: "Text"
+        themes: "Themes"
+        window: "Window"
+      default_label: "default"
+      label:
+        agent_font: "Agent font"
+        columns: "Columns"
+        compact_mode: "Compact mode"
+        cursor_type: "Cursor type"
+        font_weight: "Font weight"
+        input_position: "Input position"
+        input_type: "Input type"
+        line_height: "Line height"
+        rows: "Rows"
+        use_thin_strokes: "Use thin strokes"
+        window_blur_radius_label: "Window Blur Radius:"
+        window_opacity_label: "Window Opacity:"
+        zoom: "Zoom"
+      toggle:
+        block_dividers: "block dividers"
+        compact_mode: "compact mode"
+        cursor_blink: "cursor blink"
+        tab_indicators: "tab indicators"
+        themes_sync_os: "themes: sync with OS"
+        zen_mode: "zen mode"
+    features:
+      asynchronous_find: "Asynchronous find"
+      clipboard_osc52: "Clipboard access (OSC 52)"
+      clipboard_osc52_tooltip: "Controls whether programs running in the terminal can read or write your system clipboard."
+      code_editor_line_numbers: "Code editor line numbers:"
+      preserve_input_focus_on_block_selection: "Preserve input focus on block selection"
+      press_new_shortcut: "Press new keyboard shortcut"
+      toggle:
+        agent_task_completed_notifications: "agent task completion notifications"
+        alias_expansion: "alias expansion"
+        at_context_menu_terminal: "'@' context menu in terminal mode"
+        autocomplete_symbols: "autocomplete quotes, parentheses, and brackets"
+        autosuggestion_ignore_button: "autosuggestion ignore button"
+        autosuggestion_keybinding_hint: "autosuggestion keybinding hint"
+        code_as_default_editor: "code as default editor"
+        focus_reporting: "focus reporting"
+        global_workflows_search: "global workflows in Command Search"
+        help_block_in_new_sessions: "help block in new sessions"
+        in_app_agent_notifications: "in-app agent notifications"
+        input_hint_text: "input hint text"
+        integrated_gpu: "integrated GPU rendering (low power)"
+        link_tooltip: "show tooltip on click on links"
+        long_running_notifications: "long-running command notifications"
+        middle_click_paste: "middle-click paste"
+        mouse_reporting: "mouse reporting"
+        needs_attention_notifications: "needs-attention notifications"
+        notification_sounds: "notification sounds"
+        outline_codebase_symbols: "codebase symbols in the '@' context menu"
+        preserve_input_focus_on_block_selection: "preserve input focus on block selection"
+        quit_warning_modal: "quit warning modal"
+        restore_session: "restore windows, tabs, and panes on startup"
+        slash_commands_terminal: "slash commands in terminal mode"
+        smart_select: "smart select"
+        ssh_reuse_control_master: "reuse existing SSH ControlMaster in the Warp SSH wrapper"
+        terminal_input_message_line: "terminal input message line"
+        vim_keybindings: "editing commands with Vim keybindings"
+        vim_status_bar: "Vim status bar"
+        vim_unnamed_register: "Vim unnamed register as system clipboard"
+        wayland_window_management: "Wayland for window management"
+    billing_and_usage:
+      auto_reload: "Auto reload"
+      buy: "Buy"
+      buy_more: "Buy more"
+      buying: "Buying…"
+      credit_singular: "1 credit"
+      credits_header: "Credits"
+      default_spend_limit: "$200.00"
+      free: "Free"
+      load_more: "Load more"
+      new_agent: "New agent"
+      not_set: "Not set"
+      overview_tab: "Overview"
+      plan: "Plan"
+      resets_at: "Resets {time}"
+      sign_up: "Sign up"
+      sort_a_to_z: "A to Z"
+      sort_z_to_a: "Z to A"
+      switch_to_business: "Switch to Business"
+      team_total: "Team total"
+      usage_section: "Usage"
+      your_selected: "your selected"
+      zero_cost: "$0.00"
+      zero_credits: "0 credits"
+    scripting:
+      install: "Install"
+      install_failed: "Failed to install Warp Control command: {error}"
+      install_success: "Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line."
+      installed: "Installed"
+      installing: "Installing…"
+      title: "Scripting"
+      warp_control_cli_command: "Warp Control CLI command"
+      warp_control_cli_description: "Install the warpctrl command for scripting Warp from your terminal."
+      warpctrl_cli: "warpctrl CLI"
+      warpctrl_cli_description: "warpctrl allows for scripting Warp's UI. Use with care."
+    shared_blocks: "Shared blocks"
+    mcp_servers: "MCP Servers"
+    privacy:
+      title: "Privacy"
+    teams:
+      invite_option_email: "Email"
+      invite_option_link: "Link"
+      need_more_seats: "Need more seats? "
+      team_full_title: "Your team is full"
+      team_member_count_one: "1 team member"
+      teammate_count_one: "1 teammate"
+    update_environment_form:
+      auth_with_github: "Auth with GitHub"
+      authenticate: "Authenticate"
+      characters_count: "{count} / {max} characters"
+      configure_access: "Configure access on GitHub"
+      create_environment: "Create environment"
+      delete_environment: "Delete environment"
+      description_label: "Description"
+      description_placeholder: "e.g., this environment is for all front end focused agents"
+      docker_image_label: "Docker image"
+      docker_image_label_long: "Docker image reference"
+      docker_image_placeholder: "e.g. python:3.11, node:20-alpine"
+      docker_image_placeholder_short: "e.g., node:20-alpine"
+      edit_environment: "Edit environment"
+      generating: "Generating…"
+      launch_agent: "Launch agent"
+      load_repos_error: "Couldn't load GitHub repos. You can paste repo URL(s), or retry."
+      load_repositories_failed: "Failed to load GitHub repositories"
+      loading: "Loading..."
+      missing_repo: "Missing a repo?"
+      name_label: "Name"
+      name_placeholder: "Environment name"
+      name_placeholder_orchestration: "e.g., dev-env"
+      no_repositories: "No repositories found"
+      open_image_at: "Open image at {url}"
+      repos_helper: "Type owner/repo and press Enter to add, or select from dropdown."
+      repos_label: "Repo(s)"
+      repos_placeholder_authed: "Enter repos (owner/repo format)"
+      repos_placeholder_browse: "Browse GitHub repos..."
+      repos_placeholder_unauthed: "Paste repo URL(s)"
+      save_environment: "Save environment"
+      setup_commands_helper: "Setup commands run independently. Each command runs from the workspace root (/workspace). If a command depends on the previous one, combine them with &&."
+      setup_commands_helper_short: "Press Enter or click the submit button to add each command."
+      setup_commands_label: "Setup command(s)"
+      setup_commands_placeholder: "e.g. cd my-repo && pip install -r requirements.txt"
+      setup_commands_placeholder_short: "e.g., node start"
+      share_warning: "Personal environments cannot be used with external integrations or team API keys. For the best experience, use shared environments."
+      share_with_team: "Share with team"
+      suggest_image: "Suggest image"
+      suggest_image_auth_required: "You need to grant access to your GitHub repos to suggest a Docker image"
+      suggest_image_failed: "Failed to suggest a Docker image"
+      suggest_image_failed_with_error: "Failed to suggest a Docker image: {error}"
+      suggest_image_no_match: "We couldn't find a good match. We recommend using a custom Docker image for these repos."
+      suggest_image_tooltip: "Warp will suggest a Docker image based on your selected repositories."
+      suggest_image_unknown_response: "Unknown response from suggestCloudEnvironmentImage"
+
+    warp_agent: "Warp Agent"
+    mcp_servers_page:
+      title: "MCP Servers"
+      search_terms: "mcp servers"
+      logout_success: "Successfully logged out of {name} MCP server"
+      logout_success_unnamed: "Successfully logged out of MCP server"
+      install_modal_already_open: "Finish the current MCP install before opening another install link."
+      unknown_server: "Unknown MCP server '{name}'"
+      cannot_install_from_link: "MCP server '{name}' cannot be installed from this link."
+    environments: "Environments"
+    platform:
+      api_key_deleted: "API key deleted"
+      column_created: "Created"
+      column_expires_at: "Expires at"
+      column_key: "Key"
+      column_last_used: "Last used"
+      column_name: "Name"
+      column_scope: "Scope"
+      create_api_key_button: "+ Create API Key"
+      description_prefix: "Create and manage API keys to allow other Oz cloud agents to access your Warp account.\nFor more information, visit the "
+      documentation_link: "Documentation."
+      never: "Never"
+      new_api_key: "New API key"
+      no_api_keys: "No API Keys"
+      no_api_keys_description: "Create a key to manage external access to Warp"
+      no_api_keys_match_search: "No API keys match your search"
+      oz_cloud_api_keys: "Oz Cloud API Keys"
+      save_your_key: "Save your key"
+      scope_agent: "Agent"
+      scope_personal: "Personal"
+      scope_team: "Team"
+      search_api_keys: "Search API keys"
+  settings.code_page:
+    code: "Code"
+    initialization_settings_header: "Initialization Settings"
+    codebase_indexing_label: "Codebase indexing"
+    codebase_index_description: "Warp can automatically index code repositories as you navigate them, helping agents quickly understand context and provide solutions. Code is never stored on the server. If a codebase is unable to be indexed, Warp can still navigate your codebase and gain insights via grep and find tool calling."
+    warp_indexing_ignore_description: "To exclude specific files or directories from indexing, add them to the .warpindexingignore file in your repository directory. These files will still be accessible to AI features, but they won't be included in codebase embeddings."
+    auto_index_feature_name: "Index new folders by default"
+    auto_index_description: "When set to true, Warp will automatically index code repositories as you navigate them - helping agents quickly understand context and provide targeted solutions."
+    indexing_disabled_admin_text: "Team admins have disabled codebase indexing."
+    indexing_workspace_enabled_admin_text: "Team admins have enabled codebase indexing."
+    indexing_disabled_global_ai_text: "AI Features must be enabled to use codebase indexing."
+    codebase_index_limit_reached: "You have reached the maximum number of codebase indices for your plan. Delete existing indices to auto-index new codebases."
+    indexing_subpage_title: "Codebase Indexing"
+    editor_subpage_title: "Editor and Code Review"
+    index_new_folder: "Index new folder"
+    lsp_status_installed: "Installed"
+    lsp_status_installing: "Installing..."
+    lsp_status_checking: "Checking..."
+    lsp_status_available_for_download: "Available for download"
+    lsp_status_available: "Available"
+    lsp_status_busy: "Busy"
+    lsp_status_failed: "Failed"
+    lsp_status_stopped: "Stopped"
+    lsp_status_not_running: "Not running"
+    lsp_restart_server: "Restart server"
+    lsp_view_logs: "View logs"
+    auto_open_code_review_panel: "Auto open code review panel"
+    auto_open_code_review_panel_desc: "When this setting is on, the code review panel will open on the first accepted diff of a conversation"
+    show_code_review_button: "Show code review button"
+    show_code_review_button_desc: "Show a button in the top right of the window to toggle the code review panel."
+    show_diff_stats: "Show diff stats on code review button"
+    show_diff_stats_desc: "Show lines added and removed counts on the code review button."
+    project_explorer: "Project explorer"
+    project_explorer_desc: "Adds an IDE-style project explorer / file tree to the left side tools panel."
+    global_file_search: "Global file search"
+    global_file_search_desc: "Adds global file search to the left side tools panel."
+    show_hidden_files: "Show hidden files in project explorer"
+    show_hidden_files_desc: "Show dotfiles and hidden files (starting with .) in the project explorer."
+    format_on_save: "Format on save (requires an active language server)"
+    format_on_save_desc: "Only applies when a language server is active for the file. Automatically formats the file with the language server on save; other LSP features (hover, go-to-definition, references, diagnostics) are unaffected."
+    tabbed_editor_header: "Group files into single editor pane"
+    tabbed_editor_desc: "When this setting is on, any files opened in the same tab will be automatically grouped into a single editor pane."
+    layout_split_pane: "Split Pane"
+    layout_new_tab: "New Tab"
+    editor_default_app: "Default App"
+    choose_editor_file_links: "Choose an editor to open file links"
+    choose_editor_code_panels: "Choose an editor to open files from the code review panel, project explorer, and global search"
+    choose_layout: "Choose a layout to open files in Warp"
+    prefer_markdown_viewer: "Open Markdown files in Warp's Markdown Viewer by default"
+
+  settings.environments_page:
+    page_title: "Environments"
+    page_description: "Environments define where your ambient agents run. Set one up in minutes via GitHub (recommended), Warp-assisted setup, or manual configuration."
+    search_placeholder: "Search environments..."
+    toast_updated_success: "Successfully updated environment"
+    toast_created_success: "Successfully created environment"
+    toast_deleted_success: "Environment deleted successfully"
+    toast_shared_success: "Successfully shared environment"
+    toast_share_failed: "Failed to share environment with team"
+    toast_create_not_logged_in: "Unable to create environment: not logged in."
+    toast_save_missing: "Unable to save: environment no longer exists."
+    toast_share_no_team: "Unable to share environment: you are not currently on a team."
+    toast_share_not_synced: "Unable to share environment: environment is not yet synced."
+    no_matches: "No environments match your search."
+    section_personal: "Personal"
+    section_shared_by_team_fallback: "Shared by Warp and your team"
+    button_loading: "Loading..."
+    button_retry: "Retry"
+    button_authorize: "Authorize"
+    button_get_started: "Get started"
+    button_launch_agent: "Launch agent"
+    quick_setup_title: "Quick setup"
+    quick_setup_badge: "Suggested"
+    quick_setup_subtitle: "Select the GitHub repositories you'd like to work with and we'll suggest a base image and config"
+    use_agent_title: "Use the agent"
+    use_agent_subtitle: "Choose a locally set up project and we'll help you set up an environment based on it"
+    empty_state_header: "You haven't set up any environments yet."
+    empty_state_subheader: "Choose how you'd like to set up your environment:"
+    card_last_used_never: "Last used: never"
+    card_view_runs_link: "View my runs"
+    tooltip_share: "Share"
+    tooltip_edit: "Edit"
+    card_last_edited: "Last edited: {}"
+    card_last_used: "Last used: {}"
+    section_shared_by_team: "Shared by Warp and {}"
+    card_env_id: "Env ID: {}"
+    card_image: "Image: {}"
+    card_repos: "Repos: {}"
+    card_setup_commands: "Setup commands: {}"
+
+  settings.mcp_servers:
+    description: "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. "
+    empty_state: "Once you add a MCP server, it will be shown here."
+    no_search_results: "No search results found"
+    search_placeholder: "Search MCP Servers"
+    add_button: "Add"
+    card_available_to_install: "Available to install"
+    toast_server_updated: "MCP server updated"
+    file_based_toggle_label: "Auto-spawn servers from third-party agents"
+    file_based_description: "Automatically detect and spawn MCP servers from globally-scoped third-party AI agent configuration files (e.g. in your home directory). Servers detected inside a repository are never spawned automatically and must be enabled individually in the \"Detected from\" sections below. "
+    file_based_learn_more_link: "See supported providers."
+    learn_more_link: "Learn more."
+    section_my_mcps: "My MCPs"
+    section_shared_no_team: "Shared by Warp and from other devices"
+    section_shared_from_warp: "Shared from Warp"
+    card_detected_from_config: "Detected from config file"
+    chip_shared_by_team_member: "Shared by a team member"
+    chip_from_another_device: "From another device"
+    section_shared_with_team: "Shared by Warp and {}"
+    section_detected_from_provider: "Detected from {}"
+    chip_shared_by_creator: "Shared by: {}"
+    edit_page.save_button: "Save"
+    edit_page.edit_variables_button: "Edit Variables"
+    edit_page.delete_mcp_button: "Delete MCP"
+    edit_page.remove_from_team_button: "Remove from team"
+    edit_page.editing_disabled_banner: "Only team admins and the creator of the MCP server can edit the MCP server."
+    edit_page.add_new_title: "Add New MCP Server"
+    edit_page.edit_named_title: "Edit {} MCP Server"
+    edit_page.edit_title: "Edit MCP Server"
+    edit_page.log_out_tooltip: "Log out"
+    edit_page.json_label: "JSON"
+    edit_page.secrets_error_toast: "This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings."
+    edit_page.no_server_specified_error: "No MCP Server specified."
+    edit_page.multiple_servers_error: "Cannot add multiple MCP servers while editing a single server."
+    server_card.status_offline: "Offline"
+    server_card.status_starting: "Starting server..."
+    server_card.status_authenticating: "Authenticating..."
+    server_card.status_shutting_down: "Shutting down..."
+    server_card.no_tools_available: "No tools available"
+    server_card.tools_available_count: "{} tools available"
+    server_card.show_logs_tooltip: "Show logs"
+    server_card.log_out_tooltip: "Log out"
+    server_card.share_server_tooltip: "Share server"
+    server_card.edit_tooltip: "Edit"
+    server_card.view_logs_button: "View logs"
+    server_card.edit_config_button: "Edit config"
+    server_card.set_up_button: "Set up"
+    server_card.update_available_tooltip: "Server update available"
+
+  settings.billing_v2:
+    addon_credits_description: "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed."
+    additional_addon_credits_description_for_team: "Purchased add-on credits are added to your personal balance."
+    managed_auto_reload_header: "Auto-reload is enabled"
+    addon_credits_delinquent_warning: "Restricted due to billing issue. Update your payment method to purchase add-on credits."
+    addon_credits_non_admin_delinquent_warning: "Restricted due to billing issue. Contact your team admin to update their payment method."
+    restricted_billing_usage_warning: "Auto reload is disabled due to recent failed reload. Please update your payment method and try again."
+    restricted_billing_usage_non_admin_warning: "Auto reload is disabled due to recent failed reload. Contact your team admin to update their payment method."
+    ambient_agent_trial_title: "Cloud agent trial"
+    spending_limit_modal_title: "Monthly spending limit"
+    load_more_button: "Load more"
+    toast_update_settings_failed: "Failed to update workspace settings"
+    toast_purchase_success: "Successfully purchased add-on credits"
+    plan_section_header: "Plan"
+    manage_billing_button: "Manage billing"
+    open_admin_panel_button: "Open admin panel"
+    customer_type_free: "Free"
+    compare_plans_button: "Compare plans"
+    base_credits_label: "Base credits"
+    personal_credits_label: "Personal credits"
+    team_credits_label: "Team credits"
+    balance_section_header: "Balance"
+    credit_remaining_singular: "1 credit remaining"
+    credits_remaining_plural: "{} credits remaining"
+    new_agent_button: "New agent"
+    buy_more_button: "Buy more"
+    upgrade_to_build_link: "Upgrade to Build"
+    price_label: "{} credits / {}"
+    auto_reload_credits_amount: "{} credits"
+    auto_reload_selected_amount_fallback: "selected credit amount"
+    auto_reload_tooltip: "When any member on your team's credit balance reaches 100 credits remaining, automatically purchase {}."
+    warning_auto_reload_paused_exceed_limit: "Auto-reload is paused because the next reload would exceed your monthly spend limit. Increase your limit to continue using auto-reload."
+    warning_auto_reload_paused_exceed_limit_non_admin: "Auto-reload is paused because the next reload would exceed your team's monthly spend limit. Contact a team admin to increase it."
+    warning_purchase_exceed_limit: "This purchase would exceed your monthly limit. Increase your limit to continue."
+    warning_purchase_exceed_limit_non_admin: "This purchase would exceed your team's monthly spend limit. Contact a team admin to increase it."
+    auto_reload_non_admin_desc_with_amount: "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase {} credits for {} and add them to your balance."
+    auto_reload_non_admin_desc_fallback: "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your balance."
+    upgrade_to_build_suffix: " to purchase add-on credits."
+    contact_account_executive: "Contact your Account Executive for more add-on credits."
+    contact_team_admin: "Contact a team admin to enable add-on credits."
+    buy_credits_header: "Buy credits"
+    monthly_limit_tooltip: "Sets the monthly limit spent on add-on credits"
+    monthly_spend_limit_label: "Monthly spend limit"
+    purchased_this_month_label: "Purchased this month"
+    credit_singular: "1 credit"
+    credits_plural: "{} credits"
+    buying_button: "Buying\u2026"
+    one_time_purchase_button: "One-time purchase"
+    auto_reload_label: "Auto-reload"
+    last_30_days: "Last 30 days"
+    no_usage_history_title: "No usage history"
+    no_usage_history_desc: "Kick off an agent task to view usage history here."
+    toast_auto_reload_no_pricing: "Unable to enable auto-reload until pricing options load."
+    auto_reload_credits_fallback: "your selected"
+    toast_auto_reload_enabled: "Auto-reload enabled. We'll refill with {} credits when your balance runs low."
+    toast_auto_reload_disabled: "Auto-reload disabled."
+    balance_remaining_with_total: "/ {} remaining"
+    balance_remaining: "remaining"
+
+  settings.category:
+
+  settings.keybindings:
+    reset: "Default"
+    press_new: "Press new keyboard shortcut"
+    configure: "Configure keyboard shortcuts"
+    command_column: "Command"
+
+  settings.features:
+    category:
+      general: "General"
+      session: "Session"
+      keys: "Keys"
+      text_editing: "Text Editing"
+      terminal_input: "Terminal Input"
+      terminal: "Terminal"
+      notifications: "Notifications"
+      system: "System"
+    left_option_meta: "Left Option key is Meta"
+    right_option_meta: "Right Option key is Meta"
+    left_alt_meta: "Left Alt key is Meta"
+    right_alt_meta: "Right Alt key is Meta"
+    configure_global_hotkey: "Configure Global Hotkey"
+    make_default_terminal: "Make Warp the default terminal"
+    pin_top: "Pin to top"
+    pin_bottom: "Pin to bottom"
+    pin_left: "Pin to left"
+    pin_right: "Pin to right"
+    new_tab_after_all: "After all tabs"
+    new_tab_after_current: "After current tab"
+    change_keybinding: "Change keybinding"
+    link_tooltip: "Show tooltip on click on links"
+    quit_warning_modal: "Show warning before quitting/logging out"
+    alias_expansion: "Expand aliases as you type"
+    middle_click_paste: "Middle-click to paste"
+    vim_keybindings: "Edit code and commands with Vim keybindings"
+    vim_unnamed_register: "Set unnamed register as system clipboard"
+    vim_status_bar: "Show Vim status bar"
+    focus_reporting: "Enable Focus Reporting"
+    smart_select: "Double-click smart selection"
+    terminal_input_message_line: "Show terminal input message line"
+    slash_commands_terminal: "Enable slash commands in terminal mode"
+    integrated_gpu: "Prefer rendering new windows with integrated GPU (low power)"
+    wayland_window_management: "Use Wayland for window management"
+    active_screen: "Active Screen"
+    ten_million: "10 million"
+    one_million: "1 million"
+    block_max_rows_warning: "Setting the limit above 100k lines may impact performance. Maximum rows supported is {max_rows}."
+    open_links_desktop: "Open links in desktop app"
+    restore_session: "Restore windows, tabs, and panes on startup"
+    sticky_command_header: "Show sticky command header"
+    start_at_login_macos: "Start Warp at login (requires macOS 13+)"
+    start_at_login: "Start Warp at login"
+    quit_when_closed: "Quit when all windows are closed"
+    show_changelog: "Show changelog toast after updates"
+    allowed_values_1_20: "Allowed Values: 1-20"
+    mouse_scroll_lines: "Lines scrolled by mouse wheel interval"
+    mouse_scroll_tooltip: "Supports floating point values between 1 and 20."
+    auto_open_code_review: "Auto open code review panel"
+    auto_open_code_review_description: "When this setting is on, the code review panel will open on the first accepted diff of a conversation"
+    warp_is_default: "Warp is the default terminal"
+    max_block_rows: "Maximum rows in a block"
+    receive_desktop_notifications: "Receive desktop notifications from Warp"
+    notify_agent_completes: "Notify when an agent completes a task"
+    notify_needs_attention: "Notify when a command or agent needs your attention to continue"
+    play_notification_sounds: "Play notification sounds"
+    in_app_agent_notifications: "Show in-app agent notifications"
+    toast_visible_for: "Toast notifications stay visible for"
+    seconds: "seconds"
+    confirm_close_session: "Confirm before closing shared session"
+    global_hotkey: "Global hotkey:"
+    not_supported_wayland: "Not supported on Wayland. "
+    autocomplete_symbols: "Autocomplete quotes, parentheses, and brackets"
+    error_underlining: "Error underlining for commands"
+    syntax_highlighting: "Syntax highlighting for commands"
+    completions_while_typing: "Open completions menu as you type"
+    command_corrections: "Suggest corrected commands"
+    autosuggestion_hint: "Show autosuggestion keybinding hint"
+    autosuggestion_ignore: "Show autosuggestion ignore button"
+    right_arrow_accepts: "→ accepts autosuggestions."
+    completions_open_typing: "Completions open as you type."
+    completions_unbound: "Opening the completion menu is unbound."
+    accept_autosuggestion: "Accept Autosuggestion"
+    open_completions_menu: "Open Completions Menu"
+    tab_key_behavior: "Tab key behavior"
+    ctrl_tab_behavior: "Ctrl+Tab behavior:"
+    mouse_reporting: "Enable Mouse Reporting"
+    scroll_reporting: "Enable Scroll Reporting"
+    audible_bell: "Use Audible Bell"
+    word_char_allowlist: "Characters considered part of a word"
+    copy_on_select: "Copy on select"
+    show_help_block: "Show help block in new sessions"
+    new_tab_placement: "New tab placement"
+    default_session_mode: "Default mode for new sessions"
+    global_workflows_search: "Show Global Workflows in Command Search (ctrl-r)"
+    linux_selection_clipboard: "Honor linux selection clipboard"
+    linux_clipboard_tooltip: "Whether the Linux primary clipboard should be supported."
+    changes_new_windows: "Changes will apply to new windows."
+    wayland_description: "Enabling this setting disables global hotkey support. When disabled, text may be blurry if your Wayland compositor is using fraction scaling (ex: 125%)."
+    wayland_tooltip: "Enables the use of Wayland"
+    restart_for_changes: "Restart Warp for changes to take effect."
+    default_shell: "Default shell for new sessions"
+    working_directory: "Working directory for new sessions"
+    graphics_backend: "Preferred graphics backend"
+    current_backend: "Current backend:"
+    keybinding: "Keybinding"
+    click_to_set_hotkey: "Click to set global hotkey"
+    outline_codebase_symbols: "Outline codebase symbols for '@' context menu"
+    see_docs: "See docs."
+    autohides_on_focus_loss: "Autohides on loss of keyboard focus"
+    width_pct: "Width %"
+    height_pct: "Height %"
+    command_longer_than: "When a command takes longer than"
+    seconds_to_complete: "seconds to complete"
+    accepts_autosuggestions: "{} accepts autosuggestions."
+    completions_open_typing_or: "Completions open as you type (or {})."
+    opens_completion_menu: "{} opens completion menu."
+    at_context_menu_terminal: "Enable '@' context menu in terminal mode"
+
+    toggle:
+      copy_on_select: "copy on select within the terminal"
+      linux_selection_clipboard: "linux selection clipboard"
+      scroll_reporting: "scroll reporting"
+      completions_while_typing: "completions while typing"
+      command_corrections: "command corrections"
+      error_underlining: "error underlining"
+      syntax_highlighting: "syntax highlighting"
+      audible_bell: "audible terminal bell"
+      autosuggestions: "autosuggestions"
+  updates:
+    up_to_date: "Up to date"
+    check_for_updates: "Check for updates"
+    checking: "checking for update..."
+    downloading: "downloading update..."
+    update_available: "Update available"
+    relaunch: "Relaunch Warp"
+    updating: "Updating..."
+    installed: "Installed update"
+    cant_install: "A new version of Warp is available but can't be installed"
+    update_manually: "Update Warp manually"
+    cant_launch: "A new version of Warp is installed but can't be launched."
+
+  common:
+    back: "Back"
+    cancel: "Cancel"
+    clear: "Clear"
+    continue: "Continue"
+    create: "Create"
+    delete: "Delete"
+    disable_warp_drive: "Disable Warp Drive"
+    disabled: "Disabled"
+    edit: "Edit"
+    enabled: "Enabled"
+    finish: "Finish"
+    get_started: "Get started"
+    get_warping: "Get Warping"
+    next: "Next"
+    privacy_settings: "Privacy Settings"
+    recommended: "Recommended"
+    remove: "Remove"
+    retry: "Retry"
+    save: "Save"
+    skip: "Skip"
+    skip_for_now: "Skip for now"
+    submit: "Submit"
+    env_vars:
+      command: "Command"
+      one_password: "1Password"
+      lastpass: "LastPass"
+      edit: "Edit"
+      clear_secret: "Clear secret"
+      split_pane_right: "Split pane right"
+      split_pane_left: "Split pane left"
+      split_pane_down: "Split pane down"
+      split_pane_up: "Split pane up"
+      minimize_pane: "Minimize pane"
+      maximize_pane: "Maximize pane"
+      close_pane: "Close pane"
+      copy_link: "Copy link"
+      duplicate: "Duplicate"
+      trash: "Trash"
+      export: "Export"
+
+  # ── Code ──
+    auto_reload_enable_failed: Failed to enable auto-reload for your team. Please try again in Settings > Billing and Usage.
+    auto_reload: Auto reload
+    monthly_limit_reached_description_admin: Your monthly spend limit has been reached. Increase it to continue.
+    monthly_limit_reached_description_member: Contact a team admin to increase monthly limit.
+    monthly_limit_reached: Monthly limit reached
+    manage_billing: Manage billing
+    out_of_credits: Out of credits
+    purchase_exceeds_limit_warning_prefix: 'Purchasing these credits would take you over your monthly spend limit. '
+    increase_limit: Increase it
+    to_continue: ' to continue.'
+    out_of_credits_description_admin: Add more credits to your account to continue using Oz agents.
+    out_of_credits_description_member: Contact a team admin to purchase more credits to continue.
+    buying: Buying…
+    buy: Buy
+  code:
+    discard_this_version: "Discard this version"
+    overwrite: "Overwrite"
+    remote_disconnected_banner: "Remote host disconnected. You will not be able to see updates and save changes."
+    add_as_context: "Add as context"
+    go_to_definition: "Go to definition"
+    find_references_action: "Find references"
+    file_has_saved_changes: "This file has saved changes that are not reflected here."
+    copy_file_path: "Copy file path"
+  # ── Launch Configs ──
+  # ── Drive ──
+  # ── Notebook ──
+    file_tree:
+      remote_text: The Project Explorer requires access to your local workspace, which isn’t supported in remote sessions.
+      disabled_text: The Project Explorer requires access to your local workspace. Open a new session or navigate to an active session to view.
+      wsl_text: The Project Explorer doesn't currently work in WSL.
+      unavailable_title: Project explorer unavailable
+      open_in_new_pane: Open in new pane
+      open_in_new_tab: Open in new tab
+      open_file: Open file
+      new_file: New file
+      cd_to_directory: cd to directory
+      open_in_new_tab_directory: Open in new tab
+      reveal_in_finder: Reveal in Finder
+      reveal_in_explorer: Reveal in Explorer
+      reveal_in_file_manager: Reveal in file manager
+      rename: Rename
+      delete: Delete
+      attach_as_context: Attach as context
+      copy_path: Copy path
+      copy_relative_path: Copy relative path
+  notebook:
+    context_menu:
+      cut: "Cut"
+      copy: "Copy"
+      paste: "Paste"
+      split_pane_right: "Split pane right"
+      split_pane_left: "Split pane left"
+      split_pane_down: "Split pane down"
+      split_pane_up: "Split pane up"
+      close_pane: "Close pane"
+
+  # ── Onboarding ──
+    block_insertion:
+      embed: Embed
+      divider: Divider
+      insert_block_tooltip: Insert block
+    mermaid:
+      open_full_screen_label: Open full screen
+    code_block:
+      copy_label: Copy
+      run_in_terminal_label: Run in terminal
+    file_pane:
+      refresh_file: Refresh file
+      open_in_editor: Open in editor
+      try_again_label: Try again
+      missing_source_file: Missing source file
+    save:
+      secrets_in_content_toast: This notebook cannot be saved because its content contains secrets
+      secrets_in_title_toast: This notebook cannot be saved because its title contains secrets
+    pane_header_overflow:
+      attach_to_active_session: Attach to active session
+      copy_link: Copy link
+      open_on_desktop: Open on Desktop
+      duplicate: Duplicate
+      export: Export
+      trash: Trash
+    trash:
+      restore_tooltip: Restore notebook from trash
+      restore_label: Restore
+      copy_to_personal_tooltip: Copy notebook contents into your personal workspace
+      copy_to_personal_label: Copy to Personal
+    conflict:
+      copy_all_tooltip: Copy notebook contents to your clipboard
+      copy_all_label: Copy All
+      refresh_tooltip: Refresh notebook
+      refresh_label: Refresh
+    link:
+      copied_toast: Link copied to clipboard
+  onboarding:
+    agent_slide:
+      autonomy: "Autonomy"
+      autonomy_full_subtitle: "Warp Agent runs commands, writes code, and reads files without asking."
+      autonomy_full_title: "Full"
+      autonomy_none_subtitle: "Warp Agent takes no actions without your approval."
+      autonomy_none_title: "None"
+      autonomy_partial_subtitle: "Warp Agent can plan, read files, and execute low-risk commands. Asks before making any changes or executing sensitive commands."
+      autonomy_partial_title: "Partial"
+      autonomy_workspace_subtitle: "Autonomy settings are configured as part of your team workspace."
+      default_model: "Default model"
+      set_by_workspace: "Set by Team Workspace"
+      subtitle: "Select your Warp Agent's defaults."
+      title: "Customize your Warp Agent"
+    ai_access:
+      choose_how: "Get AI access"
+      subtitle: "Save with a recurring plan, or explore Warp's AI before committing."
+      subscription: "Subscription"
+      best_value: "Best value"
+      subscription_description: "Starting at $18 / mo, available with monthly or annual plans. Includes base credits, frontier models, cloud agents, collaboration, and more."
+      back: "Back"
+      no_ai: "I don't want AI"
+      next: "Next"
+      set_up_later_label: "Set up later"
+      set_up_later_description: "Explore Warp's built-in AI features before committing to a plan, or bring your own inference."
+      auth_prompt_bar:
+        browser_not_launched_prefix: "If your browser hasn't launched, "
+        copy_url_link: "copy the URL"
+        open_manually: " and open the page manually. "
+        paste_token_link: "Click here"
+        paste_token_suffix: " to paste your token from the browser."
+    ai_setup:
+      feature_harness: "Best harness for terminal tasks and agentic coding"
+      feature_models: "Frontier models from OpenAI, Anthropic, and Google"
+      feature_routing: "Model routing across frontier and open-weight models"
+      feature_orchestration: "Multi-agent orchestration"
+      choose_your_setup: "Choose your AI setup"
+      subtitle: "Choose if you'd like to use Warp Agent or third party agents."
+      use_warp_agent: "Use Warp Agent"
+      access_more_models: "Access more models"
+      warp_agent_description: "State of the art agent harness deeply integrated into the terminal."
+      use_third_party: "Use third party agents"
+      third_party_description: "Use agents like Claude Code, Codex, and Gemini."
+    agent:
+      skip: "Skip"
+      no_ai_dialog_title: "Are you sure you don't want AI?"
+      no_ai_dialog_body: "Without AI, you'll still get Warp's terminal experience, but you'll miss our agentic features like automatic fixes for terminal errors."
+      give_me_ai_features: "Give me AI features"
+      plan_activated_toast: "Plan successfully activated!"
+      features:
+        frontier_models: "Use frontier and open-weight models with Warp Agent"
+        cloud_agents: "Hand off agent work to cloud agents"
+        auto_fixes: "Automatically diagnose and fix terminal errors"
+        agentic_control: "Agentic control of long-running commands and TUIs"
+        code_review: "Review code diffs and send comments directly to agents"
+        remote_control: "Remote control for Claude Code, Codex, and other agents"
+
+    warp_drive_features:
+      session_sharing: "Session Sharing"
+    skip_dialog:
+      warp_drive:
+        title: "Are you sure you want to disable Warp Drive?"
+        body: "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:"
+        enable: "Enable Warp Drive"
+      agent:
+        title: "Continue without signing in?"
+        body: "Without an account, you won't have access to Warp's AI features. Sign in anytime to unlock agents and other AI features."
+
+  # ── AI Settings ──
+    callout:
+      back_to_terminal: "Back to terminal"
+      enable_natural_language_detection: "Enable Natural Language Detection"
+      in_agent_text_no_project: "Agent mode gives your questions and tasks their own conversation, so you can ask follow-ups without leaving your terminal workflow. Press {return_to_terminal_mode} to return to terminal mode at any point."
+      in_agent_text_with_project: "Agent mode gives your questions and tasks their own conversation, so you can ask follow-ups without leaving your terminal workflow.\n\nSubmit the query below to have the agent initialize this project, or ⊗ to clear the input and start your own!"
+      in_agent_title: "You're in agent mode"
+      in_terminal_title: "You're in terminal mode"
+      initialize: "Initialize"
+      meet_input_text: "Your terminal input accepts both terminal commands and agent prompts and automatically detects which you're using. Use {toggle_input_mode} to lock the input to Agent mode (natural language) or Terminal mode (commands)."
+      meet_input_title: "Meet the Warp input"
+      skip_initialization: "Skip initialization"
+      talk_to_agent_text: "You can type in natural language to engage the agent. Submit the query below to start: What tests exist in this repo, how are they structured, and what do they cover?"
+      talk_to_agent_title: "Talk to the agent"
+      prompt:
+        run_command: "Run a command..."
+        build_request: "Tell the agent what to build..."
+        talk_to_agent: "What tests exist in this repo, how are they structured, and what do they cover?"
+      terminal_mode_text: "Run commands here, just like a regular terminal. If you type a question or task using natural language, Warp can suggest opening it in agent mode. You can always override using {toggle_input_mode}."
+      welcome_terminal_title: "Welcome to terminal mode"
+    customize:
+      code_review_title: "Code review"
+      subtitle: "Tailor your features and UI to your working style."
+      tab_horizontal: "Horizontal"
+      tab_styling_title: "Tab styling"
+      tab_vertical: "Vertical"
+      title: "Customize your Warp"
+      tools_chip_conversation_history: "Conversation history"
+      tools_chip_file_explorer: "File explorer"
+      tools_chip_global_search: "Global file search"
+      tools_chip_warp_drive: "Warp Drive"
+      tools_panel_title: "Tools panel"
+    intention:
+      agent_description: "Get AI features to accelerate terminal and agent-driven workflows:"
+      agent_title: "Build faster with agents"
+      subtitle: "How do you want to work?"
+      terminal_badge: "No AI features"
+      terminal_description: "A modern terminal optimized for speed, context, and control without AI."
+      terminal_title: "Just use the terminal"
+      title: "Welcome to Warp"
+    intro:
+      have_account_label: "Already have an account? "
+      log_in: "Log in"
+      subtitle: "A modern terminal with state of the art agents built in."
+      title: "Welcome to Warp"
+    project:
+      initialize_description: "Prepares the project environment, builds an index of your code, and generates project rules—giving the agent deeper understanding and better performance."
+      initialize_title: "Initialize project automatically"
+      open_local_folder: "Open local folder"
+      subtitle: "Set up a project to optimize it for coding in Warp."
+      title: "Open a project"
+    theme_picker:
+      analytics_opt_out_prefix: "If you'd like to opt out of analytics, you can adjust your "
+      privacy_settings: "Privacy Settings"
+      subtitle: "Click or use arrow keys to select, Enter to confirm."
+      sync_with_os: "Sync light/dark theme with OS"
+      terms_of_service: "Terms of Service"
+      title: "Choose a theme"
+      tos_prefix: "By continuing, you agree to Warp's "
+    third_party:
+      cli_toolbar_title: "CLI agent toolbar"
+      notifications_title: "Notifications"
+      subtitle: "Select defaults for using agents like Claude Code, Codex, and Gemini."
+      title: "Customize third party agents"
+    select_auth:
+      privacy_prefix_with_ai: "If you'd like to opt out of analytics and AI features, you can adjust your "
+      privacy_prefix_no_ai: "If you'd like to opt out of analytics, you can adjust your "
+      warp_drive:
+        title: "Get started with Warp Drive"
+        subtitle: "Connect your account to save and share notebooks, workflows, and more across devices."
+      warp_agent:
+        title: "Get started with AI"
+        subtitle: "Connect your account to enable AI-powered planning, coding, and automation."
+      third_party:
+        title: "Create an account"
+        subtitle: "Create a Warp account to enable AI-powered planning, coding, and automations."
+    browser_open:
+      sign_in_title: "Sign in on your browser to continue"
+  settings.ai:
+    add_router: "+ Add router"
+    connect: "Connect"
+    connecting: "Connecting..."
+    disconnect: "Disconnect"
+    use_your: "Use your"
+    copy_url: "Copy URL"
+    next_command_description: "Let AI suggest the next command to run based on your command history, outputs, and common workflows."
+    prompt_suggestions_description: "Let AI suggest natural language prompts, as inline banners in the input, based on recent commands and their outputs."
+    suggested_code_banners_description: "Let AI suggest code diffs and queries as inline banners in the blocklist, based on recent commands and their outputs."
+    natural_language_autosuggestions_description: "Let AI suggest natural language autosuggestions, based on recent commands and their outputs."
+    shared_block_title_generation_description: "Let AI generate a title for your shared block based on the command and output."
+
+    active_ai: "Active AI"
+    next_command: "Next Command"
+    prompt_suggestions: "Prompt Suggestions"
+    suggested_code_banners: "Suggested Code Banners"
+    natural_language_autosuggestions: "Natural Language Autosuggestions"
+    shared_block_title_generation: "Shared Block Title Generation"
+    commit_and_pr_generation: "Commit & Pull Request Generation"
+    voice_input: "Voice Input"
+
+    usage: "Usage"
+    credits: "Credits"
+    models: "Models"
+    permissions: "Permissions"
+    profiles: "Profiles"
+    input: "Input"
+    voice: "Voice"
+    agents: "Agents"
+    knowledge: "Knowledge"
+    mcp_servers: "MCP Servers"
+
+    permission:
+      agent_decides: "Agent decides"
+      always_allow: "Always allow"
+      always_ask: "Always ask"
+      read_only: "Read only"
+      supervised: "Supervised"
+      ask_on_first_write: "Ask on first write"
+      allow_in_specific_directories: "Allow in specific directories"
+
+    restricted_due_to_billing: "Restricted due to billing issue"
+    unlimited: "Unlimited"
+
+    add_profile: "Add Profile"
+    edit_custom_endpoint: "Edit custom endpoint"
+    edit: "Edit"
+    add_custom_model: "+ Add custom model"
+    select_mcp_servers: "Select MCP servers"
+    select_coding_agent: "Select coding agent"
+    toolbar_layout: "Toolbar layout"
+    other_category: "Other"
+    new_tab: "New Tab"
+    split_pane: "Split Pane"
+
+    show_agent_tips: "Show agent tips"
+    hide_agent_tips: "Hide agent tips"
+    show_oz_changelog: "Show Oz changelog in new agent conversation view"
+    hide_oz_changelog: "Hide Oz changelog in new agent conversation view"
+
+    natural_language_detection: "Natural language detection"
+    autodetect_agent_prompts: "Autodetect agent prompts in terminal input"
+    autodetect_terminal_commands: "Autodetect terminal commands in agent input"
+    show_input_hint_text: "Show input hint text"
+    include_agent_commands_in_history: "Include agent-executed commands in history"
+    natural_language_denylist: "Natural language denylist"
+    natural_language_denylist_description: "Commands listed here will never trigger natural language detection."
+
+    codebase_context: "Codebase Context"
+    rules: "Rules"
+    suggested_rules: "Suggested Rules"
+    warp_drive_context: "Warp Drive as agent context"
+    manage_rules: "Manage rules"
+    manage_mcp_servers: "Manage MCP servers"
+    call_mcp_servers: "Call MCP servers"
+    mcp_allowlist: "MCP allowlist"
+    mcp_denylist: "MCP denylist"
+    command_denylist: "Command denylist"
+    command_allowlist: "Command allowlist"
+    directory_allowlist: "Directory allowlist"
+    placeholder_command_allowlist: "e.g. ls .*"
+    placeholder_command_denylist: "e.g. rm .*"
+    placeholder_directory_allowlist: "e.g. ~/code-repos/repo"
+    placeholder_cli_command: "command (supports regex)"
+    base_model: "Base model"
+    apply_code_diffs: "Apply code diffs"
+    read_files: "Read files"
+    execute_commands: "Execute commands"
+    interact_with_running_commands: "Interact with running commands"
+    key_for_voice_input: "Key for Activating Voice Input"
+    auto_spawn_servers: "Auto-spawn servers from third-party agents"
+    show_model_picker_in_prompt: "Show model picker in prompt"
+    show_conversation_history: "Show conversation history in tools panel"
+    agent_thinking_display: "Agent thinking display"
+    preferred_layout_open_conversation: "Preferred layout when opening existing agent conversations"
+
+    endpoint_added: "Endpoint added"
+    endpoint_saved: "Endpoint saved"
+    endpoint_removed: "Endpoint removed"
+
+    sign_up: "Sign up"
+    to_use_ai_features_create_account: "To use AI features, please create an account."
+    remote_session_org_policy: "Your organization disallows AI when the active pane contains content from a remote session"
+
+    commands_comma_separated: "Commands, comma separated"
+
+
+    agents_description: "Set the boundaries for how your Agent operates. Choose what it can access, how much autonomy it has, and when it must ask for your approval. You can also fine-tune behavior around natural language input, codebase awareness, and more."
+    profiles_description: "Profiles let you define how your Agent operates — from the actions it can take and when it needs approval, to the models it uses for tasks like coding and planning. You can also scope them to individual projects."
+    context_window_tokens: "Context window (tokens)"
+    some_permissions_managed: "Some of your permissions are managed by your workspace."
+
+    command_denylist_description: "Regular expressions to match commands that the Warp Agent should always ask permission to execute."
+    command_allowlist_description: "Regular expressions to match commands that can be automatically executed by the Warp Agent."
+    directory_allowlist_description: "Give the agent file access to certain directories."
+    mcp_allowlist_description: "Allow the Warp Agent to call these MCP servers."
+    mcp_denylist_description: "The Warp Agent will always ask for permission before calling any MCP servers on this list."
+
+    base_model_description: "This model serves as the primary engine behind the Warp Agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Warp may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization."
+    thinking_display_description: "Controls how reasoning/thinking traces are displayed."
+
+    rule_suggestions_description: "Let AI suggest rules to save based on your interactions."
+    warp_drive_context_description: "The Warp Agent can leverage your Warp Drive Contents to tailor responses to your personal and team developer workflows and environments. This includes any Workflows, Notebooks, and Environment Variables."
+
+    key_for_voice_input_description: "Press and hold to activate."
+
+    upgrade: "Upgrade"
+    compare_plans: "Compare plans"
+    contact_support: "Contact support"
+
+    learn_more: "Learn more"
+    refresh: "Refresh"
+
+    add_mcp_server: "Add a server"
+
+    show_coding_agent_toolbar: "Show coding agent toolbar"
+    third_party_cli_agents: "Third party CLI agents"
+    auto_show_hide_rich_input: "Auto show/hide Rich Input based on agent status"
+    requires_warp_plugin: "Requires the Warp plugin for your coding agent"
+    auto_open_rich_input: "Auto open Rich Input when a coding agent session starts"
+    auto_dismiss_rich_input: "Auto dismiss Rich Input after prompt submission"
+    commands_enable_toolbar: "Commands that enable the toolbar"
+    add_regex_patterns_toolbar: "Add regex patterns to show the coding agent toolbar for matching commands."
+
+    org_enforced_tooltip: "This option is enforced by your organization's settings and cannot be customized."
+    enable_agent_attribution: "Enable agent attribution"
+    agent_attribution: "Agent Attribution"
+    agent_attribution_description: "Oz can add attribution to commit messages and pull requests it creates"
+
+    experimental: "Experimental"
+    computer_use_in_cloud_agents: "Computer use in Cloud Agents"
+    computer_use_description: "Enable computer use in cloud agent conversations started from the Warp app."
+
+    cloud_handoff: "Cloud handoff"
+    cloud_handoff_header: "Cloud Handoff"
+    cloud_handoff_description: "Hand off local agent conversations to a cloud agent."
+    cloud_handoff_requires_cloud: "Cloud handoff requires cloud conversations to be enabled."
+    use_ampersand_handoff: "Use & to trigger handoff"
+    ampersand_handoff_description: "Type & as the first character to enter cloud handoff compose mode."
+
+    openai_api_key: "OpenAI API key"
+    anthropic_api_key: "Anthropic API key"
+    google_api_key: "Google API key"
+    warp_credit_fallback: "Warp credit fallback"
+    warp_credit_fallback_description: "When enabled, agent requests may be routed to one of Warp's provided models in the event of an error. Warp will prioritize using your API keys over your Warp credits."
+    custom_inference: "Custom inference"
+    custom_endpoints: "Custom endpoints"
+    api_keys: "API Keys"
+
+    aws_bedrock: "AWS Bedrock"
+    use_aws_bedrock_credentials: "Use AWS Bedrock credentials"
+    aws_bedrock_managed_by_org: "Warp loads and sends local AWS CLI credentials for Bedrock-supported models. This setting is managed by your organization."
+    aws_bedrock_description: "Warp loads and sends local AWS CLI credentials for Bedrock-supported models."
+    login_command: "Login Command"
+    aws_profile: "AWS Profile"
+    automatically_run_login_command: "Automatically run login command"
+    auto_login_description: "When enabled, the login command will run automatically when AWS Bedrock credentials expire."
+    default_model_modal:
+      api_key_description: "You added your own {provider_name} API key, but your default model is currently set to {current_default}, which won't work without Warp credits. Would you like to change your default model?"
+      custom_endpoint_description: "You added the \"{endpoint_name}\" custom endpoint, but your default model is currently set to {current_default}, which won't work without Warp credits. Would you like to change your default model?"
+
+  # ── Custom Model Router ──
+  settings.custom_router:
+    editor:
+      header: "Router Editor"
+      new_router_title: "New Router"
+      name_placeholder: "My custom router"
+      name_placeholder_personalized: "{first_name}'s custom router"
+      type_complexity: "Complexity"
+      type_rules: "Rules"
+      add_rule: "+ Add rule"
+      name_required: "Router name is required."
+      complexity_field_default: "Default"
+      complexity_field_easy: "Easy"
+      complexity_field_medium: "Medium"
+      complexity_field_hard: "Hard"
+      model_required: "{field} model is required."
+      prompt_default_required: "A default model is required."
+      at_least_one_rule_required: "At least one rule with a description and model is required."
+      validation_error: "Validation: {err}"
+      serialization_error: "Serialization: {err}"
+      write_error: "Write error: {err}"
+      models_section: "Models"
+      default_dropdown: "Default (required)"
+      easy_dropdown: "Easy (required)"
+      medium_dropdown: "Medium (required)"
+      hard_dropdown: "Hard (required)"
+      default_model_section: "Default model"
+      rules_section: "Rules"
+      rules_help_1: "Rules are custom prompts that describe when to use a specific model. Warp intelligently matches your tasks against these rules."
+      rules_help_2: "Rules are matched top to bottom — rules higher in the list take precedence over those below."
+      router_name_section: "Router name"
+      router_type_section: "Router type"
+      complexity_based_label: "Complexity-based"
+      complexity_routing_explanation: " routing chooses a model based on Warp's classification of the task's difficulty."
+      rule_based_label: "Rule-based"
+      rule_routing_explanation: " routing chooses a model based on custom prompts."
+      rule_placeholder: "Describe when to use this model…"
+      rule_label: "Rule"
+      model_label: "Model"
+    view:
+      open_file: "Open file"
+      complexity_based_routing: "Complexity-based routing"
+      prompt_based_routing: "Prompt-based routing"
+      label_default: "Default:"
+      label_easy: "Easy:"
+      label_medium: "Medium:"
+      label_hard: "Hard:"
+      rules_count_one: "1 rule"
+      rules_count_other: "{n} rules"
+    routes:
+      complexity_requires_default: "complexity routing requires a non-empty `default` model"
+      prompt_requires_default: "prompt routing requires a non-empty `default` model"
+      default_error: "`default`: {e}"
+      complexity_bucket_error: "complexity bucket `{bucket}`: {e}"
+      prompt_rule_description_empty: "prompt rule {index}: `description` is empty"
+      prompt_rule_error: "prompt rule {index}: {e}"
+      target_empty: "target model id is empty"
+      target_is_auto: "target `{trimmed}` is an auto model; custom model routers must route to concrete models"
+
+  # ── Settings Modals ──
+  settings.modals:
+    set_default_model:
+      not_now: "Not now"
+      change_default_model: "Change default model"
+    custom_inference:
+      add_endpoint: "Add endpoint"
+    agent_assisted:
+      add_repo: "Add repo"
+      create_environment: "Create environment"
+      no_directory_selected: "No directory selected"
+      select_repos: "Select repos for your environment"
+    delete_environment:
+      confirm: "Delete environment"
+    remove_endpoint:
+      confirm: "Remove endpoint"
+    handoff:
+      not_logged_in: "Not logged in"
+
+  # ── Billing Settings ──
+  settings.billing:
+
+
+
+
+
+
+
+
+
+
+  # ── OpenWarp Launch ──
+  # ── Privacy Settings ──
+  settings.privacy:
+    secret_redaction: "Secret redaction"
+    secret_redaction_description: "When this setting is enabled, Warp will scan blocks, the contents of Warp Drive objects, and Oz prompts for potential sensitive information and prevent saving or sending this data to any servers. You can customize this list via regexes."
+    custom_secret_redaction: "Custom secret redaction"
+    custom_secret_redaction_description: "Use regex to define additional secrets or data you'd like to redact. This will take effect when the next command runs. You can use the inline (?i) flag as a prefix to your regex to make it case-insensitive."
+    help_improve_warp: "Help improve Warp"
+    help_improve_warp_description: "App analytics help us make the product better for you. We may collect certain console interactions to improve Warp's AI capabilities."
+    help_improve_warp_description_enterprise: "App analytics help us make the product better for you. We only collect app usage metadata, never console input or output."
+    manage_your_data: "Manage your data"
+    manage_your_data_description: "At any time, you may choose to delete your Warp account permanently. You will no longer be able to use Warp."
+    visit_data_management_page: "Visit data management page"
+    privacy_policy_title: "Privacy Policy"
+    read_privacy_policy: "Read Warp's privacy policy"
+    add_regex_pattern: "Add regex pattern"
+    personal: "Personal"
+    enterprise: "Enterprise"
+    enterprise_secret_redaction_locked: "Enterprise secret redaction cannot be modified."
+    no_enterprise_regexes: "No enterprise regexes have been configured by your organization."
+    recommended: "Recommended"
+    add_all: "Add all"
+    add_regex: "Add regex"
+    enabled_by_organization: "Enabled by your organization."
+    secret_visual_redaction_mode: "Secret visual redaction mode"
+    secret_visual_redaction_mode_description: "Choose how secrets are visually presented in the block list while keeping them searchable. This setting only affects what you see in the block list."
+    zdr_enabled_description: "Your administrator has enabled zero data retention for your team. User generated content will never be collected."
+    managed_by_organization: "This setting is managed by your organization."
+    read_more_about_data_use: "Read more about Warp's use of data"
+    send_crash_reports: "Send crash reports"
+    send_crash_reports_description: "Crash reports assist with debugging and stability improvements."
+    store_ai_conversations_in_cloud: "Store AI conversations in the cloud"
+    cloud_conversation_storage_description: "Agent conversations can be shared with others and are retained when you log in on different devices. This data is only stored for product functionality, and Warp will not use it for analytics."
+    local_conversation_storage_description: "Agent conversations are only stored locally on your machine, are lost upon logout, and cannot be shared. Note: conversation data for ambient agents are still stored in the cloud."
+    network_log_console: "Network log console"
+    network_log_console_description: "We've built a native console that allows you to view all communications from Warp to external servers to ensure you feel comfortable that your work is always kept safe."
+    view_network_logging: "View network logging"
+
+  # ── Teams Settings ──
+  settings.teams:
+    team_name: "Team name"
+    create_team_description: "When you create a team, you can collaborate on agent-driven development by sharing cloud agent runs, environments, automations, and artifacts. You can also create a shared knowledge store for teammates and agents alike."
+    leave_team: "Leave team"
+    delete_team: "Delete team"
+    create: "Create"
+    create_team: "Create a team"
+    teams: "Teams"
+    domains_comma_separated: "Domains, comma separated"
+    emails_comma_separated: "Emails, comma separated"
+    set: "Set"
+    invite: "Invite"
+    invalid_domains_instructions: "Some of the provided domains are invalid, or have already been added."
+    invite_link_toggle_instructions: "As an admin, you can choose whether to enable or disable the ability for team members to invite others by invitation link."
+    invite_link_domain_restrictions_instructions: "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link."
+    email_invite_expiry_instructions: "Email invitations are valid for 7 days."
+    invalid_emails_instructions: "Some of the provided email addresses are invalid, already invited, or members of the team."
+    offline: "You are offline."
+    invite_team_members: "Invite team members"
+    by_link: "By link"
+    by_email: "By email"
+    by_discovery: "By discovery"
+    team_members: "Team members"
+    reset_links: "Reset links"
+    remove_domain: "Remove domain"
+    transfer_team_ownership: "Transfer team ownership?"
+    transfer_ownership: "Transfer ownership"
+    failed_to_send_invite: "Failed to send invite"
+    toggled_invite_links: "Toggled invite links"
+    failed_to_toggle_invite_links: "Failed to toggle invite links"
+    reset_invite_links_success: "Reset invite links"
+    failed_to_reset_invite_links: "Failed to reset invite links"
+    deleted_invite: "Deleted invite"
+    failed_to_delete_invite: "Failed to delete invite"
+    failed_to_add_domain_restriction: "Failed to add domain restriction"
+    failed_to_delete_domain_restriction: "Failed to delete domain restriction"
+    failed_to_generate_upgrade_link: "Failed to generate upgrade link. Please contact us at feedback@warp.dev"
+    failed_to_generate_billing_link: "Failed to generate billing link. Please contact us at feedback@warp.dev"
+    toggled_team_discoverability: "Toggled team discoverability"
+    failed_to_toggle_team_discoverability: "Failed to toggle team discoverability"
+    successfully_joined_team: "Successfully joined team"
+    failed_to_join_team: "Failed to join team"
+    successfully_transferred_team_ownership: "Successfully transferred team ownership"
+    failed_to_transfer_team_ownership: "Failed to transfer team ownership"
+    successfully_updated_team_member_role: "Successfully updated team member role"
+    failed_to_update_team_member_role: "Failed to update team member role"
+    error_leaving_team: "Error leaving team"
+    successfully_left_team: "Successfully left team"
+    your_new_team_name: "Your new team name"
+    seat_cap_reached: "You've reached your plan's member limit."
+    seat_cap_exceeded: "You've exceeded your plan's member limit. Existing team members keep their access, but you won't be able to add new members."
+    payment_past_due: "Payment past due"
+    payment_past_due_description: "Team invites have been restricted due to a past-due payment."
+    subscription_unpaid: "Subscription unpaid"
+    subscription_unpaid_description: "Team invites have been restricted due to an unpaid subscription."
+    contact_team_admin_to_restore: "Contact a team admin to restore access."
+    contact_team_admin_to_grow: "Contact a team admin to grow the team."
+    upgrade_to_grow_team: "Upgrade to grow your team."
+    contact_sales_to_grow: "Contact sales to grow your team."
+    update_payment_to_restore: "Update your payment information to restore access."
+    contact_support_to_restore: "Contact support to restore access."
+    upgrade: "Upgrade"
+    update_billing: "Update billing"
+    contact_support: "Contact support"
+    upgrade_to_build: "Upgrade to Build"
+    upgrade_to_turbo_plan: "Upgrade to Turbo plan"
+    upgrade_to_lightspeed_plan: "Upgrade to Lightspeed plan"
+    compare_plans: "Compare plans"
+    free_plan_usage_limits: "Free plan usage limits"
+    plan_usage_limits: "Plan usage limits"
+    shared_notebooks: "Shared Notebooks"
+    shared_workflows: "Shared Workflows"
+    manage_plan: "Manage plan"
+    manage_billing: "Manage billing"
+    open_admin_panel: "Open admin panel"
+    expired: "EXPIRED"
+    pending: "PENDING"
+    owner: "OWNER"
+    admin: "ADMIN"
+    past_due: "PAST DUE"
+    unpaid: "UNPAID"
+    failed_to_load_invite_link: "Failed to load invite link."
+    join_this_team: "Join this team and start collaborating on workflows, notebooks, and more."
+    join: "Join"
+    contact_admin_to_request_access: "Contact Admin to request access"
+    or_join_existing_team: "Or, join an existing team within your company"
+    allow_users_with_domain: "Allow Warp users with an @{domain} email to find and join the team."
+    allow_users_with_same_domain: "Allow Warp users with the same email domain as you to find and join the team."
+    member_limit_info: "Your plan ({plan}) has a maximum capacity of {cap} members."
+    additional_members_billed: "Additional members are billed at your plan's per-user rate: ${monthly:.0}/month or ${yearly:.0}/year, depending on your billing interval. {prorated}"
+    additional_members_billed_no_rate: "Additional members are billed at your plan's per-user rate. {prorated}"
+    prorated_charge_info: "You'll be charged for a portion of the team member's usage of Warp."
+    prorated_charge_info_admin: "Your admin will be charged for a portion of the team member's usage of Warp."
+    you_exceeded_member_limit: "You've exceeded your member limit"
+
+  # ── Environments Settings ──
+
+  # ── Warp Drive Settings ──
+
+  # ── About Settings ──
+  settings.about:
+    copyright: "Copyright 2026 Warp"
+
+  # ── Pane Menu ──
+  settings.pane_menu:
+    settings_title: "Settings"
+    split_right: "Split pane right"
+    split_left: "Split pane left"
+    split_down: "Split pane down"
+    split_up: "Split pane up"
+    close_pane: "Close pane"
+
+  # ── LSP ──
+  auth:
+    token_placeholder: "Auth Token"
+
+  # ── Code Review ──
+  codereview:
+    tooltip:
+      view_changes: "View changes"
+      hide_file_navigation: "Hide file navigation"
+      show_file_navigation: "Show file navigation"
+      discard_blocked_git_operation: "Cannot discard changes while a git operation (merge, rebase, etc.) is in progress"
+      discard_no_changes: "No changes to discard"
+      initialize_codebase: "Enables codebase indexing and WARP.md"
+      open_repository: "Navigate to a repo and initialize it for coding"
+    discard_dialog:
+      title:
+        uncommitted_all: "Discard uncommitted changes?"
+        uncommitted_file: "Discard all uncommitted changes to file?"
+        branch_all: "Discard all changes?"
+        branch_file: "Discard all changes to file?"
+      description:
+        uncommitted_all: "You're about to discard all local changes that haven't been committed."
+        uncommitted_file: "This will restore this file to the last committed version and discard local edits."
+        branch_all: "You're about to discard all committed and uncommitted changes."
+        branch_file_main: "This will restore this file to the main branch version and discard all committed and uncommitted edits."
+      button:
+        discard: "Discard changes"
+        cancel: "Cancel"
+      no_file_selected: "No file selected"
+      no_files: "No files to discard"
+      stash_checkbox: "Stash changes"
+    git_action:
+      commit_label: "Commit"
+      commit_tooltip_disabled: "No changes to commit"
+      commit_tooltip: "Commit changes locally"
+      chevron_tooltip_disabled: "No git actions available"
+      push_label: "Push"
+      push_tooltip: "Push commits to remote"
+      create_pr_label: "Create PR"
+      create_pr_tooltip: "Create a pull request"
+      view_pr_tooltip_refreshing: "Refreshing PR info"
+      view_pr_tooltip: "View pull request on GitHub"
+      publish_label: "Publish"
+      publish_tooltip: "Publish branch to remote"
+    empty_state:
+      remote_workspace: "Diffs only work for local workspaces."
+      no_git_repo: "Diffs only work for git repositories."
+      wsl_unsupported: "Diffs don't currently work in WSL."
+      initialize_codebase_button: "Initialize codebase"
+      open_repository_button: "Open repository"
+      no_repo_title: "Cannot detect diffs for this folder"
+      no_changes_title: "No open changes"
+      no_changes_subtitle: "As you or the Agent make changes, you'll be able to track them here."
+    file:
+      tooltip:
+        discard_changes: "Discard changes"
+        open_file: "Open file"
+        add_diff_as_context: "Add file diff as context"
+      binary_no_diff: "Binary file - no diff available"
+      renamed_no_changes: "File renamed without changes"
+      new_empty: "New empty file"
+      unable_to_load: "Unable to load file content"
+    toast:
+      comments_sent: "Comments sent to agent"
+      comments_send_failed: "Could not submit comments to the agent"
+      diff_removed: "Diff removed"
+      attach_context_terminal_running: "Cannot attach context when terminal is running"
+      attach_diff_input_unavailable: "Cannot attach diff while input is not available"
+    header_menu:
+      add_diff_as_context: "Add diff set as context"
+      show_saved_comment: "Show saved comment"
+      add_comment: "Add comment"
+      discard_all: "Discard all"
+    pane_header:
+      title: "Reviewing code changes"
+      maximize: "Maximize"
+      undo_button: "Undo"
+      restore_button: "Restore"
+    diff_selector:
+      uncommitted_changes: "Uncommitted changes"
+    sub_header:
+      loading_open_changes: "Loading open changes..."
+      error_loading_diffs: "Error loading diffs"
+    error:
+      retry_button: " Retry"
+    git_dialog:
+      branch_label: "Branch"
+      button:
+        cancel: "Cancel"
+        commit: "Commit"
+        commit_and_create_pr: "Commit and create PR"
+        commit_and_publish: "Commit and publish"
+        commit_and_push: "Commit and push"
+        confirm: "Confirm"
+        create_pr: "Create PR"
+        esc_tooltip: "ESC"
+        open_pr: "Open PR"
+        publish: "Publish"
+        push: "Push"
+      changes_label: "Changes"
+      commit_message_label: "Commit message"
+      default_branch: "default branch"
+      error:
+        another_git_operation_in_progress: "Another git operation is in progress. Finish or abort it first."
+        authentication_failed: "Authentication failed. Check your Git credentials."
+        gh_not_authenticated: "GitHub CLI not authenticated. Run `gh auth login`."
+        gh_not_installed: "GitHub CLI (gh) not installed. See https://cli.github.com/."
+        git_identity_not_configured: "Git identity not configured. Set user.name and user.email."
+        git_operation_failed: "Git operation failed."
+        network_error: "Network error. Check your connection."
+        no_changes: "No changes to commit."
+        no_remote_configured: "No remote configured for this branch."
+        no_staged_changes: "No staged changes to commit."
+        remote_has_new_changes: "Remote has new changes — pull before pushing."
+        remote_repository_not_found: "Remote repository not found."
+      file_count_plural: "files"
+      file_count_singular: "file"
+      include_unstaged: "Include unstaged"
+      included_commits: "Included commits"
+      loading:
+        committing: "Committing…"
+        creating: "Creating…"
+        publishing: "Publishing…"
+        pushing: "Pushing…"
+      placeholder:
+        generating_commit_message: "Generating commit message…"
+        type_commit_message: "Type a commit message"
+      success:
+        branch_published: "Branch successfully published."
+        changes_committed: "Changes successfully committed."
+        changes_committed_and_pushed: "Changes committed and pushed."
+        changes_pushed: "Changes successfully pushed."
+        pr_created: "PR successfully created."
+      title:
+        commit: "Commit your changes"
+        create_pull_request: "Create pull request"
+        publish_branch: "Publish branch"
+        push_changes: "Push changes"
+      tooltip:
+        enter_commit_message: "Enter a commit message"
+    copy_file_path: "Copy file path"
+
+  # ── Terminal Input ──
+  terminal.input:
+    a11y:
+    placeholder:
+    hint:
+    dynamic_enum:
+    keybinding:
+    toast:
+
+  # ── Terminal Notifications ──
+  terminal.notifications:
+    discovery:
+  terminal.notification:
+
+  # ── Terminal Context Menu ──
+  terminal.context_menu:
+
+  # ── Terminal Tooltips ──
+  terminal.tooltip:
+
+  # ── Terminal Block ──
+  terminal.block:
+
+  # ── Terminal Zero State ──
+  terminal.zero_state:
+
+  # ── Terminal Shared Session ──
+  terminal.shared_session:
+
+  # ── Terminal SSH ──
+  terminal.ssh:
+
+  # ── Terminal Shell ──
+  terminal.shell:
+
+  # ── Terminal A11y ──
+  terminal.a11y:
+
+  # ── Terminal Agent ──
+  terminal.agent:
+
+  # ── Terminal Environment ──
+  terminal.environment:
+
+  # ── Terminal Project ──
+  terminal.project:
+
+  # ── Terminal Skills ──
+  terminal.skills:
+
+  # ── Terminal OSC 52 (Clipboard) ──
+  terminal.osc52:
+    banner_text: "A terminal program tried to access your clipboard. This is disabled by default for security reasons."
+    allow_button: "Allow"
+    dont_show_again: "Don't show again"
+    write_blocked_text: "A terminal program tried to write to your clipboard. This is disabled by default for security reasons, to protect against malicious software."
+    read_blocked_text: "A terminal program tried to read your clipboard. This is disabled by default for security reasons, to protect against malicious software."
+    allow_writes: "Allow clipboard writes"
+    allow_reads_and_writes: "Allow clipboard reads and writes"
+
+  # ── Agent Management ──
+  agent:
+    input_footer:
+      nld_enable_tooltip: "Enable terminal command autodetection"
+      nld_disable_tooltip: "Disable terminal command autodetection"
+      fast_forward_on_tooltip: "Turn off auto-approve all agent actions"
+      fast_forward_off_tooltip: "Auto-approve all agent actions for this task"
+      fast_forward_locked_tooltip: "Fast forward is always enabled for cloud agent conversations"
+      remote_control_start_tooltip: "Start remote control"
+      remote_control_login_tooltip: "Log in to use /remote-control"
+      live_cloud_session_tooltip: "Connected to a live cloud agent session. Your next prompt continues on the running remote machine."
+      new_cloud_vm_tooltip: "Not connected to cloud agent. Your next prompt starts a new cloud machine to continue this conversation."
+      voice_input_tooltip: "Voice input"
+      attach_file_tooltip: "Attach file"
+      handoff_to_cloud_tooltip: "Hand off to cloud (or type &)"
+      open_file_explorer_tooltip: "Open file explorer"
+      open_rich_input_tooltip: "Open Rich Input"
+      open_coding_agent_settings_tooltip: "Open coding agent settings"
+      plugin_install_rich_notifications_tooltip: "Install the Warp plugin to enable rich agent notifications within Warp"
+      plugin_install_instructions_tooltip: "View instructions to install the Warp plugin"
+      plugin_update_available_tooltip: "A new version of the Warp plugin is available"
+      plugin_update_instructions_tooltip: "View instructions to update the Warp plugin"
+      dismiss_tooltip: "Dismiss"
+      stop_sharing_tooltip: "Stop sharing"
+      context_window_usage_tooltip: "Context window usage"
+      file_explorer_label: "File explorer"
+      rich_input_label: "Rich Input"
+      hide_rich_input_label: "Hide Rich Input"
+      stop_sharing_label: "Stop sharing"
+      enable_notifications_label: "Enable notifications"
+      notifications_setup_label: "Notifications setup instructions"
+      update_plugin_label: "Update Warp plugin"
+      plugin_update_instructions_label: "Plugin update instructions"
+      see_logs_label: "See logs for details"
+      auto_install_failed_toast: "Could not automatically install plugin. Please click the chip again for manual installation steps."
+      no_plugin_manager_toast: "No plugin manager available"
+      plugin_installed_toast: "Warp plugin installed. Please restart the session to activate."
+      plugin_installing_toast: "Installing Warp plugin..."
+      plugin_install_failed_toast: "Failed to install Warp plugin"
+      plugin_updated_toast: "Warp plugin updated. Please restart the session to activate."
+      plugin_updating_toast: "Updating Warp plugin..."
+      plugin_update_failed_toast: "Failed to update Warp plugin"
+      voice_quota_toast: "Voice input limit reached"
+      voice_transcribe_failed_toast: "Failed to transcribe voice input"
+      voice_mic_access_toast: "Failed to start voice input (you may need to enable Microphone access)"
+    filter:
+      all: "All"
+      working: "Working"
+      done: "Done"
+      failed: "Failed"
+      status: "Status"
+      source: "Source"
+      created: "Created on"
+      has_artifact: "Has artifact"
+      harness: "Harness"
+      environment: "Environment"
+      created_by: "Created by"
+      none: "None"
+      pull_request: "Pull Request"
+      plan: "Plan"
+      screenshot: "Screenshot"
+      file: "File"
+      last_24_hours: "Last 24 hours"
+      past_3_days: "Past 3 days"
+      last_week: "Last week"
+      all.tooltip: "View your agent tasks plus all shared team tasks"
+      personal: "Personal"
+      personal.tooltip: "View agent tasks you created"
+    get_started: "Get started"
+    view_agents: "View Agents"
+    clear_filters: "Clear filters"
+    clear_all: "Clear all"
+    search_placeholder: "Search"
+    new_agent: "New agent"
+    session_expired: "Session Expired"
+    no_session: "No session"
+    session_expired.tooltip: "Sessions expire after one week and cannot be opened."
+    runs: "Runs"
+    loading_cloud_runs: "Loading cloud runs…"
+    loading_agents: "Loading agents…"
+    no_results: "No results"
+    label: "Agent"
+    executor: "Executor"
+    creator_unknown: "Unknown"
+    copied_branch_name: "Copied branch name"
+    status_bar:
+      missing_github_auth: "Missing GitHub authentication."
+      authenticate_github: "Authenticate GitHub"
+      cloud_agent_run_cancelled: "Cloud agent run cancelled"
+      setting_up_environment: "Setting up environment"
+      exit_button_label: "Exit"
+      exit_agent_input_tooltip: "Exit agent input"
+  # ── Agent Message Bar ──
+    orchestration:
+      env_none_label: Empty environment
+      runner_none_label: Use default
+      default_model_label: Default model
+      skip_advanced: Skip (advanced)
+      api_key: API key
+      new_api_key: New API key…
+      opencode_not_supported_cloud: OpenCode is not supported on Cloud yet. Switch to Local or pick a different harness.
+      disabled_by_administrator: Disabled by your administrator
+      new_environment: New environment
+      select_api_key_to_continue: Select an API key for this harness to continue.
+      loading_secrets: Loading…
+      unable_to_load_secrets: Unable to load secrets
+      agent_location: Agent location
+      local: Local
+      cloud: Cloud
+      agent_harness: Agent harness
+      host: Host
+      environment: Environment
+      base_model: Base model
+      recommend_selecting_environment: We recommend selecting an environment for cloud agents.
+      recommend_creating_environment: We recommend creating an environment for cloud agents.
+      custom_host: Custom host…
+      no_harnesses_available: No harnesses available
+      no_models_available: No models available
+    ambient:
+      auth_secret:
+        search_placeholder: Search secrets or create a new one
+        no_results: No secrets found
+        loading: Loading…
+        load_failed: Unable to load secrets
+        skip_label: Skip (advanced)
+        skip_description: Only if your key is already set in the environment (e.g. injected as a Kubernetes secret)
+        search_helper_text: No secrets found. Save to use this value directly or click the key to add a secret.
+        name_placeholder: e.g. My API Key
+        credentials_help: Enter your credentials below.
+        privacy_note: "Your credentials are encrypted end-to-end. "
+        share_with_team: Share with team
+        name_field_label: NAME
+        back: Back
+        cancel: Cancel
+        continue: Continue
+        button_tooltip: API key
+        menu_header: API key
+        sidecar_header: Choose a type
+        no_secret_label: Inherit key from environment
+        new_item: New
+      harness:
+        button_tooltip: Agent harness
+        menu_header: Agent harness
+        locked_to_oz_tooltip: This conversation is with the Warp Agent, so the cloud handoff will also use Warp
+        disabled_tooltip: Disabled by your administrator
+      host:
+        button_tooltip: Execution host
+        menu_header: Execution host
+        badge_default: Default
+        badge_connected: Connected
+        badge_disconnected: Disconnected
+        warp_display: Warp
+      model:
+        search_placeholder: Search models
+        button_tooltip: Choose agent model
+        no_results: No results
+        default: default
+  agent.message_bar:
+
+  # ── Agent Output ──
+  agent.output:
+
+  # ── Agent Search Codebase ──
+  agent.search_codebase:
+
+  # ── Agent Usage ──
+  agent.usage:
+
+  # ── Agent Zero State ──
+  agent.zero_state:
+# --- deleted sections ---
+  # ── CLI ──
+      # Buttons
+      # Titles
+      # Section labels
+      # Loading states
+      # Placeholders
+      # Tooltips
+      # Toast messages
+      # Pluralization
+      # Error messages
+  # ── Resource Center ──
+  # ── TUI Front-End ──
+  tui:
+    suggest_new_conversation:
+      constructing: "Suggesting a new conversation…"
+      pending: "Suggested starting a new conversation"
+      succeeded_rejected: "Continuing current conversation"
+      succeeded: "New conversation started"
+      cancelled: "New conversation suggestion cancelled"
+    fetch_conversation:
+      pending: "Fetch conversation"
+      running: "Fetching conversation…"
+      succeeded: "Fetched conversation"
+      failed: "Fetch conversation failed"
+      cancelled: "Fetch conversation cancelled"
+    start_agent:
+      constructing: "Configuring agent…"
+      pending: "Start {agent}"
+      running: "Starting {agent}…"
+      succeeded: "Started agent {name}"
+      failed: "Failed to start agent {name}"
+      cancelled: "Start agent {name} cancelled"
+      local_agent_label: "agent {name}"
+      remote_agent_label: "remote agent {name}"
+    send_message_to_agent:
+      constructing: "Composing message…"
+      pending: "Send message: {subject}"
+      running: "Sending message to {count} {noun}: {subject}"
+      succeeded: "Sent message: {subject}"
+      failed: "Failed to send message: {subject}"
+      cancelled: "Send message cancelled"
+    ask_user_question:
+      constructing: "Preparing question…"
+      running: "Asking {count} {noun}"
+      skipped: "Questions skipped"
+      single_answered: "Answered question"
+      all_answered: "Answered all {total} questions"
+      partial_answered: "Answered {answered} of {total} questions"
+      answered_generic: "Answered questions"
+      failed: "Questions failed"
+      cancelled: "Questions cancelled"
+    run_agents:
+      constructing: "Configuring agents…"
+      running: "Spawning {count} {noun}…"
+      succeeded_all: "Spawned {count} {noun}"
+      failed_spawn: "Failed to spawn {count} {noun}"
+      succeeded_partial: "Spawned {launched} of {total} agents"
+      denied: "Orchestration disabled — agents not launched"
+      failed_with_error: "Failed to start orchestration: {error}"
+      failed_generic: "Failed to start orchestration"
+      cancelled: "Spawn agents cancelled"
+    file_edits:
+      verb:
+        created: "Created"
+        deleted: "Deleted"
+        updated: "Updated"
+        edited: "Edited"
+      in_progress: "Editing"
+      summary_label: "Edited {N} files"
+      file_label:
+        one: "file"
+        other: "files"
+      preparing: "Preparing edits…"
+      cancelled: "File edits cancelled"
+      failed: "File edits failed"
+      success: "Edited {N} {file_label} (+{added} −{removed})"
+    permission_prompt:
+      file_edits_title: "Is it OK if I make these file edits?"
+      "yes": "Yes"
+      "no": "No"
+      edit_command: "Edit command"
+      other: "Other"
+      esc_to_cancel: "Esc to cancel"
+      ctrl_e_to_edit: "Ctrl+E to edit/save"
+      enter_to_run: "Enter to run"
+    agent_block:
+      thinking_finished: "Thought for {duration}"
+      thinking_running: "Thinking..."
+      summarized: "Conversation summarized"
+    inline_menu:
+      loading: "Loading slash commands…"
+      empty: "No slash commands found"
+    skills_menu:
+      title: "Skills"
+    cli_subagent:
+      allow: "Allow"
+      agent_needs_input: "Agent needs your input"
+      agent_paused: "Agent paused · user is in control"
+      command_finished: "Command finished"
+      handed_control: "Agent handed control to you"
+      monitoring: "Agent is monitoring command"
+      to_hand_back: "to hand back"
+      to_take_control: "to take control"
+      user_in_control: "User is in control"
+      waiting_instructions: "Agent waiting for instructions"
+    warping:
+      label: "Warping..."
+      summarizing: "Summarizing conversation..."
+    terminal:
+      starting: "Starting terminal…"
+      cannot_run_command: "cannot run — command already running"
+      new_conversation_blocked: "cannot start new conversation while terminal command is running"
+      copied_to_clipboard: "Conversation copied to clipboard"
+      restore_token_mismatch: "The restored conversation did not match the requested conversation."
+      restore_only_oz_supported: "The Warp TUI only supports Oz/Warp conversations."
+      restore_load_failed: "The conversation could not be loaded."
+      no_active_conversation_to_export: "No active conversation to export"
+      export_overwrote: "Conversation exported to {path} (overwrote existing file)"
+      export_success: "Conversation exported to {path}"
+      export_error:
+        permission_denied: "Permission denied writing to {}. Check file permissions."
+        not_found: "Directory not found: {}"
+        already_exists: "File {} already exists"
+        failed: "Failed to export to {path}: {source}"
+      create_new_project_missing_query: "Please describe the project you want to create after /create-new-project"
+    conversation_restore:
+      loading: "Loading session..."
+      failed_prefix: "Could not restore conversation: {message}"
+    footer:
+      ctrl_c_exit_hint: "ctrl-c again to exit"
+      shell_mode_hint: "shell mode · esc to exit"
+      copied_hint: "copied to clipboard"
+      copy_failed: "failed to copy to clipboard"
+      sub_agents_callout: "Shift + ↑ sub-agents"
+    zero_state:
+      title: "Warp Agent"
+      whats_new: "What's new"
+      version:
+        dev_build: "dev build"
+        checking: "checking for updates…"
+        updating: "updating…"
+        up_to_date: "up to date"
+        pending_restart: "update installed, restart to apply"
+      project:
+        discovering: "Discovering project context…"
+        rule_loaded: "{file} loaded"
+        skills_discovered:
+          one: "1 skill discovered"
+          other: "{N} skills discovered"
+    login:
+      title: "Sign in to continue"
+      open_in_browser: "Open {uri} in your browser"
+      enter_code: "and enter code: {code}"
+      opening_browser: "Opening your browser…"
+      failed_prefix: "Login failed: {message}"
+      failed_hint: "Press Ctrl-C to exit."
+    read_documents:
+      constructing: "Reading documents…"
+      succeeded: "Read {documents}"
+      running: "Reading {documents}"
+      failed: "Failed to read documents"
+      cancelled: "Cancelled reading documents"
+    edit_documents:
+      pending: "Update plan"
+      running: "Updating plan…"
+      succeeded: "Updated plan ({count} {noun})"
+      failed: "Failed to update plan"
+      cancelled: "Update plan cancelled"
+    create_documents:
+      pending: "Create plan"
+      running: "Generating plan…"
+      succeeded_multi: "Created {count} documents"
+      succeeded_single: "Created plan"
+      failed: "Failed to create plan"
+      cancelled: "Create plan cancelled"
+    grep:
+      constructing: "Grepping…"
+      pending: "Grep for {queries} in {path}"
+      running: "Grepping for {queries} in {path}"
+      succeeded_with_count: "Grepped for {queries} in {path}, {count} {noun}"
+      succeeded_generic: "Grepped for {queries} in {path}"
+      failed: "Grep for {queries} failed"
+      cancelled: "Grep for {queries} cancelled"
+    file_glob:
+      constructing: "Finding files…"
+      pending: "Find files matching {patterns} in {path}"
+      running: "Finding files matching {patterns} in {path}"
+      succeeded_with_count: "Found {count} {noun} matching {patterns}"
+      succeeded_generic: "Found files matching {patterns}"
+      failed: "File search for {patterns} failed"
+      cancelled: "File search for {patterns} cancelled"
+    read_mcp_resource:
+      constructing_no_name: "Reading MCP resource…"
+      constructing: "Reading \"{name}\" MCP resource…"
+      succeeded: "Read MCP resource {resource}"
+      running: "Reading MCP resource {resource}"
+      failed: "MCP resource {resource} failed"
+      cancelled: "MCP resource {resource} cancelled"
+    call_mcp_tool:
+      constructing_no_name: "Calling MCP tool…"
+      constructing: "Calling \"{name}\" MCP tool…"
+      pending: "Call MCP tool {name}"
+      running: "Calling MCP tool {name}"
+      succeeded: "Called MCP tool {name}"
+      failed: "MCP tool {name} failed"
+      cancelled: "MCP tool {name} cancelled"
+    read_files:
+      constructing: "Reading files…"
+      succeeded: "Read {files}"
+      running: "Reading {files}"
+      failed: "Failed to read {files}"
+      cancelled: "Cancelled reading {files}"
+    upload_artifact:
+      constructing: "Preparing upload…"
+      pending: "Upload {file}"
+      running: "Uploading {file}"
+      succeeded: "Uploaded {file}"
+      failed: "Upload of {file} failed"
+      cancelled: "Upload of {file} cancelled"
+    insert_code_review_comments:
+      constructing: "Preparing review comments…"
+      pending: "Insert {comments}"
+      running: "Inserting {comments}…"
+      succeeded: "Inserted {comments}"
+      failed: "Failed to insert review comments"
+      cancelled: "Insert review comments cancelled"
+    start_recording:
+      pending: "Start recording"
+      running: "Starting recording…"
+      succeeded: "Started screen recording"
+      failed: "Recording failed to start"
+      cancelled: "Start recording cancelled"
+    stop_recording:
+      pending: "Stop recording"
+      running: "Stopping recording…"
+      succeeded: "Saved screen recording"
+      failed: "Failed to save recording"
+      cancelled: "Stop recording cancelled"
+    request_command_output:
+      constructing: "Generating command…"
+      pending: "Run `{cmd}`"
+      running: "Running `{cmd}`"
+      succeeded: "Ran `{cmd}`"
+      still_running: "`{cmd}` is still running"
+      exited: "`{cmd}` exited with code {code}"
+      denied_denylisted: "`{cmd}` denied (denylisted)"
+      failed: "`{cmd}` failed"
+      cancelled: "Cancelled `{cmd}`"
+    search_codebase:
+      constructing: "Searching codebase…"
+      pending: "Search for \"{query}\"{scope}"
+      running: "Searching for \"{query}\"{scope}"
+      succeeded_no_results: "Searched for \"{query}\"{scope}, no results"
+      succeeded_with_count: "Searched for \"{query}\"{scope}, {count} {noun}"
+      succeeded_generic: "Searched for \"{query}\"{scope}"
+      failed_not_indexed: "Search for \"{query}\"{scope} failed because the codebase isn't indexed"
+      failed: "Search for \"{query}\"{scope} failed"
+      cancelled: "Search for \"{query}\"{scope} cancelled"
+    read_skill:
+      constructing: "Reading skill…"
+      succeeded: "Read skill {skill}"
+      running: "Reading skill {skill}"
+      failed: "Failed to read skill {skill}"
+      cancelled: "Cancelled reading skill {skill}"
+    read_shell_command_output:
+      succeeded: "Read command output"
+      running: "Reading command output…"
+      failed: "Failed to read command output"
+      cancelled: "Read command output cancelled"
+    write_to_long_running_shell_command:
+      constructing: "Writing command input…"
+      pending: "Write input to running command"
+      running: "Writing input to running command…"
+      succeeded: "Wrote input to running command"
+      failed: "Failed to write to running command"
+      cancelled: "Write to running command cancelled"
+    fallback:
+      pending: "{name}"
+      running: "{name}…"
+      succeeded: "{name} — done"
+      failed: "{name} — failed"
+      cancelled: "{name} — cancelled"
+    summary:
+      constructing: "Preparing computer use…"
+      succeeded: "{summary}"
+      failed: "{summary} — failed"
+      cancelled: "{summary} — cancelled"
+    helper:
+      current_directory_label: "the current directory"
+      empty_files_fallback: "files"
+    common:
+      awaiting_approval_suffix: " (awaiting approval)"
+    wait_for_events:
+      running: "Waiting for agent events…"
+      succeeded: "Done waiting for agent events"
+      failed: "Waiting for agent events failed"
+      cancelled: "Wait for events cancelled"
+    transfer_shell_command_control_to_user:
+      constructing: "Handing control to you…"
+      running: "Handing control to you: {reason}"
+      succeeded: "You are in control"
+      failed: "Control transfer failed"
+      cancelled: "Control transfer cancelled"
+    conversation:
+      cloud_load_failed: "Could not load cloud conversations. Showing local conversations only."
+      loading_hint: "Loading conversation…"
+      model_persistence_failed: "Could not save the selected model."
+      switch:
+        command_running: "Cannot switch conversations while a command is in progress."
+        conversation_running: "Cannot switch conversations while the current conversation is in progress."
+        loading: "Another conversation is already loading."
+        unavailable: "That conversation is no longer available."
+    conversation_menu:
+      empty: "No conversations found"
+      loading: "Loading conversations…"
+      title: "Conversations"
+    model_menu:
+      disabled: "disabled"
+      empty: "No models found"
+      title: "Models"
+  drive:
+    title: "Warp Drive"
+    team:
+      create_hint: "Share commands & knowledge with your teammates."
+      create_button: "Create team"
+      zero_state_hint: "Drag or move a personal workflow or notebook here to share it with your team."
+      view_teams_join: "View teams to join"
+      view_team_join: "View team to join"
+    type:
+      folder: "Folder"
+      notebook: "Notebook"
+      workflow: "Workflow"
+      prompt: "Prompt"
+      env_vars: "Environment variables"
+      notebooks: "Notebooks"
+      workflows: "Workflows"
+      env_vars_plural: "Environment Variables"
+      folders: "Folders"
+      agent_workflows: "Agent Workflows"
+      ai_fact: "AI Fact"
+      rules: "Rules"
+      mcp_server: "MCP Server"
+      mcp_servers: "MCP Servers"
+    create:
+      folder: "New folder"
+      notebook: "New notebook"
+      workflow: "New workflow"
+      prompt: "New prompt"
+      env_vars: "New environment variables"
+    action:
+      import: "Import"
+      remove: "Remove"
+      compare_plans: "Compare plans"
+      manage_billing: "Manage billing"
+      rename: "Rename"
+      copy_link: "Copy link"
+      share: "Share"
+      collapse_all: "Collapse all"
+      retry: "Retry"
+      revert_to_server: "Revert to server"
+      attach_session: "Attach to active session"
+      copy_prompt: "Copy prompt"
+      copy_workflow_text: "Copy workflow text"
+      copy_id: "Copy id"
+      copy_variables: "Copy variables"
+      load_in_subshell: "Load in subshell"
+      open_on_desktop: "Open on Desktop"
+      duplicate: "Duplicate"
+      export: "Export"
+      open: "Open"
+      edit: "Edit"
+      restore: "Restore"
+      trash: "Trash"
+      delete_forever: "Delete forever"
+    banner:
+      offline: "You are offline. Some files will be read only."
+    tooltip:
+      sort_by: "Sort by"
+      retry_sync: "Retry sync"
+      syncing: "Syncing Warp Drive"
+    placeholder:
+      untitled: "Untitled"
+    trash:
+      empty: "Empty trash"
+      title_upper: "TRASH"
+      name: "Trash"
+      deletion_warning: "Items in the trash will be deleted forever after 30 days."
+    separator:
+      or: "Or"
+    signup:
+      description: "Sign up for free to increase your storage limit and unlock more features."
+      button: "Sign up"
+    space:
+      personal: "Personal"
+      team: "Team"
+      shared: "Shared with me"
+  # ── Requested Command Block ──
+  requested_command:
+    reject_label: "Reject"
+    accept_label: "Run"
+    edit_label: "Edit"
+    minimize_label: "Done"
+    loading_message: "Generating command..."
+    command_waiting_message: "OK if I run this command and read the output?"
+    mcp_tool_waiting_message: "OK if I call this MCP tool?"
+    monitoring_message: "Agent is monitoring command..."
+    agent_needs_input_message: "Agent needs your input to continue"
+    user_took_control_message: "User is in control."
+    user_stopped_subagent_message: "Paused agent. User is in control."
+    agent_requested_control_message: "User in control"
+    agent_errored_message: "Agent ran into an issue. Take over control."
+    viewing_command_detail: "Viewing command detail"
+    viewing_mcp_tool_detail: "Viewing MCP tool call detail"
+    edit_action_label: "Edit requested command"
+    auto_approve: "Auto-approve"
+    copied_from_prefix: "Copied from"
+    derived_from_prefix: "Derived from"
+    always_allow_readonly_commands: "Always allow Oz to execute read-only commands (relies on model)"
+    profile_ask_permission: "Your profile is set to always ask for permission to execute commands."
+    manage_execution_setting: "Manage command execution setting"
+    mcp_request_label: "Request"
+    mcp_no_arguments: "(no arguments)"
+    mcp_response_label: "Response"
+    mcp_cancelled: "Cancelled"
+    copy: "Copy"
+    copy_json: "Copy JSON"

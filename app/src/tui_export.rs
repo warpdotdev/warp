@@ -8,6 +8,7 @@ pub use ::ai::agent::{
 };
 pub use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 pub use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
+pub use crate::menu_label;
 pub use repo_metadata::repositories::RepoDetectionSource;
 pub use warp_cli::agent::Harness;
 use warp_completer::completer::{CompletionContext as _, TopLevelCommandCaseSensitivity};
@@ -109,16 +110,15 @@ pub use crate::ai::harness_availability::{
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::ai::orchestration::{
     AuthSecretSelection, CloudAgentStartupBlocker, CloudAgentStartupFailure,
-    CloudAgentStartupIssue, ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
-    OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus,
-    OrchestrationConfigState, OrchestrationEditState, PrepareRemoteChildLaunchError,
-    PreparedRemoteChildLaunch, RemoteChildLaunchConfig, accept_disabled_reason_with_auth,
-    api_key_snapshot, auth_secret_selection_required, classify_cloud_agent_startup_error,
-    empty_env_recommendation_message, environment_snapshot, harness_is_selectable,
-    harness_snapshot, host_snapshot, location_snapshot, model_snapshot, oz_run_url,
-    persist_environment_selection, persist_host_selection, prepare_remote_child_launch,
-    resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
-    resolve_default_host_slug, should_show_auth_secret_picker,
+    CloudAgentStartupIssue, ORCHESTRATION_WARP_WORKER_HOST, OptionBadge, OptionFooter, OptionRow,
+    OptionSnapshot, OptionSourceStatus, OrchestrationConfigState, OrchestrationEditState,
+    PrepareRemoteChildLaunchError, PreparedRemoteChildLaunch, RemoteChildLaunchConfig,
+    accept_disabled_reason_with_auth, api_key_snapshot, auth_secret_selection_required,
+    classify_cloud_agent_startup_error, empty_env_recommendation_message, environment_snapshot,
+    harness_is_selectable, harness_snapshot, host_snapshot, location_snapshot, model_snapshot,
+    orchestration_env_none_label, oz_run_url, persist_environment_selection,
+    persist_host_selection, prepare_remote_child_launch, resolve_auth_secret_selection_for_harness,
+    resolve_default_environment_id, resolve_default_host_slug, should_show_auth_secret_picker,
 };
 pub use crate::ai::skills::{SkillManager, SkillReference};
 pub use crate::appearance::Appearance;

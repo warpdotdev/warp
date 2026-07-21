@@ -28,7 +28,7 @@ use itertools::Itertools;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AIActionStatus, AIAgentActionId, AIConversationId, BlocklistAIActionEvent,
-    BlocklistAIActionModel, CancellationReason, DiffSessionType, FileDiff,
+    BlocklistAIActionModel, CancellationReason, DiffSessionType, FileDiff, menu_label,
 };
 use warp_editor::content::buffer::InitialBufferState;
 use warpui_core::elements::MouseStateHandle;
@@ -327,14 +327,27 @@ impl TuiFileEditsView {
                     .chain(deleted_files.iter().map(String::as_str))
                     .unique()
                     .count();
-                let files_label = if files == 1 { "file" } else { "files" };
-                format!("Edited {files} {files_label} (+{lines_added} −{lines_removed})")
+                let files_label = if files == 1 {
+                    menu_label("tui.file_edits.file_label.one", "file")
+                } else {
+                    menu_label("tui.file_edits.file_label.other", "files")
+                };
+                menu_label(
+                    "tui.file_edits.success",
+                    "Edited {N} {file_label} (+{added} −{removed})",
+                )
+                .replace("{N}", &files.to_string())
+                .replace("{file_label}", &files_label)
+                .replace("{added}", &lines_added.to_string())
+                .replace("{removed}", &lines_removed.to_string())
             }
-            Some(RequestFileEditsResult::Cancelled) => "File edits cancelled".to_string(),
+            Some(RequestFileEditsResult::Cancelled) => {
+                menu_label("tui.file_edits.cancelled", "File edits cancelled").to_owned()
+            }
             Some(RequestFileEditsResult::DiffApplicationFailed { .. }) => {
-                "File edits failed".to_string()
+                menu_label("tui.file_edits.failed", "File edits failed").to_owned()
             }
-            None => "Preparing edits…".to_string(),
+            None => menu_label("tui.file_edits.preparing", "Preparing edits…").to_owned(),
         }
     }
 
@@ -511,7 +524,7 @@ fn file_edit_header_label(
     subject: &str,
 ) -> String {
     let verb = if state == ToolCallDisplayState::Blocked {
-        "Editing"
+        menu_label("tui.file_edits.in_progress", "Editing")
     } else {
         completed_verb
     };
@@ -528,20 +541,23 @@ fn verb_and_name(diff: &FileDiff) -> (&'static str, String) {
             .unwrap_or_else(|| path.to_owned())
     };
     let name = file_name(&diff.base.file_path);
+    let verb_created = menu_label("tui.file_edits.verb.created", "Created");
+    let verb_deleted = menu_label("tui.file_edits.verb.deleted", "Deleted");
+    let verb_updated = menu_label("tui.file_edits.verb.updated", "Updated");
     match &diff.diff_type {
-        DiffType::Create { .. } => ("Created", name),
-        DiffType::Delete { .. } => ("Deleted", name),
+        DiffType::Create { .. } => (verb_created, name),
+        DiffType::Delete { .. } => (verb_deleted, name),
         DiffType::Update {
             rename: Some(to), ..
         } => {
             let to_name = file_name(&to.to_string_lossy());
             if to_name == name {
-                ("Updated", name)
+                (verb_updated, name)
             } else {
-                ("Updated", format!("{name} → {to_name}"))
+                (verb_updated, format!("{name} → {to_name}"))
             }
         }
-        DiffType::Update { rename: None, .. } => ("Updated", name),
+        DiffType::Update { rename: None, .. } => (verb_updated, name),
     }
 }
 
@@ -603,7 +619,10 @@ impl TuiView for TuiFileEditsView {
 
         render_permission_card(
             &self.permission_prompt,
-            "Is it OK if I make these file edits?",
+            menu_label(
+                "tui.permission_prompt.file_edits_title",
+                "Is it OK if I make these file edits?",
+            ),
             Some(content),
             app,
         )
@@ -632,8 +651,16 @@ impl TuiFileEditsView {
             SectionKey::Summary,
             &file_edit_header_label(
                 self.display_state(app),
-                "Edited",
-                &format!("{} files", self.sections.len()),
+                menu_label("tui.file_edits.verb.edited", "Edited"),
+                &{
+                    let n = self.sections.len();
+                    let file_label = if n == 1 {
+                        menu_label("tui.file_edits.file_label.one", "file")
+                    } else {
+                        menu_label("tui.file_edits.file_label.other", "files")
+                    };
+                    format!("{n} {file_label}")
+                },
             ),
             self.aggregate_stats(app),
             &builder,

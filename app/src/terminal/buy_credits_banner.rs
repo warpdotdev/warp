@@ -5,8 +5,8 @@ use itertools::Itertools as _;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::Icon;
 use warp_graphql::billing::AddonCreditsOption;
 use warp_graphql::error::BudgetExceededError;
 use warpui::elements::{
@@ -217,7 +217,7 @@ impl BuyCreditsBanner {
                 if self.banner_auto_reload_update_in_flight {
                     self.banner_auto_reload_update_in_flight = false;
                     ctx.emit(BuyCreditsBannerEvent::ShowAutoReloadError {
-                        error_message: "Failed to enable auto-reload for your team. Please try again in Settings > Billing and Usage.",
+                        error_message: crate::menu_label("common.auto_reload_enable_failed", "Failed to enable auto-reload for your team. Please try again in Settings > Billing and Usage."),
                     });
                     ctx.notify();
                 }
@@ -250,9 +250,13 @@ impl BuyCreditsBanner {
 
         let sub_text_color = theme.sub_text_color(theme.surface_1());
 
-        let label = Text::new_inline("Auto reload", appearance.ui_font_family(), 12.)
-            .with_color(sub_text_color.into())
-            .finish();
+        let label = Text::new_inline(
+            crate::menu_label("common.auto_reload", "Auto reload"),
+            appearance.ui_font_family(),
+            12.,
+        )
+        .with_color(sub_text_color.into())
+        .finish();
 
         // Get the selected amount for the tooltip
         let selected_credits = self
@@ -417,16 +421,25 @@ impl BuyCreditsBanner {
 
         // Banner text with title and description based on admin status
         let banner_description = if has_admin_permissions {
-            "Your monthly spend limit has been reached. Increase it to continue."
+            crate::menu_label(
+                "common.monthly_limit_reached_description_admin",
+                "Your monthly spend limit has been reached. Increase it to continue.",
+            )
         } else {
-            "Contact a team admin to increase monthly limit."
+            crate::menu_label(
+                "common.monthly_limit_reached_description_member",
+                "Contact a team admin to increase monthly limit.",
+            )
         };
 
         let banner_text = Flex::column()
             .with_children([
                 appearance
                     .ui_builder()
-                    .paragraph("Monthly limit reached")
+                    .paragraph(crate::menu_label(
+                        "common.monthly_limit_reached",
+                        "Monthly limit reached",
+                    ))
                     .with_style(UiComponentStyles {
                         font_size: Some(14.),
                         ..Default::default()
@@ -477,7 +490,9 @@ impl BuyCreditsBanner {
                     }),
                     ..Default::default()
                 })
-                .with_text_label("Manage billing".to_string())
+                .with_text_label(
+                    crate::menu_label("common.manage_billing", "Manage billing").to_string(),
+                )
                 .build()
                 .on_click(|ctx, _, _| {
                     ctx.dispatch_typed_action(Action::ManageBilling);
@@ -560,27 +575,32 @@ impl BuyCreditsBanner {
             .unwrap_or(false);
 
         let make_banner_text = || {
-            let mut banner_text_children = vec![
-                appearance
-                    .ui_builder()
-                    .paragraph("Out of credits")
-                    .with_style(UiComponentStyles {
-                        font_size: Some(14.),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish(),
-            ];
+            let mut banner_text_children = vec![appearance
+                .ui_builder()
+                .paragraph(crate::menu_label("common.out_of_credits", "Out of credits"))
+                .with_style(UiComponentStyles {
+                    font_size: Some(14.),
+                    ..Default::default()
+                })
+                .build()
+                .finish()];
 
             // Show different message based on whether purchase would exceed limit
             if is_at_monthly_limit || would_purchase_exceed_limit {
                 // Create formatted text with clickable hyperlink
                 let warning_text_fragments = vec![
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::menu_label(
+                        "common.purchase_exceeds_limit_warning_prefix",
                         "Purchasing these credits would take you over your monthly spend limit. ",
+                    )),
+                    FormattedTextFragment::hyperlink_action(
+                        crate::menu_label("common.increase_limit", "Increase it"),
+                        Action::ManageBilling,
                     ),
-                    FormattedTextFragment::hyperlink_action("Increase it", Action::ManageBilling),
-                    FormattedTextFragment::plain_text(" to continue."),
+                    FormattedTextFragment::plain_text(crate::menu_label(
+                        "common.to_continue",
+                        " to continue.",
+                    )),
                 ];
 
                 let formatted_warning = FormattedTextElement::new(
@@ -608,9 +628,15 @@ impl BuyCreditsBanner {
             } else {
                 // Default message when not at limit
                 let banner_description = if has_admin_permissions {
-                    "Add more credits to your account to continue using Oz agents."
+                    crate::menu_label(
+                        "common.out_of_credits_description_admin",
+                        "Add more credits to your account to continue using Oz agents.",
+                    )
                 } else {
-                    "Contact a team admin to purchase more credits to continue."
+                    crate::menu_label(
+                        "common.out_of_credits_description_member",
+                        "Contact a team admin to purchase more credits to continue.",
+                    )
                 };
 
                 banner_text_children.push(
@@ -649,9 +675,9 @@ impl BuyCreditsBanner {
                 || would_purchase_exceed_limit;
 
             let button_text = if self.purchase_addon_credits_loading {
-                "Buying…".to_string()
+                crate::menu_label("common.buying", "Buying…").to_string()
             } else {
-                "Buy".to_string()
+                crate::menu_label("common.buy", "Buy").to_string()
             };
 
             let button_font_color = buy_button_disabled.then_some(

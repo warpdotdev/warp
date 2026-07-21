@@ -16,7 +16,7 @@ mod validation;
 pub use config_state::{AuthSecretSelection, OrchestrationConfigState};
 pub use edit_state::OrchestrationEditState;
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
-pub use providers::ORCHESTRATION_ENV_NONE_LABEL;
+pub use providers::orchestration_env_none_label;
 pub use providers::{
     ORCHESTRATION_WARP_WORKER_HOST, persist_environment_selection, persist_host_selection,
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
@@ -33,7 +33,7 @@ pub use remote_child::{
     PrepareRemoteChildLaunchError, PreparedRemoteChildLaunch, RemoteChildLaunchConfig,
     classify_cloud_agent_startup_error, oz_run_url, prepare_remote_child_launch,
 };
-pub(crate) use snapshots::AUTH_SECRET_INHERIT_LABEL;
+pub(crate) use snapshots::auth_secret_inherit_label;
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use snapshots::location_snapshot;
 pub use snapshots::{
