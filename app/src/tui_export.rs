@@ -163,10 +163,10 @@ pub use crate::terminal::input::slash_commands::{
     AcceptSlashCommandOrSavedPrompt, InlineItem, SlashCommandDataSource, SlashCommandMixer,
     SlashCommandSelectionBehavior, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,
     TuiSlashCommand, TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
-    build_slash_command_mixer, record_saved_prompt_accepted, record_static_slash_command_accepted,
-    saved_prompt_text_for_id, should_close_slash_command_menu_for_exact_match,
-    slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui, slash_command_query,
-    slash_command_selection_behavior,
+    build_slash_command_mixer, record_autodetection_toggle_from_slash_command,
+    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    should_close_slash_command_menu_for_exact_match, slash_command_is_submitted_as_prompt,
+    slash_command_is_supported_in_tui, slash_command_query, slash_command_selection_behavior,
 };
 pub use crate::terminal::local_tty::{
     TerminalManager as LocalTtyTerminalManager, TerminalManagerInit, TerminalSurfaceInit,

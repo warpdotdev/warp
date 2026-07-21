@@ -33,8 +33,8 @@ use warp::tui_export::{
     TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, UserTakeOverReason,
     WAKEUP_THROTTLE_PERIOD, block_context_from_terminal_model, build_slash_command_mixer,
     detect_possible_git_repo, export_conversation_markdown, maybe_build_ai_query_upsert_event,
-    prepare_conversation_block_restoration, record_saved_prompt_accepted,
-    record_static_slash_command_accepted, saved_prompt_text_for_id,
+    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
+    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::features::FeatureFlag;
@@ -174,6 +174,9 @@ const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
 const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
+const NLD_ENABLED_HINT: &str = "Natural language detection enabled.";
+const NLD_DISABLED_HINT: &str = "Natural language detection disabled.";
+const NLD_PERSISTENCE_FAILED_HINT: &str = "Could not save the natural language detection setting.";
 
 fn log_bundle_success_message(path: &Path) -> String {
     format!("Log bundle saved to {}", path.display())
@@ -2791,7 +2794,51 @@ impl TuiTerminalSessionView {
                 self.send_prompt(prompt, ctx);
                 record_static_slash_command_accepted(command_name, true, ctx);
             }
+            TuiSlashCommand::EnableNaturalLanguageDetection => {
+                self.set_nld_enabled(true, command.name, ctx);
+            }
+            TuiSlashCommand::DisableNaturalLanguageDetection => {
+                self.set_nld_enabled(false, command.name, ctx);
+            }
         }
+    }
+
+    /// Persists the natural-language-detection (NLD) setting to `enabled`, reports the
+    /// toggle via telemetry, and surfaces a confirmation hint. Shared by the
+    /// `/enable-natural-language-detection` and `/disable-natural-language-detection`
+    /// TUI slash commands so the two execution paths stay in sync.
+    fn set_nld_enabled(
+        &mut self,
+        enabled: bool,
+        command_name: &'static str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+        let result = AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            settings
+                .ai_autodetection_enabled_internal
+                .set_value(enabled, ctx)
+        });
+        match result {
+            Ok(()) => {
+                record_autodetection_toggle_from_slash_command(enabled, ctx);
+                let hint = if enabled {
+                    NLD_ENABLED_HINT
+                } else {
+                    NLD_DISABLED_HINT
+                };
+                self.show_success_hint(hint.to_owned(), ctx);
+            }
+            Err(error) => {
+                if enabled {
+                    log::warn!("Failed to enable TUI natural language detection: {error}");
+                } else {
+                    log::warn!("Failed to disable TUI natural language detection: {error}");
+                }
+                self.show_transient_hint(NLD_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
+            }
+        }
+        record_static_slash_command_accepted(command_name, true, ctx);
     }
 
     /// Bridges shared shell-tool executor events into terminal-manager PTY intents.
