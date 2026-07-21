@@ -2298,8 +2298,10 @@ pub fn gutter_expansion_button_types(
 
 /// Builds the screen-reader announcement describing the images in a document,
 /// from their alt texts. Alt text is the only image content a screen reader can
-/// convey, so images without alt text are omitted rather than announced as
-/// unlabeled — an unlabeled image adds noise without conveying meaning.
+/// convey, so an image with empty or whitespace-only alt text is treated as
+/// decorative and omitted entirely — the equivalent of a browser mapping
+/// `alt=""` to `role="presentation"`. Announcing it as an unlabeled image would
+/// add noise without conveying meaning.
 ///
 /// Returns [`None`] when no image carries alt text (the caller then contributes
 /// nothing to the view's accessibility contents). Each labeled image is prefixed

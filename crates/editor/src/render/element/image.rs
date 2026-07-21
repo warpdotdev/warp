@@ -16,6 +16,15 @@ use crate::render::model::{BlockItem, RenderState, RichTextStyles};
 /// tooltip's vertical offset from its anchor.
 const TOOLTIP_OFFSET: f32 = 4.;
 
+/// Whether an image should carry an alt-text hover tooltip. Only images with
+/// non-empty (non-whitespace) alt text do: an image without alt text is
+/// decorative, and a tooltip with nothing to say shouldn't exist. This mirrors
+/// the accessibility-tree rule (`alt=""` → decorative) so the two affordances
+/// agree on which images are meaningful.
+fn image_has_tooltip(alt_text: &str) -> bool {
+    !alt_text.trim().is_empty()
+}
+
 /// Text shown alongside the broken-image glyph when an image fails to load.
 /// Prefers the image's alt text; falls back to a generic notice when the alt
 /// text is empty or whitespace-only.
@@ -122,9 +131,7 @@ impl RenderableBlock for RenderableImage {
         // (and remains available for the broken-image placeholder). Use the
         // overlay variant so the tooltip escapes the editor's viewport clip, and
         // anchor it below the image, mirroring the hidden-section tooltip.
-        let mut element: Box<dyn Element> = if self.alt_text.trim().is_empty() {
-            image
-        } else {
+        let mut element: Box<dyn Element> = if image_has_tooltip(&self.alt_text) {
             Appearance::as_ref(app)
                 .ui_builder()
                 .overlay_tool_tip_on_element(
@@ -135,6 +142,8 @@ impl RenderableBlock for RenderableImage {
                     ChildAnchor::TopLeft,
                     vec2f(0., TOOLTIP_OFFSET),
                 )
+        } else {
+            image
         };
 
         let constraint = SizeConstraint::new(vec2f(0., 0.), size);
@@ -217,7 +226,20 @@ impl RenderableBlock for RenderableImage {
 
 #[cfg(test)]
 mod tests {
-    use super::broken_image_label;
+    use super::{broken_image_label, image_has_tooltip};
+
+    #[test]
+    fn tooltip_present_when_alt_text_non_empty() {
+        assert!(image_has_tooltip("A red bicycle"));
+        assert!(image_has_tooltip("  spaced alt  "));
+    }
+
+    #[test]
+    fn tooltip_absent_when_alt_text_empty_or_whitespace() {
+        assert!(!image_has_tooltip(""));
+        assert!(!image_has_tooltip("   "));
+        assert!(!image_has_tooltip("\t\n"));
+    }
 
     #[test]
     fn label_uses_alt_text_when_present() {
