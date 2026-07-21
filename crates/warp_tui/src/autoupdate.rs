@@ -834,7 +834,10 @@ fn validate_artifact_url(
     let expected_path =
         format!("/{channel}/{version}/tui/{os}/{arch}/warp-tui-{channel}-{os}-{arch}.tar.gz");
     if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
         || url.host_str() != Some("releases.warp.dev")
+        || url.port().is_some()
         || url.path() != expected_path
         || url.query().is_some()
         || url.fragment().is_some()

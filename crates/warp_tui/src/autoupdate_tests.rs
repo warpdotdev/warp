@@ -110,6 +110,15 @@ fn rejects_unexpected_release_artifact_urls() {
             "http://releases.warp.dev/dev/{version}/tui/macos/aarch64/warp-tui-dev-macos-aarch64.tar.gz"
         ),
         format!(
+            "https://user@releases.warp.dev/dev/{version}/tui/macos/aarch64/warp-tui-dev-macos-aarch64.tar.gz"
+        ),
+        format!(
+            "https://user:password@releases.warp.dev/dev/{version}/tui/macos/aarch64/warp-tui-dev-macos-aarch64.tar.gz"
+        ),
+        format!(
+            "https://releases.warp.dev:444/dev/{version}/tui/macos/aarch64/warp-tui-dev-macos-aarch64.tar.gz"
+        ),
+        format!(
             "https://releases.warp.dev/dev/{version}/tui/macos/x86_64/warp-tui-dev-macos-x86_64.tar.gz"
         ),
         format!(
