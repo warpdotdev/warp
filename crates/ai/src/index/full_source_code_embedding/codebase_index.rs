@@ -1195,13 +1195,12 @@ impl CodebaseIndex {
                     (tree, sync_result)
                 },
                 move |me, (tree, server_sync_result), ctx| {
-                    send_telemetry_from_ctx!(
-                        server_sync_result.telemetry_event(
-                            sync_start_time.elapsed(),
-                            CodebaseContextSyncType::Full
-                        ),
-                        ctx
-                    );
+                    let telemetry_event = server_sync_result
+                        .telemetry_event(sync_start_time.elapsed(), CodebaseContextSyncType::Full);
+                    if !matches!(telemetry_event, AITelemetryEvent::SyncCodebaseContextSuccess { .. })
+                    {
+                        send_telemetry_from_ctx!(telemetry_event, ctx);
+                    }
 
                     // We should only flush pending changes when we know the sync failed because of a read fragment error.
                     let should_flush_pending_changes = if let SyncOperationResult::Error(
@@ -1259,11 +1258,12 @@ impl CodebaseIndex {
             }) => {
                 // Emit telemetries for the initial sync result.
                 if let Some(sync_time) = time_tracker.compute_duration_for_interval(SYNC_TIME) {
-                    send_telemetry_from_ctx!(
-                        server_sync_result
-                            .telemetry_event(sync_time, CodebaseContextSyncType::Initial),
-                        ctx
-                    );
+                    let telemetry_event = server_sync_result
+                        .telemetry_event(sync_time, CodebaseContextSyncType::Initial);
+                    if !matches!(telemetry_event, AITelemetryEvent::SyncCodebaseContextSuccess { .. })
+                    {
+                        send_telemetry_from_ctx!(telemetry_event, ctx);
+                    }
                 }
 
                 if let Some((file_traversal_duration, merkle_tree_parse_duration)) = time_tracker

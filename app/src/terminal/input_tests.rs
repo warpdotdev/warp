@@ -357,14 +357,13 @@ fn bootstrap_terminal(
             let BootstrappedEvent {
                 session_info,
                 restored_block_commands,
-                rcfiles_duration_seconds,
+                rcfiles_duration_seconds: _,
                 spawning_command,
             } = bootstrapped_event;
             sessions.initialize_bootstrapped_session(
                 *session_info,
                 spawning_command,
                 restored_block_commands,
-                rcfiles_duration_seconds,
                 ctx,
             );
         });
