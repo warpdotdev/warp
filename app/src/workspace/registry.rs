@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use warpui::{AppContext, Entity, SingletonEntity, WeakViewHandle, WindowId};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WeakViewHandle, WindowId};
 
 use super::Workspace;
 
@@ -10,6 +10,10 @@ use super::Workspace;
 /// that `views_of_type::<Workspace>` performs.
 pub struct WorkspaceRegistry {
     workspaces: HashMap<WindowId, WeakViewHandle<Workspace>>,
+}
+
+pub enum WorkspaceRegistryEvent {
+    Registered(WindowId),
 }
 
 impl Default for WorkspaceRegistry {
@@ -26,8 +30,14 @@ impl WorkspaceRegistry {
     }
 
     /// Registers a workspace for the given window.
-    pub fn register(&mut self, window_id: WindowId, workspace: WeakViewHandle<Workspace>) {
+    pub fn register(
+        &mut self,
+        window_id: WindowId,
+        workspace: WeakViewHandle<Workspace>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.workspaces.insert(window_id, workspace);
+        ctx.emit(WorkspaceRegistryEvent::Registered(window_id));
     }
 
     /// Unregisters the workspace for the given window.
@@ -60,7 +70,7 @@ impl WorkspaceRegistry {
 }
 
 impl Entity for WorkspaceRegistry {
-    type Event = ();
+    type Event = WorkspaceRegistryEvent;
 }
 
 impl SingletonEntity for WorkspaceRegistry {}

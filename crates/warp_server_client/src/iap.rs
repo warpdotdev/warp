@@ -671,11 +671,6 @@ fn fetch_iap_token(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        // Disable interactive prompts (e.g. browser-based auth flows triggered when
-        // credentials expire) so gcloud fails immediately instead of blocking until
-        // GCLOUD_TIMEOUT. Some users have shorter OAuth refresh-token lifetimes that
-        // cause more frequent credential expiry, making this guard especially important.
-        .env("CLOUDSDK_CORE_DISABLE_PROMPTS", "1")
         .args(args);
     // allows warp to resolve `gcloud` cli path
     if let Some(path_env) = path_env {
