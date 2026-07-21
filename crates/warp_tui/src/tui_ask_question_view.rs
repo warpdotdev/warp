@@ -417,11 +417,11 @@ impl TuiAskQuestionView {
             .child(
                 TuiText::from_spans([
                     ("Enter or number ".to_owned(), builder.primary_text_style()),
-                    ("to select  ".to_owned(), builder.muted_text_style()),
+                    ("to select ".to_owned(), builder.muted_text_style()),
                     ("Tab or ← → ".to_owned(), builder.primary_text_style()),
-                    ("to navigate  ".to_owned(), builder.muted_text_style()),
+                    ("to navigate ".to_owned(), builder.muted_text_style()),
                     ("Ctrl + C ".to_owned(), builder.primary_text_style()),
-                    ("to skip all".to_owned(), builder.muted_text_style()),
+                    ("to cancel question".to_owned(), builder.muted_text_style()),
                 ])
                 .truncate()
                 .finish(),
