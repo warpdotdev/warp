@@ -57,11 +57,16 @@ fn make_pty(size: winsize) -> Result<(RawFd, RawFd)> {
     // will _not_ be closed when we exec the shell.
     unsafe {
         if libc::fcntl(ends.master, libc::F_SETFD, libc::FD_CLOEXEC) == -1 {
-            return Err(io::Error::last_os_error())
-                .context("fcntl FD_CLOEXEC on master pty failed");
+            let err = io::Error::last_os_error();
+            libc::close(ends.master);
+            libc::close(ends.slave);
+            return Err(err).context("fcntl FD_CLOEXEC on master pty failed");
         }
         if libc::fcntl(ends.slave, libc::F_SETFD, libc::FD_CLOEXEC) == -1 {
-            return Err(io::Error::last_os_error()).context("fcntl FD_CLOEXEC on slave pty failed");
+            let err = io::Error::last_os_error();
+            libc::close(ends.master);
+            libc::close(ends.slave);
+            return Err(err).context("fcntl FD_CLOEXEC on slave pty failed");
         }
     }
 
@@ -625,7 +630,12 @@ impl Pty {
         let fd = unsafe {
             // Maybe this should be done outside of this function so nonblocking
             // isn't forced upon consumers. Although maybe it should be?
-            set_nonblocking(leader_fd).context("failed to set leader fd non-blocking")?;
+            if let Err(err) = set_nonblocking(leader_fd) {
+                libc::close(leader_fd);
+                let mut pty_handle = pty_handle;
+                let _ = pty_handle.kill();
+                return Err(err).context("failed to set leader fd non-blocking");
+            }
 
             File::from_raw_fd(leader_fd)
         };
