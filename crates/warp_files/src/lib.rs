@@ -12,6 +12,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+/// Maximum file size (in bytes) that `FileModel` will read into memory.
+/// Files larger than this are rejected with [`FileLoadError::FileTooLarge`] to
+/// prevent multi-gigabyte allocations when a user opens or the file-watcher
+/// detects changes to a very large file (logs, binaries, database dumps, etc.).
+const MAX_READABLE_FILE_SIZE: u64 = 256 * 1024 * 1024; // 256 MB
+
 use async_channel::Sender;
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
@@ -418,9 +424,13 @@ impl FileModel {
         let use_individual_watcher = watcher_type == WatcherType::Individual;
         let future = ctx.spawn(
             async move {
-                let contents = async_fs::read_to_string(&file_path_buf)
-                    .await
-                    .map_err(FileLoadError::from);
+                let contents = async {
+                    Self::check_file_size(&file_path_buf).await?;
+                    async_fs::read_to_string(&file_path_buf)
+                        .await
+                        .map_err(FileLoadError::from)
+                }
+                .await;
                 (file_id, contents)
             },
             move |me, (file_id, load_result), ctx| match load_result {
@@ -474,6 +484,7 @@ impl FileModel {
         if !Self::file_exists(file_path).await {
             return Err(FileLoadError::DoesNotExist);
         }
+        Self::check_file_size(file_path).await?;
         async_fs::read_to_string(file_path)
             .await
             .map_err(FileLoadError::from)
@@ -614,6 +625,20 @@ impl FileModel {
 
     pub async fn file_exists(file_path: &Path) -> bool {
         async_fs::metadata(file_path).await.is_ok()
+    }
+
+    /// Returns `Ok(())` if the file at `path` is within the readable size limit,
+    /// or an appropriate [`FileLoadError`] otherwise.
+    async fn check_file_size(path: &Path) -> Result<(), FileLoadError> {
+        let metadata = async_fs::metadata(path).await.map_err(FileLoadError::from)?;
+        let size = metadata.len();
+        if size > MAX_READABLE_FILE_SIZE {
+            return Err(FileLoadError::FileTooLarge {
+                size,
+                limit: MAX_READABLE_FILE_SIZE,
+            });
+        }
+        Ok(())
     }
 
     pub async fn create_file(file_path: &Path) -> Result<(), io::Error> {
@@ -1108,6 +1133,13 @@ impl FileModel {
             async move {
                 let mut res = Vec::new();
                 for file_path in matching_files {
+                    if Self::check_file_size(&file_path).await.is_err() {
+                        log::warn!(
+                            "Skipping reload of file exceeding size limit: {}",
+                            file_path.display()
+                        );
+                        continue;
+                    }
                     if let Ok(content) = async_fs::read_to_string(&file_path).await {
                         res.push((file_path, content));
                     }
