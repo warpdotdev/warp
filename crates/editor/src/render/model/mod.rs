@@ -2291,6 +2291,28 @@ pub fn gutter_expansion_button_types(
         }
     }
 }
+
+/// Builds the screen-reader announcement describing the images in a document,
+/// from their alt texts. Alt text is the only image content a screen reader can
+/// convey, so images without alt text are omitted rather than announced as
+/// unlabeled — an unlabeled image adds noise without conveying meaning.
+///
+/// Returns [`None`] when no image carries alt text (the caller then contributes
+/// nothing to the view's accessibility contents). Each labeled image is prefixed
+/// with `Image:` so screen-reader users can tell an image label apart from the
+/// surrounding prose.
+pub fn image_alt_texts_announcement<'a>(
+    alt_texts: impl Iterator<Item = &'a str>,
+) -> Option<String> {
+    let labels: Vec<String> = alt_texts
+        .filter_map(|alt| {
+            let trimmed = alt.trim();
+            (!trimmed.is_empty()).then(|| format!("Image: {trimmed}"))
+        })
+        .collect();
+
+    (!labels.is_empty()).then(|| labels.join(". "))
+}
 // `Clone`, not `Copy`: holds a `MouseStateHandle` (`Arc`-backed), like
 // `BlockItem::TaskList`. The hidden-range dedupe paths clone configs accordingly.
 #[derive(Debug, Clone)]
