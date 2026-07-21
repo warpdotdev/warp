@@ -7,11 +7,12 @@ use pathfinder_geometry::rect::RectF;
 
 use super::*;
 use crate::elements::{
-    Clipped, ConstrainedBox, DispatchEventResult, EventHandler, ParentElement, Rect, ZIndex,
+    Clipped, ConstrainedBox, DispatchEventResult, EventHandler, Hoverable, MouseState,
+    MouseStateHandle, ParentElement, Rect, ZIndex,
 };
 use crate::platform::WindowStyle;
 use crate::{
-    App, AppContext, Entity, EntityIdSet, Event, Presenter, TypedActionView, ViewContext,
+    App, AppContext, Entity, EntityIdSet, Event, Presenter, Scene, TypedActionView, ViewContext,
     ViewHandle, WindowId, WindowInvalidation,
 };
 
@@ -737,6 +738,205 @@ fn test_relative_positioning_bound_to_missing_anchor() {
             // child, this implicitly tests that we don't panic during layout.
         });
     });
+}
+
+/// Size of the base (in-flow) child in [`HoverOverlayTooltipView`].
+fn tooltip_base_size() -> Vector2F {
+    vec2f(80., 60.)
+}
+/// Size of the floating tooltip child in [`HoverOverlayTooltipView`].
+fn tooltip_overlay_size() -> Vector2F {
+    vec2f(120., 20.)
+}
+/// Vertical gap between the base and the tooltip in [`HoverOverlayTooltipView`].
+const TOOLTIP_GAP: f32 = 4.;
+
+/// A view mirroring the `overlay_tool_tip_on_element` composition used by the
+/// image alt-text tooltip: a [`Hoverable`] wrapping a [`Stack`] whose only
+/// in-flow child is a sized base element, plus — when hovered — a tooltip added
+/// via [`Stack::add_positioned_overlay_child`] anchored below the base.
+///
+/// This is the exact shape produced by
+/// `UiBuilder::overlay_tool_tip_on_element` (overlay = true), reduced to plain
+/// [`Rect`] children so it needs no theme/appearance setup.
+///
+/// The whole thing is wrapped in a [`Clipped`] sized to the base, mirroring the
+/// editor's viewport clip layer (`RichTextElement::paint` starts a bounded clip
+/// layer around all blocks). Because the tooltip is anchored *below* the base —
+/// outside this clip — a tooltip painted in-flow would be clipped away, while a
+/// true floating overlay escapes the clip. This is what makes the test a real
+/// analogue of the editor scenario rather than a bare-Stack check.
+struct HoverOverlayTooltipView {
+    mouse_state: MouseStateHandle,
+}
+
+impl HoverOverlayTooltipView {
+    fn new() -> Self {
+        Self {
+            mouse_state: Default::default(),
+        }
+    }
+}
+
+impl Entity for HoverOverlayTooltipView {
+    type Event = String;
+}
+
+impl crate::core::View for HoverOverlayTooltipView {
+    fn render<'a>(&self, _: &AppContext) -> Box<dyn Element> {
+        let hoverable = Hoverable::new(self.mouse_state.clone(), |state: &MouseState| {
+            let base = ConstrainedBox::new(Rect::new().finish())
+                .with_width(tooltip_base_size().x())
+                .with_height(tooltip_base_size().y())
+                .finish();
+
+            let mut stack = Stack::new().with_child(base);
+
+            if state.is_hovered() {
+                let tooltip = ConstrainedBox::new(Rect::new().finish())
+                    .with_width(tooltip_overlay_size().x())
+                    .with_height(tooltip_overlay_size().y())
+                    .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., TOOLTIP_GAP),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::BottomLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
+            }
+
+            stack.finish()
+        })
+        .finish();
+
+        Clipped::sized(hoverable, tooltip_base_size()).finish()
+    }
+
+    fn ui_name() -> &'static str {
+        "HoverOverlayTooltipView"
+    }
+}
+
+impl TypedActionView for HoverOverlayTooltipView {
+    type Action = ();
+}
+
+/// Collect the bounds of every rect drawn in the scene's normal (in-flow)
+/// layers — i.e. everything that establishes document layout, excluding
+/// floating overlay layers.
+fn normal_layer_rect_bounds(scene: &Scene) -> Vec<RectF> {
+    scene
+        .normal_layers()
+        .flat_map(|layer| layer.rects.iter().map(|r| r.bounds))
+        .collect()
+}
+
+/// Regression test for the image alt-text tooltip reserving layout space.
+///
+/// The tooltip must float in an overlay layer and leave the in-flow content
+/// (the base element) untouched. Before the fix this was structurally
+/// guaranteed by the [`Stack`] excluding positioned children from its size
+/// computation; this test pins that guarantee against the exact composition the
+/// image block uses, so a future refactor of the tooltip helper can't
+/// regress the "zero layout impact on hover" contract.
+#[test]
+fn test_overlay_tooltip_does_not_reserve_layout_space_on_hover() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            HoverOverlayTooltipView::new()
+        });
+
+        // Frame 1: not hovered. Capture the in-flow layout and confirm no overlay
+        // layer exists yet.
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+        let (unhovered_bounds, unhovered_overlay_count) = read_scene(app, window_id, |scene| {
+            (normal_layer_rect_bounds(scene), scene.overlay_layer_count())
+        });
+        assert_eq!(
+            unhovered_overlay_count, 0,
+            "No overlay layer should exist before hover"
+        );
+        assert!(
+            unhovered_bounds.contains(&RectF::new(Vector2F::zero(), tooltip_base_size())),
+            "Base element should be laid out at its natural size, got {unhovered_bounds:?}"
+        );
+
+        // Move the mouse over the base element to trigger hover, then render the
+        // next frame so the hovered element tree is laid out and painted.
+        let presenter = app
+            .presenter(window_id)
+            .expect("Test window should have a presenter after the first frame.");
+        app.update(|ctx| {
+            ctx.simulate_window_event(
+                Event::MouseMoved {
+                    position: vec2f(10., 10.),
+                    cmd: false,
+                    shift: false,
+                    is_synthetic: false,
+                },
+                window_id,
+                presenter,
+            );
+        });
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+
+        // Frame 2: hovered. The tooltip must appear in an overlay layer, and the
+        // normal (in-flow) layout must be byte-for-byte identical to the
+        // unhovered frame — the tooltip reserves no document-flow space.
+        let (hovered_bounds, hovered_overlay_count, overlay_bounds) =
+            read_scene(app, window_id, |scene| {
+                let overlay_bounds: Vec<RectF> = scene
+                    .layers()
+                    .skip(scene.layer_count() - scene.overlay_layer_count())
+                    .flat_map(|layer| layer.rects.iter().map(|r| r.bounds))
+                    .collect();
+                (
+                    normal_layer_rect_bounds(scene),
+                    scene.overlay_layer_count(),
+                    overlay_bounds,
+                )
+            });
+
+        assert_eq!(
+            hovered_overlay_count, 1,
+            "Hovering should add exactly one floating overlay layer for the tooltip"
+        );
+        assert_eq!(
+            hovered_bounds, unhovered_bounds,
+            "In-flow layout must be unchanged by hover: the tooltip must not \
+             reserve document-flow space"
+        );
+
+        // The tooltip itself must live in the overlay layer, anchored below the
+        // base (base bottom = 60, plus the 4px gap = y 64), never in the normal
+        // layers.
+        let expected_tooltip = RectF::new(
+            vec2f(0., tooltip_base_size().y() + TOOLTIP_GAP),
+            tooltip_overlay_size(),
+        );
+        assert!(
+            overlay_bounds.contains(&expected_tooltip),
+            "Tooltip should float in the overlay layer at {expected_tooltip:?}, \
+             got overlay rects {overlay_bounds:?}"
+        );
+    });
+}
+
+/// Read the last-rendered scene for `window_id` and project it with `f`.
+fn read_scene<T>(app: &mut App, window_id: WindowId, f: impl FnOnce(&Scene) -> T) -> T {
+    let presenter_ref = app
+        .presenter(window_id)
+        .expect("Test window should have a presenter since a frame was rendered.");
+    let presenter = presenter_ref.borrow();
+    let scene = presenter
+        .scene()
+        .expect("Presenter should have rendered a scene.");
+    f(scene)
 }
 
 /// Positions the second child using the positioning and asserts the child is at bounds

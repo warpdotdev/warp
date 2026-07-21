@@ -664,6 +664,20 @@ impl Scene {
         self.layers.len() + self.overlay_layers.len()
     }
 
+    /// Get the number of overlay layers. Overlay layers float above the normal
+    /// (in-flow) layers, so a positioned overlay child contributes here rather
+    /// than to the normal layers that establish document flow.
+    #[cfg(test)]
+    pub fn overlay_layer_count(&self) -> usize {
+        self.overlay_layers.len()
+    }
+
+    /// Iterate over just the normal (in-flow) layers, excluding overlay layers.
+    #[cfg(test)]
+    pub fn normal_layers(&self) -> impl Iterator<Item = &Layer> {
+        self.layers.iter()
+    }
+
     pub fn scale_factor(&self) -> f32 {
         self.scale_factor
     }
