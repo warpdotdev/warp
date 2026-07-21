@@ -14,8 +14,8 @@ use markdown_parser::markdown_parser::{
 };
 use markdown_parser::weight::CustomWeight;
 use markdown_parser::{
-    CodeBlockText, FormattedImage, FormattedTextLine, FormattedTextStyles, Hyperlink,
-    parse_markdown,
+    BlockAlignment, CodeBlockText, FormattedImage, FormattedTextLine, FormattedTextStyles,
+    Hyperlink, parse_markdown,
 };
 pub use markdown_parser::{
     FormattedTable, FormattedTableAlignment, FormattedTextFragment, FormattedTextInline,
@@ -230,6 +230,8 @@ fn parse_table_cell_markdown_inline(cell: &str) -> FormattedTextInline {
                 inline.push(FormattedTextFragment::plain_text("---"));
             }
             FormattedTextLine::Embedded(_) => {}
+            // Align-region boundary markers are content-less; they contribute no inline text.
+            FormattedTextLine::AlignRegionStart(_) | FormattedTextLine::AlignRegionEnd => {}
         }
     }
 
@@ -361,6 +363,17 @@ impl LinkMarker {
             LinkMarker::End => -1,
         }
     }
+}
+
+/// Paired boundary marker for a horizontally-aligned block region
+/// (`<div align>`/`<p align>`, GH-13735). Modeled on [`LinkMarker`]: the markers come in balanced
+/// pairs bracketing the region's blocks. They are zero-width (see the text-summary arm), balanced
+/// by `validate_content`, and their alignment is consumed at layout time by walking the block
+/// stream — so they carry no `SumTree` style/dimension bookkeeping of their own.
+#[derive(Eq, PartialEq, Clone, Debug)]
+pub enum AlignMarker {
+    Start(BlockAlignment),
+    End,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -553,6 +566,9 @@ pub enum BufferText {
         dir: MarkerDir,
     },
     Link(LinkMarker),
+    /// Paired boundary marker bracketing a horizontally-aligned block region.
+    /// Zero-width, like [`BufferText::Link`]; tracked via a `SumTree` counter.
+    Align(AlignMarker),
     Color(ColorMarker),
     /// A newline.
     Newline,
@@ -603,6 +619,14 @@ impl Display for BufferText {
                 let name = match marker {
                     LinkMarker::Start(url) => format!("a_{url}"),
                     LinkMarker::End => "a".to_string(),
+                };
+
+                write!(f, "<{name}>")
+            }
+            Self::Align(marker) => {
+                let name = match marker {
+                    AlignMarker::Start(alignment) => format!("align_{alignment:?}"),
+                    AlignMarker::End => "align".to_string(),
                 };
 
                 write!(f, "<{name}>")
@@ -1791,7 +1815,10 @@ impl sum_tree::Item for BufferText {
                 first_line_len: (*char_count).into(),
                 rightmost_point: Point::new(0, (*char_count).into()),
             },
-            BufferText::Marker { .. } | BufferText::Link(_) | BufferText::Color(_) => TextSummary {
+            BufferText::Marker { .. }
+            | BufferText::Link(_)
+            | BufferText::Align(_)
+            | BufferText::Color(_) => TextSummary {
                 chars: 0.into(),
                 bytes: 0.into(),
                 lines: Point::new(0, 0),
@@ -1843,6 +1870,10 @@ impl sum_tree::Item for BufferText {
                 s.total_link_marker += 1;
                 Some(Box::new(s))
             }
+            // Align-region markers carry no inline style summary. They are made zero-width by the
+            // text-summary arm above, kept balanced by `validate_content`, and their alignment is
+            // consumed at layout time by walking the `AlignBoundary` block stream — no `SumTree`
+            // style/dimension bookkeeping is needed.
             _ => None,
         };
 

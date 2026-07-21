@@ -10,8 +10,8 @@ use super::buffer::{Buffer, EditOrigin, EditResult};
 use super::cursor::BufferSumTree;
 use super::edit::EditDelta;
 use super::text::{
-    BlockType, BufferTextStyle, ColorMarker, LinkCount, LinkMarker, MarkerDir, SyntaxColorId,
-    TextStyles, TextStylesWithMetadata,
+    AlignMarker, BlockType, BufferTextStyle, ColorMarker, LinkCount, LinkMarker, MarkerDir,
+    SyntaxColorId, TextStyles, TextStylesWithMetadata,
 };
 use super::undo::{ReversibleEditorAction, UndoArg};
 use crate::content::anchor::{Anchor, AnchorSide, AnchorUpdate};
@@ -886,6 +886,20 @@ impl Buffer {
                         }),
                         None,
                     );
+                }
+                // Align-region boundary lines lower into paired, content-less top-level
+                // `BufferText::Align` markers that bracket the interior blocks' content. They
+                // carry no block style of their own (alignment is an orthogonal `SumTree`
+                // dimension), so — like the ordered-list marker translating its line into a
+                // `BufferBlockStyle::OrderedList` marker — they only emit the marker and leave
+                // `previous_block_type` untouched.
+                FormattedTextLine::AlignRegionStart(alignment) => {
+                    end_all_active_text_styles(&mut new_content);
+                    new_content.push(BufferText::Align(AlignMarker::Start(alignment)));
+                }
+                FormattedTextLine::AlignRegionEnd => {
+                    end_all_active_text_styles(&mut new_content);
+                    new_content.push(BufferText::Align(AlignMarker::End));
                 }
                 FormattedTextLine::Embedded(metadata) => {
                     // TODO(kevin): Render broken embedded item state instead of skipping.

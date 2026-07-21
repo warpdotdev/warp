@@ -165,10 +165,22 @@ pub enum FormattedTextLine {
     Embedded(Mapping),
     Image(FormattedImage),
     Table(FormattedTable),
+    /// Opening boundary of a horizontally-aligned block region (`<div align>`/`<p align>`).
+    /// Content-less: it carries only the region's alignment and brackets the interior blocks,
+    /// which follow as ordinary `FormattedTextLine`s until the matching [`Self::AlignRegionEnd`].
+    AlignRegionStart(BlockAlignment),
+    /// Closing boundary of a horizontally-aligned block region. Content-less.
+    AlignRegionEnd,
 }
 
 impl FormattedTextLine {
     pub fn raw_text(&self) -> String {
+        // Align-region boundary markers are content-less: they carry no text of their own
+        // and must not contribute even a bare newline to the raw text (they bracket interior
+        // lines that already carry their own newlines).
+        if matches!(self, Self::AlignRegionStart(_) | Self::AlignRegionEnd) {
+            return String::new();
+        }
         let mut text = match self {
             Self::CodeBlock(text) => text.code.clone(),
             Self::Heading(header) => header
@@ -196,6 +208,8 @@ impl FormattedTextLine {
             Self::LineBreak | Self::HorizontalRule | Self::Embedded(_) => "\n".to_string(),
             Self::Image(image) => format!("{}\n", image.alt_text),
             Self::Table(table) => table.to_internal_format(),
+            // Handled by the early return above; content-less markers contribute nothing.
+            Self::AlignRegionStart(_) | Self::AlignRegionEnd => String::new(),
         };
         // Each `FormattedTextLine` unit represents a complete line. If it doesn't already end in
         // a newline, add one.
@@ -237,7 +251,9 @@ impl FormattedTextLine {
             | Self::LineBreak
             | Self::HorizontalRule
             | Self::Embedded(_)
-            | Self::Image(_) => {}
+            | Self::Image(_)
+            | Self::AlignRegionStart(_)
+            | Self::AlignRegionEnd => {}
         }
         self
     }
@@ -254,7 +270,9 @@ impl FormattedTextLine {
             | FormattedTextLine::HorizontalRule
             | FormattedTextLine::Embedded(_)
             | FormattedTextLine::Image(_)
-            | FormattedTextLine::Table(_) => None,
+            | FormattedTextLine::Table(_)
+            | FormattedTextLine::AlignRegionStart(_)
+            | FormattedTextLine::AlignRegionEnd => None,
         }
     }
 
@@ -292,6 +310,8 @@ impl LineCount for FormattedTextLine {
             Self::TaskList(_) => 1,
             Self::LineBreak => 0,
             Self::HorizontalRule => 0,
+            // Align-region boundary markers are content-less and occupy no line of their own.
+            Self::AlignRegionStart(_) | Self::AlignRegionEnd => 0,
             Self::Embedded(_) => 1,
             Self::Image(_) => 1,
             Self::Table(table) => 1 + table.rows.len(), // Header + data rows (separator not counted as a line)
@@ -344,6 +364,20 @@ pub struct FormattedImage {
 /// Column alignment for table cells
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default, Hash)]
 pub enum TableAlignment {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// Horizontal alignment of a `<div align>`/`<p align>` block region.
+///
+/// Deliberately distinct from [`TableAlignment`]: table-*column* alignment and
+/// block-*region* alignment are different axes that merely share three variant
+/// names. Keeping them separate avoids coupling unrelated concerns the first time
+/// either needs to diverge (e.g. a `Justify` value added to one but not the other).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default, Hash)]
+pub enum BlockAlignment {
     #[default]
     Left,
     Center,

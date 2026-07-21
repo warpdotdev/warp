@@ -122,6 +122,64 @@ fn tables_switch_from_columns_to_header_keyed_records() {
 }
 
 #[test]
+fn centers_an_aligned_region_within_the_pane_width() {
+    use markdown_parser::BlockAlignment;
+
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            // A centered region wrapping a short caption line.
+            let formatted = FormattedText::new(vec![
+                FormattedTextLine::AlignRegionStart(BlockAlignment::Center),
+                FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("hi")]),
+                FormattedTextLine::AlignRegionEnd,
+            ]);
+            let (lines, _) = render(&formatted, 10, ctx);
+            // "hi" is 2 cols wide in a 10-col pane → 8 cols of slack, 4 leading (centered).
+            assert_eq!(lines, vec!["    hi"]);
+        });
+    });
+}
+
+#[test]
+fn right_aligns_an_aligned_region_within_the_pane_width() {
+    use markdown_parser::BlockAlignment;
+
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let formatted = FormattedText::new(vec![
+                FormattedTextLine::AlignRegionStart(BlockAlignment::Right),
+                FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("hi")]),
+                FormattedTextLine::AlignRegionEnd,
+            ]);
+            let (lines, _) = render(&formatted, 10, ctx);
+            // "hi" pushed to the right edge of a 10-col pane → 8 leading spaces.
+            assert_eq!(lines, vec!["        hi"]);
+        });
+    });
+}
+
+#[test]
+fn aligned_region_falls_back_to_left_when_content_fills_the_pane() {
+    use markdown_parser::BlockAlignment;
+
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            // Content as wide as the pane leaves no slack; centering degrades to left-aligned.
+            let formatted = FormattedText::new(vec![
+                FormattedTextLine::AlignRegionStart(BlockAlignment::Center),
+                FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("abcdefghij")]),
+                FormattedTextLine::AlignRegionEnd,
+            ]);
+            let (lines, _) = render(&formatted, 10, ctx);
+            assert_eq!(lines, vec!["abcdefghij"]);
+        });
+    });
+}
+
+#[test]
 fn renders_structural_and_specialized_fallbacks() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -220,7 +278,9 @@ fn fenced_markdown_code_block_applies_syntax_colors_to_exact_cells() {
                 | FormattedTextLine::Image(_)
                 | FormattedTextLine::Embedded(_)
                 | FormattedTextLine::LineBreak
-                | FormattedTextLine::HorizontalRule => None,
+                | FormattedTextLine::HorizontalRule
+                | FormattedTextLine::AlignRegionStart(_)
+                | FormattedTextLine::AlignRegionEnd => None,
             })
             .expect("fenced Markdown should contain a code block");
         let code_view = add_code_view(&mut app);

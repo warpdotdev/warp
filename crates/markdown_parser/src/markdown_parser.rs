@@ -18,8 +18,8 @@ use nom::{FindToken, IResult, InputIter, InputLength, Parser, Slice};
 use serde_yaml::Value;
 
 use crate::{
-    CodeBlockText, CustomWeight, FormattedImage, FormattedIndentTextInline, FormattedTable,
-    FormattedTaskList, FormattedText, FormattedTextFragment, FormattedTextHeader,
+    BlockAlignment, CodeBlockText, CustomWeight, FormattedImage, FormattedIndentTextInline,
+    FormattedTable, FormattedTaskList, FormattedText, FormattedTextFragment, FormattedTextHeader,
     FormattedTextInline, FormattedTextLine, FormattedTextStyles, Hyperlink,
     OrderedFormattedIndentTextInline, TableAlignment,
 };
@@ -193,6 +193,21 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     let mut remaining = markdown;
     let mut lines = Vec::new();
     while !remaining.is_empty() {
+        // Align-region detection runs ahead of the ordinary block `alt`, because a matched
+        // region expands into *several* `FormattedTextLine`s (a `AlignRegionStart` boundary,
+        // the interior blocks parsed as ordinary Markdown, and an `AlignRegionEnd` boundary)
+        // rather than the single line the block loop otherwise consumes per iteration. When it
+        // doesn't match, it consumes nothing and control falls through to the normal grammar.
+        if let Some((remaining_after_region, region_lines)) =
+            parse_align_region::<E>(remaining, parse_gfm_tables)?
+        {
+            remaining = remaining_after_region;
+            // A block boundary always terminates any list run.
+            indentation_context.borrow_mut().clear();
+            lines.extend(region_lines);
+            continue;
+        }
+
         let (remaining_after_block, mut line) = block(remaining)?;
         remaining = remaining_after_block;
 
@@ -224,6 +239,396 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     }
 
     Ok((remaining, lines))
+}
+
+// ---------------------------------------------------------------------------
+// Block-alignment region detection (`<div align>` / `<p align>`).
+//
+// Two detector paths — an own-line `<div>`/`<p>` scanner (open tag, interior
+// blocks, and close tag each on their own line(s)) and a single-line `<p>`
+// matcher (open+content+close on one source line) — funnel through one shared
+// **attribute-matching contract** ([`resolve_tag_alignment`]) so they never
+// diverge on how `align`/`style` are matched. Both emit the same three-part
+// shape: an [`FormattedTextLine::AlignRegionStart`] boundary, the interior
+// parsed as ordinary Markdown, and an [`FormattedTextLine::AlignRegionEnd`]
+// boundary. Neither path ever wraps the interior in a new parser variant.
+// ---------------------------------------------------------------------------
+
+/// Outcome of applying the attribute-matching contract to an opening tag's
+/// attribute region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TagAlignment {
+    /// A recognized `left`/`center`/`right` value — the region is aligned.
+    Recognized(BlockAlignment),
+    /// The tag is well-formed but names no recognized alignment (e.g.
+    /// `align="justify"`, or a `style` with no usable `text-align`). It is
+    /// still consumed as an align tag, but the region is unaligned (`Left`).
+    Unaligned,
+    /// The attribute region is malformed (unterminated quote, stray `<`, etc.).
+    /// The tag is not recognized at all and falls through to literal text.
+    Malformed,
+}
+
+/// Parse a `style` attribute value for its effective `text-align` per the
+/// product spec's micro-grammar: split declarations on `;`, split each on the
+/// **first** `:`, trim, match the property name case-insensitively against
+/// `text-align`, ignore unrelated properties, last `text-align` wins, and match
+/// the value case-insensitively against `left`/`center`/`right`. Any
+/// unrecognized value (including `calc()`, custom props, `!important`, comments)
+/// makes that declaration contribute nothing.
+///
+/// Returns `None` when the `style` contributes no recognized alignment.
+fn parse_style_text_align(style_value: &str) -> Option<BlockAlignment> {
+    let mut result = None;
+    for declaration in style_value.split(';') {
+        let declaration = declaration.trim();
+        if declaration.is_empty() {
+            // Trailing `;` or empty `;;` declaration — ignored, not an error.
+            continue;
+        }
+        let Some((property, value)) = declaration.split_once(':') else {
+            // A declaration without a `:` (no value) contributes nothing.
+            continue;
+        };
+        if !property.trim().eq_ignore_ascii_case("text-align") {
+            // Unrelated property (e.g. `color: red`) — ignored, doesn't invalidate the rest.
+            continue;
+        }
+        // Later `text-align` declarations override earlier ones (CSS cascade order).
+        result = parse_alignment_literal(value.trim());
+    }
+    result
+}
+
+/// Match a value case-insensitively against the three recognized alignment
+/// literals. Any other value (`justify`, `bogus`, empty, …) yields `None`.
+fn parse_alignment_literal(value: &str) -> Option<BlockAlignment> {
+    if value.eq_ignore_ascii_case("left") {
+        Some(BlockAlignment::Left)
+    } else if value.eq_ignore_ascii_case("center") {
+        Some(BlockAlignment::Center)
+    } else if value.eq_ignore_ascii_case("right") {
+        Some(BlockAlignment::Right)
+    } else {
+        None
+    }
+}
+
+/// Split `>`-terminated attribute text into `(name, Option<value>)` pairs.
+///
+/// Returns `None` if the attribute region is malformed (unterminated quote,
+/// stray `<`, or a bare `=` with no value) — the caller treats that as
+/// [`TagAlignment::Malformed`]. Values may be double-quoted, single-quoted, or
+/// unquoted; the returned value is the raw characters between quotes (or up to
+/// the next whitespace/`>` for the unquoted form).
+fn parse_tag_attributes(attrs: &str) -> Option<Vec<(String, Option<String>)>> {
+    let mut chars = attrs.char_indices().peekable();
+    let mut out = Vec::new();
+    while let Some(&(_, c)) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        // A `<` inside the attribute region is malformed.
+        if c == '<' || c == '>' {
+            return None;
+        }
+        // Read an attribute name: up to whitespace, `=`, or `>`.
+        let mut name = String::new();
+        while let Some(&(_, c)) = chars.peek() {
+            if c.is_whitespace() || c == '=' || c == '>' {
+                break;
+            }
+            if c == '<' || c == '"' || c == '\'' {
+                // A quote or `<` where a name character is expected is malformed.
+                return None;
+            }
+            name.push(c);
+            chars.next();
+        }
+        if name.is_empty() {
+            // Reached here on a stray `=` or similar with no preceding name.
+            return None;
+        }
+        // Optional `= value`. Skip whitespace before `=`.
+        let mut after_name = chars.clone();
+        while let Some(&(_, c)) = after_name.peek() {
+            if c.is_whitespace() {
+                after_name.next();
+            } else {
+                break;
+            }
+        }
+        if matches!(after_name.peek(), Some(&(_, '='))) {
+            chars = after_name;
+            chars.next(); // consume `=`
+            // Skip whitespace after `=`.
+            while let Some(&(_, c)) = chars.peek() {
+                if c.is_whitespace() {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let value = match chars.peek() {
+                Some(&(_, quote)) if quote == '"' || quote == '\'' => {
+                    chars.next(); // consume opening quote
+                    let mut value = String::new();
+                    let mut closed = false;
+                    for (_, c) in chars.by_ref() {
+                        if c == quote {
+                            closed = true;
+                            break;
+                        }
+                        value.push(c);
+                    }
+                    if !closed {
+                        // Unterminated quote — malformed.
+                        return None;
+                    }
+                    value
+                }
+                Some(_) => {
+                    // Unquoted value: up to whitespace or `>`. A `<` or quote here is malformed.
+                    let mut value = String::new();
+                    while let Some(&(_, c)) = chars.peek() {
+                        if c.is_whitespace() || c == '>' {
+                            break;
+                        }
+                        if c == '<' || c == '"' || c == '\'' {
+                            return None;
+                        }
+                        value.push(c);
+                        chars.next();
+                    }
+                    value
+                }
+                None => {
+                    // `=` with no value — malformed.
+                    return None;
+                }
+            };
+            out.push((name, Some(value)));
+        } else {
+            // Bare attribute (no value), e.g. `hidden`.
+            out.push((name, None));
+        }
+    }
+    Some(out)
+}
+
+/// Apply the shared attribute-matching contract to an opening tag's attribute
+/// region (the text between the tag name and the closing `>`). `align` wins
+/// unless a recognized `style` `text-align` overrides it. Unrelated attributes
+/// are ignored. Malformed syntax yields [`TagAlignment::Malformed`].
+fn resolve_tag_alignment(attrs: &str) -> TagAlignment {
+    let Some(attributes) = parse_tag_attributes(attrs) else {
+        return TagAlignment::Malformed;
+    };
+    let mut align_value = None;
+    let mut style_value = None;
+    for (name, value) in &attributes {
+        if name.eq_ignore_ascii_case("align") {
+            // A recognized `align` literal; unrecognized values leave `align_value` at `None`
+            // but the tag is still consumed (softer unaligned case, handled below).
+            align_value = Some(value.as_deref().and_then(parse_alignment_literal));
+        } else if name.eq_ignore_ascii_case("style") {
+            style_value = Some(value.as_deref().and_then(parse_style_text_align));
+        }
+        // Every other attribute is read past and discarded.
+    }
+    // `style` wins when it contributes a recognized value.
+    if let Some(Some(alignment)) = style_value {
+        return TagAlignment::Recognized(alignment);
+    }
+    if let Some(Some(alignment)) = align_value {
+        return TagAlignment::Recognized(alignment);
+    }
+    // A tag that carries neither `align` nor `style` at all is not an align tag.
+    if align_value.is_none() && style_value.is_none() {
+        return TagAlignment::Malformed;
+    }
+    // Present-but-unrecognized `align`/`style`: consumed as an align tag, unaligned region.
+    TagAlignment::Unaligned
+}
+
+/// The result of a successful align-region detection: the input remaining after
+/// the region and the flat run of lines (`AlignRegionStart`, interior blocks,
+/// `AlignRegionEnd`).
+type AlignRegion<'a> = (&'a str, Vec<FormattedTextLine>);
+
+/// Try to detect an align region at the start of `input`. On a match, returns
+/// `Ok(Some((remaining, lines)))` where `lines` is the bracketed run; on no
+/// match, returns `Ok(None)` and consumes nothing (the caller falls through to
+/// ordinary parsing). Only hard interior-parse failures surface as `Err`.
+fn parse_align_region<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+    parse_gfm_tables: bool,
+) -> Result<Option<AlignRegion<'a>>, nom::Err<E>> {
+    // Leading spaces (up to a small block indent) are allowed before the opening tag,
+    // matching how own-line block HTML is detected elsewhere.
+    let trimmed = input.trim_start_matches([' ', '\t']);
+
+    if let Some(region) = parse_single_line_p_region::<E>(input, trimmed)? {
+        return Ok(Some(region));
+    }
+    if let Some(region) = parse_own_line_region::<E>(input, trimmed, parse_gfm_tables)? {
+        return Ok(Some(region));
+    }
+    Ok(None)
+}
+
+/// Detect a single-source-line `<p …>content</p>`: open tag, inline content,
+/// and close tag all on one line, with nothing but whitespace before the open
+/// tag or after the close tag. Text sharing the line with the tags falls
+/// through (returns `Ok(None)`) per the mixed-same-line literal-fallback rule.
+fn parse_single_line_p_region<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+    trimmed: &'a str,
+) -> Result<Option<AlignRegion<'a>>, nom::Err<E>> {
+    // Isolate this source line (single-line detection never spans a newline).
+    let line_end = trimmed.find(['\n', '\r']).unwrap_or(trimmed.len());
+    let line = &trimmed[..line_end];
+    // The remainder of `input` after this line, including the line ending.
+    let rest = &input[input.len() - (trimmed.len() - line_end)..];
+
+    let Some((tag_align, after_open)) = match_open_tag(line, "p") else {
+        return Ok(None);
+    };
+    // Malformed open tag → literal fallback (no region).
+    let alignment = match tag_align {
+        TagAlignment::Malformed => return Ok(None),
+        TagAlignment::Unaligned => BlockAlignment::Left,
+        TagAlignment::Recognized(a) => a,
+    };
+    // Find the closing `</p>` on this same line (case-insensitive).
+    let Some(close_at) = find_close_tag(after_open, "p") else {
+        return Ok(None);
+    };
+    let content = &after_open[..close_at];
+    let after_close = &after_open[close_at + "</p>".len()..];
+    // Nothing but trailing whitespace may follow the close tag on this line.
+    if !after_close.trim().is_empty() {
+        return Ok(None);
+    }
+    // Parse the inline content as phrasing, producing exactly one interior `Line`.
+    let (_, fragments) = all_consuming(parse_inline::<E>)(content)?;
+    let lines = vec![
+        FormattedTextLine::AlignRegionStart(alignment),
+        FormattedTextLine::Line(fragments),
+        FormattedTextLine::AlignRegionEnd,
+    ];
+    Ok(Some((rest, lines)))
+}
+
+/// Detect an own-line `<div …>` / `<p …>` region: the opening tag on its own
+/// line, one or more interior Markdown blocks, then a matching own-line closing
+/// tag. The interior is parsed recursively with the same GFM-table setting.
+fn parse_own_line_region<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+    trimmed: &'a str,
+    parse_gfm_tables: bool,
+) -> Result<Option<AlignRegion<'a>>, nom::Err<E>> {
+    for tag in ["div", "p"] {
+        let Some((tag_align, after_open)) = match_open_tag_own_line(trimmed, tag) else {
+            continue;
+        };
+        let alignment = match tag_align {
+            TagAlignment::Malformed => continue,
+            TagAlignment::Unaligned => BlockAlignment::Left,
+            TagAlignment::Recognized(a) => a,
+        };
+        // Find the matching own-line closing tag `</tag>`.
+        let Some((interior, after_close)) = split_at_own_line_close(after_open, tag) else {
+            // Unterminated region → literal fallback.
+            continue;
+        };
+        // The remainder of `input` corresponding to `after_close`.
+        let rest = &input[input.len() - after_close.len()..];
+        // Recursively parse the interior as ordinary Markdown.
+        let (_, interior_lines) = parse_markdown_internal::<E>(interior, parse_gfm_tables)?;
+        let mut lines = Vec::with_capacity(interior_lines.len() + 2);
+        lines.push(FormattedTextLine::AlignRegionStart(alignment));
+        lines.extend(interior_lines);
+        lines.push(FormattedTextLine::AlignRegionEnd);
+        return Ok(Some((rest, lines)));
+    }
+    Ok(None)
+}
+
+/// Match `<tag …>` at the start of `line` (case-insensitive tag name), returning
+/// the resolved [`TagAlignment`] and the input immediately after the `>`.
+/// Returns `None` if the line doesn't open with this tag.
+fn match_open_tag<'a>(line: &'a str, tag: &str) -> Option<(TagAlignment, &'a str)> {
+    let rest = line.strip_prefix('<')?;
+    let rest = strip_prefix_ignore_case(rest, tag)?;
+    // The character after the tag name must be whitespace or `>` (so `<pre>` doesn't match `<p>`).
+    let attr_start = match rest.chars().next() {
+        Some(c) if c.is_whitespace() => c.len_utf8(),
+        Some('>') => 0,
+        _ => return None,
+    };
+    // Find the closing `>` of the opening tag.
+    let close = rest.find('>')?;
+    let attrs = &rest[attr_start.min(close)..close];
+    let after = &rest[close + 1..];
+    Some((resolve_tag_alignment(attrs), after))
+}
+
+/// Like [`match_open_tag`], but requires the opening tag to be the whole line
+/// (only trailing whitespace after `>`), for own-line block detection.
+fn match_open_tag_own_line<'a>(input: &'a str, tag: &str) -> Option<(TagAlignment, &'a str)> {
+    let line_end = input.find(['\n', '\r']).unwrap_or(input.len());
+    let line = &input[..line_end];
+    let (tag_align, after) = match_open_tag(line, tag)?;
+    // The opening tag must occupy the whole line: nothing but whitespace after `>`.
+    if !after.trim().is_empty() {
+        return None;
+    }
+    // Resume parsing after this line's ending.
+    let after_line = &input[line_end..];
+    let after_line = after_line
+        .strip_prefix("\r\n")
+        .or_else(|| after_line.strip_prefix('\n'))
+        .or_else(|| after_line.strip_prefix('\r'))
+        .unwrap_or(after_line);
+    Some((tag_align, after_line))
+}
+
+/// Find an own-line `</tag>` closing tag in `input`, returning `(interior,
+/// after_close)` where `interior` is everything before the closing line and
+/// `after_close` is everything after it. Returns `None` if no own-line close
+/// is found (unterminated region).
+fn split_at_own_line_close<'a>(input: &'a str, tag: &str) -> Option<(&'a str, &'a str)> {
+    let close_needle_lower = format!("</{tag}>");
+    let mut offset = 0;
+    for line in input.split_inclusive(['\n', '\r']) {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case(&close_needle_lower) {
+            let interior = &input[..offset];
+            let after_close = &input[offset + line.len()..];
+            return Some((interior, after_close));
+        }
+        offset += line.len();
+    }
+    None
+}
+
+/// Find a closing `</tag>` (case-insensitive) within `input`, returning its
+/// byte offset. Used by the single-line detector.
+fn find_close_tag(input: &str, tag: &str) -> Option<usize> {
+    let needle = format!("</{tag}>");
+    let lower = input.to_ascii_lowercase();
+    lower.find(&needle.to_ascii_lowercase())
+}
+
+/// Case-insensitively strip `prefix` from the start of `s`, returning the remainder.
+fn strip_prefix_ignore_case<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        Some(&s[prefix.len()..])
+    } else {
+        None
+    }
 }
 
 /// Parse a single paragraph of Markdown text.

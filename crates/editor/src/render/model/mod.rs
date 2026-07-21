@@ -8,7 +8,7 @@ use std::{fmt, mem};
 
 use float_cmp::ApproxEq;
 use itertools::Itertools;
-use markdown_parser::TableAlignment;
+use markdown_parser::{BlockAlignment, TableAlignment};
 use num_traits::SaturatingSub;
 use ordered_float::OrderedFloat;
 use parking_lot::Mutex;
@@ -1574,6 +1574,13 @@ impl ParagraphBlock {
         Self { paragraphs }
     }
 
+    /// Set the horizontal alignment on every paragraph in this block.
+    fn set_alignment(&mut self, alignment: BlockAlignment) {
+        for paragraph in self.paragraphs.iter_mut() {
+            paragraph.set_alignment(alignment);
+        }
+    }
+
     pub fn spacing(&self) -> BlockSpacing {
         // In the future, we should support two separate level of spacing in a
         // ParagraphBlock: 1) the internal spacing between paragraphs 2) the overall
@@ -1658,6 +1665,9 @@ pub struct Paragraph {
     detected_url: Vec<ParsedUrl>,
     spacing: BlockSpacing,
     minimum_height: Option<Pixels>,
+    /// Horizontal alignment of the enclosing `<div align>`/`<p align>` region (GH-13735).
+    /// `Left` (the default) is the unaligned behavior — each line paints at the block's left edge.
+    alignment: BlockAlignment,
 }
 
 impl Paragraph {
@@ -1685,7 +1695,18 @@ impl Paragraph {
             detected_url: active_url,
             spacing,
             minimum_height,
+            alignment: BlockAlignment::default(),
         }
+    }
+
+    /// Set the horizontal alignment of the region enclosing this paragraph.
+    pub(super) fn set_alignment(&mut self, alignment: BlockAlignment) {
+        self.alignment = alignment;
+    }
+
+    /// The horizontal alignment of the region enclosing this paragraph (`Left` when unaligned).
+    pub(crate) fn alignment(&self) -> BlockAlignment {
+        self.alignment
     }
 
     pub fn first_line_height(&self) -> f32 {
@@ -4292,6 +4313,33 @@ impl BlockItem {
             spacing,
             minimum_height,
         ))
+    }
+
+    /// Apply the enclosing region's horizontal alignment to this block's paragraph(s). A no-op for
+    /// block kinds that carry no paragraph (rules, images, tables, embeds) and for `Left` (the
+    /// unaligned default), so unaligned content is bit-identical to before.
+    pub fn set_alignment(&mut self, alignment: BlockAlignment) {
+        match self {
+            BlockItem::Paragraph(paragraph)
+            | BlockItem::Header { paragraph, .. }
+            | BlockItem::TaskList { paragraph, .. }
+            | BlockItem::UnorderedList { paragraph, .. }
+            | BlockItem::OrderedList { paragraph, .. } => paragraph.set_alignment(alignment),
+            BlockItem::TextBlock { paragraph_block }
+            | BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            }
+            | BlockItem::TemporaryBlock {
+                paragraph_block, ..
+            } => paragraph_block.set_alignment(alignment),
+            BlockItem::MermaidDiagram { .. }
+            | BlockItem::TrailingNewLine(_)
+            | BlockItem::HorizontalRule(_)
+            | BlockItem::Image { .. }
+            | BlockItem::Table(_)
+            | BlockItem::Embedded(_)
+            | BlockItem::Hidden(_) => {}
+        }
     }
 
     pub fn first_line_height(&self) -> f32 {
