@@ -193,6 +193,26 @@ impl TuiUiBuilder {
                 .blend(&accent.with_opacity(10)),
         )
     }
+
+    /// Pale-green overlay behind shell command rows in the transcript.
+    /// Pre-blended because terminal cells cannot preserve alpha.
+    pub(crate) fn shell_command_background(&self) -> Color {
+        let accent = ThemeFill::from(self.warp_theme.terminal_colors().bright.green);
+        cell_color(self.base_background().blend(&accent.with_opacity(10)))
+    }
+
+    /// Bold pale-green `!` marker for a shell command row, over the same
+    /// [`Self::shell_command_background`] the rest of the row uses. Mirrors the
+    /// shell-mode `!` affordance the input shows before submission, which is
+    /// stripped from the command sent to the PTY.
+    pub(crate) fn shell_command_prefix_style(&self) -> TuiStyle {
+        TuiStyle::default()
+            .fg(cell_color(ThemeFill::from(
+                self.warp_theme.terminal_colors().bright.green,
+            )))
+            .bg(self.shell_command_background())
+            .add_modifier(Modifier::BOLD)
+    }
     /// Blue-overlay background for inline plan bodies, matching the TUI
     /// design's `blue_overlay_1` treatment.
     pub(crate) fn plan_background(&self) -> Color {

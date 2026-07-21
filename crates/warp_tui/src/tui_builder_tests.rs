@@ -48,6 +48,28 @@ fn text_styles_follow_light_theme_foreground() {
         builder.slash_command_selection_background(),
         selection_background
     );
+    let shell_command_fill = ThemeFill::from(theme.terminal_colors().bright.green);
+    let shell_command_background: Color = CoreFill::from(
+        theme
+            .background()
+            .blend(&shell_command_fill.with_opacity(10)),
+    )
+    .into();
+    assert_eq!(builder.shell_command_background(), shell_command_background);
+    let shell_command_prefix_style = builder.shell_command_prefix_style();
+    assert_eq!(
+        shell_command_prefix_style.fg,
+        Some(CoreFill::from(shell_command_fill).into())
+    );
+    assert_eq!(
+        shell_command_prefix_style.bg,
+        Some(shell_command_background)
+    );
+    assert!(
+        shell_command_prefix_style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
     let selection_style = builder.slash_command_selection_text_style();
     assert_eq!(selection_style.fg, Some(selection_foreground));
     assert_eq!(selection_style.bg, Some(selection_background));

@@ -51,6 +51,7 @@ fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
 #[test]
 fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
     App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         app.read(|app| {
             let mut model = TerminalModel::mock(None, None);
             model.simulate_block("printf", "one\r\ntwo\r\nthree\r\n");
