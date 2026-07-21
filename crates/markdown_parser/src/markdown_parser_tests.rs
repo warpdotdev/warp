@@ -2987,3 +2987,18 @@ fn test_parse_html_comment_inside_code_span_is_preserved() {
         ])]
     );
 }
+
+#[test]
+fn test_parse_html_comment_with_trailing_same_line_content_is_not_block() {
+    // A comment is only a whole-line block comment when nothing but whitespace follows it on the
+    // same line. When content follows the closing `-->`, the line falls through to inline parsing:
+    // the comment is stripped inline and the trailing `# Heading` stays literal text rather than
+    // being reparsed as a fresh heading block.
+    let source = "<!-- hidden --> # Heading\n";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text(" # Heading")
+        ])]
+    );
+}
