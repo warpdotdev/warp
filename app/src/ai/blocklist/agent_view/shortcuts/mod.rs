@@ -29,6 +29,7 @@ pub struct AgentShortcutsViewContext {
     pub is_cloud_agent: bool,
     /// True once the user has submitted the first prompt.
     pub has_submitted_first_prompt: bool,
+    pub is_autoexecute_enabled: bool,
 }
 
 #[derive(Default)]
@@ -64,6 +65,14 @@ pub fn render_shortcut(props: ShortcutProps, app: &AppContext) -> Box<dyn Elemen
             .finish(),
         )
         .finish()
+}
+
+pub fn autoexecute_shortcut_text(is_autoexecute_enabled: bool) -> &'static str {
+    if is_autoexecute_enabled {
+        "toggle off"
+    } else {
+        "toggle on"
+    }
 }
 
 pub fn render_keystroke(keystroke: &Keystroke, app: &AppContext) -> Box<dyn Element> {
@@ -213,7 +222,7 @@ pub fn render_agent_shortcuts_view(
         shortcuts.push(render_shortcut(
             ShortcutProps {
                 keystroke,
-                text: "toggle auto-accept".into(),
+                text: autoexecute_shortcut_text(context.is_autoexecute_enabled).into(),
                 ..Default::default()
             },
             app,
@@ -261,6 +270,10 @@ pub fn render_agent_shortcuts_view(
     )
     .finish()
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
 
 pub mod styles {
     use warp_core::ui::appearance::Appearance;

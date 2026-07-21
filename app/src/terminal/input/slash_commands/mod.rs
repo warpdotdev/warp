@@ -140,6 +140,7 @@ pub enum TuiSlashCommand {
     CreateNewProject,
     ExportToClipboard,
     ExportToFile,
+    FastForward,
     Mcp,
     Exit,
     ViewLogs,
@@ -161,6 +162,7 @@ impl TuiSlashCommand {
             name if name == commands::CREATE_NEW_PROJECT.name => Some(Self::CreateNewProject),
             name if name == commands::EXPORT_TO_CLIPBOARD.name => Some(Self::ExportToClipboard),
             name if name == commands::EXPORT_TO_FILE.name => Some(Self::ExportToFile),
+            name if name == commands::FAST_FORWARD.name => Some(Self::FastForward),
             name if name == commands::MCP.name => Some(Self::Mcp),
             name if name == commands::EXIT.name => Some(Self::Exit),
             name if name == commands::VIEW_LOGS.name => Some(Self::ViewLogs),
@@ -995,6 +997,9 @@ impl Input {
                     });
                     ctx.notify();
                 }
+            }
+            _fast_forward if command.name == commands::FAST_FORWARD.name => {
+                ctx.dispatch_typed_action(&TerminalAction::ToggleAutoexecuteMode);
             }
             _profiles if command.name == commands::PROFILE.name => {
                 if !FeatureFlag::InlineProfileSelector.is_enabled() {

@@ -2723,6 +2723,13 @@ impl TuiTerminalSessionView {
                     .update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
+            TuiSlashCommand::FastForward => {
+                self.conversation_selection.update(ctx, |selection, ctx| {
+                    selection.toggle_pending_query_autoexecute(ctx);
+                });
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
             TuiSlashCommand::Model => {
                 self.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);

@@ -25,6 +25,37 @@ fn view_logs_command_is_registered_only_for_tui_mode() {
 }
 
 #[test]
+fn fast_forward_command_is_local_agent_action_without_arguments() {
+    let command = COMMAND_REGISTRY
+        .get_command_with_name(FAST_FORWARD.name)
+        .expect("expected /fast-forward to be registered");
+
+    assert_eq!(command.description, "Toggle fast forward");
+    assert_eq!(command.icon_path, "bundled/svg/fast-forward.svg");
+    assert!(!command.auto_enter_ai_mode);
+    assert_eq!(
+        command.availability,
+        Availability::AGENT_VIEW
+            | Availability::ACTIVE_CONVERSATION
+            | Availability::AI_ENABLED
+            | Availability::NOT_CLOUD_AGENT
+    );
+    assert!(command.argument.is_none());
+    assert!(command.is_active(
+        Availability::AGENT_VIEW
+            | Availability::ACTIVE_CONVERSATION
+            | Availability::AI_ENABLED
+            | Availability::NOT_CLOUD_AGENT
+    ));
+    assert!(!command.is_active(
+        Availability::AGENT_VIEW
+            | Availability::ACTIVE_CONVERSATION
+            | Availability::AI_ENABLED
+            | Availability::CLOUD_AGENT
+    ));
+}
+
+#[test]
 fn rename_tab_command_requires_argument() {
     let command = COMMAND_REGISTRY
         .get_command_with_name(RENAME_TAB.name)

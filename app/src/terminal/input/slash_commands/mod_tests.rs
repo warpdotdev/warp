@@ -30,12 +30,31 @@ fn slash_command_is_submitted_as_prompt_only_for_prompt_commands() {
         &commands::COMPACT_AND
     ));
     assert!(!slash_command_is_submitted_as_prompt(&commands::MODEL));
+    assert!(!slash_command_is_submitted_as_prompt(
+        &commands::FAST_FORWARD
+    ));
     assert!(!slash_command_is_submitted_as_prompt(&commands::REWIND));
     assert!(!slash_command_is_submitted_as_prompt(
         &commands::CONVERSATIONS
     ));
     assert!(!slash_command_is_submitted_as_prompt(&commands::QUEUE));
     assert!(!slash_command_is_submitted_as_prompt(&commands::MCP));
+}
+
+#[test]
+fn fast_forward_is_an_exact_no_argument_command() {
+    use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
+
+    assert_eq!(
+        TuiSlashCommand::from_static_command(&commands::FAST_FORWARD),
+        Some(TuiSlashCommand::FastForward)
+    );
+    assert!(slash_command_is_supported_in_tui(&commands::FAST_FORWARD));
+    assert_eq!(
+        slash_command_selection_behavior(&commands::FAST_FORWARD),
+        SlashCommandSelectionBehavior::Execute
+    );
+    assert!(commands::FAST_FORWARD.argument.is_none());
 }
 
 #[test]
@@ -55,6 +74,7 @@ fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
             TuiSlashCommand::ExportToClipboard,
         ),
         (&*commands::EXPORT_TO_FILE, TuiSlashCommand::ExportToFile),
+        (&commands::FAST_FORWARD, TuiSlashCommand::FastForward),
         (&commands::MCP, TuiSlashCommand::Mcp),
         (&commands::EXIT, TuiSlashCommand::Exit),
         (&commands::VIEW_LOGS, TuiSlashCommand::ViewLogs),

@@ -302,11 +302,17 @@ impl Input {
                     // When inactive, show all shortcuts (treat as not-cloud and not in the zero-state).
                     AgentViewState::Inactive => (false, true),
                 };
+            let is_autoexecute_enabled = self
+                .ai_context_model
+                .as_ref(app)
+                .pending_query_autoexecute_override(app)
+                .is_autoexecute_any_action();
 
             column.add_child(render_agent_shortcuts_view(
                 AgentShortcutsViewContext {
                     is_cloud_agent,
                     has_submitted_first_prompt,
+                    is_autoexecute_enabled,
                 },
                 app,
             ));

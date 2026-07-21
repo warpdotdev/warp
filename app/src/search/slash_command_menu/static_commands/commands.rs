@@ -395,6 +395,18 @@ pub static PROFILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     argument: None,
 });
 
+pub const FAST_FORWARD: StaticCommand = StaticCommand {
+    name: "/fast-forward",
+    description: "Toggle fast forward",
+    icon_path: "bundled/svg/fast-forward.svg",
+    availability: Availability::AGENT_VIEW
+        .union(Availability::ACTIVE_CONVERSATION)
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub const PLAN_NAME: &str = "/plan";
 
 pub static PLAN: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
@@ -680,6 +692,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,
         MODEL.clone(),
+        FAST_FORWARD,
     ];
 
     if FeatureFlag::LocalDockerSandbox.is_enabled() {

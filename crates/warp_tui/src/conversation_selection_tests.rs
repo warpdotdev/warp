@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIConversationId, AgentConversationListEntryState, AgentRunDisplayStatus, AgentViewEntryOrigin,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationSelection,
-    ConversationSelectionEvent, ConversationSelectionHandle, Harness, TerminalModel,
-    TranscriptScope,
+    AIConversationAutoexecuteMode, AIConversationId, AgentConversationListEntryState,
+    AgentRunDisplayStatus, AgentViewEntryOrigin, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle, Harness,
+    TerminalModel, TranscriptScope,
 };
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{App, EntityId, ModelHandle};
@@ -116,6 +116,13 @@ fn tui_selection_eagerly_owns_session_conversation() {
             assert!(history.conversation(&conversation_id).is_some());
             assert_eq!(
                 history
+                    .conversation(&conversation_id)
+                    .expect("conversation should exist")
+                    .autoexecute_override(),
+                AIConversationAutoexecuteMode::RespectUserSettings
+            );
+            assert_eq!(
+                history
                     .active_conversation(terminal_surface_id)
                     .map(|conversation| conversation.id()),
                 Some(conversation_id)
@@ -166,6 +173,13 @@ fn tui_selection_eagerly_owns_session_conversation() {
                     .active_conversation(terminal_surface_id)
                     .map(|conversation| conversation.id()),
                 Some(new_conversation_id)
+            );
+            assert_eq!(
+                history
+                    .conversation(&new_conversation_id)
+                    .expect("replacement conversation should exist")
+                    .autoexecute_override(),
+                AIConversationAutoexecuteMode::RespectUserSettings
             );
         });
         assert_eq!(
@@ -273,11 +287,25 @@ fn tui_selection_reconciles_split_and_removed_selection() {
         replacement_rx
             .await
             .expect("removing the selected conversation should select a replacement");
+        let replacement_conversation_id = selection.read(&app, |selection, ctx| {
+            selection
+                .selected_conversation_id(ctx)
+                .expect("replacement should be selected")
+        });
 
         selection.read(&app, |selection, ctx| {
             assert!(selection.selected_conversation_id(ctx).is_some());
             assert!(selection.is_conversation_active(ctx));
             assert!(selection.is_conversation_fullscreen(ctx));
+        });
+        history.read(&app, |history, _| {
+            assert_eq!(
+                history
+                    .conversation(&replacement_conversation_id)
+                    .expect("replacement conversation should exist")
+                    .autoexecute_override(),
+                AIConversationAutoexecuteMode::RespectUserSettings
+            );
         });
     });
 }
@@ -343,11 +371,12 @@ fn tui_new_conversations_respect_the_active_execution_profile() {
             .expect("TUI conversation creation should succeed");
 
         history.read(&app, |history, _| {
-            assert!(
-                !history
+            assert_eq!(
+                history
                     .conversation(&conversation_id)
                     .expect("conversation should exist")
-                    .autoexecute_any_action()
+                    .autoexecute_override(),
+                AIConversationAutoexecuteMode::RespectUserSettings
             );
         });
     });

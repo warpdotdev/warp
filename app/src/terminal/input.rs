@@ -3317,6 +3317,7 @@ impl Input {
                         | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
                         | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                         | BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                        | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
                         | BlocklistAIHistoryEvent::SplitConversation { .. }
                         | BlocklistAIHistoryEvent::AppendedExchange { .. }
                         | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
