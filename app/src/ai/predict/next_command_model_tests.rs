@@ -235,3 +235,74 @@ fn test_feature_flag_arg_is_valid_with_no_whitespace_before_arg() {
         assert!(is_valid);
     });
 }
+
+#[test]
+fn test_normalize_ai_input_suggestion_response_restores_json_doubled_separators() {
+    use warp_util::path::ShellFamily;
+
+    // Build backslash runs of an exact length without multi-backslash literals, so
+    // the expected counts are unambiguous.
+    let run = |n| "\\".repeat(n);
+
+    // AI echo of a UNC path: JSON serialization doubled every backslash. The
+    // ingestion normalizer halves the uniform doubling, restoring the UNC prefix
+    // and single separators in both `most_likely_action` and `commands`.
+    let response = normalize_ai_input_suggestion_response(
+        GenerateAIInputSuggestionsResponseV2 {
+            commands: vec![format!("cat {}WSL${}Ubuntu{}file", run(8), run(4), run(4))],
+            ai_queries: vec![],
+            most_likely_action: format!("cat {}WSL${}Ubuntu{}file", run(8), run(4), run(4)),
+        },
+        ShellFamily::PowerShell,
+    );
+    assert_eq!(
+        response.most_likely_action,
+        format!("cat {}WSL${}Ubuntu{}file", run(4), run(2), run(2))
+    );
+    assert_eq!(
+        response.commands,
+        vec![format!("cat {}WSL${}Ubuntu{}file", run(4), run(2), run(2))]
+    );
+
+    // A regex literal the AI echoed as JSON-doubled (two backslashes -> four) is
+    // restored to the intended two backslashes, not collapsed to one.
+    let regex_response = normalize_ai_input_suggestion_response(
+        GenerateAIInputSuggestionsResponseV2 {
+            commands: vec![],
+            ai_queries: vec![],
+            most_likely_action: format!("Select-String '{}d+'", run(4)),
+        },
+        ShellFamily::PowerShell,
+    );
+    assert_eq!(
+        regex_response.most_likely_action,
+        format!("Select-String '{}d+'", run(2))
+    );
+
+    // POSIX-family sessions are a no-op: the response is returned unchanged.
+    let posix_command = format!("cat {}server{}share", run(8), run(4));
+    let posix_response = normalize_ai_input_suggestion_response(
+        GenerateAIInputSuggestionsResponseV2 {
+            commands: vec![posix_command.clone()],
+            ai_queries: vec![],
+            most_likely_action: posix_command.clone(),
+        },
+        ShellFamily::Posix,
+    );
+    assert_eq!(posix_response.most_likely_action, posix_command);
+    assert_eq!(posix_response.commands, vec![posix_command]);
+
+    // Already-correct single-separator text (history/completer shape, which is never
+    // routed through this helper in production) is a no-op: no run of >= 4 means the
+    // normalizer returns it borrowed and unchanged.
+    let correct = format!("cat {}WSL${}Ubuntu{}file", run(2), run(1), run(1));
+    let correct_response = normalize_ai_input_suggestion_response(
+        GenerateAIInputSuggestionsResponseV2 {
+            commands: vec![],
+            ai_queries: vec![],
+            most_likely_action: correct.clone(),
+        },
+        ShellFamily::PowerShell,
+    );
+    assert_eq!(correct_response.most_likely_action, correct);
+}

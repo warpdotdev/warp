@@ -17,6 +17,7 @@ use warp_completer::parsers::ParsedExpression;
 use warp_completer::parsers::hir::{Command, Expression, FlagType};
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
+use warp_util::path::ShellFamily;
 #[cfg(feature = "local_fs")]
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -371,6 +372,15 @@ impl NextCommandModel {
                     let mut history_based_autosuggestion_state =
                         HistoryBasedAutosuggestionState::default();
                     let start_ts_ms = Utc::now().timestamp_millis();
+                    // The AI prompt serializes history as JSON, which doubles every
+                    // backslash; the model can echo that JSON-escaped form back as the
+                    // "plain command." Resolve the active shell family once so the
+                    // server response can be unescaped at this single ingestion point
+                    // (see `normalize_ai_input_suggestion_response`).
+                    let shell_family = completion_context
+                        .as_ref()
+                        .map(|context| context.session.shell_family())
+                        .unwrap_or(ShellFamily::Posix);
 
                     let mut next_command_context =
                         if let Some(cached_next_command_context) = cached_next_command_context {
@@ -465,8 +475,14 @@ impl NextCommandModel {
 
                     // For zero-state next command suggestions, return the result immediately.
                     let Some(prefix) = prefix else {
+                        let response = server_api
+                            .generate_ai_input_suggestions(&request)
+                            .await
+                            .map(|response| {
+                                normalize_ai_input_suggestion_response(response, shell_family)
+                            });
                         return (
-                            server_api.generate_ai_input_suggestions(&request).await,
+                            response,
                             request,
                             true,
                             start_ts_ms,
@@ -546,7 +562,12 @@ impl NextCommandModel {
                     };
 
                     // Only if we have no commands from history and no completions, use the LLM to generate a partial suggestion.
-                    let response = server_api.generate_ai_input_suggestions(&request).await;
+                    let response = server_api
+                        .generate_ai_input_suggestions(&request)
+                        .await
+                        .map(|response| {
+                            normalize_ai_input_suggestion_response(response, shell_family)
+                        });
                     (
                         response,
                         request,
@@ -632,6 +653,35 @@ impl NextCommandModel {
             }
         };
     }
+}
+
+/// Unescapes JSON-doubled backslashes in a server-backed AI next-command
+/// response at the single ingestion point where the response enters client
+/// state.
+///
+/// The AI prompt serializes command history as JSON (`serde_json::to_string`),
+/// which doubles every backslash; the model can echo that JSON-escaped form back
+/// as the "plain command." History and completer fallbacks are already correct
+/// and are never routed through here (they return with `is_from_ai = false`).
+/// For the active `ShellFamily` this restores the intended separators so
+/// downstream prefix matching and editor insertion never see doubled
+/// backslashes. POSIX-family sessions are a no-op.
+fn normalize_ai_input_suggestion_response(
+    mut response: GenerateAIInputSuggestionsResponseV2,
+    shell_family: ShellFamily,
+) -> GenerateAIInputSuggestionsResponseV2 {
+    if shell_family != ShellFamily::PowerShell {
+        return response;
+    }
+    response.most_likely_action = shell_family
+        .normalize_autosuggestion(&response.most_likely_action)
+        .into_owned();
+    response.commands = response
+        .commands
+        .into_iter()
+        .map(|command| shell_family.normalize_autosuggestion(&command).into_owned())
+        .collect();
+    response
 }
 
 impl SingletonEntity for NextCommandModel {}

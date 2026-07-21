@@ -2318,6 +2318,85 @@ fn test_partial_autosuggestion() -> Result<()> {
 }
 
 #[test]
+fn test_autosuggestion_acceptance_uses_normalized_power_shell_text() -> Result<()> {
+    use warp_util::path::ShellFamily;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        // Scenario 1 — partial-prefix intelligent acceptance: the user has typed the
+        // first UNC backslash, and the (already-normalized at the AI ingestion point)
+        // intelligent suggestion supplies the rest. The prefix strip keeps the
+        // remaining UNC backslash, and full acceptance yields a buffer with exactly
+        // two leading backslashes and single internal separators.
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut view = EditorView::new_with_base_text("", Default::default(), ctx);
+            view.set_shell_family(ShellFamily::PowerShell);
+            view
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.user_insert("\\", ctx);
+            view.set_autosuggestion(
+                r#"\WSL$\Ubuntu\home\dev\file"#,
+                AutosuggestionLocation::EndOfBuffer,
+                AutosuggestionType::Command {
+                    was_intelligent_autosuggestion: true,
+                },
+                ctx,
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.move_to_buffer_end(ctx);
+            view.insert_full_autosuggestion(ctx);
+        });
+
+        view.read(&app, |view, app| {
+            assert_eq!(view.displayed_text(app), r#"\\WSL$\Ubuntu\home\dev\file"#);
+            assert_eq!(None, view.current_autosuggestion_text());
+            Result::<()>::Ok(())
+        })?;
+
+        // Scenario 2 — full, zero-prefix acceptance (regular acceptance path): an
+        // empty buffer with a complete normalized UNC command as the suggestion.
+        // Accepting it inserts the command verbatim with the UNC prefix intact and no
+        // doubled separators in the final buffer.
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut view = EditorView::new_with_base_text("", Default::default(), ctx);
+            view.set_shell_family(ShellFamily::PowerShell);
+            view
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.set_autosuggestion(
+                r#"cat \\WSL$\Ubuntu\home\dev\file"#,
+                AutosuggestionLocation::EndOfBuffer,
+                AutosuggestionType::Command {
+                    was_intelligent_autosuggestion: false,
+                },
+                ctx,
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.move_to_buffer_end(ctx);
+            view.insert_full_autosuggestion(ctx);
+        });
+
+        view.read(&app, |view, app| {
+            assert_eq!(
+                view.displayed_text(app),
+                r#"cat \\WSL$\Ubuntu\home\dev\file"#
+            );
+            Result::<()>::Ok(())
+        })?;
+
+        Ok(())
+    })
+}
+
+#[test]
 fn test_placeholder_text() {
     use warpui::text_layout::LayoutCache;
 

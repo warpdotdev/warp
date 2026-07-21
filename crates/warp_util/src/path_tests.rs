@@ -252,39 +252,93 @@ fn test_powershell_escape() {
     assert_eq!(shell_family.escape("foo '\"' bar"), "foo` `'`\"`'` bar");
 }
 #[test]
-fn test_powershell_autosuggestion_normalizes_json_escaped_backslashes() {
+fn test_powershell_autosuggestion_restores_json_doubled_separators() {
     let powershell = ShellFamily::PowerShell;
+
+    // AI echo of a UNC path: JSON serialization doubled every backslash (UNC `\\`
+    // -> `\\\\`, separators `\` -> `\\`). The normalizer halves the uniform
+    // doubling, restoring the UNC prefix and single separators.
     let escaped_unc =
         r#"cat \\\\WSL$\\Ubuntu\\home\\dev\\.intelligent-terminal\\shell-integration_v2.sh"#;
     let normalized_unc =
         r#"cat \\WSL$\Ubuntu\home\dev\.intelligent-terminal\shell-integration_v2.sh"#;
-
     assert_eq!(
         powershell.normalize_autosuggestion(escaped_unc),
         normalized_unc
     );
+
+    // Idempotence: a normalized command has no run of >= 4, so a second pass is a no-op.
     assert_eq!(
         powershell.normalize_autosuggestion(normalized_unc),
         normalized_unc
     );
+
+    // Quoted UNC path is normalized the same way (double quotes are interpolating
+    // in PowerShell; the JSON-doubling artifact is restored).
     assert_eq!(
-        powershell.normalize_autosuggestion(r#"cat "C:\\\\Program Files\\Warp""#),
-        r#"cat "C:\Program Files\Warp""#
+        powershell.normalize_autosuggestion(r#"cat "\\\\WSL$\\share\\file""#),
+        r#"cat "\\WSL$\share\file""#
     );
+
+    // A bare doubled UNC command (history-recall shape, already correct) is left
+    // untouched: its longest run is 2, so there is no JSON-quadrupling signal.
+    assert_eq!(
+        powershell.normalize_autosuggestion(r#"cat \\server\share\file"#),
+        r#"cat \\server\share\file"#
+    );
+
+    // A command with no path is unchanged.
     assert_eq!(
         powershell.normalize_autosuggestion(r#"Write-Output "already correct""#),
         r#"Write-Output "already correct""#
     );
 
+    // POSIX-family suggestions are byte-for-byte unchanged by this layer.
     let command = r#"cat \\\\server\\share\\file"#;
     assert_eq!(
         ShellFamily::Posix.normalize_autosuggestion(command),
         command
     );
+}
+
+#[test]
+fn test_powershell_autosuggestion_preserves_intentional_doubled_backslashes() {
+    let powershell = ShellFamily::PowerShell;
+    // Build backslash runs of an exact length without multi-backslash literals, so
+    // the expected counts are unambiguous.
+    let run = |n| "\\".repeat(n);
+
+    // An intentional double backslash inside a single-quoted (verbatim) PowerShell
+    // string (e.g. a regex literal the user actually typed) has no run of >= 4, so
+    // it is preserved rather than collapsed to a single backslash.
+    let intentional = format!("Select-String '{}d+' ", run(2));
     assert_eq!(
-        powershell.normalize_autosuggestion(command),
-        r#"cat \\server\share\file"#
+        powershell.normalize_autosuggestion(&intentional),
+        intentional
     );
+
+    // A regex run mid-token that is already correct (two backslashes) is preserved.
+    let mid_token = format!("Select-String 'foo{}d+bar' ", run(2));
+    assert_eq!(powershell.normalize_autosuggestion(&mid_token), mid_token);
+
+    // When the AI echoes the JSON-doubled form of that same regex literal (two
+    // backslashes doubled to four), the uniform-doubling signal (run >= 4, all
+    // even) triggers halving, restoring the user's intended two backslashes rather
+    // than collapsing to one.
+    let echoed = format!("Select-String '{}d+' ", run(4));
+    assert_eq!(
+        powershell.normalize_autosuggestion(&echoed),
+        format!("Select-String '{}d+' ", run(2))
+    );
+
+    // A correct UNC prefix (a run of two) on its own is preserved (no run >= 4).
+    let unc = format!("ls {}server{}share", run(2), run(1));
+    assert_eq!(powershell.normalize_autosuggestion(&unc), unc);
+
+    // Mixed (non-uniform) doubling - a four-run prefix alongside single separators
+    // - is left untouched rather than risk corrupting the odd-length runs.
+    let mixed = format!("cat {}WSL${}Ubuntu{}file", run(4), run(1), run(1));
+    assert_eq!(powershell.normalize_autosuggestion(&mixed), mixed);
 }
 
 #[test]

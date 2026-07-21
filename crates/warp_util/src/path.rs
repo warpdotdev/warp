@@ -254,12 +254,18 @@ impl ShellFamily {
         Cow::Owned(result)
     }
 
-    /// Normalizes command text returned by shell autosuggestion producers.
+    /// Restores backslashes that the server-backed AI next-command response may
+    /// have had doubled by JSON serialization.
     ///
-    /// PowerShell treats backslashes as ordinary path separators, but a suggestion
-    /// that has passed through JSON serialization can contain doubled separators.
-    /// Collapse those redundant separators while preserving the two-character UNC
-    /// prefix at the start of a path token. Other shell families are unchanged.
+    /// The AI suggestion prompt serializes command history as JSON, which doubles
+    /// every backslash; the model can echo that JSON-escaped form back as the
+    /// "plain command." This is the targeted unescape applied at the single AI
+    /// ingestion point (see `NextCommandModel`), not a broad pass over arbitrary
+    /// suggestion text — history and completer suggestions are already correct and
+    /// are never routed through here. For PowerShell it halves uniformly-doubled
+    /// backslash runs (restoring a UNC prefix `\\` and single separators); POSIX
+    /// shells are a no-op. See [`normalize_powershell_autosuggestion`] for the
+    /// narrow signal this acts on.
     pub fn normalize_autosuggestion<'s>(&self, input: &'s str) -> Cow<'s, str> {
         match self {
             Self::Posix => Cow::Borrowed(input),
@@ -298,16 +304,48 @@ impl ShellFamily {
 }
 
 fn normalize_powershell_autosuggestion<'s>(input: &'s str) -> Cow<'s, str> {
-    if !input.as_bytes().windows(2).any(|window| window == b"\\\\") {
+    let bytes = input.as_bytes();
+    // Fast path: no doubled backslash means there is no JSON-doubling artifact to undo.
+    if !bytes.windows(2).any(|window| window == b"\\\\") {
         return Cow::Borrowed(input);
     }
 
-    let mut normalized = String::with_capacity(input.len());
-    let mut token_start = true;
-    let mut quote = None;
-    let mut changed = false;
-    let mut chars = input.chars().peekable();
+    // Measure every contiguous backslash run. JSON serialization doubles *every*
+    // backslash uniformly, so a genuine AI echo of the JSON-escaped form has a run
+    // of >= 4 (e.g. a UNC prefix `\\` doubled to `\\\\`) with every run even.
+    let mut max_run = 0usize;
+    let mut all_even = true;
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            let start = index;
+            while index < bytes.len() && bytes[index] == b'\\' {
+                index += 1;
+            }
+            let run = index - start;
+            max_run = max_run.max(run);
+            all_even = all_even && run % 2 == 0;
+        } else {
+            index += 1;
+        }
+    }
 
+    // Leave intentional or already-correct text untouched. A correct UNC prefix
+    // (`\\`, run of 2), a single separator (`\`, run of 1), and a regex/literal
+    // double (`\\` inside `'…'`, run of 2) all lack a run of >= 4, so they are
+    // returned unchanged. A mixed (non-uniform) input is also left alone rather
+    // than risk corrupting odd-length runs.
+    if max_run < 4 || !all_even {
+        return Cow::Borrowed(input);
+    }
+
+    // Uniform doubling detected: halve every run to restore the original text.
+    // This restores a doubled UNC prefix `\\\\` -> `\\` and doubled separators
+    // `\\` -> `\`, and also restores a JSON-doubled regex literal `\\\\d+` ->
+    // `\\d+` (the user's intended two backslashes) rather than collapsing it to
+    // one. Idempotent: halving an all-even input can never produce a run of >= 4.
+    let mut normalized = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
     while let Some(character) = chars.next() {
         if character == '\\' {
             let mut run_length = 1;
@@ -315,39 +353,13 @@ fn normalize_powershell_autosuggestion<'s>(input: &'s str) -> Cow<'s, str> {
                 chars.next();
                 run_length += 1;
             }
-
-            // A token-start run is a UNC prefix. Keep exactly two separators;
-            // all other runs represent redundant JSON-style path separators.
-            let normalized_length = if token_start { run_length.min(2) } else { 1 };
-            if normalized_length != run_length {
-                changed = true;
-            }
-            normalized.extend(std::iter::repeat_n('\\', normalized_length));
-            token_start = false;
-            continue;
-        }
-
-        normalized.push(character);
-        if let Some(active_quote) = quote {
-            if character == active_quote {
-                quote = None;
-                token_start = false;
-            } else if token_start && !character.is_whitespace() {
-                token_start = false;
-            }
-        } else if character == '\'' || character == '"' {
-            quote = Some(character);
+            normalized.extend(std::iter::repeat_n('\\', run_length / 2));
         } else {
-            token_start =
-                character.is_whitespace() || matches!(character, ';' | '|' | '&' | '(' | ')');
+            normalized.push(character);
         }
     }
 
-    if changed {
-        Cow::Owned(normalized)
-    } else {
-        Cow::Borrowed(input)
-    }
+    Cow::Owned(normalized)
 }
 /// Returns `true` iff the given string is a valid POSIX portable pathname.
 /// Source: https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_271
