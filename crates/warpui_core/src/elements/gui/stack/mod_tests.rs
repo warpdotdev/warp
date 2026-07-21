@@ -6,9 +6,10 @@ use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
 
 use super::*;
+use crate::r#async::Timer;
 use crate::elements::{
     Clipped, ConstrainedBox, DispatchEventResult, EventHandler, Hoverable, MouseState,
-    MouseStateHandle, ParentElement, Rect, ZIndex,
+    MouseStateHandle, ParentElement, Rect, TooltipState, ZIndex,
 };
 use crate::platform::WindowStyle;
 use crate::{
@@ -1073,6 +1074,250 @@ fn test_overlay_tooltip_positions_at_mouse_pointer() {
             !overlay_bounds.contains(&element_anchored),
             "Tooltip must not be anchored to the element rect at {element_anchored:?}; \
              it should track the pointer"
+        );
+    });
+}
+
+/// Delay `D` used by the hysteresis scene tests below. Short enough to keep the
+/// real-time waits brief, long enough to be reliably observable across a frame.
+const HYSTERESIS_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
+/// Jitter tolerance (px) for the hysteresis scene tests.
+const HYSTERESIS_JITTER: f32 = 3.0;
+
+/// A view mirroring the real `overlay_tool_tip_at_pointer` composition end to
+/// end: a [`Hoverable`] opted into browser-`title` tooltip hysteresis via
+/// [`Hoverable::with_pointer_hysteresis`], whose build closure shows a
+/// pointer-anchored overlay tooltip iff the machine reports
+/// [`TooltipState::Visible`] — exactly as the image alt-text builder does,
+/// reduced to plain [`Rect`] children so it needs no theme/appearance setup.
+///
+/// Unlike [`HoverPointerTooltipView`] (which reads `hover_position` directly and
+/// so only exercises the Stack overlay primitive), this drives the actual
+/// hysteresis wiring: intra-element moves, timer-armed show/dismiss, and the
+/// redraw re-dispatch that resolves matured deadlines.
+struct HysteresisTooltipView {
+    mouse_state: MouseStateHandle,
+}
+
+impl HysteresisTooltipView {
+    fn new() -> Self {
+        Self {
+            mouse_state: Default::default(),
+        }
+    }
+}
+
+impl Entity for HysteresisTooltipView {
+    type Event = String;
+}
+
+impl crate::core::View for HysteresisTooltipView {
+    fn render<'a>(&self, _: &AppContext) -> Box<dyn Element> {
+        Hoverable::new(self.mouse_state.clone(), |state: &MouseState| {
+            let base = ConstrainedBox::new(Rect::new().finish())
+                .with_width(tooltip_base_size().x())
+                .with_height(tooltip_base_size().y())
+                .finish();
+
+            let mut stack = Stack::new().with_child(base);
+
+            if let Some(TooltipState::Visible { at }) = state.tooltip_hysteresis_state() {
+                let tooltip = ConstrainedBox::new(Rect::new().finish())
+                    .with_width(tooltip_overlay_size().x())
+                    .with_height(tooltip_overlay_size().y())
+                    .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        at + tooltip_pointer_offset(),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
+            }
+
+            stack.finish()
+        })
+        .with_pointer_hysteresis(HYSTERESIS_DELAY, HYSTERESIS_JITTER)
+        .finish()
+    }
+
+    fn ui_name() -> &'static str {
+        "HysteresisTooltipView"
+    }
+}
+
+impl TypedActionView for HysteresisTooltipView {
+    type Action = ();
+}
+
+/// Bounds of every rect in the scene's floating overlay layers.
+fn overlay_layer_rect_bounds(scene: &Scene) -> Vec<RectF> {
+    scene
+        .layers()
+        .skip(scene.layer_count() - scene.overlay_layer_count())
+        .flat_map(|layer| layer.rects.iter().map(|r| r.bounds))
+        .collect()
+}
+
+/// Dispatch a real (non-synthetic) mouse move and record it as the window's last
+/// move, so the timer-driven redraw re-dispatches it as a synthetic move — the
+/// mechanism that lets a matured show/dismiss deadline resolve on the next frame.
+fn move_mouse(app: &mut App, window_id: WindowId, position: Vector2F) {
+    let presenter = app
+        .presenter(window_id)
+        .expect("Test window should have a presenter after the first frame.");
+    let event = Event::MouseMoved {
+        position,
+        cmd: false,
+        shift: false,
+        is_synthetic: false,
+    };
+    app.update(|ctx| {
+        ctx.simulate_window_event(event.clone(), window_id, presenter);
+        ctx.set_last_mouse_move_event(window_id, event);
+    });
+}
+
+/// Spec point 2: resting the pointer over the element shows the tooltip at the
+/// pointer position after `D`, and not before. Drives the real hysteresis wiring
+/// (Hoverable timer arm → redraw re-dispatch → deadline matures), not just the
+/// pure state machine.
+///
+/// The move-to-dismiss and rest-again-relocate transitions (spec points 3–5) are
+/// exercised exhaustively by the `tooltip_hysteresis` state-machine tests, which
+/// control the clock and pointer motion precisely. They cannot be driven
+/// deterministically here because the harness's only way to advance time is a
+/// real wait, during which the window re-dispatches the *last* mouse position —
+/// which the machine correctly reads as the pointer coming to rest, not as
+/// continued motion. See `test_hysteresis_tooltip_relocates_on_rerest_without_new_delay`
+/// for the relocate path (which the re-dispatch *can* express) and the exit test
+/// for immediate dismissal.
+#[test]
+fn test_hysteresis_tooltip_shows_at_pointer_only_after_rest_delay() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, _view) =
+            app.add_window(WindowStyle::NotStealFocus, |_| HysteresisTooltipView::new());
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+
+        // Rest the pointer inside the base. Nothing shows yet (delay unpaid).
+        let rest = vec2f(30., 25.);
+        move_mouse(app, window_id, rest);
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+        let overlay = read_scene(app, window_id, overlay_layer_rect_bounds);
+        assert!(
+            overlay.is_empty(),
+            "tooltip must not show before the rest delay elapses; got {overlay:?}"
+        );
+
+        // Wait out the show delay; the redraw the notify timer triggers
+        // re-dispatches the held move, which matures the pending-show deadline.
+        Timer::after(HYSTERESIS_DELAY * 3).await;
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+        let overlay = read_scene(app, window_id, overlay_layer_rect_bounds);
+        let expected = RectF::new(rest + tooltip_pointer_offset(), tooltip_overlay_size());
+        assert!(
+            overlay.contains(&expected),
+            "tooltip should show at the resting pointer {expected:?}; got {overlay:?}"
+        );
+    });
+}
+
+/// Spec point 6: leaving the element dismisses immediately (no delay), driven
+/// through the real wiring.
+#[test]
+fn test_hysteresis_tooltip_dismisses_immediately_on_exit() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, _view) =
+            app.add_window(WindowStyle::NotStealFocus, |_| HysteresisTooltipView::new());
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+
+        // Rest and show.
+        let rest = vec2f(30., 25.);
+        move_mouse(app, window_id, rest);
+        Timer::after(HYSTERESIS_DELAY * 3).await;
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+        assert!(
+            !read_scene(app, window_id, overlay_layer_rect_bounds).is_empty(),
+            "precondition: tooltip visible after resting"
+        );
+
+        // Move well outside the base (base is 80x60 at the origin). Exit must
+        // dismiss on this very frame, with no delay wait.
+        move_mouse(app, window_id, vec2f(500., 500.));
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+        let overlay = read_scene(app, window_id, overlay_layer_rect_bounds);
+        assert!(
+            overlay.is_empty(),
+            "tooltip must dismiss immediately on exit; got {overlay:?}"
+        );
+    });
+}
+
+/// Spec point 4: while the tooltip is visible, nudging to a new spot and coming
+/// to rest again before the dismissal fires relocates the still-visible tooltip
+/// to the new pointer position with no additional show delay. Driven through the
+/// real wiring.
+#[test]
+fn test_hysteresis_tooltip_relocates_on_rerest_without_new_delay() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, _view) =
+            app.add_window(WindowStyle::NotStealFocus, |_| HysteresisTooltipView::new());
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+
+        // Rest and show at the first spot. Both spots are kept in the top strip
+        // of the base (y small) so the pointer never lands *under* a visible
+        // tooltip (which floats below-right at +16 in y) — a pointer covered by
+        // its own tooltip reads as "left the element" and would dismiss, an
+        // orthogonal hit-testing concern noted in the deliverable.
+        let first = vec2f(15., 8.);
+        move_mouse(app, window_id, first);
+        Timer::after(HYSTERESIS_DELAY * 3).await;
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+        let overlay = read_scene(app, window_id, overlay_layer_rect_bounds);
+        assert!(
+            overlay.contains(&RectF::new(
+                first + tooltip_pointer_offset(),
+                tooltip_overlay_size()
+            )),
+            "precondition: tooltip visible at first rest spot; got {overlay:?}"
+        );
+
+        // Nudge to a new spot and immediately hold still there. A single move
+        // arms dismissal; holding still (re-dispatched by the redraw) resolves as
+        // a re-rest, which relocates the *still-visible* tooltip with no new show
+        // delay. Check within less than the full delay that it moved and is up.
+        let second = vec2f(55., 8.);
+        move_mouse(app, window_id, second);
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+        // Give the relocate (which is immediate on re-rest) a frame to settle,
+        // but far less than a full delay so this can't be confused with a fresh
+        // show-after-delay.
+        Timer::after(HYSTERESIS_DELAY / 4).await;
+        // Hold still: re-dispatch the same position so the machine sees a rest.
+        move_mouse(app, window_id, second);
+        app.update(|ctx| ctx.simulate_render_frame(window_id));
+        let overlay = read_scene(app, window_id, overlay_layer_rect_bounds);
+        assert!(
+            overlay.contains(&RectF::new(
+                second + tooltip_pointer_offset(),
+                tooltip_overlay_size()
+            )),
+            "tooltip should relocate to the new rest spot with no new delay; got {overlay:?}"
+        );
+        assert!(
+            !overlay.contains(&RectF::new(
+                first + tooltip_pointer_offset(),
+                tooltip_overlay_size()
+            )),
+            "tooltip should no longer be at the old spot; got {overlay:?}"
         );
     });
 }
