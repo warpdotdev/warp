@@ -1,4 +1,5 @@
-use std::{rc::Rc, time::Duration};
+use std::rc::Rc;
+use std::time::Duration;
 
 use instant::Instant;
 use warp::appearance::Appearance;
@@ -6,11 +7,10 @@ use warp::settings::{AISettings, TuiUsageDisplayMode};
 use warp::terminal::model::ansi::{Handler, InputBufferValue};
 use warp::tui_export::{
     AIConversationId, AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel,
-    ConversationStatus, ConversationUsageTotals, Harness, InputType, PtyIntent, PtyIntentEvent,
-    SizeInfo, SizeUpdate, TranscriptScope, export_conversation_markdown,
+    ConversationStatus, ConversationUsageTotals, Harness, InputType, LLMPreferences, PtyIntent,
+    PtyIntentEvent, SizeInfo, SizeUpdate, TranscriptScope, export_conversation_markdown,
     register_tui_session_view_test_singletons, slash_commands,
 };
-use warpui_core::event::ModifiersState;
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -23,6 +23,7 @@ use warpui_core::elements::tui::{
     TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint,
     TuiRect, TuiScene, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
+use warpui_core::event::ModifiersState;
 use warpui_core::keymap::{Context, Keystroke, Trigger};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::telemetry::{EventPayload, flush_events};
@@ -193,7 +194,7 @@ fn model_label_position(buffer: &TuiBuffer, model_name: &str) -> (u16, u16) {
 }
 
 #[test]
-fn open_model_menu_action_opens_the_inline_model_menu() {
+fn toggle_model_menu_action_opens_and_closes_the_inline_model_menu() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
@@ -204,12 +205,21 @@ fn open_model_menu_action_opens_the_inline_model_menu() {
             );
         });
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&TuiTerminalSessionAction::OpenModelMenu, ctx);
+            view.handle_action(&TuiTerminalSessionAction::ToggleModelMenu, ctx);
         });
         view.read(&app, |view, ctx| {
             assert!(
                 view.model_menu.as_ref(ctx).is_open(ctx),
-                "OpenModelMenu action should open the inline model menu"
+                "ToggleModelMenu action should open a closed inline model menu"
+            );
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::ToggleModelMenu, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert!(
+                !view.model_menu.as_ref(ctx).is_open(ctx),
+                "ToggleModelMenu action should close an open inline model menu"
             );
         });
     });
@@ -274,7 +284,7 @@ fn footer_model_label_is_a_bounded_click_target() {
         assert!(view.read(&app, |v, _| {
             v.model_label_hover.lock().unwrap().is_clicked()
         }));
-        // Releasing inside disarms (the click handler dispatches OpenModelMenu).
+        // Releasing inside disarms (the click handler dispatches ToggleModelMenu).
         assert!(dispatch_session_event(
             &app,
             &view,

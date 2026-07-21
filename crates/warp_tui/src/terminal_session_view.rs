@@ -361,9 +361,9 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Click on the footer's usage entry: flips the persisted credits⇄cost
     /// display-mode setting.
     ToggleUsageDisplay,
-    /// Click on the footer's active-model label: opens the inline model
+    /// Click on the footer's active-model label: toggles the inline model
     /// picker (the same menu `/model` surfaces).
-    OpenModelMenu,
+    ToggleModelMenu,
     /// Raw user bytes to forward to the foreground PTY process.
     ForwardUserPtyBytes(Vec<u8>),
     /// Ctrl-d while the prompt is focused: exit the TUI immediately when the
@@ -2170,7 +2170,7 @@ impl TuiTerminalSessionView {
                 .get_active_base_model(ctx, Some(self.terminal_surface_id))
                 .display_name
                 .clone();
-            // The active-model label is clickable: a left click opens the
+            // The active-model label is clickable: a left click toggles the
             // inline model picker (the same menu `/model` surfaces). The hover
             // state lives on a retained [`MouseStateHandle`] so it survives
             // element-tree rebuilds, and the click dispatches a typed action
@@ -2194,7 +2194,7 @@ impl TuiTerminalSessionView {
                         .finish(),
                 )
                 .on_click(|event_ctx, _| {
-                    event_ctx.dispatch_typed_action(TuiTerminalSessionAction::OpenModelMenu);
+                    event_ctx.dispatch_typed_action(TuiTerminalSessionAction::ToggleModelMenu);
                 })
                 .finish(),
             )
@@ -2291,12 +2291,17 @@ impl TuiTerminalSessionView {
         });
     }
 
-    /// Opens the inline model picker from the footer's active-model label —
-    /// the same menu `/model` surfaces. [`TuiModelMenuModel::open`] preserves
-    /// the `try_open`/active-menu arbitration and the existing
-    /// acceptance/persistence flow.
-    fn open_model_menu(&mut self, ctx: &mut ViewContext<Self>) {
-        self.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
+    /// Toggles the inline model picker from the footer's active-model label —
+    /// the same menu `/model` surfaces. The model's existing open/dismiss paths
+    /// preserve active-menu arbitration, input cleanup, and selection handling.
+    fn toggle_model_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        self.model_menu.update(ctx, |menu, ctx| {
+            if menu.is_open(ctx) {
+                menu.dismiss(ctx);
+            } else {
+                menu.open(ctx);
+            }
+        });
     }
 
     /// The selected conversation's accumulated usage totals, or `None` (entry
@@ -3240,7 +3245,7 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.hand_back_terminal_use_control(ctx)
             }
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
-            TuiTerminalSessionAction::OpenModelMenu => self.open_model_menu(ctx),
+            TuiTerminalSessionAction::ToggleModelMenu => self.toggle_model_menu(ctx),
             TuiTerminalSessionAction::FocusDefaultInteractionTarget => {
                 self.set_orchestration_tab_focus(false, ctx)
             }
