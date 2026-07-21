@@ -205,6 +205,18 @@ fn renders_fixed_prompt_chip_command_without_interpolation() {
 pub fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 
+    // NLD is now opt-in by default (`ai_autodetection_enabled_internal` defaults to false).
+    // These tests exercise the natural-language-detection-on code paths (buffer-driven slash
+    // command detection, auto-detection input mode), so explicitly re-enable it here to preserve
+    // the pre-opt-in test behavior. The opt-in default itself is covered by
+    // `ai_autodetection_defaults_to_opt_in` in `settings/ai_tests.rs`.
+    crate::settings::AISettings::handle(app).update(app, |settings, ctx| {
+        settings
+            .ai_autodetection_enabled_internal
+            .set_value(true, ctx)
+            .unwrap();
+    });
+
     // Make sure we set up all necessary custom action bindings.
     app.update(init);
 

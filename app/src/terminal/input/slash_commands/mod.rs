@@ -48,7 +48,7 @@ use crate::search::slash_command_menu::static_commands::Availability;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
 use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 use crate::server::ids::SyncId;
-use crate::server::telemetry::SlashCommandAcceptedDetails;
+use crate::server::telemetry::{AgentModeAutoDetectionSettingOrigin, SlashCommandAcceptedDetails};
 use crate::settings::AISettings;
 use crate::tab::SelectedTabColor;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
@@ -143,6 +143,8 @@ pub enum TuiSlashCommand {
     Mcp,
     Exit,
     ViewLogs,
+    EnableNaturalLanguageDetection,
+    DisableNaturalLanguageDetection,
 }
 
 impl TuiSlashCommand {
@@ -162,6 +164,12 @@ impl TuiSlashCommand {
             name if name == commands::MCP.name => Some(Self::Mcp),
             name if name == commands::EXIT.name => Some(Self::Exit),
             name if name == commands::VIEW_LOGS.name => Some(Self::ViewLogs),
+            name if name == commands::ENABLE_NATURAL_LANGUAGE_DETECTION.name => {
+                Some(Self::EnableNaturalLanguageDetection)
+            }
+            name if name == commands::DISABLE_NATURAL_LANGUAGE_DETECTION.name => {
+                Some(Self::DisableNaturalLanguageDetection)
+            }
             _ => None,
         }
     }
@@ -187,6 +195,25 @@ pub fn record_static_slash_command_accepted(
                 command_name: command_name.to_owned(),
             },
             is_in_agent_view,
+        },
+        ctx
+    );
+}
+
+/// Records an input auto-detection setting toggle triggered from a TUI slash
+/// command (`/enable-natural-language-detection` or
+/// `/disable-natural-language-detection`).
+///
+/// Mirrors the `SettingsPage` and `Banner` origins used by the GUI toggle paths,
+/// but reports the toggle as originating from a TUI slash command.
+pub fn record_autodetection_toggle_from_slash_command(
+    is_autodetection_enabled: bool,
+    ctx: &mut AppContext,
+) {
+    send_telemetry_from_ctx!(
+        TelemetryEvent::AgentModeToggleAutoDetectionSetting {
+            is_autodetection_enabled,
+            origin: AgentModeAutoDetectionSettingOrigin::SlashCommand,
         },
         ctx
     );

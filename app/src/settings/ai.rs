@@ -1043,7 +1043,7 @@ define_settings_group!(AISettings, settings: [
     // `is_ai_autodetection_enabled()` getter.
     ai_autodetection_enabled_internal: AIAutoDetectionEnabled {
         type: bool,
-        default: true,
+        default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         surface: settings::SettingSurfaces::ALL,

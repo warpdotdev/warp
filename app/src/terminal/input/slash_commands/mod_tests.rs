@@ -134,6 +134,35 @@ fn cloud_mode_v2_commands_are_active_only_in_cloud_mode_v2_context() {
     assert!(commands::HARNESS.is_active(cloud_mode_v2_context));
 }
 
+#[test]
+fn natural_language_detection_commands_are_supported_in_tui() {
+    for (command, expected) in [
+        (
+            &commands::ENABLE_NATURAL_LANGUAGE_DETECTION,
+            TuiSlashCommand::EnableNaturalLanguageDetection,
+        ),
+        (
+            &commands::DISABLE_NATURAL_LANGUAGE_DETECTION,
+            TuiSlashCommand::DisableNaturalLanguageDetection,
+        ),
+    ] {
+        assert_eq!(
+            TuiSlashCommand::from_static_command(command),
+            Some(expected),
+            "{} should map to its TUI command",
+            command.name
+        );
+        assert!(
+            slash_command_is_supported_in_tui(command),
+            "{} should be supported in TUI",
+            command.name
+        );
+        // The toggle commands run immediately and are never reiterated as a prompt.
+        assert!(command.argument.is_none());
+        assert!(!slash_command_is_submitted_as_prompt(command));
+    }
+}
+
 #[cfg(all(feature = "local_fs", windows))]
 mod windows {
     use std::sync::Arc;

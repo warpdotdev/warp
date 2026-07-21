@@ -33,7 +33,8 @@ use warp::tui_export::{
     TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, UserTakeOverReason,
     WAKEUP_THROTTLE_PERIOD, block_context_from_terminal_model, build_slash_command_mixer,
     detect_possible_git_repo, export_conversation_markdown, maybe_build_ai_query_upsert_event,
-    prepare_conversation_block_restoration, record_saved_prompt_accepted,
+    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
+    record_saved_prompt_accepted,
     record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
@@ -174,6 +175,9 @@ const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
 const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
+const NLD_ENABLED_HINT: &str = "Natural language detection enabled.";
+const NLD_DISABLED_HINT: &str = "Natural language detection disabled.";
+const NLD_PERSISTENCE_FAILED_HINT: &str = "Could not save the natural language detection setting.";
 
 fn log_bundle_success_message(path: &Path) -> String {
     format!("Log bundle saved to {}", path.display())
@@ -2790,6 +2794,44 @@ impl TuiTerminalSessionView {
                     .unwrap_or_else(|| command_name.to_owned());
                 self.send_prompt(prompt, ctx);
                 record_static_slash_command_accepted(command_name, true, ctx);
+            }
+            TuiSlashCommand::EnableNaturalLanguageDetection => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                let result = AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    settings
+                        .ai_autodetection_enabled_internal
+                        .set_value(true, ctx)
+                });
+                match result {
+                    Ok(()) => {
+                        record_autodetection_toggle_from_slash_command(true, ctx);
+                        self.show_success_hint(NLD_ENABLED_HINT.to_owned(), ctx);
+                    }
+                    Err(error) => {
+                        log::warn!("Failed to enable TUI natural language detection: {error}");
+                        self.show_transient_hint(NLD_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
+                    }
+                }
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            TuiSlashCommand::DisableNaturalLanguageDetection => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                let result = AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    settings
+                        .ai_autodetection_enabled_internal
+                        .set_value(false, ctx)
+                });
+                match result {
+                    Ok(()) => {
+                        record_autodetection_toggle_from_slash_command(false, ctx);
+                        self.show_success_hint(NLD_DISABLED_HINT.to_owned(), ctx);
+                    }
+                    Err(error) => {
+                        log::warn!("Failed to disable TUI natural language detection: {error}");
+                        self.show_transient_hint(NLD_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
+                    }
+                }
+                record_static_slash_command_accepted(command.name, true, ctx);
             }
         }
     }

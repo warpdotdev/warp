@@ -152,3 +152,42 @@ fn strip_command_prefix_substring_not_matched() {
     let result = strip_command_prefix("/planning something", "/plan");
     assert_eq!(result, None);
 }
+
+#[test]
+fn natural_language_detection_commands_are_registered_only_for_tui_mode() {
+    let tui_commands = all_commands(settings::SettingsMode::Tui);
+    assert!(
+        tui_commands
+            .iter()
+            .any(|command| command == &ENABLE_NATURAL_LANGUAGE_DETECTION)
+    );
+    assert!(
+        tui_commands
+            .iter()
+            .any(|command| command == &DISABLE_NATURAL_LANGUAGE_DETECTION)
+    );
+
+    let gui_commands = all_commands(settings::SettingsMode::Gui);
+    assert!(
+        !gui_commands
+            .iter()
+            .any(|command| command == &ENABLE_NATURAL_LANGUAGE_DETECTION)
+    );
+    assert!(
+        !gui_commands
+            .iter()
+            .any(|command| command == &DISABLE_NATURAL_LANGUAGE_DETECTION)
+    );
+}
+
+#[test]
+fn natural_language_detection_commands_are_ai_enabled_and_execute_immediately() {
+    for command in [
+        &ENABLE_NATURAL_LANGUAGE_DETECTION,
+        &DISABLE_NATURAL_LANGUAGE_DETECTION,
+    ] {
+        assert_eq!(command.availability, Availability::AI_ENABLED);
+        assert!(!command.auto_enter_ai_mode);
+        assert!(command.argument.is_none());
+    }
+}
