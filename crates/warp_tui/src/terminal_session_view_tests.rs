@@ -1,7 +1,9 @@
+use std::time::Duration;
+
 use warp::appearance::Appearance;
 use warp::tui_export::{
-    PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, export_conversation_markdown,
-    register_tui_session_view_test_singletons,
+    CloudConversationData, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate,
+    export_conversation_markdown, register_tui_session_view_test_singletons,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -17,8 +19,10 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView, WindowInvalidation};
 
 use super::{
-    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, TuiTerminalSessionEvent, export_file_success_message,
-    log_bundle_success_message, raw_prompt_if_not_blank, render_left_footer_hint,
+    ConversationRestoreState, ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, TuiConversationRestoreOrigin,
+    TuiConversationRestoreTarget, TuiTerminalSessionEvent, conversation_restore_with_timeout,
+    export_file_success_message, log_bundle_success_message, raw_prompt_if_not_blank,
+    render_left_footer_hint,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::keybindings::{
@@ -35,6 +39,47 @@ use crate::tui_builder::TuiUiBuilder;
 struct FocusTestFixture {
     window_id: warpui_core::WindowId,
     sessions: ModelHandle<TuiSessions>,
+}
+
+#[test]
+fn conversation_restore_timeout_transitions_to_failure() {
+    App::test((), |mut app| async move {
+        let result = conversation_restore_with_timeout(
+            futures::future::pending::<Option<CloudConversationData>>(),
+            Duration::ZERO,
+        )
+        .await;
+        assert!(result.is_none(), "a timed-out restore should deliver None");
+
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.conversation_restore_state = ConversationRestoreState::Loading {
+                origin: TuiConversationRestoreOrigin::Startup,
+                request_id: 1,
+                future: None,
+            };
+            view.handle_conversation_restore_result(
+                TuiConversationRestoreTarget::Server(
+                    warp::tui_export::ServerConversationToken::new(
+                        "00000000-0000-0000-0000-000000000000".to_owned(),
+                    ),
+                ),
+                TuiConversationRestoreOrigin::Startup,
+                1,
+                result,
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            view.read(&app, |view, _| match &view.conversation_restore_state {
+                ConversationRestoreState::Failed(message) => Some(message.clone()),
+                _ => None,
+            }),
+            Some("The conversation could not be loaded.".to_owned())
+        );
+    });
 }
 
 #[test]

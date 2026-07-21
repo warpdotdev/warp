@@ -21,7 +21,7 @@ fn compact_footer_path_elides_middle_components() {
 }
 
 #[test]
-fn conversation_loader_is_centered_and_animated() {
+fn conversation_loader_is_left_aligned_and_animated() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
@@ -42,8 +42,17 @@ fn conversation_loader_is_centered_and_animated() {
             );
 
             assert!(
-                label.find("Loading session...").is_some_and(|x| x > 0),
-                "loading label should be horizontally centered: {label:?}"
+                label.find("Loading session...") == Some(0),
+                "loading label should be left-aligned: {label:?}"
+            );
+            let hint = lines
+                .iter()
+                .find(|line| line.contains("Esc or Ctrl-C to cancel and start a new session"))
+                .expect("loading cancellation hint should render");
+            assert_eq!(
+                hint.find("Esc or Ctrl-C to cancel and start a new session"),
+                Some(0),
+                "loading cancellation hint should be left-aligned: {hint:?}"
             );
             assert!(
                 frame.repaint_at.is_some(),

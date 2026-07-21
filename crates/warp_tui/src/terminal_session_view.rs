@@ -1,6 +1,7 @@
 //! Authenticated terminal-session TUI surface.
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -42,7 +43,7 @@ use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
-use warpui_core::r#async::{SpawnedFutureHandle, Timer};
+use warpui_core::r#async::{FutureExt as _, SpawnedFutureHandle, Timer};
 use warpui_core::elements::tui::{
     TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiStyle, TuiText,
 };
@@ -169,6 +170,17 @@ const SWITCH_LOADING_HINT: &str = "Another conversation is already loading.";
 const SWITCH_UNAVAILABLE_HINT: &str = "That conversation is no longer available.";
 const LOADING_CONVERSATION_HINT: &str = "Loading conversation…";
 const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model.";
+const CONVERSATION_RESTORE_TIMEOUT: Duration = Duration::from_secs(30);
+
+async fn conversation_restore_with_timeout<F>(
+    future: F,
+    timeout: Duration,
+) -> Option<CloudConversationData>
+where
+    F: Future<Output = Option<CloudConversationData>>,
+{
+    future.with_timeout(timeout).await.unwrap_or(None)
+}
 
 /// Footer hint shown while the input is in `!` shell mode.
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
@@ -1616,6 +1628,7 @@ impl TuiTerminalSessionView {
                 }
             });
 
+        let future = conversation_restore_with_timeout(future, CONVERSATION_RESTORE_TIMEOUT);
         let future_handle = ctx.spawn(future, move |view, result, ctx| {
             view.handle_conversation_restore_result(target, origin, request_id, result, ctx);
         });
