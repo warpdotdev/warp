@@ -61,7 +61,7 @@ fn synthetic_focus_event(
             window,
         );
     }
-    event
+    event.into()
 }
 
 /// Regression guard for the background-computer-use focus-stuck bug: ending a session must remove
