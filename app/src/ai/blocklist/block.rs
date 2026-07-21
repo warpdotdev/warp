@@ -24,7 +24,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
-use ai::agent::file_locations::group_file_contexts_for_display;
 use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use base64::Engine as _;
 use chrono::Duration;
@@ -126,7 +125,7 @@ use crate::ai::blocklist::inline_action::run_agents_card_view::{
     self, RunAgentsCardView, RunAgentsCardViewEvent,
 };
 use crate::ai::blocklist::inline_action::search_codebase::{
-    SearchCodebaseView, SearchCodebaseViewEvent,
+    SearchCodebaseView, SearchCodebaseViewEvent, grouped_search_codebase_display_files,
 };
 use crate::ai::blocklist::inline_action::suggested_unit_tests::{
     SuggestedUnitTestsEvent, SuggestedUnitTestsView,
@@ -4637,7 +4636,7 @@ impl AIBlock {
                         ) = &result.result
                         {
                             if !FeatureFlag::SearchCodebaseUI.is_enabled() {
-                                let display_files = group_file_contexts_for_display(
+                                let display_files = grouped_search_codebase_display_files(
                                     files,
                                     me.shell_launch_data.as_ref(),
                                     me.current_working_directory.as_ref(),

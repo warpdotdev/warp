@@ -61,11 +61,11 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome, MessageId,
-    ReadFilesFailedFile, ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult,
-    SearchCodebaseFailureReason, SearchCodebaseResult, StartRecordingResult, StopRecordingResult,
-    SubagentCall, SubagentType, SuggestNewConversationResult, SummarizationType, TodoOperation,
-    UploadArtifactResult,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome, FileContext,
+    FileLocations, MessageId, ReadFilesFailedFile, ReadFilesRequest, ReadFilesResult,
+    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult,
+    StartRecordingResult, StopRecordingResult, SubagentCall, SubagentType,
+    SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -95,7 +95,9 @@ use crate::ai::blocklist::inline_action::requested_action::{
 };
 use crate::ai::blocklist::inline_action::requested_command::RequestedCommand;
 use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardView;
-use crate::ai::blocklist::inline_action::search_codebase::SearchCodebaseView;
+use crate::ai::blocklist::inline_action::search_codebase::{
+    SearchCodebaseView, grouped_search_codebase_display_files,
+};
 use crate::ai::blocklist::inline_action::suggested_unit_tests::SuggestedUnitTestsView;
 use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
 use crate::ai::blocklist::inline_action::web_search::WebSearchView;
@@ -509,7 +511,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                             continue;
                                         }
                                         (
-                                            group_file_contexts_for_display(
+                                            read_files_success_display_paths(
                                                 file_contexts,
                                                 props.shell_launch_data,
                                                 props.current_working_directory,
@@ -519,16 +521,11 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                     }
                                     // if not completed/successful, generate a user message without line count
                                     _ => (
-                                        files
-                                            .iter()
-                                            .map(|file| {
-                                                file.to_user_message(
-                                                    props.shell_launch_data,
-                                                    props.current_working_directory,
-                                                    None,
-                                                )
-                                            })
-                                            .collect_vec(),
+                                        read_files_request_display_paths(
+                                            files,
+                                            props.shell_launch_data,
+                                            props.current_working_directory,
+                                        ),
                                         vec![],
                                     ),
                                 };
@@ -1618,7 +1615,7 @@ fn render_search_codebase(
                                 let skill = file_locations.and_then(|file_locations| {
                                     parsed_skill_for_common_locations(file_locations, app)
                                 });
-                                let grouped = group_file_contexts_for_display(
+                                let grouped = grouped_search_codebase_display_files(
                                     files,
                                     props.shell_launch_data,
                                     props.current_working_directory,
@@ -1813,6 +1810,24 @@ pub fn render_read_files_text<A: Action>(
         app,
     );
     formatted_files
+}
+fn read_files_request_display_paths(
+    files: &[FileLocations],
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> Vec<String> {
+    files
+        .iter()
+        .map(|file| file.to_user_message(shell_launch_data, current_working_directory, None))
+        .collect()
+}
+
+fn read_files_success_display_paths(
+    files: &[FileContext],
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> Vec<String> {
+    group_file_contexts_for_display(files, shell_launch_data, current_working_directory)
 }
 
 fn join_display_paths(file_names: impl IntoIterator<Item = impl AsRef<str>>) -> String {
@@ -2565,17 +2580,53 @@ fn create_formatted_text_for_grep(
         .as_ref()
         .is_some_and(|status| status.is_queued());
 
+    let formatted_text = formatted_text_for_grep(
+        queries,
+        path,
+        is_cancelled,
+        is_queued,
+        props.shell_launch_data,
+        props.current_working_directory,
+    );
+
+    FormattedTextElement::new(
+        formatted_text,
+        appearance.monospace_font_size(),
+        appearance.ui_font_family(),
+        appearance.monospace_font_family(),
+        theme.main_text_color(theme.background()).into(),
+        Default::default(),
+    )
+    .with_inline_code_properties(
+        Some(
+            if is_queued
+                || (props.model.status(app).is_streaming()
+                    && !props.model.is_first_action_in_output(id, app))
+            {
+                blended_colors::text_disabled(theme, theme.surface_2())
+            } else {
+                theme.terminal_colors().normal.green.into()
+            },
+        ),
+        None,
+    )
+}
+
+fn formatted_text_for_grep(
+    queries: &[String],
+    path: &str,
+    is_cancelled: bool,
+    is_queued: bool,
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> FormattedText {
     let display_path = if path == "." {
         "the current directory".to_string()
     } else {
-        shell_native_path_for_display(
-            path,
-            props.shell_launch_data,
-            props.current_working_directory,
-        )
+        shell_native_path_for_display(path, shell_launch_data, current_working_directory)
     };
 
-    let formatted_text = if queries.len() == 1 {
+    if queries.len() == 1 {
         let query = queries
             .first()
             .expect("Queries slice should have an element");
@@ -2625,7 +2676,36 @@ fn create_formatted_text_for_grep(
         }
 
         FormattedText::new(lines)
-    };
+    }
+}
+
+/// Creates a FormattedText object with inline code formatting for file glob queries
+fn create_formatted_text_for_file_glob(
+    props: Props,
+    id: &AIAgentActionId,
+    patterns: &[String],
+    path: Option<&str>,
+    app: &AppContext,
+) -> FormattedTextElement {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    let action_status = props.action_model.as_ref(app).get_action_status(id);
+    let is_cancelled = action_status
+        .as_ref()
+        .is_some_and(|status| status.is_cancelled());
+    let is_queued = action_status
+        .as_ref()
+        .is_some_and(|status| status.is_queued());
+
+    let formatted_text = formatted_text_for_file_glob(
+        patterns,
+        path,
+        is_cancelled,
+        is_queued,
+        props.shell_launch_data,
+        props.current_working_directory,
+    );
 
     FormattedTextElement::new(
         formatted_text,
@@ -2650,36 +2730,21 @@ fn create_formatted_text_for_grep(
     )
 }
 
-/// Creates a FormattedText object with inline code formatting for file glob queries
-fn create_formatted_text_for_file_glob(
-    props: Props,
-    id: &AIAgentActionId,
+fn formatted_text_for_file_glob(
     patterns: &[String],
     path: Option<&str>,
-    app: &AppContext,
-) -> FormattedTextElement {
-    let appearance = Appearance::as_ref(app);
-    let theme = appearance.theme();
-
-    let action_status = props.action_model.as_ref(app).get_action_status(id);
-    let is_cancelled = action_status
-        .as_ref()
-        .is_some_and(|status| status.is_cancelled());
-    let is_queued = action_status
-        .as_ref()
-        .is_some_and(|status| status.is_queued());
-
+    is_cancelled: bool,
+    is_queued: bool,
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> FormattedText {
     let path = path
         .map(|path| {
-            shell_native_path_for_display(
-                path,
-                props.shell_launch_data,
-                props.current_working_directory,
-            )
+            shell_native_path_for_display(path, shell_launch_data, current_working_directory)
         })
         .unwrap_or_else(|| "the current directory".to_string());
 
-    let formatted_text = if patterns.len() == 1 {
+    if patterns.len() == 1 {
         let pattern = patterns
             .first()
             .expect("Patterns slice should have an element");
@@ -2729,29 +2794,7 @@ fn create_formatted_text_for_file_glob(
             ]));
         }
         FormattedText::new(lines)
-    };
-
-    FormattedTextElement::new(
-        formatted_text,
-        appearance.monospace_font_size(),
-        appearance.ui_font_family(),
-        appearance.monospace_font_family(),
-        theme.main_text_color(theme.background()).into(),
-        Default::default(),
-    )
-    .with_inline_code_properties(
-        Some(
-            if is_queued
-                || (props.model.status(app).is_streaming()
-                    && !props.model.is_first_action_in_output(id, app))
-            {
-                blended_colors::text_disabled(theme, theme.surface_2())
-            } else {
-                theme.terminal_colors().normal.green.into()
-            },
-        ),
-        None,
-    )
+    }
 }
 
 /// Renders the Grep and File Glob tools.

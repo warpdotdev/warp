@@ -13,13 +13,14 @@ use warpui::App;
 use watcher::HomeDirectoryWatcher;
 
 use super::{
-    RecordingCardText, format_failed_read_paths, format_upload_artifact_text, join_display_paths,
-    parsed_skill_for_common_locations, read_skill_display_text,
+    RecordingCardText, format_failed_read_paths, format_upload_artifact_text,
+    formatted_text_for_file_glob, formatted_text_for_grep, parsed_skill_for_common_locations,
+    read_files_request_display_paths, read_files_success_display_paths, read_skill_display_text,
     should_decorate_recorded_use_computer, start_recording_card_text, stop_recording_card_text,
 };
 use crate::ai::agent::{
-    ReadFilesFailedFile, RecordingStarted, RecordingStopped, StartRecordingResult,
-    StopRecordingResult, UploadArtifactResult,
+    AnyFileContent, FileContext, FileLocations, ReadFilesFailedFile, RecordingStarted,
+    RecordingStopped, StartRecordingResult, StopRecordingResult, UploadArtifactResult,
 };
 use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
@@ -41,10 +42,95 @@ fn format_upload_artifact_text_includes_request_details() {
 }
 
 #[test]
-fn read_file_rows_consume_display_ready_paths_without_reabsolutizing() {
+fn grep_renderer_preserves_copy_and_formats_explicit_and_current_paths() {
+    let cwd = "/repo/worktree/deep".to_string();
+    let queries = vec!["needle".to_string()];
+
     assert_eq!(
-        join_display_paths(["src/lib.rs (10-20)", "../../shared.rs", "/outside.rs"]),
-        "src/lib.rs (10-20)\n../../shared.rs\n/outside.rs"
+        formatted_text_for_grep(
+            &queries,
+            "/repo/worktree/deep/src",
+            false,
+            false,
+            None,
+            Some(&cwd),
+        )
+        .raw_text(),
+        "Grepping for needle in src\n"
+    );
+    assert_eq!(
+        formatted_text_for_grep(&queries, ".", true, false, None, Some(&cwd)).raw_text(),
+        "Grep for needle in the current directory cancelled\n"
+    );
+}
+
+#[test]
+fn file_glob_and_v2_renderer_format_explicit_and_omitted_directories() {
+    let cwd = "/repo/worktree/deep".to_string();
+    let patterns = vec!["**/*.rs".to_string()];
+
+    assert_eq!(
+        formatted_text_for_file_glob(
+            &patterns,
+            Some("/repo/archive"),
+            false,
+            false,
+            None,
+            Some(&cwd),
+        )
+        .raw_text(),
+        "Finding files that match **/*.rs in ../../archive\n"
+    );
+    assert_eq!(
+        formatted_text_for_file_glob(&patterns, None, false, true, None, Some(&cwd)).raw_text(),
+        "Search for files that match **/*.rs in the current directory\n"
+    );
+}
+
+fn file_context(path: &str, line_range: Option<std::ops::Range<usize>>) -> FileContext {
+    FileContext::new(
+        path.to_string(),
+        AnyFileContent::StringContent("one\ntwo\nthree".to_string()),
+        line_range,
+        None,
+    )
+}
+
+#[test]
+fn read_files_request_renderer_formats_paths_once_against_invocation_cwd() {
+    let cwd = "/repo/worktree/deep".to_string();
+    let files = vec![
+        FileLocations {
+            name: "/repo/worktree/deep/src/lib.rs".to_string(),
+            lines: std::iter::once(10..20).collect(),
+        },
+        FileLocations {
+            name: "/repo/archive.rs".to_string(),
+            lines: vec![],
+        },
+        FileLocations {
+            name: "/outside.rs".to_string(),
+            lines: vec![],
+        },
+    ];
+    assert_eq!(
+        read_files_request_display_paths(&files, None, Some(&cwd)),
+        vec!["src/lib.rs (10-20)", "../../archive.rs", "/outside.rs",]
+    );
+}
+
+#[test]
+fn read_files_grouped_success_renderer_formats_and_groups_actual_results() {
+    let cwd = "/repo/worktree/deep".to_string();
+    let files = vec![
+        file_context("/repo/worktree/deep/src/lib.rs", Some(40..45)),
+        file_context("/repo/archive.rs", None),
+        file_context("/repo/worktree/deep/src/lib.rs", Some(10..20)),
+    ];
+
+    assert_eq!(
+        read_files_success_display_paths(&files, None, Some(&cwd)),
+        vec!["src/lib.rs (10-20, 40-45)", "../../archive.rs",]
     );
 }
 

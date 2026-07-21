@@ -6,8 +6,14 @@ use warp_terminal::model::BlockIndex;
 
 use super::find_block_indices_for_exchange_timestamps;
 use crate::AIConversationId;
+#[cfg(feature = "local_fs")]
+use crate::ai::agent::FileLocations;
 use crate::ai::agent::conversation::AIConversation;
+#[cfg(feature = "local_fs")]
+use crate::ai::blocklist::block::TextLocation;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
+#[cfg(feature = "local_fs")]
+use crate::util::link_detection::{DetectedLinkType, DetectedLinksState, detect_links};
 
 /// Helper: create a `DateTime<Local>` from a unix timestamp in seconds.
 fn ts(secs: i64) -> chrono::DateTime<Local> {
@@ -329,5 +335,72 @@ fn forked_startup_working_directory_uses_latest_directory() {
     assert_eq!(
         restoration.initial_working_directory().as_deref(),
         Some("/home/user/code/warp"),
+    );
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn restored_tool_rows_keep_the_exchange_cwd_after_the_live_cwd_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let invocation_cwd = root.path().join("repo");
+    let live_cwd = root.path().join("other");
+    let file = invocation_cwd.join("src").join("lib.rs");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&live_cwd).unwrap();
+    std::fs::write(&file, "fn restored() {}\n").unwrap();
+
+    let invocation_cwd = invocation_cwd.to_string_lossy().to_string();
+    let live_cwd = live_cwd.to_string_lossy().to_string();
+    let conversation = conversation_with_dirs(&invocation_cwd, &live_cwd);
+    let restored_exchange_cwd = conversation
+        .root_task_exchanges()
+        .next()
+        .and_then(|exchange| exchange.working_directory.clone())
+        .expect("restored exchange should retain its invocation cwd");
+    let locations = FileLocations {
+        name: file.to_string_lossy().to_string(),
+        lines: std::iter::once(7..9).collect(),
+    };
+
+    let restored_display = locations.to_user_message(None, Some(&restored_exchange_cwd), None);
+    assert_eq!(restored_display, "src/lib.rs (7-9)");
+    assert_ne!(
+        restored_display,
+        locations.to_user_message(None, Some(&live_cwd), None),
+        "using the later live cwd would rewrite the historical row",
+    );
+
+    let location = TextLocation::Action {
+        action_index: 0,
+        line_index: 0,
+    };
+    let mut links = DetectedLinksState::default();
+    detect_links(
+        &mut links,
+        &restored_display,
+        location,
+        Some(&restored_exchange_cwd),
+        None,
+    );
+    assert!(matches!(
+        links.link_at(&location, &(0..10)),
+        Some(DetectedLinkType::FilePath { absolute_path, .. }) if absolute_path == &file
+    ));
+    assert!(
+        links
+            .detected_links_by_location
+            .get(&location)
+            .expect("restored display should contain a detected file link")
+            .detected_links
+            .values()
+            .any(|detected| {
+                matches!(
+                    &detected.link,
+                    DetectedLinkType::FilePath {
+                        absolute_path,
+                        line_and_column_num: Some(line_and_column_num),
+                    } if absolute_path == &file && line_and_column_num.line_num == 7
+                )
+            })
     );
 }
