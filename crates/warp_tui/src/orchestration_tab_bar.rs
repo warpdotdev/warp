@@ -172,7 +172,7 @@ pub(crate) fn render_orchestration_tab_footer(builder: &TuiUiBuilder) -> Box<dyn
         (" to navigate  ".to_string(), muted),
         ("Shift + ← →".to_string(), primary),
         (" to go to start/end  ".to_string(), muted),
-        ("Shift + ↓".to_string(), primary),
+        ("↓".to_string(), primary),
         (" to send a message".to_string(), muted),
     ])
     .truncate()

@@ -2,7 +2,8 @@ use instant::Instant;
 use warp::appearance::Appearance;
 use warp::settings::TuiUsageDisplayMode;
 use warp::tui_export::{
-    BlockPadding, ConversationStatus, ConversationUsageTotals, InputType, PtyIntent,
+    AIConversationId, AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel,
+    ConversationStatus, ConversationUsageTotals, Harness, InputType, PtyIntent,
     PtyIntentEvent, SizeInfo, SizeUpdate, export_conversation_markdown,
     register_tui_session_view_test_singletons,
 };
@@ -18,13 +19,13 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::keymap::{Context, Keystroke, Trigger};
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, TuiView, WindowInvalidation};
+use warpui_core::{App, AppContext, TuiView, TypedActionView as _, WindowInvalidation};
 
 use super::{
     CTRL_C_EXIT_HINT, ConversationRestoreState, FooterSegments, INLINE_MENU_TOP_PADDING_ROWS,
     LOADING_CONVERSATION_HINT, SHELL_MODE_HINT, TuiConversationRestoreOrigin,
-    TuiTerminalSessionEvent, export_file_success_message, log_bundle_success_message,
-    raw_prompt_if_not_blank, render_status_footer_row,
+    TuiTerminalSessionAction, TuiTerminalSessionEvent, export_file_success_message,
+    log_bundle_success_message, raw_prompt_if_not_blank, render_status_footer_row,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -34,7 +35,9 @@ use crate::keybindings::{
 };
 use crate::orchestrated_agent_identity_styling::AgentIdentity;
 use crate::orchestration_model::TuiOrchestrationModel;
-use crate::orchestration_tab_bar::{ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_icon};
+use crate::orchestration_tab_bar::{
+    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_icon, render_orchestration_tab_footer,
+};
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::terminal_block::{block_content_rows, should_render_terminal_block};
@@ -893,5 +896,321 @@ fn terminal_wakeup_redraws_only_the_focused_session() {
 
         assert!(foreground.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
         assert!(!background.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
+    });
+}
+
+fn tab_focused_context() -> Context {
+    let mut context = Context::default();
+    context.set.insert(super::TuiTerminalSessionView::ui_name());
+    context.set.insert(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
+    context
+}
+
+fn input_only_context() -> Context {
+    let mut context = Context::default();
+    context.set.insert(crate::input::TuiInputView::ui_name());
+    context
+}
+
+#[test]
+fn focus_input_bindings_match_down_and_shift_down_in_tab_context_only() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let down = Trigger::Keystrokes(vec![Keystroke::parse("down").unwrap()]);
+            let shift_down = Trigger::Keystrokes(vec![Keystroke::parse("shift-down").unwrap()]);
+
+            let focus_input_bindings: Vec<_> = ctx
+                .editable_bindings()
+                .filter(|b| b.name == "tui:orchestration_tabs:focus_input")
+                .collect();
+            assert_eq!(
+                focus_input_bindings.len(),
+                2,
+                "down + shift-down bindings should be registered"
+            );
+            assert!(
+                focus_input_bindings.iter().any(|b| *b.trigger == down),
+                "plain down should focus the input"
+            );
+            assert!(
+                focus_input_bindings
+                    .iter()
+                    .any(|b| *b.trigger == shift_down),
+                "shift-down should remain an alias"
+            );
+
+            let tab_context = tab_focused_context();
+            for binding in &focus_input_bindings {
+                assert!(
+                    binding.in_context(&tab_context),
+                    "focus-input binding {:?} should match the tab-focused context",
+                    binding.trigger
+                );
+            }
+
+            let input_context = input_only_context();
+            for binding in &focus_input_bindings {
+                assert!(
+                    !binding.in_context(&input_context),
+                    "focus-input binding {:?} must not match a normal input context",
+                    binding.trigger
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn escape_binding_targets_main_agent_in_tab_context_only() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let escape = Trigger::Keystrokes(vec![Keystroke::parse("escape").unwrap()]);
+            let binding = ctx
+                .editable_bindings()
+                .find(|b| b.name == "tui:orchestration_tabs:focus_main")
+                .expect("escape focus-main binding is registered");
+            assert_eq!(*binding.trigger, escape);
+
+            assert!(binding.in_context(&tab_focused_context()));
+            assert!(!binding.in_context(&input_only_context()));
+        });
+    });
+}
+
+#[test]
+fn orchestration_tab_navigation_bindings_remain_scoped_to_tab_context() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let tab_context = tab_focused_context();
+            let input_context = input_only_context();
+            for (name, key) in [
+                ("tui:orchestration_tabs:previous", "left"),
+                ("tui:orchestration_tabs:previous", "shift-tab"),
+                ("tui:orchestration_tabs:next", "right"),
+                ("tui:orchestration_tabs:next", "tab"),
+                ("tui:orchestration_tabs:first_child", "shift-left"),
+                ("tui:orchestration_tabs:last_child", "shift-right"),
+            ] {
+                let trigger = Trigger::Keystrokes(vec![Keystroke::parse(key).unwrap()]);
+                let binding = ctx
+                    .editable_bindings()
+                    .find(|b| b.name == name && *b.trigger == trigger)
+                    .unwrap_or_else(|| panic!("missing {name} on {key}"));
+                assert!(
+                    binding.in_context(&tab_context),
+                    "{name} {key} should match the tab-focused context"
+                );
+                assert!(
+                    !binding.in_context(&input_context),
+                    "{name} {key} must not match a normal input context"
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn orchestration_tab_footer_advertises_down_without_shift_or_escape_hint() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let buffer = render_element(render_orchestration_tab_footer(&builder), ctx, 80);
+            let footer = buffer.to_lines().join("\n");
+            assert!(
+                footer.contains("↓ to send a message"),
+                "footer should advertise ↓: {footer}"
+            );
+            assert!(
+                !footer.contains("Shift + ↓"),
+                "footer must not advertise Shift + ↓: {footer}"
+            );
+            assert!(
+                !footer.to_lowercase().contains("esc"),
+                "footer must not advertise an Escape hint: {footer}"
+            );
+        });
+    });
+}
+
+/// Registers a session with a live active conversation, returning its view and conversation id.
+fn add_orchestration_session(
+    app: &mut App,
+    fixture: &FocusTestFixture,
+    focus: bool,
+) -> (
+    ViewHandle<super::TuiTerminalSessionView>,
+    TuiSessionId,
+    AIConversationId,
+) {
+    let (view, manager) = add_test_terminal_session(app, fixture.window_id);
+    let session_id = app.update(|ctx| {
+        TuiSessions::register_session(&fixture.sessions, view.clone(), manager, focus, ctx)
+    });
+    let conversation_id = app.update(|ctx| {
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            let conversation_id =
+                history.start_new_conversation(session_id.surface_id(), false, false, false, ctx);
+            history.set_active_conversation_id(conversation_id, session_id.surface_id(), ctx);
+            conversation_id
+        })
+    });
+    (view, session_id, conversation_id)
+}
+
+/// Registers a child session under a parent conversation.
+fn add_orchestration_child(
+    app: &mut App,
+    fixture: &FocusTestFixture,
+    parent_conversation_id: AIConversationId,
+    name: &str,
+) -> (
+    ViewHandle<super::TuiTerminalSessionView>,
+    TuiSessionId,
+    AIConversationId,
+) {
+    let (view, manager) = add_test_terminal_session(app, fixture.window_id);
+    let session_id = app.update(|ctx| {
+        TuiSessions::register_session(&fixture.sessions, view.clone(), manager, false, ctx)
+    });
+    let conversation_id = app.update(|ctx| {
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            let conversation_id = history.start_new_child_conversation(
+                session_id.surface_id(),
+                name.to_owned(),
+                parent_conversation_id,
+                Some(Harness::Oz),
+                ctx,
+            );
+            history.set_active_conversation_id(conversation_id, session_id.surface_id(), ctx);
+            conversation_id
+        })
+    });
+    (view, session_id, conversation_id)
+}
+
+#[test]
+fn escape_from_child_tab_switches_to_root_and_clears_tab_focus() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (parent_view, parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (child_view, child_session_id, child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+
+        // Focus the child session and point its conversation selection at the child
+        // conversation so the orchestration snapshot resolves the parent as root.
+        app.update(|ctx| {
+            TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.focus_session(child_session_id, ctx);
+            });
+        });
+        child_view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    child_conversation_id,
+                    AgentViewEntryOrigin::Tui,
+                    ctx,
+                );
+            });
+            view.refresh_orchestration_tab_state(ctx);
+            view.orchestration_tabs_focused = true;
+            view.refresh_orchestration_tab_bar(ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                child_view
+                    .as_ref(ctx)
+                    .orchestration_tab_bar
+                    .as_ref(ctx)
+                    .main_tab_key(),
+                Some(parent_conversation_id.to_string()),
+                "tab bar should expose the parent as the main tab"
+            );
+        });
+
+        child_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::FocusMainOrchestrationTab, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                TuiSessions::as_ref(ctx).focused_session_id(),
+                Some(parent_session_id),
+                "escape should switch focus to the root/main session"
+            );
+            assert!(
+                !child_view.as_ref(ctx).orchestration_tabs_focused,
+                "child tab focus should be cleared"
+            );
+            assert!(
+                !parent_view.as_ref(ctx).orchestration_tabs_focused,
+                "parent tab focus should remain cleared"
+            );
+            assert!(
+                ctx.check_view_or_child_focused(fixture.window_id, &parent_view.id()),
+                "root session input should own focus after escape"
+            );
+        });
+    });
+}
+
+#[test]
+fn escape_with_root_selected_clears_tab_focus_without_switching() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (parent_view, parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (_child_view, _child_session_id, _child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+
+        // Point the parent session's conversation selection at the root conversation so
+        // the orchestration snapshot resolves the root as both root and selected.
+        parent_view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    parent_conversation_id,
+                    AgentViewEntryOrigin::Tui,
+                    ctx,
+                );
+            });
+            view.refresh_orchestration_tab_state(ctx);
+            view.orchestration_tabs_focused = true;
+            view.refresh_orchestration_tab_bar(ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                parent_view
+                    .as_ref(ctx)
+                    .orchestration_tab_bar
+                    .as_ref(ctx)
+                    .main_tab_key(),
+                Some(parent_conversation_id.to_string()),
+                "root tab bar should expose the root as the main tab"
+            );
+        });
+
+        parent_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::FocusMainOrchestrationTab, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                TuiSessions::as_ref(ctx).focused_session_id(),
+                Some(parent_session_id),
+                "escape with root selected should not switch sessions"
+            );
+            assert!(
+                !parent_view.as_ref(ctx).orchestration_tabs_focused,
+                "root tab focus should be cleared"
+            );
+            assert!(
+                ctx.check_view_or_child_focused(fixture.window_id, &parent_view.id()),
+                "root session input should own focus after escape"
+            );
+        });
     });
 }
