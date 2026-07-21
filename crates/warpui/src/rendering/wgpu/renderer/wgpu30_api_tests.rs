@@ -403,3 +403,31 @@ fn test_wgpu30_buffer_readback_handles_get_mapped_range_result() {
     drop(data);
     staging.unmap();
 }
+
+#[test]
+fn test_wgpu30_get_mapped_range_reports_unmapped_error() {
+    let Some((device, _queue)) = acquire_device() else {
+        eprintln!(
+            "skipping test_wgpu30_get_mapped_range_reports_unmapped_error: no wgpu adapter available"
+        );
+        return;
+    };
+
+    // wgpu does not expose a deterministic way to make an in-flight map fail,
+    // but accessing a buffer after it is unmapped exercises the same
+    // `get_mapped_range` Result error path. The production readback code must
+    // propagate this error instead of assuming the view is always available.
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("wgpu30 unmapped range"),
+        size: 64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: true,
+    });
+    buffer.unmap();
+
+    let result = buffer.slice(..).get_mapped_range();
+    assert!(
+        result.is_err(),
+        "get_mapped_range should reject access to an unmapped buffer"
+    );
+}
