@@ -77,7 +77,8 @@ use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
 use crate::ai::blocklist::secret_redaction::{SecretRedactionState, redact_secrets_in_element};
 use crate::ai::blocklist::view_util::{
-    FailedOutputPresentation, error_color, failed_output_presentation,
+    FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL, error_color,
+    failed_output_presentation,
 };
 use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
 use crate::ai::loading::shimmering_warp_loading_text;
@@ -3047,10 +3048,9 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
 
     let error_text = match presentation {
         FailedOutputPresentation::Message(message) => message,
-        FailedOutputPresentation::OutOfCredits { title, detail, .. } => {
+        FailedOutputPresentation::OutOfCredits { message } => {
             return render_out_of_credits_error(
-                title,
-                detail,
+                &message,
                 props.subscribe_button_handle,
                 props.is_ai_input_enabled,
                 props.icon_right_margin,
@@ -3159,8 +3159,7 @@ fn out_of_credits_cta_button(
 
 /// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
 fn render_out_of_credits_error(
-    title: &str,
-    detail: &str,
+    message: &str,
     subscribe_button_handle: &MouseStateHandle,
     is_ai_input_enabled: bool,
     icon_right_margin: f32,
@@ -3184,7 +3183,7 @@ fn render_out_of_credits_error(
     .finish();
 
     let text = Text::new(
-        format!("{title}\n\n{detail}"),
+        message.to_owned(),
         appearance.monospace_font_family(),
         appearance.monospace_font_size(),
     )
@@ -3202,7 +3201,7 @@ fn render_out_of_credits_error(
     })
     .finish();
 
-    let subscribe_button = out_of_credits_cta_button("Subscribe", subscribe_button_handle, app)
+    let subscribe_button = out_of_credits_cta_button(OUT_OF_CREDITS_SUBSCRIBE_LABEL, subscribe_button_handle, app)
         .build()
         .on_click(|ctx, _, _| {
             ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);

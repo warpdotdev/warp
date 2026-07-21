@@ -25,9 +25,9 @@ const PROVIDER_BUTTON_ICON_SIZE: f32 = 14.;
 const PROVIDER_BUTTON_ICON_TEXT_GAP: f32 = 8.;
 const ERROR_APOLOGY_TEXT: &str = "I'm sorry, I couldn't complete that request.";
 const INTERNAL_WARP_ERROR: &str = "Internal Warp error.";
-const OUT_OF_CREDITS_TITLE: &str = "I’m sorry, I couldn’t complete that request.";
-const OUT_OF_CREDITS_DETAIL: &str =
-    "In order to use Warp’s AI features, subscribe to a Warp plan, or bring your own inference.";
+pub const FAILED_OUTPUT_USAGE_NOTICE_TEXT: &str =
+    "This response won't count towards your usage.";
+pub const OUT_OF_CREDITS_SUBSCRIBE_LABEL: &str = "Subscribe";
 
 /// Text to use as a label throughout the app for user interactions that will attach selected
 /// block(s) or text selections to a new AI query.
@@ -65,21 +65,10 @@ pub fn error_color(theme: &WarpTheme) -> ColorU {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FailedOutputPresentation {
     Message(String),
-    OutOfCredits {
-        title: &'static str,
-        detail: &'static str,
-        can_use_own_api_keys: bool,
-    },
-    InvalidApiKey {
-        title: &'static str,
-        detail: String,
-    },
-    ContextWindowExceeded {
-        message: String,
-    },
-    AwsBedrockCredentialsExpiredOrInvalid {
-        fallback_message: String,
-    },
+    OutOfCredits { message: String },
+    InvalidApiKey { title: &'static str, detail: String },
+    ContextWindowExceeded { message: String },
+    AwsBedrockCredentialsExpiredOrInvalid { fallback_message: String },
 }
 
 /// Returns the user-facing presentation for an Agent Mode request failure.
@@ -101,10 +90,7 @@ pub fn failed_output_presentation(
             if let Some(message) = user_display_message {
                 if should_show_subscribe_cta(app) {
                     FailedOutputPresentation::OutOfCredits {
-                        title: OUT_OF_CREDITS_TITLE,
-                        detail: OUT_OF_CREDITS_DETAIL,
-                        can_use_own_api_keys: UserWorkspaces::as_ref(app)
-                            .is_byo_api_key_enabled(app),
+                        message: format!("{ERROR_APOLOGY_TEXT}\n\n{message}"),
                     }
                 } else {
                     FailedOutputPresentation::Message(format!("{ERROR_APOLOGY_TEXT}\n\n{message}"))
