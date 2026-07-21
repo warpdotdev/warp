@@ -136,3 +136,23 @@ fn zero_max_bytes_disables_rotation_entirely() {
     assert!(!tmp.path().join("warp.log.in_session.0").exists());
     assert_eq!(read(&tmp.path().join("warp.log")).len(), 500);
 }
+
+// CODE-1902: in-session rotation must use the resolved TUI base name, so a TUI
+// session produces `warp_tui_dev.log.in_session.N` and never a GUI `warp.log.*` name.
+#[test]
+fn in_session_rotation_uses_resolved_tui_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut w = RotatingFileWriter::open(tmp.path(), "warp_tui_dev.log", 16, 3).unwrap();
+    w.write_all(b"first batch ").unwrap(); // 12 bytes
+    w.write_all(b"more content").unwrap(); // crosses 16 -> rotate before write
+    w.flush().unwrap();
+
+    assert_eq!(
+        read(&tmp.path().join("warp_tui_dev.log.in_session.0")),
+        "first batch "
+    );
+    assert_eq!(read(&tmp.path().join("warp_tui_dev.log")), "more content");
+    // The GUI name must not appear from a TUI rotation.
+    assert!(!tmp.path().join("warp.log.in_session.0").exists());
+    assert!(!tmp.path().join("warp.log").exists());
+}

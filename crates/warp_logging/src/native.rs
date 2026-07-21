@@ -104,10 +104,17 @@ pub fn on_crash_recovery_process_killed() {
     if !config.use_logfile {
         return;
     }
+    on_crash_recovery_process_killed_in(&config.log_directory, &config.logfile_name);
+}
 
+/// Testable core of [`on_crash_recovery_process_killed`]: removes the
+/// `<logfile_name>.recovery` sidecar from `log_directory`. Extracted so the
+/// crash-recovery naming/flow can be exercised against a temp directory and a
+/// resolved TUI/GUI/CLI name without initializing the global logger.
+fn on_crash_recovery_process_killed_in(log_directory: &Path, logfile_name: &str) {
     let _ = fs::remove_file(crash_recovery_process_log_file_path(
-        &config.log_directory,
-        &config.logfile_name,
+        log_directory,
+        logfile_name,
     ));
 }
 
@@ -123,14 +130,22 @@ pub fn on_parent_process_crash() {
     if !config.use_logfile {
         return;
     }
+    on_parent_process_crash_in(&config.log_directory, &config.logfile_name);
+}
 
-    let main_log_path = main_process_log_file_path(&config.log_directory, &config.logfile_name);
-    let temp_path = temp_log_file_path(&config.log_directory, &config.logfile_name);
+/// Testable core of [`on_parent_process_crash`]: renames the active
+/// `<logfile_name>` to `<logfile_name>.old.temp`, then moves the crash
+/// recovery sidecar `<logfile_name>.recovery` into the active slot. Extracted
+/// so the crash-recovery naming/flow can be exercised against a temp directory
+/// and a resolved TUI/GUI/CLI name without initializing the global logger.
+fn on_parent_process_crash_in(log_directory: &Path, logfile_name: &str) {
+    let main_log_path = main_process_log_file_path(log_directory, logfile_name);
+    let temp_path = temp_log_file_path(log_directory, logfile_name);
 
     let _ = fs::rename(&main_log_path, temp_path);
 
     let _ = fs::rename(
-        crash_recovery_process_log_file_path(&config.log_directory, &config.logfile_name),
+        crash_recovery_process_log_file_path(log_directory, logfile_name),
         main_log_path,
     );
 }
@@ -164,18 +179,28 @@ pub async fn rotate_files(channel_file_name: &str, max_rotation: usize) -> Resul
             return Err(anyhow::anyhow!("Could not get log directory {err:?}"));
         }
     };
+    rotate_files_in(&log_directory, channel_file_name, max_rotation)
+}
 
+/// Testable core of [`rotate_files`]: performs the startup rotation against the
+/// given `log_directory` using the resolved `channel_file_name` (e.g. a TUI
+/// `warp_tui_dev.log` or the GUI `ChannelState::logfile_name()`). Extracted so
+/// the rotation flow can be exercised against a temp directory and a resolved
+/// frontend name without initializing the global logger. The body is purely
+/// synchronous I/O, so this core is sync; the public [`rotate_files`] stays
+/// async to preserve its API contract.
+fn rotate_files_in(
+    log_directory: &Path,
+    channel_file_name: &str,
+    max_rotation: usize,
+) -> Result<()> {
     // Delete the oldest log file (and any nested .in_session.M chunks that
     // belonged to that oldest startup-rotation slot).
     let largest_log_file_suffix = max_rotation.saturating_sub(1);
     let _ = fs::remove_file(
         log_directory.join(format!("{channel_file_name}.old.{largest_log_file_suffix}")),
     );
-    remove_old_session_in_session_chunks(
-        &log_directory,
-        channel_file_name,
-        largest_log_file_suffix,
-    );
+    remove_old_session_in_session_chunks(log_directory, channel_file_name, largest_log_file_suffix);
 
     // Rotate the .old.N startup-rotation slots, and along with each one any
     // nested `<name>.log.old.{N}.in_session.M` chunks left by the session
@@ -186,7 +211,7 @@ pub async fn rotate_files(channel_file_name: &str, max_rotation: usize) -> Resul
         let new_file_path = log_directory.join(format!("{channel_file_name}.old.{}", file_no + 1));
         let _ = fs::rename(old_file_path, new_file_path);
 
-        shift_old_session_in_session_chunks(&log_directory, channel_file_name, file_no);
+        shift_old_session_in_session_chunks(log_directory, channel_file_name, file_no);
     }
 
     // Migrate the previous session's `<name>.log.in_session.M` files into
@@ -194,10 +219,10 @@ pub async fn rotate_files(channel_file_name: &str, max_rotation: usize) -> Resul
     // opens with a clean `.in_session.*` window. The active log it produced
     // is renamed below from `.log.old.temp` to `.log.old.0`, so this naming
     // co-locates each old session's final state with its mid-session chunks.
-    migrate_previous_session_in_session_chunks(&log_directory, channel_file_name);
+    migrate_previous_session_in_session_chunks(log_directory, channel_file_name);
 
     // Rename `warp.log.old.temp` (the temporary file) to `warp.log.old.0`.
-    let temp_file_path = temp_log_file_path(&log_directory, channel_file_name);
+    let temp_file_path = temp_log_file_path(log_directory, channel_file_name);
 
     let _ = fs::rename(
         temp_file_path,
@@ -473,8 +498,15 @@ pub fn create_log_bundle_zip() -> Result<PathBuf> {
     let state = LOG_STATE
         .get()
         .ok_or_else(|| anyhow::anyhow!("Logging not initialized"))?;
-    let log_directory = &state.log_directory;
-    let logfile_name = &state.logfile_name;
+    create_log_bundle_zip_in(&state.log_directory, &state.logfile_name)
+}
+
+/// Testable core of [`create_log_bundle_zip`]: builds the timestamped zip in
+/// `log_directory` from every active/rotated/in-session file matching
+/// `logfile_name`. Extracted so the real bundle API (the one `/view-logs`
+/// calls) can be exercised against a temp directory and a resolved
+/// TUI/GUI/CLI name without initializing the global logger.
+fn create_log_bundle_zip_in(log_directory: &Path, logfile_name: &str) -> Result<PathBuf> {
     let log_files = collect_log_paths_in(log_directory, logfile_name)?;
     let logfile_stem = logfile_name.strip_suffix(".log").unwrap_or(logfile_name);
 
