@@ -1200,7 +1200,7 @@ define_settings_group!(AISettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
     },
-// This field is used to store the key used for voice input toggling.
+    // This field is used to store the key used for voice input toggling.
     // Note this is not the named key, but rather corresponds to the physical key.
     voice_input_toggle_key: VoiceInputToggleKey,
     // Preferred spoken language for voice transcription. Stored as an ISO-639-1

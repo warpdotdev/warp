@@ -7284,7 +7284,7 @@ impl SettingsWidget for VoiceWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "voice agent oz ai a.i. speech input natural language talk english language spanish french german estonian finnish"
+        "voice agent oz ai a.i. speech input natural language talk english spanish french german estonian finnish"
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
