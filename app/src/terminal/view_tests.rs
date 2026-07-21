@@ -8062,13 +8062,6 @@ fn cmd_k_in_agent_view_cancels_in_progress_conversation_and_starts_new_one() {
 #[test]
 #[cfg(target_os = "linux")]
 fn copy_forwards_etx_to_pty_on_linux_alt_screen_without_warp_selection() {
-    // Regression test for APP-4896 / issue #13988: on Linux, when a fullscreen
-    // TUI (alt screen) is running and Warp has no copyable selection of its own,
-    // `Ctrl+Shift+C` (TerminalAction::Copy) must forward the copy intent to the
-    // foreground TUI by writing a single ETX (0x03) byte to the PTY — the same
-    // byte `Ctrl+C` sends — so a TUI like Claude Code in fullscreen mode can copy
-    // its own internal selection that Warp can't see. Before the fix, `copy()`
-    // found nothing to copy and silently swallowed the keystroke (no PTY write).
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
@@ -8119,12 +8112,6 @@ fn copy_forwards_etx_to_pty_on_linux_alt_screen_without_warp_selection() {
 
 #[test]
 fn copy_does_not_forward_when_alt_screen_has_warp_selection() {
-    // Non-regression guard for APP-4896 behavior invariant #2: when the alt
-    // screen is active AND Warp *does* have its own alt-screen selection (the
-    // user click-dragged in Warp to select text on the fullscreen TUI's grid),
-    // `Ctrl+Shift+C` must copy that Warp selection to the clipboard and write
-    // *nothing* to the PTY. The forward-to-PTY fallback must not fire when a
-    // Warp selection was copied.
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
@@ -8179,12 +8166,6 @@ fn copy_does_not_forward_when_alt_screen_has_warp_selection() {
 
 #[test]
 fn copy_does_not_forward_on_normal_screen() {
-    // Non-regression guard for APP-4896 behavior invariant #3: on the normal
-    // screen (no alt screen / fullscreen TUI) with no selection, `Ctrl+Shift+C`
-    // must remain a silent no-op — nothing copied, nothing written to the PTY.
-    // Sending ETX on the normal screen would SIGINT a plain shell prompt. On
-    // Linux this guards `is_alt_screen_active()`; on macOS/Windows it guards the
-    // `cfg!(target_os = "linux")` predicate.
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
