@@ -2,20 +2,20 @@
 
 *Summary:* When the orchestration tab bar owns keyboard focus, make the plain Down arrow return focus to the session input (while retaining Shift+Down as an alias), and make Escape return to the main/orchestrator agent and focus its input.
 *Key design choices:* Keep input-focus and Escape bindings on the terminal-session surface, where input ownership and cross-session focus are available; reuse the existing semantic orchestration-session switch path instead of adding raw key handling to the tab-bar view; keep Escape out of the footer hint so the footer only advertises the requested Down affordance.
-*Design alternatives:* 
+*Design alternatives:*
 - Register the new bindings in `register_orchestration_surface_bindings` — rejected because that helper is shared by terminal sessions and cloud-run surfaces, while cloud-run views do not own a prompt input or the terminal-session focus transition.
 - Handle Escape/Down inside `TuiTabBarView` — rejected because the retained tab bar only owns presentation and selection events; session switching and input focus belong to `TuiTerminalSessionView`.
 - Remove Shift+Down and replace it with Down — rejected because the ticket explicitly requires Shift+Down to remain a working alias for existing users.
 
 *Root cause / approach:* At `d02e147360b9183444928c6037e11a462c0f98b1`, `TuiTerminalSessionView::init` registers `tui:orchestration_tabs:focus_input` only for `shift-down`, and `render_orchestration_tab_footer` advertises `Shift + ↓`. The terminal-session action `FocusDefaultInteractionTarget` already clears tab focus and focuses the default input owner via `set_orchestration_tab_focus(false, ctx)`. Add a second `down` binding to that action while retaining `shift-down`. Add a terminal-session-scoped editable Escape binding/action that obtains the tab bar's configured `main_tab` key, calls the existing `switch_to_orchestration_tab`/`switch_to_orchestration_conversation` path with `keep_tab_focus = false`, and therefore switches to the root session when a child is selected or simply returns focus to the input when the root is already selected. Expose the main-tab key through the retained tab-bar API rather than duplicating tab-bar configuration in the session view. Update the terminal orchestration footer from `Shift + ↓` to `↓`; do not add an Escape hint.
 
-*Affected files:* 
+*Affected files:*
 - `crates/warp_tui/src/terminal_session_view.rs` — terminal-session bindings, Escape action, and main-session focus transition.
 - `crates/warp_tui/src/tab_bar.rs` — read-only accessor for the configured main-tab key.
 - `crates/warp_tui/src/orchestration_tab_bar.rs` — Down footer copy; existing shared navigation bindings remain unchanged.
 - `crates/warp_tui/src/terminal_session_view_tests.rs` (and/or focused TUI keybinding tests) — binding, focus, session-switch, and footer regression coverage.
 
-*Open questions resolved:* 
+*Open questions resolved:*
 - Down focus behavior is limited to the focused orchestration-tab context and must not change ordinary input-editor Down behavior.
 - Shift+Down remains an equivalent focus-input binding.
 - Escape always targets the configured root/main tab; if that tab is already selected, no session switch is required, but input focus must still be restored.
