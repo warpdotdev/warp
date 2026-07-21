@@ -182,19 +182,24 @@ impl MouseState {
         self.hover_position
     }
 
-    /// The current browser-`title` tooltip hysteresis outcome, or [`None`] when
-    /// the owning [`Hoverable`] did not opt into pointer hysteresis. A hover
-    /// build closure reads this to decide whether to show a pointer-anchored
-    /// tooltip and at what position, instead of consulting [`Self::is_hovered`].
+    /// The current fade-animated tooltip outcome (position + opacity) at *now*,
+    /// or [`None`] when the owning [`Hoverable`] did not opt into pointer
+    /// hysteresis. A hover build closure reads this to decide whether to show a
+    /// pointer-anchored tooltip, at what position, and at what opacity, instead
+    /// of consulting [`Self::is_hovered`]. Sampled at [`Instant::now`] because
+    /// the opacity animates continuously; the [`Hoverable`] arms redraw timers so
+    /// the closure re-runs while a fade is in progress.
     pub fn tooltip_hysteresis_state(&self) -> Option<TooltipState> {
-        self.tooltip_hysteresis.as_ref().map(|h| h.state())
+        self.tooltip_hysteresis
+            .as_ref()
+            .map(|h| h.state(Instant::now()))
     }
 
     pub fn reset_hover_state(&mut self) {
         self.is_hovered = false;
         self.hover_position = None;
         if let Some(hysteresis) = self.tooltip_hysteresis.as_mut() {
-            hysteresis.on_pointer_left();
+            hysteresis.on_pointer_left(Instant::now());
         }
     }
 
@@ -213,9 +218,10 @@ impl MouseState {
         // Cancel any pending hover timers
         self.hover_in_timer = None;
         self.hover_out_timer = None;
-        // Dismiss any pointer-anchored tooltip immediately and drop its timer.
+        // Fade any pointer-anchored tooltip out (at the exit rate) and drop its
+        // timer. The fade-out still animates; a follow-up frame settles it hidden.
         if let Some(hysteresis) = self.tooltip_hysteresis.as_mut() {
-            hysteresis.on_pointer_left();
+            hysteresis.on_pointer_left(Instant::now());
         }
         self.hysteresis_timer = None;
     }
@@ -545,15 +551,17 @@ impl Hoverable {
 
     /// Feed a mouse move (or a re-dispatched last-move on redraw) into the
     /// pointer-hysteresis machine, if this `Hoverable` opted in, and reconcile
-    /// the notify timer that re-evaluates it. Returns `true` if the tooltip's
-    /// visible state changed (so the caller should treat the move as handled and
-    /// let the ensuing rebuild pick up the new [`TooltipState`]).
+    /// the notify timer that re-samples it during a fade. Returns `true` if the
+    /// tooltip's opacity/position changed since the last sample, or a fade is
+    /// still in progress (so the caller should treat the move as handled and let
+    /// the ensuing rebuild pick up the new [`TooltipState`]).
     ///
     /// The machine sees intra-element moves that the hover-state logic ignores;
-    /// its show/relocate/dismiss transitions are driven from a single
-    /// `notify_after` timer armed at the machine's next deadline. On redraw the
-    /// window re-dispatches the last move, which re-enters here and lets a
-    /// matured deadline resolve (see the timer plumbing in `App::dispatch_event`).
+    /// its opacity animates continuously, so while a fade is running we arm a
+    /// short (~frame-length) `notify_after` timer. On redraw the window
+    /// re-dispatches the last move, which re-enters here, re-samples the opacity,
+    /// and re-arms until the fade settles (see the timer plumbing in
+    /// `App::dispatch_event`).
     fn drive_pointer_hysteresis(
         &mut self,
         is_over_element: bool,
@@ -573,7 +581,11 @@ impl Hoverable {
         let relative = position - origin.xy();
         let now = Instant::now();
 
-        let before = self.state().tooltip_hysteresis.as_ref().map(|h| h.state());
+        let before = self
+            .state()
+            .tooltip_hysteresis
+            .as_ref()
+            .map(|h| h.state(now));
         {
             let mut state = self.state();
             let hysteresis = state
@@ -583,17 +595,28 @@ impl Hoverable {
             if is_over_element {
                 hysteresis.on_pointer_moved(relative, now);
             } else {
-                hysteresis.on_pointer_left();
+                hysteresis.on_pointer_left(now);
             }
         }
 
-        // Reconcile the single re-evaluation timer with the machine's next
-        // deadline: clear a stale one, arm a fresh one when a deadline is pending
-        // and none is already scheduled for it.
-        self.reconcile_hysteresis_timer(ctx);
+        // Reconcile the re-sample timer: while a fade is in progress, keep a
+        // short frame-length timer armed so the opacity re-samples each redraw;
+        // clear it once the fade settles.
+        self.reconcile_hysteresis_timer(ctx, now);
 
-        let after = self.state().tooltip_hysteresis.as_ref().map(|h| h.state());
-        if before != after {
+        let after = self
+            .state()
+            .tooltip_hysteresis
+            .as_ref()
+            .map(|h| h.state(now));
+        // Rebuild if the visible outcome changed, or a fade is still animating
+        // (so the next re-dispatch keeps advancing it toward its target).
+        let animating = self
+            .state()
+            .tooltip_hysteresis
+            .as_ref()
+            .is_some_and(|h| h.is_animating(now));
+        if before != after || animating {
             ctx.notify();
             true
         } else {
@@ -601,41 +624,36 @@ impl Hoverable {
         }
     }
 
-    /// Clear any armed hysteresis re-evaluation timer whose deadline no longer
-    /// matches the machine, and arm a fresh `notify_after` timer for the current
-    /// pending deadline (show or dismiss) when one is needed.
-    fn reconcile_hysteresis_timer(&mut self, ctx: &mut EventContext) {
-        let deadline = self
+    /// The ~frame-length re-sample interval used while a tooltip fade is in
+    /// progress: on each such redraw the window re-dispatches the last move,
+    /// which re-samples the animating opacity. 16 ms ≈ one 60 Hz frame.
+    const HYSTERESIS_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+    /// Keep a short re-sample timer armed while the tooltip fade is animating,
+    /// and drop it once the fade settles at its target. Unlike a single
+    /// deadline-at-completion timer, re-sampling every frame lets the build
+    /// closure paint each intermediate opacity, producing a visible fade rather
+    /// than a snap at the end.
+    fn reconcile_hysteresis_timer(&mut self, ctx: &mut EventContext, now: Instant) {
+        let animating = self
             .state()
             .tooltip_hysteresis
             .as_ref()
-            .and_then(|h| h.next_deadline());
+            .is_some_and(|h| h.is_animating(now));
         let existing = self.state().hysteresis_timer.clone();
 
-        match (deadline, existing) {
-            // A deadline is pending and the armed timer already targets it: keep it.
-            (Some(deadline), Some(timer)) if timer.hover_at == deadline => {}
-            // Deadline changed or newly appeared: replace any stale timer.
-            (Some(deadline), existing) => {
-                if let Some(existing) = existing {
-                    ctx.clear_notify_timer(existing.timer_id);
-                }
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                let (timer_id, hover_at) = ctx.notify_after(remaining);
-                // Pin the recorded deadline to the machine's, so the re-dispatch
-                // on the resulting redraw resolves it deterministically even if
-                // `notify_after` rounds the wake time.
-                self.state().hysteresis_timer = Some(HoverTimer {
-                    hover_at: deadline.max(hover_at),
-                    timer_id,
-                });
-            }
-            // No deadline pending: drop any lingering timer.
-            (None, Some(existing)) => {
+        if animating {
+            // Re-arm a fresh frame timer each sample. Clearing the previous one
+            // first avoids leaking timers as the fade re-dispatches frame by frame.
+            if let Some(existing) = existing {
                 ctx.clear_notify_timer(existing.timer_id);
-                self.state().hysteresis_timer = None;
             }
-            (None, None) => {}
+            let (timer_id, hover_at) = ctx.notify_after(Self::HYSTERESIS_FRAME_INTERVAL);
+            self.state().hysteresis_timer = Some(HoverTimer { hover_at, timer_id });
+        } else if let Some(existing) = existing {
+            // Fade settled: stop re-sampling.
+            ctx.clear_notify_timer(existing.timer_id);
+            self.state().hysteresis_timer = None;
         }
     }
 

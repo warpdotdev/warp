@@ -3,9 +3,10 @@ use std::rc::Rc;
 
 use warpui_core::color::ColorU;
 use warpui_core::elements::{
-    ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-    Icon, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-    Radius, Stack, TOOLTIP_JITTER_THRESHOLD, TOOLTIP_SHOW_DELAY, Text, TooltipState,
+    ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Fill as UiFill, Flex,
+    Hoverable, Icon, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Stack, TOOLTIP_JITTER_THRESHOLD, TOOLTIP_SHOW_DELAY, Text,
+    TooltipState,
 };
 use warpui_core::fonts::{FamilyId, Properties, Weight};
 use warpui_core::geometry::vector::{Vector2F, vec2f};
@@ -497,19 +498,22 @@ impl UiBuilder {
     }
 
     /// Like `overlay_tool_tip_on_element`, but anchors the tooltip at the mouse
-    /// pointer with the browser-`title` show/dismiss hysteresis model rather than
-    /// pinning it to the hovered element's rect. The tooltip's top-left is placed
-    /// at the pointer position the machine reports, nudged by `pointer_offset` (a
+    /// pointer with a browser-`title` *fade animation* rather than pinning it to
+    /// the hovered element's rect. The tooltip's top-left is placed at the
+    /// pointer position the fade machine reports, nudged by `pointer_offset` (a
     /// small below-right nudge so the pointer doesn't cover the text).
     ///
-    /// Behavior (see [`TooltipHysteresis`]): the tooltip appears after the
-    /// pointer comes to rest over the element for [`TOOLTIP_SHOW_DELAY`]; while
-    /// visible, sustained pointer movement dismisses it after the same delay,
-    /// while coming to rest again first relocates it in place with no new delay;
-    /// leaving the element dismisses it immediately. It renders as an overlay
-    /// (escapes parent clips) and is kept within the window on both axes. This is
-    /// driven from timers, not per-move rebuilds, so it has no document-layout
-    /// impact.
+    /// Behavior (see [`TooltipHysteresis`]): opacity animates toward full while
+    /// the pointer is at rest over the element and toward zero while it moves
+    /// (a full fade spans [`TOOLTIP_SHOW_DELAY`]); the fade-in *is* the rest
+    /// delay, and moving mid-fade reverses from the current opacity. The tooltip
+    /// colors are scaled by that opacity so the whole affordance fades together.
+    /// Position is captured when a fade-in starts from zero and held fixed while
+    /// visible; resting at a new spot lets the old fade out before the new fades
+    /// in (single tooltip instance). Leaving the element fades out faster. It
+    /// renders as an overlay (escapes parent clips) and is kept within the window
+    /// on both axes, driven from per-frame re-sample timers rather than per-move
+    /// rebuilds, so it has no document-layout impact.
     pub fn overlay_tool_tip_at_pointer(
         &self,
         label: String,
@@ -517,13 +521,18 @@ impl UiBuilder {
         element: Box<dyn Element>,
         pointer_offset: Vector2F,
     ) -> Box<dyn Element> {
-        Hoverable::new(mouse_state_handle, |state| {
+        let styles = self.default_tool_tip_styles();
+        Hoverable::new(mouse_state_handle, move |state| {
             let mut stack = Stack::new().with_child(element);
-            // Consult the hysteresis machine — not `is_hovered` — for whether and
-            // where to show. `Some(Visible { at })` means the pointer settled and
-            // the show/relocate timing has been satisfied.
-            if let Some(TooltipState::Visible { at }) = state.tooltip_hysteresis_state() {
-                let tool_tip = self.tool_tip(label).build().finish();
+            // Consult the fade machine — not `is_hovered` — for whether, where,
+            // and at what opacity to show. `Some(Visible { at, opacity })` means
+            // the tooltip is at least partly faded in at the settled position.
+            if let Some(TooltipState::Visible { at, opacity }) = state.tooltip_hysteresis_state() {
+                // Scale the tooltip's colors by the current fade opacity so the
+                // whole affordance (background, border, text) fades together.
+                let tool_tip = Tooltip::new(label.clone(), scale_tool_tip_opacity(styles, opacity))
+                    .build()
+                    .finish();
                 let offset = OffsetPositioning::offset_from_parent(
                     at + pointer_offset,
                     ParentOffsetBounds::WindowByPosition,
@@ -1239,6 +1248,44 @@ impl UiBuilder {
     pub fn line_height_ratio(&self) -> f32 {
         self.line_height_ratio
     }
+}
+
+/// Scale a `ColorU`'s alpha channel by `opacity` (`0.0..=1.0`), leaving RGB
+/// untouched. Used to fade a tooltip's colors together as one affordance.
+fn coloru_scaled(color: ColorU, opacity: f32) -> ColorU {
+    let a = (color.a as f32 * opacity.clamp(0.0, 1.0)).round() as u8;
+    ColorU::new(color.r, color.g, color.b, a)
+}
+
+/// Scale every color in a `UiFill` by `opacity`, preserving its shape (solid
+/// stays solid, gradient stays a gradient with both stops faded, none stays
+/// none).
+fn fill_scaled(fill: UiFill, opacity: f32) -> UiFill {
+    match fill {
+        UiFill::None => UiFill::None,
+        UiFill::Solid(color) => UiFill::Solid(coloru_scaled(color, opacity)),
+        UiFill::Gradient {
+            start,
+            end,
+            start_color,
+            end_color,
+        } => UiFill::Gradient {
+            start,
+            end,
+            start_color: coloru_scaled(start_color, opacity),
+            end_color: coloru_scaled(end_color, opacity),
+        },
+    }
+}
+
+/// Return a copy of `styles` with the tooltip's background, border, and font
+/// colors' alpha scaled by `opacity`, so the whole tooltip fades uniformly as
+/// the fade animation progresses. An `opacity` of `1.0` is a no-op.
+fn scale_tool_tip_opacity(mut styles: UiComponentStyles, opacity: f32) -> UiComponentStyles {
+    styles.background = styles.background.map(|f| fill_scaled(f, opacity));
+    styles.border_color = styles.border_color.map(|f| fill_scaled(f, opacity));
+    styles.font_color = styles.font_color.map(|c| coloru_scaled(c, opacity));
+    styles
 }
 
 /// Options for how to render an animated button.

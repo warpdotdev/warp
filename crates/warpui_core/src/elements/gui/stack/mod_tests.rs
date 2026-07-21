@@ -1121,7 +1121,12 @@ impl crate::core::View for HysteresisTooltipView {
 
             let mut stack = Stack::new().with_child(base);
 
-            if let Some(TooltipState::Visible { at }) = state.tooltip_hysteresis_state() {
+            // The fade machine reports `Visible` at any opacity > 0. This
+            // reduced view ignores the opacity (its plain `Rect` child carries no
+            // color to fade); the real builder scales the tooltip's colors by it.
+            // What this scene test pins is presence/position/relocation of the
+            // overlay, which are governed by `at`.
+            if let Some(TooltipState::Visible { at, .. }) = state.tooltip_hysteresis_state() {
                 let tooltip = ConstrainedBox::new(Rect::new().finish())
                     .with_width(tooltip_overlay_size().x())
                     .with_height(tooltip_overlay_size().y())
@@ -1180,22 +1185,24 @@ fn move_mouse(app: &mut App, window_id: WindowId, position: Vector2F) {
     });
 }
 
-/// Spec point 2: resting the pointer over the element shows the tooltip at the
-/// pointer position after `D`, and not before. Drives the real hysteresis wiring
-/// (Hoverable timer arm → redraw re-dispatch → deadline matures), not just the
-/// pure state machine.
+/// Fade spec point 1–2: the tooltip is fully faded out before the pointer is
+/// ever seen (no rest sample), and fully faded in at the pointer position once
+/// the pointer has rested for `D`. Drives the real fade wiring (Hoverable arms a
+/// per-frame re-sample timer → redraw re-dispatches the held move → the machine
+/// reads it as rest and advances the fade), not just the pure state machine.
 ///
-/// The move-to-dismiss and rest-again-relocate transitions (spec points 3–5) are
-/// exercised exhaustively by the `tooltip_hysteresis` state-machine tests, which
-/// control the clock and pointer motion precisely. They cannot be driven
-/// deterministically here because the harness's only way to advance time is a
-/// real wait, during which the window re-dispatches the *last* mouse position —
-/// which the machine correctly reads as the pointer coming to rest, not as
-/// continued motion. See `test_hysteresis_tooltip_relocates_on_rerest_without_new_delay`
-/// for the relocate path (which the re-dispatch *can* express) and the exit test
-/// for immediate dismissal.
+/// This reduced view carries no color on its `Rect` child, so it cannot observe
+/// *opacity* — it treats any opacity > 0 as "overlay present". It therefore pins
+/// what it can see at the scene level: no overlay before any pointer sample, and
+/// the overlay present at the settled position after resting for `D`. The
+/// intermediate fade opacities (fade-in curve, `p·D` fade-out, reversal) are
+/// covered precisely by the `tooltip_hysteresis` state-machine tests, which
+/// control the clock and can read the opacity directly. Note that because the
+/// render frame re-dispatches the last move, the machine sees the resting
+/// pointer within a frame and the fade-in begins right away — so this scene test
+/// asserts the *end* of the fade-in, not a "still hidden mid-delay" checkpoint.
 #[test]
-fn test_hysteresis_tooltip_shows_at_pointer_only_after_rest_delay() {
+fn test_hysteresis_tooltip_shows_at_pointer_after_rest_delay() {
     App::test((), |mut app| async move {
         let app = &mut app;
         app.update(init);
@@ -1203,33 +1210,35 @@ fn test_hysteresis_tooltip_shows_at_pointer_only_after_rest_delay() {
             app.add_window(WindowStyle::NotStealFocus, |_| HysteresisTooltipView::new());
         app.update(|ctx| ctx.simulate_render_frame(window_id));
 
-        // Rest the pointer inside the base. Nothing shows yet (delay unpaid).
-        let rest = vec2f(30., 25.);
-        move_mouse(app, window_id, rest);
-        app.update(|ctx| ctx.simulate_render_frame(window_id));
+        // Before any pointer sample, the tooltip is fully faded out.
         let overlay = read_scene(app, window_id, overlay_layer_rect_bounds);
         assert!(
             overlay.is_empty(),
-            "tooltip must not show before the rest delay elapses; got {overlay:?}"
+            "tooltip must be fully faded out before the pointer is seen; got {overlay:?}"
         );
 
-        // Wait out the show delay; the redraw the notify timer triggers
-        // re-dispatches the held move, which matures the pending-show deadline.
+        // Rest the pointer, then wait out the fade-in; the per-frame re-sample
+        // timer re-dispatches the held move (read as rest), driving the opacity up
+        // to full over `D`.
+        let rest = vec2f(30., 25.);
+        move_mouse(app, window_id, rest);
         Timer::after(HYSTERESIS_DELAY * 3).await;
         app.update(|ctx| ctx.simulate_render_frame(window_id));
         let overlay = read_scene(app, window_id, overlay_layer_rect_bounds);
         let expected = RectF::new(rest + tooltip_pointer_offset(), tooltip_overlay_size());
         assert!(
             overlay.contains(&expected),
-            "tooltip should show at the resting pointer {expected:?}; got {overlay:?}"
+            "tooltip should be faded in at the resting pointer {expected:?}; got {overlay:?}"
         );
     });
 }
 
-/// Spec point 6: leaving the element dismisses immediately (no delay), driven
-/// through the real wiring.
+/// Fade spec point 4 (exit): leaving the element fades the tooltip out (at the
+/// faster exit rate) until it is fully gone, driven through the real wiring.
+/// Unlike an instant snap, the fade takes `D / EXIT_FADE_RATE_MULTIPLIER`; this
+/// test waits that fade out and confirms the overlay is gone once it settles.
 #[test]
-fn test_hysteresis_tooltip_dismisses_immediately_on_exit() {
+fn test_hysteresis_tooltip_fades_out_on_exit() {
     App::test((), |mut app| async move {
         let app = &mut app;
         app.update(init);
@@ -1237,7 +1246,7 @@ fn test_hysteresis_tooltip_dismisses_immediately_on_exit() {
             app.add_window(WindowStyle::NotStealFocus, |_| HysteresisTooltipView::new());
         app.update(|ctx| ctx.simulate_render_frame(window_id));
 
-        // Rest and show.
+        // Rest and fade in.
         let rest = vec2f(30., 25.);
         move_mouse(app, window_id, rest);
         Timer::after(HYSTERESIS_DELAY * 3).await;
@@ -1247,24 +1256,28 @@ fn test_hysteresis_tooltip_dismisses_immediately_on_exit() {
             "precondition: tooltip visible after resting"
         );
 
-        // Move well outside the base (base is 80x60 at the origin). Exit must
-        // dismiss on this very frame, with no delay wait.
+        // Move well outside the base (base is 80x60 at the origin) and wait out
+        // the exit fade. The per-frame re-sample timer re-dispatches the held
+        // outside position (read as "still gone"), driving opacity down to 0.
         move_mouse(app, window_id, vec2f(500., 500.));
+        Timer::after(HYSTERESIS_DELAY * 3).await;
         app.update(|ctx| ctx.simulate_render_frame(window_id));
         let overlay = read_scene(app, window_id, overlay_layer_rect_bounds);
         assert!(
             overlay.is_empty(),
-            "tooltip must dismiss immediately on exit; got {overlay:?}"
+            "tooltip must fully fade out after leaving the element; got {overlay:?}"
         );
     });
 }
 
-/// Spec point 4: while the tooltip is visible, nudging to a new spot and coming
-/// to rest again before the dismissal fires relocates the still-visible tooltip
-/// to the new pointer position with no additional show delay. Driven through the
-/// real wiring.
+/// Single-instance relocation (fade spec point 3): moving to a new rest spot
+/// does not slide or crossfade a second instance — the tooltip at the old spot
+/// fades out first, then fades in at the new spot. Driven through the real
+/// wiring, this test pins the *endpoint*: after resting at a new spot long
+/// enough for the old to fade out and the new to fade in, the overlay is at the
+/// new spot and not the old.
 #[test]
-fn test_hysteresis_tooltip_relocates_on_rerest_without_new_delay() {
+fn test_hysteresis_tooltip_relocates_to_new_rest_spot() {
     App::test((), |mut app| async move {
         let app = &mut app;
         app.update(init);
@@ -1272,7 +1285,7 @@ fn test_hysteresis_tooltip_relocates_on_rerest_without_new_delay() {
             app.add_window(WindowStyle::NotStealFocus, |_| HysteresisTooltipView::new());
         app.update(|ctx| ctx.simulate_render_frame(window_id));
 
-        // Rest and show at the first spot. Both spots are kept in the top strip
+        // Rest and fade in at the first spot. Both spots are kept in the top strip
         // of the base (y small) so the pointer never lands *under* a visible
         // tooltip (which floats below-right at +16 in y) — a pointer covered by
         // its own tooltip reads as "left the element" and would dismiss, an
@@ -1290,27 +1303,26 @@ fn test_hysteresis_tooltip_relocates_on_rerest_without_new_delay() {
             "precondition: tooltip visible at first rest spot; got {overlay:?}"
         );
 
-        // Nudge to a new spot and immediately hold still there. A single move
-        // arms dismissal; holding still (re-dispatched by the redraw) resolves as
-        // a re-rest, which relocates the *still-visible* tooltip with no new show
-        // delay. Check within less than the full delay that it moved and is up.
+        // Move to a new spot and hold still there. Under the single-instance
+        // model the old tooltip finishes fading out at `first`, then a fresh
+        // fade-in captures `second`. Wait out both fades (each ≤ D), holding the
+        // pointer still at `second` so the re-dispatch keeps it "at rest".
         let second = vec2f(55., 8.);
         move_mouse(app, window_id, second);
-        app.update(|ctx| ctx.simulate_render_frame(window_id));
-        // Give the relocate (which is immediate on re-rest) a frame to settle,
-        // but far less than a full delay so this can't be confused with a fresh
-        // show-after-delay.
-        Timer::after(HYSTERESIS_DELAY / 4).await;
-        // Hold still: re-dispatch the same position so the machine sees a rest.
-        move_mouse(app, window_id, second);
-        app.update(|ctx| ctx.simulate_render_frame(window_id));
+        // Several settle waits, re-asserting the held position each time so the
+        // machine sees continuous rest at `second` across the fade-out→fade-in.
+        for _ in 0..3 {
+            Timer::after(HYSTERESIS_DELAY).await;
+            move_mouse(app, window_id, second);
+            app.update(|ctx| ctx.simulate_render_frame(window_id));
+        }
         let overlay = read_scene(app, window_id, overlay_layer_rect_bounds);
         assert!(
             overlay.contains(&RectF::new(
                 second + tooltip_pointer_offset(),
                 tooltip_overlay_size()
             )),
-            "tooltip should relocate to the new rest spot with no new delay; got {overlay:?}"
+            "tooltip should end up faded in at the new rest spot; got {overlay:?}"
         );
         assert!(
             !overlay.contains(&RectF::new(

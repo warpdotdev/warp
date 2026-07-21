@@ -1,34 +1,63 @@
-//! A pure state machine implementing the browser title-tooltip behavior with
-//! symmetric show/dismiss hysteresis, extracted so it can be exhaustively unit
-//! tested with a virtual clock, free of any UI framework or async harness.
+//! A pure state machine implementing the browser title-tooltip behavior as a
+//! *fade animation*, extracted so it can be exhaustively unit tested with a
+//! virtual clock, free of any UI framework or async harness.
 //!
-//! # The model (matching a browser's `title` tooltip)
+//! # The model (a fade-animated browser `title` tooltip)
 //!
-//! Let `D` be a single delay reused for both the show and the dismiss paths.
+//! Let `D` be a single delay reused for both the fade-in and the fade-out paths.
 //!
-//! - The pointer coming to **rest** over the target (no movement beyond a small
-//!   jitter threshold for `D`) shows the tooltip at the pointer position.
-//! - Once visible, the pointer **moving** starts a dismissal timer of the same
-//!   `D`. If the pointer is still moving when it fires, the tooltip dismisses.
-//! - If the pointer comes to **rest again before** that dismissal fires, the
-//!   dismissal is cancelled and the *visible* tooltip is **relocated** to the
-//!   new pointer position with no additional show delay (it was already paid).
-//! - Resting again *after* a dismissal takes the normal show path (delay `D`,
-//!   appear at the new position).
-//! - The pointer **leaving** the target dismisses immediately, with no delay.
+//! The tooltip's opacity continuously animates toward a *target*:
+//!
+//! - `1.0` (fully opaque) while the pointer is **at rest** over the target (no
+//!   movement beyond a small jitter threshold since the last sample).
+//! - `0.0` (fully transparent) while the pointer is **moving** (beyond the
+//!   jitter threshold) or has **left** the target.
+//!
+//! The fade rate is symmetric: a full `0 → 1` fade takes exactly `D` — the
+//! fade-in *is* the rest delay, so it begins the instant the pointer comes to
+//! rest, with no invisible waiting period. A fade-out from opacity `p` takes
+//! `p · D` (same constant rate `1/D`). When the target flips mid-fade, the
+//! animation **reverses from the current opacity**, not from a fixed endpoint:
+//! nudging the pointer while the tooltip is at 30% starts fading it *out* from
+//! 30% (a `0.3 · D` fade-out), and coming to rest again resumes fading *in* from
+//! wherever it had reached.
 //!
 //! The word "rest" is load-bearing: this is not "hovered for `D`". The pointer
-//! can sit over the target the entire time and the tooltip still hides while it
-//! keeps moving — exactly like a browser `title` tooltip.
+//! can sit over the target the entire time and the tooltip still fades away
+//! while it keeps moving — exactly like a browser `title` tooltip.
+//!
+//! # Position
+//!
+//! The anchor position is **captured when a fade-in starts from zero opacity**
+//! (the pointer's rest position). While opacity is `> 0` the position stays
+//! fixed — the tooltip never slides. Only once it has fully faded to `0` is the
+//! position released, so the next fade-in from zero can capture a fresh spot.
+//!
+//! This is the single-tooltip-instance consequence of the framework's overlay
+//! machinery: the build closure emits at most one positioned overlay child from
+//! one [`TooltipState`], so two simultaneously-fading instances at different
+//! positions cannot be expressed. If the pointer comes to rest at a new spot
+//! while the old tooltip is still mid-fade-out, the old one finishes fading to
+//! `0` at its position first, and only then does a fresh fade-in begin at the
+//! new rest position.
+//!
+//! # Exit
+//!
+//! Leaving the target entirely fades out at a **faster** rate than symmetric
+//! (see [`EXIT_FADE_RATE_MULTIPLIER`]) so a dismissed tooltip clears promptly
+//! rather than lingering — snappier than the in-target move-to-dismiss, but
+//! still animated (not an instant snap, which read as janky in the live build).
 //!
 //! # Driving the machine
 //!
 //! Callers feed pointer samples in via [`TooltipHysteresis::on_pointer_moved`]
 //! (a move within the target), [`TooltipHysteresis::on_pointer_left`] (exited
-//! the target), and call [`TooltipHysteresis::tick`] whenever the clock may have
-//! advanced far enough to cross a pending deadline (e.g. from a timer callback,
-//! or on the next re-dispatch of the last pointer sample). Every method returns
-//! the current [`TooltipState`] so the caller can rebuild only when it changes.
+//! the target), and read [`TooltipHysteresis::state`] / the opacity at a given
+//! `now`. Because the opacity animates continuously, a driver re-samples it each
+//! frame while [`TooltipHysteresis::is_animating`] is true (arming a short
+//! ~frame-length timer), and stops re-arming once the opacity settles at its
+//! target. [`TooltipHysteresis::next_deadline`] reports when the current fade
+//! completes, for callers that prefer a single settle timer.
 //!
 //! The machine holds no real clock: the caller supplies a monotonically
 //! non-decreasing `now` on every call. In production `now` is `Instant::now()`;
@@ -40,29 +69,38 @@ use instant::Instant;
 
 use pathfinder_geometry::vector::Vector2F;
 
-/// The framework's tooltip show delay `D`, reused across every hover tooltip so
-/// they feel uniform. Also the dismiss delay for the browser-`title` hysteresis
-/// model (a single `D` governs both the rest-to-show and move-to-dismiss paths).
-/// This matches the hidden-section tooltip's long-standing 500 ms show delay.
+/// The framework's tooltip fade duration `D`, reused across every hover tooltip
+/// so they feel uniform. A full `0 → 1` opacity fade takes exactly this long,
+/// and it doubles as the fade-out span from full opacity. This matches the
+/// hidden-section tooltip's long-standing 500 ms show delay.
 pub const TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
 
 /// Default jitter tolerance (in pixels) for pointer-hysteresis tooltips: inter-
 /// sample movement at or below this counts as the pointer still being at rest,
-/// so hand tremor neither dismisses nor relocates a visible tooltip.
-pub const TOOLTIP_JITTER_THRESHOLD: f32 = 3.0;
+/// so hand tremor neither fades out nor relocates a visible tooltip. Raised from
+/// the original 3 px to absorb a little more real-hand tremor without the
+/// tooltip flickering toward a fade-out.
+pub const TOOLTIP_JITTER_THRESHOLD: f32 = 6.0;
 
-/// The visible outcome of the hysteresis machine, recomputed after every input.
+/// How much faster than the symmetric rate the tooltip fades when the pointer
+/// leaves the target entirely. Exit should feel snappier than an in-target
+/// move-to-dismiss, but still animate rather than snap. At 3×, a full-opacity
+/// tooltip clears in `D / 3`.
+pub const EXIT_FADE_RATE_MULTIPLIER: f32 = 3.0;
+
+/// The visible outcome of the fade machine, recomputed for a given `now`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TooltipState {
-    /// The tooltip is not shown.
+    /// The tooltip is fully faded out (opacity 0) and not shown.
     Hidden,
-    /// The tooltip is shown, anchored at this pointer position (relative to the
-    /// target's origin — the same space the samples are fed in).
-    Visible { at: Vector2F },
+    /// The tooltip is shown at `opacity` (in `(0.0, 1.0]`), anchored at `at`
+    /// (relative to the target's origin — the same space samples are fed in).
+    /// The caller scales the tooltip's colors by `opacity`.
+    Visible { at: Vector2F, opacity: f32 },
 }
 
 impl TooltipState {
-    /// Whether the tooltip is currently shown.
+    /// Whether the tooltip is currently shown at all (opacity strictly positive).
     pub fn is_visible(&self) -> bool {
         matches!(self, TooltipState::Visible { .. })
     }
@@ -70,41 +108,51 @@ impl TooltipState {
     /// The anchor position if visible.
     pub fn position(&self) -> Option<Vector2F> {
         match self {
-            TooltipState::Visible { at } => Some(*at),
+            TooltipState::Visible { at, .. } => Some(*at),
             TooltipState::Hidden => None,
+        }
+    }
+
+    /// The current opacity in `[0.0, 1.0]` (0 when hidden).
+    pub fn opacity(&self) -> f32 {
+        match self {
+            TooltipState::Visible { opacity, .. } => *opacity,
+            TooltipState::Hidden => 0.0,
         }
     }
 }
 
-/// Internal phase tracking, distinct from the externally observable
-/// [`TooltipState`] because "hidden" splits into "idle" vs "waiting to show" and
-/// "visible" splits into "steady" vs "waiting to dismiss".
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Phase {
-    /// Pointer is over the target but has not yet come to rest, and nothing is
-    /// shown. This is the state after a dismissal while the pointer keeps
-    /// moving, and the initial state.
-    Idle,
-    /// Pointer came to rest at `at`; the tooltip will show when `deadline` is
-    /// reached (provided the pointer has not moved again since).
-    PendingShow { at: Vector2F, deadline: Instant },
-    /// Tooltip is visible and anchored at `at`; the pointer is at rest.
-    Visible { at: Vector2F },
-    /// Tooltip is visible and anchored at `at`, but the pointer has started
-    /// moving; it will dismiss when `deadline` is reached unless the pointer
-    /// comes to rest again first.
-    PendingDismiss { at: Vector2F, deadline: Instant },
-}
-
-/// The browser-`title` tooltip hysteresis state machine. See the module docs.
+/// The fade-animated browser-`title` tooltip machine. See the module docs.
+///
+/// Opacity is modeled as a piecewise-linear function of time anchored at
+/// `(anchor_time, anchor_opacity)` and moving at `rate` (opacity units per
+/// second, signed toward `target`). Sampling clamps the linear extrapolation
+/// into `[0, target]` (for a rising fade) or `[target, anchor]` (for a falling
+/// one), so the value never overshoots its target.
 #[derive(Clone, Debug)]
 pub struct TooltipHysteresis {
-    /// The single delay `D` reused for the show and dismiss paths.
-    delay: std::time::Duration,
-    /// Movement below this many pixels between two samples is treated as jitter
-    /// (i.e. still "at rest"), not motion.
+    /// The symmetric fade duration `D`: a full `0 → 1` fade (and a full `1 → 0`
+    /// in-target fade) takes this long.
+    delay: Duration,
+    /// Movement strictly beyond this many pixels between two samples counts as
+    /// motion; at or below it, the pointer is treated as still (jitter).
     jitter_threshold: f32,
-    phase: Phase,
+
+    /// Opacity value at `anchor_time`, the start of the current linear segment.
+    anchor_opacity: f32,
+    /// The instant `anchor_opacity` was captured; the segment's origin.
+    anchor_time: Instant,
+    /// Signed opacity-per-second slope of the current segment (positive fading
+    /// in, negative fading out, zero when settled at the target).
+    rate: f32,
+    /// The opacity the current segment is heading toward (`0.0` or `1.0`).
+    target: f32,
+
+    /// The anchor position, captured when a fade-in began from zero opacity and
+    /// held fixed until the tooltip fully fades out. [`None`] only while fully
+    /// hidden with nothing fading.
+    position: Option<Vector2F>,
+
     /// The most recent pointer position sampled while over the target, used to
     /// measure inter-sample movement for jitter rejection. [`None`] before the
     /// first sample and after the pointer leaves.
@@ -112,44 +160,83 @@ pub struct TooltipHysteresis {
 }
 
 impl TooltipHysteresis {
-    /// Creates a machine in the [`Phase::Idle`] state.
+    /// Creates a machine fully hidden (opacity 0), with no position captured.
     ///
-    /// `delay` is `D` (reused for both show and dismiss). `jitter_threshold` is
-    /// the pixel radius below which movement counts as rest.
-    pub fn new(delay: std::time::Duration, jitter_threshold: f32) -> Self {
+    /// `delay` is `D` (the symmetric fade duration). `jitter_threshold` is the
+    /// pixel radius at/below which inter-sample movement counts as rest.
+    pub fn new(delay: Duration, jitter_threshold: f32) -> Self {
         Self {
             delay,
             jitter_threshold,
-            phase: Phase::Idle,
+            anchor_opacity: 0.0,
+            anchor_time: Instant::now(),
+            rate: 0.0,
+            target: 0.0,
+            position: None,
             last_position: None,
         }
     }
 
-    /// The current externally observable state.
-    pub fn state(&self) -> TooltipState {
-        match self.phase {
-            Phase::Idle | Phase::PendingShow { .. } => TooltipState::Hidden,
-            Phase::Visible { at } | Phase::PendingDismiss { at, .. } => {
-                TooltipState::Visible { at }
-            }
+    /// The symmetric fade rate, in opacity units per second (`1 / D`).
+    fn base_rate(&self) -> f32 {
+        1.0 / self.delay.as_secs_f32()
+    }
+
+    /// The opacity at `now`, clamping the current linear segment so it never
+    /// overshoots its target. Pure: does not mutate the machine.
+    fn opacity_at(&self, now: Instant) -> f32 {
+        let elapsed = now
+            .saturating_duration_since(self.anchor_time)
+            .as_secs_f32();
+        let raw = self.anchor_opacity + self.rate * elapsed;
+        // Clamp into the interval bounded by the anchor and the target, so a
+        // matured fade sits exactly at its target rather than running past it.
+        let (lo, hi) = if self.anchor_opacity <= self.target {
+            (self.anchor_opacity, self.target)
+        } else {
+            (self.target, self.anchor_opacity)
+        };
+        raw.clamp(lo, hi)
+    }
+
+    /// The current externally observable state at `now`.
+    pub fn state(&self, now: Instant) -> TooltipState {
+        let opacity = self.opacity_at(now);
+        match self.position {
+            Some(at) if opacity > 0.0 => TooltipState::Visible { at, opacity },
+            _ => TooltipState::Hidden,
         }
     }
 
-    /// The next instant at which [`Self::tick`] would change state, if any. A
-    /// caller can use this to schedule a single timer rather than polling.
+    /// The current opacity at `now`, in `[0.0, 1.0]`.
+    pub fn opacity(&self, now: Instant) -> f32 {
+        self.opacity_at(now)
+    }
+
+    /// Whether a fade is in progress at `now` (opacity not yet settled at its
+    /// target). A driver re-samples each frame while this is true.
+    pub fn is_animating(&self, now: Instant) -> bool {
+        (self.opacity_at(now) - self.target).abs() > f32::EPSILON
+    }
+
+    /// The instant the current fade completes (opacity reaches its target), if a
+    /// fade is in progress; [`None`] when already settled. A caller can use this
+    /// to schedule a single settle timer instead of polling every frame.
     pub fn next_deadline(&self) -> Option<Instant> {
-        match self.phase {
-            Phase::PendingShow { deadline, .. } | Phase::PendingDismiss { deadline, .. } => {
-                Some(deadline)
-            }
-            Phase::Idle | Phase::Visible { .. } => None,
+        if self.rate == 0.0 || self.anchor_opacity == self.target {
+            return None;
         }
+        let remaining = (self.target - self.anchor_opacity) / self.rate;
+        if remaining <= 0.0 {
+            return None;
+        }
+        Some(self.anchor_time + Duration::from_secs_f32(remaining))
     }
 
     /// Whether `to` is within the jitter threshold of the last sampled position
     /// (i.e. the pointer is effectively still). The first sample after the
-    /// pointer arrives has no predecessor and so counts as movement, which
-    /// correctly starts the initial rest timer via [`Self::on_pointer_moved`].
+    /// pointer arrives has no predecessor and so counts as movement, correctly
+    /// leaving the tooltip faded out until the *next* (resting) sample.
     fn is_jitter(&self, to: Vector2F) -> bool {
         match self.last_position {
             Some(from) => (to - from).length() <= self.jitter_threshold,
@@ -157,118 +244,113 @@ impl TooltipHysteresis {
         }
     }
 
+    /// Re-anchor the animation to the current opacity at `now` and aim it at
+    /// `target` with slope `rate` (magnitude, always positive; sign is derived
+    /// from the direction to the target). A no-op-preserving helper: sampling at
+    /// `now` immediately after yields the same opacity it did just before.
+    fn retarget(&mut self, now: Instant, target: f32, rate_magnitude: f32) {
+        let current = self.opacity_at(now);
+        self.anchor_opacity = current;
+        self.anchor_time = now;
+        self.target = target;
+        self.rate = if target >= current {
+            rate_magnitude
+        } else {
+            -rate_magnitude
+        };
+    }
+
+    /// Release the captured position if the tooltip has fully faded out, so the
+    /// next fade-in from zero can capture a fresh rest position. Called after
+    /// sampling so a matured fade-out drops its anchor.
+    fn release_position_if_hidden(&mut self, now: Instant) {
+        if self.opacity_at(now) <= 0.0 && self.target <= 0.0 {
+            self.position = None;
+        }
+    }
+
     /// Feed a pointer sample taken while the pointer is over the target, at
     /// position `at` (relative to the target's origin) at time `now`.
     ///
-    /// Movement within the jitter threshold of the previous sample is treated as
-    /// no movement: the pointer is still at rest, so a pending show/relocate is
-    /// left to mature rather than being restarted. Real movement (re)arms the
-    /// rest timer while hidden, and starts/keeps the dismissal timer while
-    /// visible.
+    /// Movement at or within the jitter threshold of the previous sample is
+    /// treated as rest: the fade heads toward full opacity. Real movement aims
+    /// the fade toward zero. The animation reverses from the *current* opacity,
+    /// so quick rest/move alternations don't snap.
     pub fn on_pointer_moved(&mut self, at: Vector2F, now: Instant) -> TooltipState {
-        // First, let any already-elapsed deadline resolve, so a sample that
-        // arrives after the deadline still shows/dismisses deterministically.
-        self.tick(now);
-
         let jitter = self.is_jitter(at);
-        let previous = self.last_position;
+        let had_predecessor = self.last_position.is_some();
         self.last_position = Some(at);
 
-        if jitter {
-            // The pointer held still since the last sample: it has come to rest.
-            // While counting down to dismiss, that re-rest cancels the dismissal
-            // and relocates the still-visible tooltip to the rest position with no
-            // new delay (spec: rest again before dismissal → relocate). This is
-            // how the re-rest is detected in production: the window re-dispatches
-            // the last move on each redraw, and two same-position samples in a row
-            // read as "stopped here".
-            //
-            // A jitter sample with no predecessor cannot happen (`is_jitter` is
-            // false without one), but guard anyway.
-            if previous.is_some()
-                && let Phase::PendingDismiss { .. } = self.phase
-            {
-                self.phase = Phase::Visible { at };
-            }
-            // Otherwise the pointer is still at rest in a phase whose pending
-            // deadline should simply mature (PendingShow) or that is already
-            // steady (Visible/Idle); leave it for `tick`.
-            return self.state();
+        // "At rest" = a jitter sample (held still since the last one). The very
+        // first sample after arrival has no predecessor and so is motion, which
+        // keeps the tooltip faded out until the pointer actually holds still.
+        let at_rest = jitter && had_predecessor;
+
+        if at_rest {
+            self.rest_at(at, now);
+        } else {
+            // Real motion (or first-sample arrival): fade toward hidden. Keep the
+            // captured position pinned so the fading-out tooltip does not slide.
+            self.retarget(now, 0.0, self.base_rate());
         }
 
-        // Real movement.
-        self.phase = match self.phase {
-            // Hidden and moving: (re)start the rest timer. When the pointer next
-            // holds still, `tick` after `delay` will show at that held position.
-            // We keep re-arming to the *latest* position so the tooltip shows
-            // where the pointer actually came to rest.
-            Phase::Idle | Phase::PendingShow { .. } => Phase::PendingShow {
-                at,
-                deadline: now + self.delay,
-            },
-            // Visible and starting/continuing to move: arm (or keep) the
-            // dismissal timer. Keep the anchor pinned where the tooltip is now;
-            // it must not follow the pointer while dismissing.
-            Phase::Visible { at: shown_at } => Phase::PendingDismiss {
-                at: shown_at,
-                deadline: now + self.delay,
-            },
-            // Already counting down to dismiss and still moving: let the
-            // existing deadline stand (do not extend it on every move — a moving
-            // pointer should dismiss `delay` after motion *began*).
-            Phase::PendingDismiss {
-                at: shown_at,
-                deadline,
-            } => Phase::PendingDismiss {
-                at: shown_at,
-                deadline,
-            },
-        };
-        self.state()
-    }
-
-    /// Advance the machine to time `now`, resolving any pending show/dismiss
-    /// whose deadline has been reached. Idempotent and safe to call at any time.
-    ///
-    /// A `PendingShow` that matures becomes `Visible` at its resting position. A
-    /// `PendingDismiss` that matures becomes `Idle` (hidden) — the pointer was
-    /// still moving when the timer fired.
-    pub fn tick(&mut self, now: Instant) -> TooltipState {
-        self.phase = match self.phase {
-            Phase::PendingShow { at, deadline } if now >= deadline => Phase::Visible { at },
-            Phase::PendingDismiss { deadline, .. } if now >= deadline => Phase::Idle,
-            other => other,
-        };
-        self.state()
+        self.release_position_if_hidden(now);
+        self.state(now)
     }
 
     /// Note that the pointer has come to rest at `at` at time `now` (an explicit
-    /// "settled" signal, e.g. from a rest-detection timer). This is a
-    /// convenience over [`Self::on_pointer_moved`] for callers that detect rest
-    /// out-of-band: it relocates a visible tooltip immediately (cancelling any
-    /// dismissal, no new delay) and, if hidden, arms the show timer.
+    /// "settled" signal, e.g. from a rest-detection timer). Aims the fade toward
+    /// full opacity when resting at (or near) the captured position, or lets an
+    /// old tooltip finish fading out before capturing a new spot; see [`Self::rest_at`].
     pub fn on_pointer_rested(&mut self, at: Vector2F, now: Instant) -> TooltipState {
-        self.tick(now);
         self.last_position = Some(at);
-        self.phase = match self.phase {
-            // Rest before the dismissal fired: cancel it and relocate the
-            // already-visible tooltip. No new show delay — it was already paid.
-            Phase::PendingDismiss { .. } | Phase::Visible { .. } => Phase::Visible { at },
-            // Hidden: normal show path. Arm the show timer at the resting spot.
-            Phase::Idle | Phase::PendingShow { .. } => Phase::PendingShow {
-                at,
-                deadline: now + self.delay,
-            },
-        };
-        self.state()
+        self.rest_at(at, now);
+        self.release_position_if_hidden(now);
+        self.state(now)
     }
 
-    /// The pointer has left the target entirely: dismiss immediately, with no
-    /// delay, and forget any pending timers and the last sampled position.
-    pub fn on_pointer_left(&mut self) -> TooltipState {
-        self.phase = Phase::Idle;
+    /// Shared "the pointer is at rest at `at`" handling, honoring the
+    /// single-instance relocation rule:
+    ///
+    /// - Fully hidden (opacity 0): capture `at` and fade in from zero.
+    /// - Visible at (or within jitter of) the captured position: reverse toward
+    ///   full opacity in place — this is a re-rest at the same spot.
+    /// - Visible but `at` is a *different* spot: do **not** reverse; keep the
+    ///   fade heading toward zero so the old tooltip finishes fading out at its
+    ///   position, after which a later rest sample (now from zero) captures the
+    ///   new spot. This is the single-tooltip-instance consequence — two
+    ///   simultaneously-visible instances at different positions can't be shown.
+    fn rest_at(&mut self, at: Vector2F, now: Instant) {
+        let opacity = self.opacity_at(now);
+        if opacity <= 0.0 {
+            // Fade in from zero at the fresh rest position.
+            self.position = Some(at);
+            self.retarget(now, 1.0, self.base_rate());
+            return;
+        }
+
+        // Visible: reverse toward full only if resting at the pinned position.
+        let same_spot = self
+            .position
+            .is_some_and(|pinned| (at - pinned).length() <= self.jitter_threshold);
+        if same_spot {
+            self.retarget(now, 1.0, self.base_rate());
+        } else {
+            // Rest at a new spot while the old is still visible: let it finish
+            // fading out first (do not reverse, do not slide).
+            self.retarget(now, 0.0, self.base_rate());
+        }
+    }
+
+    /// The pointer has left the target entirely: fade toward hidden at the faster
+    /// exit rate ([`EXIT_FADE_RATE_MULTIPLIER`]×), reversing from the current
+    /// opacity, and forget the last sampled position. The captured anchor
+    /// position stays pinned until the fade-out completes.
+    pub fn on_pointer_left(&mut self, now: Instant) -> TooltipState {
         self.last_position = None;
-        self.state()
+        self.retarget(now, 0.0, self.base_rate() * EXIT_FADE_RATE_MULTIPLIER);
+        self.release_position_if_hidden(now);
+        self.state(now)
     }
 }
 
@@ -277,7 +359,7 @@ mod tests {
     use super::*;
 
     const D: Duration = Duration::from_millis(500);
-    const JITTER: f32 = 3.0;
+    const JITTER: f32 = 6.0;
 
     fn machine() -> TooltipHysteresis {
         TooltipHysteresis::new(D, JITTER)
@@ -287,273 +369,299 @@ mod tests {
         Vector2F::new(x, y)
     }
 
-    /// Spec point 2: pointer comes to rest over the target; after D the tooltip
-    /// appears at the pointer position.
+    /// Opacity helper: assert two f32s are within a small epsilon. The tolerance
+    /// absorbs the float rounding of `Duration::as_secs_f32` scaled by the rate
+    /// (a 500 ms fade lands within a few thousandths of its target).
+    fn approx(a: f32, b: f32) {
+        assert!((a - b).abs() < 5e-3, "expected {a} ≈ {b}");
+    }
+
+    /// The fade-in *is* the rest delay: opacity rises linearly from 0 the instant
+    /// the pointer comes to rest, reaching full at exactly `D` — no invisible
+    /// waiting period first.
     #[test]
-    fn rest_shows_after_delay_at_pointer() {
+    fn fade_in_is_the_rest_delay_monotonic_from_zero() {
         let mut m = machine();
         let t0 = Instant::now();
 
-        // Arrival is "movement" (no predecessor) → arms the show timer.
+        // Arrival is motion (no predecessor): still hidden, target 0.
         assert_eq!(m.on_pointer_moved(at(10., 20.), t0), TooltipState::Hidden);
-        // Held still (jitter) before the deadline: still hidden.
-        assert_eq!(
-            m.on_pointer_moved(at(11., 21.), t0 + Duration::from_millis(100)),
-            TooltipState::Hidden
-        );
-        // Just before the deadline: still hidden.
-        assert_eq!(
-            m.tick(t0 + Duration::from_millis(499)),
-            TooltipState::Hidden
-        );
-        // At the deadline: shows at the resting position.
-        assert_eq!(m.tick(t0 + D), TooltipState::Visible { at: at(10., 20.) });
-    }
-
-    /// The show anchors at where the pointer actually came to rest, not where it
-    /// first entered — re-arming tracks the latest resting spot.
-    #[test]
-    fn show_anchors_at_final_resting_position() {
-        let mut m = machine();
-        let t0 = Instant::now();
-        m.on_pointer_moved(at(10., 10.), t0);
-        // Real move to a new spot re-arms the timer at the new position.
-        m.on_pointer_moved(at(50., 60.), t0 + Duration::from_millis(200));
-        // Not yet D since the *second* rest began.
-        assert_eq!(
-            m.tick(t0 + Duration::from_millis(600)),
-            TooltipState::Hidden
-        );
-        assert_eq!(
-            m.tick(t0 + Duration::from_millis(700)),
-            TooltipState::Visible { at: at(50., 60.) }
-        );
-    }
-
-    /// Spec point 4: pointer moves while visible, then comes to rest again
-    /// before the dismissal timer fires → dismissal cancelled and the tooltip
-    /// relocates to the new position with no additional delay.
-    #[test]
-    fn rest_before_dismissal_relocates_without_delay() {
-        let mut m = machine();
-        let t0 = Instant::now();
-        // Show it.
-        m.on_pointer_moved(at(10., 10.), t0);
-        assert!(m.tick(t0 + D).is_visible());
-
-        // Move → arms dismissal at t = D + 300 + D.
-        let t_move = t0 + D + Duration::from_millis(300);
-        assert_eq!(
-            m.on_pointer_moved(at(80., 90.), t_move),
-            TooltipState::Visible { at: at(10., 10.) },
-            "anchor stays pinned while dismissing"
-        );
-
-        // Rest again before the dismissal deadline: relocate immediately.
-        let t_rest = t_move + Duration::from_millis(200);
-        assert_eq!(
-            m.on_pointer_rested(at(80., 90.), t_rest),
-            TooltipState::Visible { at: at(80., 90.) },
-            "relocated with no new delay"
-        );
-        // The prior dismissal deadline must not fire anymore.
-        assert_eq!(
-            m.tick(t_move + D + Duration::from_millis(1)),
-            TooltipState::Visible { at: at(80., 90.) }
-        );
-    }
-
-    /// Spec point 3: pointer keeps moving while visible; the dismissal timer
-    /// completes and the tooltip dismisses.
-    #[test]
-    fn sustained_movement_dismisses_after_delay() {
-        let mut m = machine();
-        let t0 = Instant::now();
-        m.on_pointer_moved(at(10., 10.), t0);
-        assert!(m.tick(t0 + D).is_visible());
-
-        // Start moving → arms dismissal D from now.
-        let t_move = t0 + D + Duration::from_millis(100);
-        m.on_pointer_moved(at(40., 40.), t_move);
-        // Keep moving; deadline should not extend on each move.
-        m.on_pointer_moved(at(70., 70.), t_move + Duration::from_millis(200));
-        m.on_pointer_moved(at(100., 100.), t_move + Duration::from_millis(400));
-        // Just before dismissal deadline (t_move + D): still visible.
+        // Hold still: the pointer is now at rest and the fade-in begins at once
+        // (opacity is exactly 0 at the retarget instant, then rises immediately).
+        let t_rest = t0 + Duration::from_millis(1);
+        m.on_pointer_moved(at(11., 21.), t_rest);
+        // A hair after the rest instant, opacity is already positive — no
+        // invisible waiting period before the fade begins.
         assert!(
-            m.tick(t_move + D - Duration::from_millis(1)).is_visible(),
-            "still visible just before dismissal"
+            m.opacity(t_rest + Duration::from_millis(1)) > 0.0,
+            "fade-in begins immediately on rest, not after a delay"
         );
-        // At the deadline: dismissed.
-        assert_eq!(m.tick(t_move + D), TooltipState::Hidden);
+
+        // Monotonically rising toward full over D, measured from the rest instant.
+        approx(m.opacity(t_rest + Duration::from_millis(125)), 0.25);
+        approx(m.opacity(t_rest + Duration::from_millis(250)), 0.50);
+        approx(m.opacity(t_rest + Duration::from_millis(500)), 1.0);
+        // Clamped at full past the deadline.
+        approx(m.opacity(t_rest + Duration::from_millis(900)), 1.0);
+        // The captured anchor is the pointer's rest position (11,21).
+        assert_eq!(
+            m.state(t_rest + Duration::from_millis(500)).position(),
+            Some(at(11., 21.))
+        );
+        approx(m.state(t_rest + Duration::from_millis(500)).opacity(), 1.0);
     }
 
-    /// A dismissal deadline is measured from when motion *began*, not extended by
-    /// each subsequent move — a continuously-moving pointer dismisses on schedule.
+    /// The position is captured at the pointer's rest spot when the fade-in
+    /// starts from zero, and stays fixed while opacity > 0 — no sliding.
     #[test]
-    fn dismissal_deadline_not_extended_by_continued_motion() {
+    fn position_captured_at_zero_start_and_pinned_while_visible() {
         let mut m = machine();
         let t0 = Instant::now();
+        m.on_pointer_moved(at(10., 10.), t0);
+        // Rest: captures the rest-sample position (12,12) as the anchor and begins
+        // fading in (the capture is where the pointer is seen to hold still).
+        let t_rest = t0 + Duration::from_millis(1);
+        m.on_pointer_moved(at(12., 12.), t_rest);
+        approx(m.opacity(t_rest + Duration::from_millis(250)), 0.5);
+        // Another rest sample nearby (within jitter) must NOT move the anchor.
+        let s = m.on_pointer_moved(at(14., 14.), t_rest + Duration::from_millis(300));
+        assert_eq!(
+            s.position(),
+            Some(at(12., 12.)),
+            "anchor pinned while visible"
+        );
+    }
+
+    /// Fade-out from full opacity takes the full `D` (`p·D` with `p = 1`), rising
+    /// then falling symmetrically.
+    #[test]
+    fn fade_out_from_full_takes_full_delay() {
+        let mut m = machine();
+        let t0 = Instant::now();
+        m.on_pointer_moved(at(10., 10.), t0);
+        m.on_pointer_moved(at(11., 11.), t0 + Duration::from_millis(1)); // rest → fade in
+        approx(m.opacity(t0 + D), 1.0);
+
+        // Real move at full opacity → fade out begins from 1.0.
+        let t_move = t0 + D;
+        m.on_pointer_moved(at(60., 60.), t_move);
+        approx(m.opacity(t_move + Duration::from_millis(250)), 0.5);
+        approx(m.opacity(t_move + D), 0.0);
+        assert_eq!(m.state(t_move + D), TooltipState::Hidden);
+    }
+
+    /// Fade-out from a *partial* opacity `p` takes `p·D`: moving while the
+    /// tooltip is only 40% faded-in clears it in `0.4·D`, reversing from 0.4 (not
+    /// from 1.0).
+    #[test]
+    fn fade_out_from_partial_takes_p_times_delay_reversing_from_current() {
+        let mut m = machine();
+        let t0 = Instant::now();
+        m.on_pointer_moved(at(10., 10.), t0);
+        m.on_pointer_moved(at(11., 11.), t0 + Duration::from_millis(1)); // rest → fade in
+        // At +200ms, opacity ≈ 0.4.
+        let t_move = t0 + Duration::from_millis(201);
+        approx(m.opacity(t_move), 0.4);
+
+        // Move → reverse from 0.4 toward 0 at the same rate: reaches 0 in 0.4·D = 200ms.
+        m.on_pointer_moved(at(80., 80.), t_move);
+        approx(m.opacity(t_move), 0.4);
+        approx(m.opacity(t_move + Duration::from_millis(100)), 0.2);
+        approx(m.opacity(t_move + Duration::from_millis(200)), 0.0);
+        assert_eq!(
+            m.state(t_move + Duration::from_millis(200)),
+            TooltipState::Hidden
+        );
+    }
+
+    /// Re-resting at the *same* captured position mid-fade-out reverses back
+    /// toward full from the current opacity, keeping the pinned position (a
+    /// jitter-scale wobble that resolves as staying put).
+    #[test]
+    fn rest_at_same_spot_mid_fade_out_reverses_from_current() {
+        let mut m = machine();
+        let t0 = Instant::now();
+        m.on_pointer_moved(at(10., 10.), t0);
+        // The rest sample (11,11) is captured as the pinned anchor.
+        let t_rest0 = t0 + Duration::from_millis(1);
+        m.on_pointer_moved(at(11., 11.), t_rest0); // rest → fade in
+        approx(m.opacity(t_rest0 + D), 1.0);
+
+        // A brief wobble beyond jitter starts a fade-out (target 0).
+        let t_move = t_rest0 + D;
+        m.on_pointer_moved(at(21., 11.), t_move); // 10px from (11,11) → motion
+        approx(m.opacity(t_move + Duration::from_millis(250)), 0.5);
+
+        // Rest again back at the pinned spot (within jitter of (11,11)) at +250ms
+        // (opacity 0.5) → reverse toward full from 0.5, same position.
+        let t_rest = t_move + Duration::from_millis(250);
+        let s = m.on_pointer_rested(at(11., 11.), t_rest);
+        approx(s.opacity(), 0.5);
+        assert_eq!(
+            s.position(),
+            Some(at(11., 11.)),
+            "position stays pinned while visible"
+        );
+        // Rises back to full over the next 0.5·D = 250ms.
+        approx(m.opacity(t_rest + Duration::from_millis(250)), 1.0);
+    }
+
+    /// Single-instance relocation: resting at a *new* spot while the old tooltip
+    /// is still visible does NOT reverse it in place — the old finishes fading
+    /// out at its position, and only a rest sample taken once fully hidden
+    /// captures the new spot and fades in there.
+    #[test]
+    fn rest_at_new_spot_while_visible_defers_until_faded_out() {
+        let mut m = machine();
+        let t0 = Instant::now();
+        m.on_pointer_moved(at(10., 10.), t0);
+        // The rest sample (11,11) is captured as the pinned anchor.
+        let t_rest0 = t0 + Duration::from_millis(1);
+        m.on_pointer_moved(at(11., 11.), t_rest0); // rest at (11,11)
+        approx(m.opacity(t_rest0 + D), 1.0);
+
+        // Move to a far spot, then hold still there while the old is still up.
+        let t_move = t_rest0 + D;
+        m.on_pointer_moved(at(200., 200.), t_move); // motion → fade out from full
+        // Hold still at the new spot mid-fade-out: must NOT reverse (old still
+        // pinned at (11,11)); keeps fading out toward 0.
+        let s = m.on_pointer_moved(at(201., 201.), t_move + Duration::from_millis(100));
+        assert_eq!(
+            s.position(),
+            Some(at(11., 11.)),
+            "old position pinned, not relocated yet"
+        );
+        assert!(s.opacity() < 1.0, "still fading out, not reversed");
+
+        // Let it fully fade out.
+        assert_eq!(m.state(t_move + D), TooltipState::Hidden);
+
+        // Now (fully hidden) a rest sample at the new spot captures it and fades in.
+        let t_new = t_move + D;
+        m.on_pointer_moved(at(202., 202.), t_new + Duration::from_millis(1)); // rest (jitter vs 201) → capture
+        let s = m.state(t_new + Duration::from_millis(2));
+        assert_eq!(
+            s.position(),
+            Some(at(202., 202.)),
+            "new position captured after full fade-out"
+        );
+        assert!(s.opacity() > 0.0, "fading in at the new spot");
+    }
+
+    /// Leaving the target fades out faster than symmetric (3× rate): a
+    /// full-opacity tooltip clears in `D / 3`, still animated (not instant).
+    #[test]
+    fn exit_fades_out_at_faster_rate() {
+        let mut m = machine();
+        let t0 = Instant::now();
+        m.on_pointer_moved(at(10., 10.), t0);
+        m.on_pointer_moved(at(11., 11.), t0 + Duration::from_millis(1)); // rest → fade in
+        approx(m.opacity(t0 + D), 1.0);
+
+        // Leave: fade out at 3× → reaches 0 in D/3 ≈ 166.7ms.
+        let t_left = t0 + D;
+        let s = m.on_pointer_left(t_left);
+        approx(s.opacity(), 1.0);
+        approx(m.opacity(t_left + Duration::from_millis(83)), 0.5);
+        approx(m.opacity(t_left + Duration::from_millis(167)), 0.0);
+        assert_eq!(
+            m.state(t_left + Duration::from_millis(167)),
+            TooltipState::Hidden
+        );
+    }
+
+    /// Sub-threshold movement (≤ jitter) counts as rest, so a visible tooltip
+    /// keeps fading toward full and is not relocated by hand-tremor samples. The
+    /// 6px threshold tolerates a larger tremor than the original 3px.
+    #[test]
+    fn jitter_within_six_px_counts_as_rest() {
+        let mut m = machine();
+        let t0 = Instant::now();
+        m.on_pointer_moved(at(10., 10.), t0);
+        // The rest sample (11,11) is captured as the pinned anchor.
+        let t_rest0 = t0 + Duration::from_millis(1);
+        m.on_pointer_moved(at(11., 11.), t_rest0); // rest → fade in
+        approx(m.opacity(t_rest0 + D), 1.0);
+
+        // A ~4.5px move (≤ 6px threshold) is jitter: stays at rest (target 1),
+        // not faded out, anchor unchanged at the pinned (11,11).
+        let s = m.on_pointer_moved(at(15., 13.), t_rest0 + D + Duration::from_millis(50)); // dist=~4.47
+        assert_eq!(s.position(), Some(at(11., 11.)));
+        approx(s.opacity(), 1.0);
+
+        // A ~7px move (> 6px) IS motion: begins a fade-out.
+        let t_move = t_rest0 + D + Duration::from_millis(100);
+        let s = m.on_pointer_moved(at(20., 18.), t_move); // dist from (15,13) = ~7.07
+        approx(s.opacity(), 1.0);
+        assert!(
+            m.opacity(t_move + Duration::from_millis(250)) < 1.0,
+            "fading out after real move"
+        );
+    }
+
+    /// `on_pointer_rested` on a hidden machine begins a fade-in from zero (does
+    /// not snap to full), capturing the rest position.
+    #[test]
+    fn explicit_rest_while_hidden_begins_fade_in() {
+        let mut m = machine();
+        let t0 = Instant::now();
+        let s = m.on_pointer_rested(at(5., 5.), t0);
+        approx(s.opacity(), 0.0);
+        approx(m.opacity(t0 + Duration::from_millis(250)), 0.5);
+        let s = m.state(t0 + D);
+        assert_eq!(
+            s,
+            TooltipState::Visible {
+                at: at(5., 5.),
+                opacity: 1.0
+            }
+        );
+    }
+
+    /// `next_deadline` reports when the current fade completes, and nothing once
+    /// settled at the target, so a driver can schedule exactly one settle timer.
+    #[test]
+    fn next_deadline_reports_fade_completion() {
+        let mut m = machine();
+        let t0 = Instant::now();
+        assert_eq!(m.next_deadline(), None, "settled hidden: no fade");
+
         m.on_pointer_moved(at(0., 0.), t0);
-        assert!(m.tick(t0 + D).is_visible());
-
-        let t_move = t0 + D;
-        m.on_pointer_moved(at(20., 0.), t_move);
-        // A later move well before the deadline must not push it out.
-        m.on_pointer_moved(at(40., 0.), t_move + Duration::from_millis(499));
-        assert_eq!(m.tick(t_move + D), TooltipState::Hidden);
-    }
-
-    /// Spec point 6: leaving the target dismisses immediately, no delay, from any
-    /// visible or pending state.
-    #[test]
-    fn leaving_dismisses_immediately() {
-        // From Visible.
-        let mut m = machine();
-        let t0 = Instant::now();
-        m.on_pointer_moved(at(10., 10.), t0);
-        assert!(m.tick(t0 + D).is_visible());
-        assert_eq!(m.on_pointer_left(), TooltipState::Hidden);
-
-        // From PendingShow.
-        let mut m = machine();
-        m.on_pointer_moved(at(10., 10.), t0);
-        assert_eq!(m.on_pointer_left(), TooltipState::Hidden);
-
-        // From PendingDismiss.
-        let mut m = machine();
-        m.on_pointer_moved(at(10., 10.), t0);
-        m.tick(t0 + D);
-        m.on_pointer_moved(at(40., 40.), t0 + D + Duration::from_millis(50));
-        assert_eq!(m.on_pointer_left(), TooltipState::Hidden);
-    }
-
-    /// Spec point 5: after a dismissal, resting again takes the normal show path
-    /// (full delay D, appears at the new position).
-    #[test]
-    fn rest_after_dismissal_uses_full_show_delay() {
-        let mut m = machine();
-        let t0 = Instant::now();
-        m.on_pointer_moved(at(10., 10.), t0);
-        assert!(m.tick(t0 + D).is_visible());
-
-        // Dismiss via sustained movement.
-        let t_move = t0 + D;
-        m.on_pointer_moved(at(40., 40.), t_move);
-        assert_eq!(m.tick(t_move + D), TooltipState::Hidden);
-
-        // Rest at a new spot: must take the full delay again.
-        let t_rest = t_move + D + Duration::from_millis(100);
-        m.on_pointer_moved(at(200., 200.), t_rest);
-        assert_eq!(
-            m.tick(t_rest + D - Duration::from_millis(1)),
-            TooltipState::Hidden,
-            "must pay the full show delay after a dismissal"
+        let t_rest = t0 + Duration::from_millis(1);
+        m.on_pointer_moved(at(1., 1.), t_rest); // rest → fade in over D
+        let deadline = m.next_deadline().expect("fade in progress");
+        // Completes ~D after the rest sample.
+        let expected = t_rest + D;
+        assert!(
+            deadline.saturating_duration_since(expected) < Duration::from_millis(2)
+                && expected.saturating_duration_since(deadline) < Duration::from_millis(2),
+            "fade-in completion deadline"
         );
-        assert_eq!(
-            m.tick(t_rest + D),
-            TooltipState::Visible { at: at(200., 200.) }
-        );
-    }
 
-    /// Sub-jitter-threshold movement does not count as motion: a visible tooltip
-    /// stays visible and is not relocated by hand-tremor-scale samples.
-    #[test]
-    fn jitter_does_not_dismiss_or_relocate() {
-        let mut m = machine();
-        let t0 = Instant::now();
-        m.on_pointer_moved(at(10., 10.), t0);
-        assert!(m.tick(t0 + D).is_visible());
-
-        // A 2px move (< 3px threshold) is jitter: no dismissal armed, anchor
-        // unchanged.
-        assert_eq!(
-            m.on_pointer_moved(at(12., 10.), t0 + D + Duration::from_millis(100)),
-            TooltipState::Visible { at: at(10., 10.) }
-        );
+        // Once fully faded in, no deadline.
+        // (Sample past the deadline re-anchors nothing; next_deadline is derived
+        // from the segment, which still points at target 1 with anchor < 1 until
+        // re-sampled — so advance via a rest sample at full to settle it.)
+        m.on_pointer_moved(at(2., 2.), t_rest + D); // still rest (jitter) at full
         assert_eq!(
             m.next_deadline(),
             None,
-            "no dismissal timer armed by jitter"
+            "settled at full opacity: no further fade"
         );
     }
 
-    /// A jitter (hold-still) sample arriving while counting down to dismiss is
-    /// read as the pointer coming to rest again, and relocates the still-visible
-    /// tooltip with no new delay — the production re-rest path, since the window
-    /// re-dispatches the last move on each redraw and two same-spot samples read
-    /// as "stopped here".
+    /// `is_animating` is true during a fade and false once settled at the target.
     #[test]
-    fn jitter_sample_during_pending_dismiss_relocates() {
+    fn is_animating_tracks_fade_progress() {
         let mut m = machine();
         let t0 = Instant::now();
-        m.on_pointer_moved(at(10., 10.), t0);
-        assert!(m.tick(t0 + D).is_visible());
-
-        // Real move → PendingDismiss (anchor still pinned at the old spot).
-        let t_move = t0 + D;
-        assert_eq!(
-            m.on_pointer_moved(at(60., 60.), t_move),
-            TooltipState::Visible { at: at(10., 10.) }
-        );
-        // Hold still near the new spot (within jitter) → re-rest → relocate to the
-        // held position, before the dismissal deadline.
-        assert_eq!(
-            m.on_pointer_moved(at(61., 61.), t_move + Duration::from_millis(50)),
-            TooltipState::Visible { at: at(61., 61.) }
-        );
-        assert_eq!(m.next_deadline(), None, "dismissal cancelled by re-rest");
-    }
-
-    /// `on_pointer_rested` on a hidden machine arms the show timer (does not show
-    /// instantly) — the explicit-rest entry point still honors the show delay
-    /// when nothing is visible yet.
-    #[test]
-    fn explicit_rest_while_hidden_arms_show_timer() {
-        let mut m = machine();
-        let t0 = Instant::now();
-        assert_eq!(m.on_pointer_rested(at(5., 5.), t0), TooltipState::Hidden);
-        assert_eq!(
-            m.tick(t0 + D - Duration::from_millis(1)),
-            TooltipState::Hidden
-        );
-        assert_eq!(m.tick(t0 + D), TooltipState::Visible { at: at(5., 5.) });
-    }
-
-    /// A pointer sample that arrives after its show deadline still resolves to a
-    /// show at that sample time (deadlines are resolved on the next input, not
-    /// only by an external tick).
-    #[test]
-    fn late_sample_resolves_pending_show() {
-        let mut m = machine();
-        let t0 = Instant::now();
-        m.on_pointer_moved(at(10., 10.), t0);
-        // Next sample arrives well after the deadline, still at rest (jitter).
-        assert_eq!(
-            m.on_pointer_moved(at(11., 11.), t0 + D + Duration::from_millis(50)),
-            TooltipState::Visible { at: at(10., 10.) }
-        );
-    }
-
-    /// `next_deadline` reports the pending show/dismiss instant and nothing in
-    /// the steady states, so a driver can schedule exactly one timer.
-    #[test]
-    fn next_deadline_tracks_pending_phases() {
-        let mut m = machine();
-        let t0 = Instant::now();
-        assert_eq!(m.next_deadline(), None, "idle has no deadline");
-
         m.on_pointer_moved(at(0., 0.), t0);
-        assert_eq!(m.next_deadline(), Some(t0 + D), "pending-show deadline");
-
-        m.tick(t0 + D);
-        assert_eq!(m.next_deadline(), None, "visible steady state");
-
-        let t_move = t0 + D + Duration::from_millis(10);
-        m.on_pointer_moved(at(30., 0.), t_move);
-        assert_eq!(
-            m.next_deadline(),
-            Some(t_move + D),
-            "pending-dismiss deadline"
+        let t_rest = t0 + Duration::from_millis(1);
+        m.on_pointer_moved(at(1., 1.), t_rest); // fade in
+        assert!(
+            m.is_animating(t_rest + Duration::from_millis(100)),
+            "mid fade-in"
         );
+        assert!(!m.is_animating(t_rest + D), "settled at full");
     }
 }

@@ -133,9 +133,10 @@ impl RenderableBlock for RenderableImage {
         // Show the alt text on hover so it's reachable without loading the image
         // (and remains available for the broken-image placeholder). Use the
         // overlay variant so the tooltip escapes the editor's viewport clip, and
-        // anchor it at the mouse pointer with browser-`title` show/dismiss
-        // hysteresis (rest to show, motion to dismiss, re-rest to relocate) so it
-        // reads as a cursor tooltip rather than a caption pinned to the image.
+        // anchor it at the mouse pointer with a browser-`title` fade animation
+        // (fade in on rest, fade out on motion or exit, relocate on re-rest at a
+        // new spot) so it reads as a cursor tooltip rather than a caption pinned
+        // to the image.
         let mut element: Box<dyn Element> = if image_has_tooltip(&self.alt_text) {
             Appearance::as_ref(app)
                 .ui_builder()
