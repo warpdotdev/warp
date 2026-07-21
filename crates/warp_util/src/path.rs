@@ -311,8 +311,13 @@ fn normalize_powershell_autosuggestion<'s>(input: &'s str) -> Cow<'s, str> {
     }
 
     // Measure every contiguous backslash run. JSON serialization doubles *every*
-    // backslash uniformly, so a genuine AI echo of the JSON-escaped form has a run
-    // of >= 4 (e.g. a UNC prefix `\\` doubled to `\\\\`) with every run even.
+    // backslash uniformly, so a genuine AI echo of the JSON-escaped form has every
+    // backslash run even — a UNC prefix (two backslashes) doubled to four, a single
+    // separator doubled to two, etc. The discriminator is the *all-even* signal
+    // with a minimum run length of 2 (the smallest JSON-doubled backslash); a run
+    // of >= 4 is NOT required, because an ordinary AI-doubled path like
+    // `C:\\Users\\alice\\repo` has only run-length-2 separators and would otherwise
+    // be left uncorrected (APP-4893).
     let mut max_run = 0usize;
     let mut all_even = true;
     let mut index = 0;
@@ -330,20 +335,29 @@ fn normalize_powershell_autosuggestion<'s>(input: &'s str) -> Cow<'s, str> {
         }
     }
 
-    // Leave intentional or already-correct text untouched. A correct UNC prefix
-    // (`\\`, run of 2), a single separator (`\`, run of 1), and a regex/literal
-    // double (`\\` inside `'…'`, run of 2) all lack a run of >= 4, so they are
-    // returned unchanged. A mixed (non-uniform) input is also left alone rather
-    // than risk corrupting odd-length runs.
-    if max_run < 4 || !all_even {
+    // Leave already-correct or mixed text untouched. A correct path with single
+    // separators (run of 1) has an odd run, so all_even is false and it is returned
+    // unchanged — this also keeps the normalizer idempotent, since a halved result
+    // contains single separators and will not be halved again. A mixed (non-uniform)
+    // input — e.g. a correct UNC prefix (run of 2) alongside single separators
+    // (run of 1) — is left alone rather than risk corrupting the odd-length runs.
+    // The tradeoff of the all-even heuristic: an intentional double backslash (e.g.
+    // a regex literal inside a single-quoted string) whose only backslash run is
+    // length 2 is indistinguishable from a JSON-doubled single separator and will
+    // be halved. That is accepted because this normalizer runs only at the AI
+    // next-command ingestion point (see `normalize_ai_input_suggestion_response`),
+    // where JSON-doubled ordinary paths are the common defect and intentional regex
+    // doubles are rare.
+    if max_run < 2 || !all_even {
         return Cow::Borrowed(input);
     }
 
-    // Uniform doubling detected: halve every run to restore the original text.
-    // This restores a doubled UNC prefix `\\\\` -> `\\` and doubled separators
-    // `\\` -> `\`, and also restores a JSON-doubled regex literal `\\\\d+` ->
-    // `\\d+` (the user's intended two backslashes) rather than collapsing it to
-    // one. Idempotent: halving an all-even input can never produce a run of >= 4.
+    // Uniform doubling detected: halve every run to restore the original text. This
+    // restores a doubled UNC prefix (four backslashes -> two), doubled separators
+    // (two -> one, including ordinary paths like `C:\\Users\\alice\\repo` ->
+    // `C:\Users\alice\repo`), and a JSON-doubled regex literal (four backslashes ->
+    // two, the user's intended pair). Idempotent: halving an all-even input
+    // produces single separators (odd runs), so a second pass is a no-op.
     let mut normalized = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(character) = chars.next() {

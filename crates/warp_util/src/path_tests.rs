@@ -267,7 +267,7 @@ fn test_powershell_autosuggestion_restores_json_doubled_separators() {
         normalized_unc
     );
 
-    // Idempotence: a normalized command has no run of >= 4, so a second pass is a no-op.
+    // Idempotence: a normalized command has single separators (odd runs), so a second pass is a no-op.
     assert_eq!(
         powershell.normalize_autosuggestion(normalized_unc),
         normalized_unc
@@ -280,8 +280,26 @@ fn test_powershell_autosuggestion_restores_json_doubled_separators() {
         r#"cat "\\WSL$\share\file""#
     );
 
+    // An ordinary AI-doubled path with no UNC prefix: JSON serialization doubled
+    // every single separator, so every run is length 2. The all-even signal (no
+    // run of >= 4 is required) triggers halving, restoring single separators.
+    // This is the core APP-4893 fix — the previous threshold of 4 left this common
+    // shape uncorrected.
+    assert_eq!(
+        powershell.normalize_autosuggestion(r#"cd C:\\Users\\alice\\repo"#),
+        r#"cd C:\Users\alice\repo"#
+    );
+
+    // Idempotence: the restored path has single separators (odd runs), so a
+    // second pass is a no-op.
+    assert_eq!(
+        powershell.normalize_autosuggestion(r#"cd C:\Users\alice\repo"#),
+        r#"cd C:\Users\alice\repo"#
+    );
+
     // A bare doubled UNC command (history-recall shape, already correct) is left
-    // untouched: its longest run is 2, so there is no JSON-quadrupling signal.
+    // untouched: its single separators (run of 1) make the input non-uniform, so
+    // all_even is false and the normalizer returns it unchanged.
     assert_eq!(
         powershell.normalize_autosuggestion(r#"cat \\server\share\file"#),
         r#"cat \\server\share\file"#
@@ -302,41 +320,50 @@ fn test_powershell_autosuggestion_restores_json_doubled_separators() {
 }
 
 #[test]
-fn test_powershell_autosuggestion_preserves_intentional_doubled_backslashes() {
+fn test_powershell_autosuggestion_all_even_heuristic() {
     let powershell = ShellFamily::PowerShell;
     // Build backslash runs of an exact length without multi-backslash literals, so
     // the expected counts are unambiguous.
     let run = |n| "\\".repeat(n);
 
-    // An intentional double backslash inside a single-quoted (verbatim) PowerShell
-    // string (e.g. a regex literal the user actually typed) has no run of >= 4, so
-    // it is preserved rather than collapsed to a single backslash.
+    // The all-even signal is the discriminator: any run of >= 2 with every run
+    // even is treated as JSON-doubling and halved. An intentional double
+    // backslash inside a single-quoted (verbatim) PowerShell string (e.g. a regex
+    // literal the user typed) whose only backslash run is length 2 is
+    // indistinguishable from a JSON-doubled single separator, so it is halved.
+    // This is the accepted tradeoff of the heuristic — the normalizer runs only
+    // at the AI next-command ingestion point, where JSON-doubled ordinary paths
+    // are the common defect (APP-4893) and intentional regex doubles are rare.
     let intentional = format!("Select-String '{}d+' ", run(2));
     assert_eq!(
         powershell.normalize_autosuggestion(&intentional),
-        intentional
+        format!("Select-String '{}d+' ", run(1))
     );
 
-    // A regex run mid-token that is already correct (two backslashes) is preserved.
+    // Same tradeoff mid-token: an isolated run-2 double is halved to a single.
     let mid_token = format!("Select-String 'foo{}d+bar' ", run(2));
-    assert_eq!(powershell.normalize_autosuggestion(&mid_token), mid_token);
+    assert_eq!(
+        powershell.normalize_autosuggestion(&mid_token),
+        format!("Select-String 'foo{}d+bar' ", run(1))
+    );
 
-    // When the AI echoes the JSON-doubled form of that same regex literal (two
-    // backslashes doubled to four), the uniform-doubling signal (run >= 4, all
-    // even) triggers halving, restoring the user's intended two backslashes rather
-    // than collapsing to one.
+    // When the AI echoes the JSON-doubled form of a regex literal (two backslashes
+    // doubled to four), the all-even signal triggers halving, restoring the user's
+    // intended two backslashes rather than collapsing to one.
     let echoed = format!("Select-String '{}d+' ", run(4));
     assert_eq!(
         powershell.normalize_autosuggestion(&echoed),
         format!("Select-String '{}d+' ", run(2))
     );
 
-    // A correct UNC prefix (a run of two) on its own is preserved (no run >= 4).
+    // A correct UNC prefix (a run of two) alongside single separators (run of
+    // one) is NOT all-even, so it is preserved untouched.
     let unc = format!("ls {}server{}share", run(2), run(1));
     assert_eq!(powershell.normalize_autosuggestion(&unc), unc);
 
-    // Mixed (non-uniform) doubling - a four-run prefix alongside single separators
-    // - is left untouched rather than risk corrupting the odd-length runs.
+    // Mixed (non-uniform) doubling - a four-run prefix alongside single
+    // separators - is left untouched rather than risk corrupting the odd-length
+    // runs.
     let mixed = format!("cat {}WSL${}Ubuntu{}file", run(4), run(1), run(1));
     assert_eq!(powershell.normalize_autosuggestion(&mixed), mixed);
 }

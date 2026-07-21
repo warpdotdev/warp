@@ -293,8 +293,9 @@ fn test_normalize_ai_input_suggestion_response_restores_json_doubled_separators(
     assert_eq!(posix_response.commands, vec![posix_command]);
 
     // Already-correct single-separator text (history/completer shape, which is never
-    // routed through this helper in production) is a no-op: no run of >= 4 means the
-    // normalizer returns it borrowed and unchanged.
+    // routed through this helper in production) is a no-op: its single separators
+    // (run of 1) make the input non-uniform, so all_even is false and the normalizer
+    // returns it borrowed and unchanged.
     let correct = format!("cat {}WSL${}Ubuntu{}file", run(2), run(1), run(1));
     let correct_response = normalize_ai_input_suggestion_response(
         GenerateAIInputSuggestionsResponseV2 {
