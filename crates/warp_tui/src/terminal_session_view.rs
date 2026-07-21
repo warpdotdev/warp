@@ -204,18 +204,6 @@ fn render_left_footer_hint(
         None => None,
     }
 }
-
-/// Separates the inline menu from the agent block's warping/summary footer
-/// without consuming any of the menu's result-row capacity.
-fn render_inline_menu_section(menu: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
-    TuiConstrainedBox::new(
-        TuiContainer::new(menu)
-            .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
-            .finish(),
-    )
-    .with_max_rows(MAX_INLINE_MENU_ROWS + INLINE_MENU_TOP_PADDING_ROWS)
-    .finish()
-}
 /// Entry point that requested conversation restoration.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum TuiConversationRestoreOrigin {
@@ -3063,7 +3051,15 @@ impl TuiView for TuiTerminalSessionView {
                 || matches!(input_target, TuiInputTarget::Disabled))
         {
             if let (true, Some(menu)) = (input_target.agent_editor_owns_input(), inline_menu) {
-                content = content.child(render_inline_menu_section(menu));
+                content = content.child(
+                    TuiConstrainedBox::new(
+                        TuiContainer::new(menu)
+                            .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
+                            .finish(),
+                    )
+                    .with_max_rows(MAX_INLINE_MENU_ROWS + INLINE_MENU_TOP_PADDING_ROWS)
+                    .finish(),
+                );
             }
             let border_style = if self.is_shell_mode(ctx) {
                 builder.shell_mode_accent_style()
