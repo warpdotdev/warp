@@ -1554,24 +1554,15 @@ impl SettingsView {
                     );
                 }
 
-                // Restore the active subpage after filtering.
+                // Restore the active subpage after filtering. Rebuilding a subpage creates a
+                // fresh PageType with every widget visible, so the query must be applied again
+                // before the restored page is rendered.
                 if is_search_active {
-                    let current = self.current_settings_page;
-                    if current.is_ai_subpage()
-                        && current != SettingsSection::AgentMCPServers
-                        && let Some(subpage) = AISubpage::from_section(current)
-                    {
-                        self.ai_page_handle.update(ctx, |view, ctx| {
-                            view.set_active_subpage(Some(subpage), ctx);
-                        });
-                    }
-                    if current.is_code_subpage()
-                        && let Some(subpage) = CodeSubpage::from_section(current)
-                    {
-                        self.code_page_handle.update(ctx, |view, ctx| {
-                            view.set_active_subpage(Some(subpage), ctx);
-                        });
-                    }
+                    self.restore_active_subpage_filter(
+                        self.current_settings_page,
+                        &search_query,
+                        ctx,
+                    );
                 }
 
                 // Auto-expand umbrellas that have matching subpages during search.
@@ -1651,6 +1642,12 @@ impl SettingsView {
                             false, /* allow_steal_focus */
                             ctx,
                         );
+                        // Auto-selection also rebuilds the destination subpage. Preserve the
+                        // search filter there so navigation never reveals stale, unmatched
+                        // widgets.
+                        if is_search_active {
+                            self.restore_active_subpage_filter(new_section, &search_query, ctx);
+                        }
                     }
                 }
                 ctx.notify();
@@ -1662,6 +1659,35 @@ impl SettingsView {
         }
     }
 
+    /// Restore a rebuilt AI or Code subpage and reapply the active search query.
+    ///
+    /// `set_active_subpage` constructs a new `PageType`, whose initial filter contains every
+    /// widget. Search computes per-subpage match counts before the backing page is rebuilt, so
+    /// this helper keeps the rendered widget filter in sync with `subpage_filter`.
+    fn restore_active_subpage_filter(
+        &mut self,
+        section: SettingsSection,
+        query: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if section.is_ai_subpage()
+            && section != SettingsSection::AgentMCPServers
+            && let Some(subpage) = AISubpage::from_section(section)
+        {
+            self.ai_page_handle.update(ctx, |view, ctx| {
+                view.set_active_subpage(Some(subpage), ctx);
+                view.update_filter(query, ctx);
+            });
+        }
+        if section.is_code_subpage()
+            && let Some(subpage) = CodeSubpage::from_section(section)
+        {
+            self.code_page_handle.update(ctx, |view, ctx| {
+                view.set_active_subpage(Some(subpage), ctx);
+                view.update_filter(query, ctx);
+            });
+        }
+    }
     fn context_menu_items(&self, ctx: &mut ViewContext<Self>) -> Vec<MenuItem<SettingsAction>> {
         let mut items = vec![];
 
