@@ -1137,7 +1137,9 @@ impl View for CommentListView {
                 .with_dragbar_color(warpui::elements::Fill::Solid(
                     warpui::color::ColorU::transparent_black(),
                 ))
-                .with_bounds_callback(Box::new(|window_size| (100.0, window_size.y() * 0.8)))
+                .with_bounds_callback(Box::new(|window_size| {
+                    (100.0, (window_size.y() * 0.8).max(100.0))
+                }))
                 .on_resize(|ctx, _| {
                     ctx.notify();
                 })
