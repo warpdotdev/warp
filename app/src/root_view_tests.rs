@@ -1,7 +1,11 @@
+use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::{App, SingletonEntity};
 
-use super::{HAS_COMPLETED_ONBOARDING_KEY, RootView, has_completed_local_onboarding};
+use super::{
+    HAS_COMPLETED_ONBOARDING_KEY, RootView, has_completed_local_onboarding,
+    requires_post_onboarding_login,
+};
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::server::server_api::ServerApiProvider;
@@ -22,6 +26,24 @@ fn set_local_onboarding_completed(app: &mut App, completed: bool) {
             )
             .unwrap();
     });
+}
+
+#[test]
+fn account_first_requires_login_even_without_ai_or_drive_settings() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+
+    assert!(requires_post_onboarding_login(false, false, false));
+    assert!(!requires_post_onboarding_login(true, false, false));
+}
+
+#[test]
+fn fallback_flow_only_requires_login_for_account_backed_settings() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(false);
+    let _settings_modes = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
+
+    assert!(!requires_post_onboarding_login(false, false, false));
+    assert!(requires_post_onboarding_login(false, true, false));
+    assert!(requires_post_onboarding_login(false, false, true));
 }
 
 /// Regression test for the bug fixed by introducing

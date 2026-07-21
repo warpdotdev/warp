@@ -259,8 +259,9 @@ the existing third-party path; N4 replaces that).
      login slide's Back to the Theme step. Skip completes onboarding via the existing skip handling
      (N4 replaces completion semantics).
 7. `crates/onboarding/src/telemetry.rs`
-   - Add `flow_version: Option<String>` to `OnboardingStarted`, `SlideViewed`, `SettingChanged`
-     payloads (emit `account_first_v1` when the flag is on; `None`/absent otherwise).
+   - Include `flow_version` in the `OnboardingStarted`, `SlideViewed`, and `SettingChanged`
+     payloads (emit `account_first_v1` when the flag is on; leave existing payloads unchanged
+     otherwise).
    - Add `OnboardingAction { slide_name: String, action: String, account_class: Option<String> }`
      → event name `onboarding_action`. Pre-auth actions emitted in this PR: `get_started`, `next`,
      `back`, `skip_account`, `continue_signup` (account_class is `None` pre-auth).

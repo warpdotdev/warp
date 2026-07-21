@@ -27,6 +27,74 @@ fn step(app: &App, model: &ModelHandle<OnboardingStateModel>) -> OnboardingStep 
 }
 
 #[test]
+fn account_first_path_is_linear_and_reversible() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    let _settings_modes = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+
+        model.update(&mut app, |model, ctx| model.next(ctx));
+        assert_eq!(step(&app, &model), OnboardingStep::Customize);
+
+        model.update(&mut app, |model, ctx| model.next(ctx));
+        assert_eq!(step(&app, &model), OnboardingStep::ThemePicker);
+
+        model.update(&mut app, |model, ctx| model.back(ctx));
+        assert_eq!(step(&app, &model), OnboardingStep::Customize);
+
+        model.update(&mut app, |model, ctx| model.back(ctx));
+        assert_eq!(step(&app, &model), OnboardingStep::Intro);
+    });
+}
+
+#[test]
+fn account_first_path_uses_three_step_progress() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        let cases = [
+            (OnboardingStep::Intro, (0, 3)),
+            (OnboardingStep::Customize, (0, 3)),
+            (OnboardingStep::ThemePicker, (1, 3)),
+        ];
+
+        for (target, expected) in cases {
+            model.update(&mut app, |model, ctx| model.set_step(target, ctx));
+            let progress = model.read(&app, |model, _| model.progress());
+            assert_eq!(progress, expected, "unexpected dots for {target:?}");
+        }
+    });
+}
+
+#[test]
+fn account_first_path_uses_agent_ui_defaults() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+
+        model.read(&app, |model, _| {
+            assert_eq!(
+                *model.intention(),
+                OnboardingIntention::AgentDrivenDevelopment
+            );
+            let SelectedSettings::AgentDrivenDevelopment {
+                ui_customization: Some(ui),
+                ..
+            } = model.settings()
+            else {
+                panic!("account-first onboarding should preserve agent UI defaults");
+            };
+            assert!(ui.use_vertical_tabs);
+            assert!(ui.show_conversation_history);
+            assert!(ui.show_project_explorer);
+            assert!(ui.show_global_search);
+            assert!(ui.show_warp_drive);
+            assert!(ui.show_code_review_button);
+        });
+    });
+}
+
+#[test]
 fn agent_path_routes_through_ai_setup() {
     let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
