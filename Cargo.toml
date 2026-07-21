@@ -343,7 +343,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "ea825ae5f3edfe1b6da20d3f9b55055346491622" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "156cb6206fa314d26ac73879576cd84b76165774" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -367,7 +367,7 @@ web-sys = { version = "0.3.69", features = [
 # Disable default features to disable support for WebGPU, which does not yet
 # have wide browser support.  We enable all other default feature of wgpu,
 # though.
-wgpu = { version = "29.0.1", default-features = false, features = [
+wgpu = { version = "30.0.0", default-features = false, features = [
   "dx12",
   "gles",
   "metal",
