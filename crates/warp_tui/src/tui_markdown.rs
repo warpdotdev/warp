@@ -143,19 +143,30 @@ pub(crate) fn render_formatted_text(
             list_numbering.reset();
         }
         column.add_child(element);
-        if matches!(
-            line,
-            FormattedTextLine::Heading(_) | FormattedTextLine::Line(_)
-        ) && formatted.lines.get(line_index + 1).is_some_and(|next| {
-            !matches!(
-                next,
-                FormattedTextLine::LineBreak | FormattedTextLine::HorizontalRule
-            )
-        }) {
+        if should_insert_blank_row(line, formatted.lines.get(line_index + 1)) {
             column.add_child(blank_row());
         }
     }
     column.finish()
+}
+fn should_insert_blank_row(line: &FormattedTextLine, next: Option<&FormattedTextLine>) -> bool {
+    let Some(next) = next else {
+        return false;
+    };
+    match line {
+        FormattedTextLine::Heading(_) => !matches!(
+            next,
+            FormattedTextLine::LineBreak | FormattedTextLine::HorizontalRule
+        ),
+        // Adjacent `Line` values are soft-wrapped lines from one paragraph.
+        FormattedTextLine::Line(_) => !matches!(
+            next,
+            FormattedTextLine::Line(_)
+                | FormattedTextLine::LineBreak
+                | FormattedTextLine::HorizontalRule
+        ),
+        _ => false,
+    }
 }
 
 fn inline_text(

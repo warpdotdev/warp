@@ -44,6 +44,17 @@ fn inserts_blank_rows_between_tightly_packed_headers_and_paragraphs() {
 }
 
 #[test]
+fn keeps_soft_wrapped_paragraph_lines_contiguous() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let formatted = parse_markdown("one\ntwo\nthree").expect("Markdown should parse");
+            let (lines, _) = render(&formatted, 80, ctx);
+            assert_eq!(lines, vec!["one", "two", "three"]);
+        });
+    });
+}
+#[test]
 fn renders_blocks_inline_styles_and_accessible_links_without_markers() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());

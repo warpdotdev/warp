@@ -60,12 +60,12 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
         );
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            assert_eq!(desired_height(block, 20, app_ctx), 8);
+            assert_eq!(desired_height(block, 20, app_ctx), 6);
 
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 block.render_element(app_ctx),
-                TuiRect::new(0, 0, 20, 8),
+                TuiRect::new(0, 0, 20, 6),
                 app_ctx,
             );
             assert_eq!(
@@ -75,7 +75,7 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["", "> hello", "", "one", "", "two", "", "three"],
+                vec!["", "> hello", "", "one", "two", "three"],
             );
             assert_eq!(
                 frame.buffer[(0, 1)].fg,
