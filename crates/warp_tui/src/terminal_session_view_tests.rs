@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use instant::Instant;
 use warp::appearance::Appearance;
 use warp::settings::{AISettings, TuiUsageDisplayMode};
@@ -9,12 +11,12 @@ use warp::tui_export::{
     slash_commands,
 };
 use warp_core::settings::Setting as _;
-use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
 use warpui::{
     AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, SingletonEntity, UpdateModel, ViewHandle,
 };
+use warpui_core::r#async::Timer;
 use warpui_core::elements::tui::{
     Color, TuiBuffer, TuiBufferExt, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
@@ -95,7 +97,6 @@ fn inline_menu_padding_preserves_result_capacity() {
 
 fn focus_test_fixture(app: &mut App) -> FocusTestFixture {
     register_tui_session_view_test_singletons(app);
-    app.update(MockTelemetryContextProvider::register);
     add_test_semantic_selection(app);
     app.update(TuiAutoupdater::register);
     let (window_id, _) = app.update(|ctx| {
@@ -263,7 +264,6 @@ fn nld_slash_commands_execute_and_report_their_effects() {
                 ctx,
             );
         });
-        futures_lite::future::yield_now().await;
 
         assert!(app.read(|ctx| {
             *AISettings::as_ref(ctx)
@@ -313,17 +313,26 @@ fn nld_slash_commands_execute_and_report_their_effects() {
             ))
         );
 
-        let toggles: Vec<_> = flush_events()
-            .into_iter()
-            .filter_map(|event| match event.payload {
-                EventPayload::NamedEvent {
-                    name,
-                    value: Some(value),
-                    ..
-                } if name == "AgentMode.ToggleAutoDetectionSetting" => Some(value),
-                _ => None,
-            })
-            .collect();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut toggles = Vec::new();
+        while toggles.len() < 2 {
+            toggles.extend(
+                flush_events()
+                    .into_iter()
+                    .filter_map(|event| match event.payload {
+                        EventPayload::NamedEvent {
+                            name,
+                            value: Some(value),
+                            ..
+                        } if name == "AgentMode.ToggleAutoDetectionSetting" => Some(value),
+                        _ => None,
+                    }),
+            );
+            if toggles.len() >= 2 || Instant::now() >= deadline {
+                break;
+            }
+            Timer::after(Duration::from_millis(10)).await;
+        }
         assert_eq!(toggles.len(), 2);
         assert_eq!(
             toggles[0],
