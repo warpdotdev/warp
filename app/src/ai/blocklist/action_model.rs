@@ -955,7 +955,7 @@ impl BlocklistAIActionModel {
     }
 
     /// Installs a front-of-queue confirmation action without preprocessing.
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(all(feature = "tui", any(test, feature = "test-util")))]
     pub(crate) fn queue_confirmation_action(
         &mut self,
         action: AIAgentAction,
