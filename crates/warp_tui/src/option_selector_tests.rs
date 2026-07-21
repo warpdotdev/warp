@@ -19,7 +19,7 @@ use super::{
 };
 use crate::editor_element::TuiEditorAction;
 use crate::editor_interaction::TuiEditorCommand;
-use crate::editor_view::TuiEditorViewAction;
+use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
 use crate::test_fixtures::TestHostView;
 use crate::tui_builder::TuiUiBuilder;
 
@@ -204,6 +204,33 @@ fn up_from_top_focuses_search_and_down_returns_to_first_row() {
     });
 }
 
+#[test]
+fn select_item_without_confirm_moves_focus_to_an_arbitrary_option() {
+    App::test((), |mut app| async move {
+        let (selector, events) = add_selector(&mut app);
+        let leading_editor = app.update(|ctx| {
+            ctx.add_typed_action_tui_view(selector.window_id(ctx), TuiEditorView::single_line)
+        });
+        selector.update(&mut app, |selector, ctx| {
+            selector.set_leading_editor(leading_editor.clone(), ctx);
+            selector.set_page(page(snapshot(&["yes", "no"], Some("yes")), false), ctx);
+            selector.focus_leading_editor(ctx);
+        });
+        assert!(leading_editor.read(&app, |editor, _| editor.is_focused()));
+
+        act(
+            &mut app,
+            &selector,
+            TuiOptionSelectorAction::SelectItemWithoutConfirm(1),
+        );
+        assert!(!leading_editor.read(&app, |editor, _| editor.is_focused()));
+        assert_eq!(
+            selector.read(&app, |selector, _| selector.highlighted_index()),
+            Some(1)
+        );
+        assert!(primary_events(&events).is_empty());
+    });
+}
 #[test]
 fn search_and_last_option_wrap_in_both_directions() {
     App::test((), |mut app| async move {
@@ -423,6 +450,9 @@ fn laid_out_element(
     );
     if let Some(search_field) = selector_ref.search_field.as_ref() {
         rendered_views.insert(search_field.id(), search_field.as_ref(app).render(app));
+    }
+    if let Some(leading_editor) = selector_ref.leading_editor.as_ref() {
+        rendered_views.insert(leading_editor.id(), leading_editor.as_ref(app).render(app));
     }
     let mut element = selector_ref.render(app);
     let size = {

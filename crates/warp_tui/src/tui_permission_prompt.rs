@@ -18,7 +18,9 @@ use warpui_core::{
 
 use crate::editor_view::TuiEditorView;
 use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
-use crate::option_selector::{OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent};
+use crate::option_selector::{
+    OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorAction, TuiOptionSelectorEvent,
+};
 use crate::tui_builder::TuiUiBuilder;
 
 const PERMISSION_PROMPT_ACTIVE: &str = "TuiPermissionPromptActive";
@@ -209,8 +211,9 @@ impl TuiPermissionPrompt {
 
     /// Restores Yes as the highlighted response after body editing.
     pub(crate) fn restore_options_focus(&self, ctx: &mut ViewContext<Self>) {
-        self.selector
-            .update(ctx, |selector, ctx| selector.select_first(ctx));
+        self.selector.update(ctx, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::SelectItemWithoutConfirm(0), ctx)
+        });
     }
     #[cfg(test)]
     pub(crate) fn highlighted_index(&self, app: &AppContext) -> Option<usize> {
@@ -359,8 +362,20 @@ impl TypedActionView for TuiPermissionPrompt {
         }
         match action {
             TuiPermissionPromptAction::Confirm => {
-                self.selector
-                    .update(ctx, |selector, ctx| selector.confirm_selected(ctx));
+                let body_editor_focused = self
+                    .body_editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.as_ref(ctx).is_focused());
+                self.selector.update(ctx, |selector, ctx| {
+                    if body_editor_focused {
+                        selector.handle_action(
+                            &TuiOptionSelectorAction::SelectItemWithoutConfirm(0),
+                            ctx,
+                        );
+                    } else {
+                        selector.confirm_selected(ctx);
+                    }
+                });
             }
             TuiPermissionPromptAction::MoveUp => {
                 self.selector

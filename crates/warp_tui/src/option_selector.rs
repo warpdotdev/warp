@@ -103,6 +103,8 @@ pub(crate) enum TuiOptionSelectorAction {
     ConfirmSelected,
     MoveUp,
     MoveDown,
+    /// Selects an item at an absolute index without confirming it.
+    SelectItemWithoutConfirm(usize),
     /// Select the viewport-relative item and confirm it when enabled.
     SelectNumberedOption(u8),
     /// Select the row assigned to a host-defined shortcut.
@@ -443,11 +445,21 @@ impl TuiOptionSelector {
         self.move_selection(true, ctx);
     }
 
-    /// Restores the first option as the active highlight.
-    pub(crate) fn select_first(&mut self, ctx: &mut ViewContext<Self>) {
-        self.select_id(self.page.snapshot.rows.first().map(|row| row.id.clone()));
-        self.sync_after_items_changed();
+    /// Moves focus and highlight to an item without confirming it.
+    pub(crate) fn select_item_without_confirm(
+        &mut self,
+        index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let items_len = self.items().len();
+        if index >= items_len {
+            return;
+        }
+        self.interaction
+            .selection
+            .select(index, items_len, |_| true);
         ctx.focus_self();
+        self.scroll_to_keep_visible(items_len, index, ctx);
         ctx.notify();
     }
 
@@ -1247,6 +1259,9 @@ impl TypedActionView for TuiOptionSelector {
             }
             TuiOptionSelectorAction::MoveUp => self.move_selection(false, ctx),
             TuiOptionSelectorAction::MoveDown => self.move_selection(true, ctx),
+            TuiOptionSelectorAction::SelectItemWithoutConfirm(index) => {
+                self.select_item_without_confirm(*index, ctx);
+            }
             TuiOptionSelectorAction::SelectNumberedOption(digit) => {
                 let index = self.interaction.scroll_offset + usize::from(*digit) - 1;
                 let item_has_custom_shortcut = self.items().get(index).is_some_and(|item| {
