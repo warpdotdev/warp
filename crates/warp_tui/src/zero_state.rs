@@ -35,6 +35,10 @@ const MAX_CHANGELOG_BULLETS: usize = 3;
 /// Width cap on the text column so bullets wrap like the mock.
 const LEFT_COLUMN_MAX_COLS: u16 = 48;
 
+/// Maximum width of the starfield animation panel.  On wide terminals the
+/// animation stays at this width and excess space becomes blank background.
+const MAX_ANIMATION_COLS: u16 = 100;
+
 // ---------------------------------------------------------------------------
 // TuiZeroStateView
 // ---------------------------------------------------------------------------
@@ -118,11 +122,15 @@ impl TuiView for TuiZeroStateView {
             TuiConstrainedBox::new(render_left_column(cwd.as_deref(), &builder, ctx).finish())
                 .with_max_cols(LEFT_COLUMN_MAX_COLS)
                 .finish();
-        let animation = ZeroStateAnimationElement::new(
-            Rc::clone(&self.starfield),
-            self.clock,
-            builder.accent_color(),
+        let animation = TuiConstrainedBox::new(
+            ZeroStateAnimationElement::new(
+                Rc::clone(&self.starfield),
+                self.clock,
+                builder.accent_color(),
+            )
+            .finish(),
         )
+        .with_max_cols(MAX_ANIMATION_COLS)
         .finish();
         TuiFlex::row()
             .child(text_column)

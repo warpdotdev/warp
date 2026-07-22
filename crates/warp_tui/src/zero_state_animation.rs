@@ -136,9 +136,12 @@ impl StarfieldState {
 
     /// Advances simulation by one 1/60s step.
     fn advance_one_step(&mut self, warp: f64) {
+        // Normalize base velocity to panel size so crossing time is consistent
+        // across all terminal widths (~4.5s at reference max_r=43).
+        let a = 0.12 * (self.max_r / 43.0).clamp(0.5, 3.0);
         for star in &mut self.stars {
             star.r_prev = star.r;
-            star.r += (0.12 + star.r * 0.012) * star.speed * warp;
+            star.r += (a + star.r * 0.012) * star.speed * warp;
             // ~2% chance per step to toggle glow.
             if xorshift_f64(&mut self.rng) < 0.02 {
                 star.glow = !star.glow;
@@ -164,9 +167,20 @@ impl StarfieldState {
         self.sim_secs = target_secs;
     }
 
-    pub(crate) fn set_max_r(&mut self, max_r: f64) {
+    /// Updates the panel geometry and adjusts the star count to match the new size.
+    pub(crate) fn set_dimensions(&mut self, max_r: f64, num_stars: usize) {
         self.max_r = max_r;
+        while self.stars.len() < num_stars {
+            self.stars.push(new_star(&mut self.rng, self.max_r));
+        }
+        self.stars.truncate(num_stars);
     }
+}
+
+/// Returns the number of stars appropriate for the panel's max_r, keeping
+/// density consistent across terminal sizes (reference: 220 stars at max_r=43).
+pub(crate) fn star_count_for_max_r(max_r: f64) -> usize {
+    ((220.0_f64 * (max_r / 43.0).powf(1.5)).round() as usize).clamp(50, 500)
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +260,8 @@ impl TuiElement for ZeroStateAnimationElement {
         let max_r = cx.hypot(cy * 2.0);
 
         let mut sf = self.state.borrow_mut();
-        sf.set_max_r(max_r);
+        let num_stars = star_count_for_max_r(max_r);
+        sf.set_dimensions(max_r, num_stars);
         sf.simulate_to(elapsed);
 
         let geo = GridGeometry {
@@ -306,7 +321,7 @@ fn draw_star_streak(
         if px < 0 || py < 0 || px as usize >= geo.cols || py as usize >= geo.rows {
             continue;
         }
-        let gi = ((rr / geo.max_r) * (STAR_GLYPHS.len() - 1) as f64) as usize;
+        let gi = ((rr / geo.max_r).powf(0.65) * (STAR_GLYPHS.len() - 1) as f64) as usize;
         let gi = gi.min(STAR_GLYPHS.len() - 1);
         let glyph = STAR_GLYPHS[gi];
         let buf = [glyph];
