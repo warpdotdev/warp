@@ -15974,6 +15974,7 @@ dependencies = [
  "clap",
  "command",
  "dirs 6.0.0",
+ "fs4",
  "futures",
  "futures-lite 1.13.0",
  "http_client",
