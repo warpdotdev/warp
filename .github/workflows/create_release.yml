@@ -515,9 +515,8 @@ jobs:
     name: Build Release (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: prepare_release
-    # The Warp TUI is currently dev-only. Keep this job scoped to the dev
-    # channel; it rides the existing nightly dev cut.
-    if: ${{ inputs.build_macos != false && inputs.channel == 'dev' }}
+    # The Warp TUI is available on the dev and preview channels.
+    if: ${{ inputs.build_macos != false && (inputs.channel == 'dev' || inputs.channel == 'preview') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -632,9 +631,9 @@ jobs:
     name: Build Release (Linux TUI ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
-    # Keep Linux TUI artifacts dev-only and workflow-local until the server's
-    # download endpoint and installer accept Linux payloads.
-    if: ${{ inputs.build_linux != false && inputs.channel == 'dev' }}
+    # Keep Linux TUI artifacts workflow-local until the server's download
+    # endpoint and installer accept Linux payloads.
+    if: ${{ inputs.build_linux != false && (inputs.channel == 'dev' || inputs.channel == 'preview') }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -1795,12 +1794,12 @@ jobs:
           if [[ ${{ needs.release_macos_cli.result }} != 'success' ]]; then
             FAILED+=('MacOS CLI')
           fi
-          # The TUI job only runs on the dev channel, so only treat it as a
-          # failure there (it is intentionally skipped elsewhere).
-          if [[ ${{ needs.release_macos_tui.result }} != 'success' && ${{ inputs.channel }} == 'dev' ]]; then
+          # The TUI jobs only run on the dev and preview channels, so only
+          # treat them as failures there (they are intentionally skipped elsewhere).
+          if [[ ${{ needs.release_macos_tui.result }} != 'success' && ( ${{ inputs.channel }} == 'dev' || ${{ inputs.channel }} == 'preview' ) ]]; then
             FAILED+=('MacOS TUI')
           fi
-          if [[ ${{ needs.release_linux_tui.result }} != 'success' && ${{ inputs.channel }} == 'dev' ]]; then
+          if [[ ${{ needs.release_linux_tui.result }} != 'success' && ( ${{ inputs.channel }} == 'dev' || ${{ inputs.channel }} == 'preview' ) ]]; then
             FAILED+=('Linux TUI')
           fi
           if [[ ${{ needs.release_linux_x86.result }} != 'success' ]]; then
