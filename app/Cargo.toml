@@ -621,6 +621,7 @@ default = [
     "cloud_mode_from_local_session",
     "cloud_mode_image_context",
     "agent_mode_computer_use",
+    "background_computer_use",
     "oz_platform_skills",
     "oz_identity_federation",
     "sync_ambient_plans",
