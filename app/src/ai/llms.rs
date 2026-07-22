@@ -1714,7 +1714,7 @@ impl LLMPreferences {
                     .write_value(MODELS_BY_FEATURE_CACHE_KEY, serialized_update)
                     .context("Failed to cache LLMs")
                 {
-                    report_error!(e);
+                    log::warn!("{e:#}");
                 }
             }
             Err(e) => {
