@@ -127,24 +127,31 @@ impl View for GeminiEnterpriseCredentialsErrorView {
         } else {
             "Warp couldn't authenticate with Google Cloud. Refresh your Gemini Enterprise credentials, then retry the request."
         };
+        let header_color = if self.refresh_succeeded {
+            theme.ansi_fg_green()
+        } else {
+            error_color(theme)
+        };
 
         let make_header = || {
             Flex::row()
                 .with_spacing(8.)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
-                    ConstrainedBox::new(
+                    ConstrainedBox::new(if self.refresh_succeeded {
+                        Icon::Check.to_warpui_icon(header_color.into()).finish()
+                    } else {
                         Icon::AlertTriangle
-                            .to_warpui_icon(error_color(theme).into())
-                            .finish(),
-                    )
+                            .to_warpui_icon(header_color.into())
+                            .finish()
+                    })
                     .with_width(icon_size(app))
                     .with_height(icon_size(app))
                     .finish(),
                 )
                 .with_child(
                     Text::new(title.to_string(), appearance.ui_font_family(), 14.)
-                        .with_color(error_color(theme))
+                        .with_color(header_color)
                         .with_selectable(false)
                         .finish(),
                 )
