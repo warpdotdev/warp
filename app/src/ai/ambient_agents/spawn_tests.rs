@@ -5,8 +5,8 @@ use chrono::Utc;
 use session_sharing_protocol::common::SessionId;
 
 use super::{
-    AmbientAgentEvent, MAX_STALE_POLLS_BEFORE_FAILURE, SessionJoinInfo, spawn_task,
-    submit_run_followup,
+    AmbientAgentEvent, MAX_STALE_POLLS_BEFORE_FAILURE, SessionJoinInfo, monitor_spawned_task,
+    spawn_task, submit_run_followup,
 };
 use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
@@ -42,6 +42,37 @@ fn task_with(
         last_event_sequence: None,
         children: vec![],
     }
+}
+
+#[tokio::test]
+async fn monitor_spawned_task_does_not_spawn_again() {
+    use futures::StreamExt;
+
+    let mut mock = MockAIClient::new();
+    mock.expect_spawn_agent().times(0);
+    mock.expect_get_ambient_agent_task()
+        .times(1)
+        .returning(|_| Ok(task_with(AmbientAgentTaskState::Succeeded, None, None)));
+    let mut stream = Box::pin(monitor_spawned_task(
+        run_id(),
+        "already-created-run".to_owned(),
+        false,
+        Arc::new(mock),
+        None,
+    ));
+
+    assert!(matches!(
+        stream.next().await.expect("spawned event").expect("ok"),
+        AmbientAgentEvent::TaskSpawned { .. }
+    ));
+    assert!(matches!(
+        stream.next().await.expect("state event").expect("ok"),
+        AmbientAgentEvent::StateChanged {
+            state: AmbientAgentTaskState::Succeeded,
+            ..
+        }
+    ));
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]

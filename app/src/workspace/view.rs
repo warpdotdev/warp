@@ -82,8 +82,6 @@ use warp_editor::editor::NavigationKey;
 use warp_errors::{report_error, report_if_error};
 use warp_server_client::auth::AuthEvent;
 use warp_util::path::{LineAndColumnArg, user_friendly_path};
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use warp_util::standardized_path::StandardizedPath;
 use warpui::accessibility::{
     AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
 };
@@ -184,16 +182,18 @@ use crate::ai::agent_sdk::driver::harness::{claude_transcript, codex_transcript}
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffInjectionPath};
+use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffSurface};
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::touched_repos::extract_paths_from_conversation;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
+use crate::ai::blocklist::handoff::{
+    HandoffCommitOutcome, HandoffLaunchAttachments, HandoffPrepareError, HandoffPrepareInput,
+    HandoffPresentationSnapshot, HandoffRestoration, HandoffTargetMaterialization,
+    MaterializeHandoffTarget, PendingCloudLaunch, commit_handoff, prepare_handoff,
+};
 use crate::ai::blocklist::history_model::{CloudConversationData, load_conversation_from_server};
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::{
@@ -217,7 +217,7 @@ use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::view::AIFactPage;
 use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::panel::{AIAssistantPanelEvent, AIAssistantPanelView};
@@ -412,10 +412,8 @@ use crate::terminal::session_settings::{
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
 use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::terminal::view::ambient_agent::{
-    HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
+    AmbientAgentViewModel, AuthSecretFtuxView, AuthSecretFtuxViewEvent,
 };
 #[cfg(feature = "local_tty")]
 use crate::terminal::view::docker_sandbox::DEFAULT_DOCKER_SANDBOX_BASE_IMAGE;
@@ -791,14 +789,6 @@ enum LocalToCloudHandoffIntent {
         trigger: AutoCloudHandoffTrigger,
         conversation_id: AIConversationId,
     },
-}
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-struct LocalToCloudHandoffOpenParams {
-    forked_conversation_id: String,
-    launch: Option<PendingCloudLaunch>,
-    environment_id: Option<SyncId>,
-    intent: LocalToCloudHandoffIntent,
-    should_inject_continue: bool,
 }
 
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -15131,7 +15121,7 @@ impl Workspace {
                                     .to_owned();
                                 let attachments = input.collect_cloud_launch_attachments(ctx);
                                 let entry_point = input.handoff_entry_point(ctx);
-                                input.exit_cloud_handoff_compose_and_clear(ctx);
+                                input.exit_cloud_handoff_compose_and_clear_prompt(ctx);
                                 let launch = if prompt.is_empty() {
                                     None
                                 } else {
@@ -15391,88 +15381,8 @@ impl Workspace {
         target
     }
 
-    /// Opens a cloud pane without forking when there is no local conversation to hand off.
-    /// Still snapshots the source pane's pwd so the cloud agent receives the local repo's
-    /// branch info and uncommitted diffs.
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    fn start_fresh_cloud_launch(
-        &mut self,
-        source_view: ViewHandle<TerminalView>,
-        launch: Option<PendingCloudLaunch>,
-        environment_id: Option<SyncId>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let handoff_target = self.prepare_handoff_target(&source_view, ctx);
-        let Some((_new_pane_view, model_handle)) =
-            handoff_target.update(ctx, |view, view_ctx| view.start_cloud_mode(None, view_ctx))
-        else {
-            log::warn!(
-                "start_local_to_cloud_handoff: failed to push fresh cloud-mode pane over the active session"
-            );
-            Self::restore_source_handoff_draft(&source_view, launch, environment_id, ctx);
-            let window_id = ctx.window_id();
-            WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(
-                    DismissibleToast::error(
-                        "Couldn't open a cloud pane for handoff. Try again, or restart Warp if this keeps happening."
-                            .to_owned(),
-                    ),
-                    window_id,
-                    ctx,
-                );
-            });
-            return;
-        };
-
-        // Carry the source pane's model selection and execution profile onto
-        // the new cloud pane, which otherwise resolves to the profile default.
-        Self::copy_model_and_profile_to_terminal_view(
-            source_view.id(),
-            model_handle.as_ref(ctx).terminal_view_id(),
-            ctx,
-        );
-
-        if let Some(environment_id) = environment_id {
-            model_handle.update(ctx, |model, ctx| {
-                model.set_environment_id(Some(environment_id), ctx);
-            });
-        }
-        Self::show_handoff_success_toast(ctx);
-
-        let pending = PendingHandoff {
-            forked_conversation_id: None,
-            title: None,
-            touched_workspace: None,
-            snapshot_upload: SnapshotUploadStatus::Pending,
-            submission_state: HandoffSubmissionState::Idle,
-            auto_submit: launch,
-            orchestration_handoff: None,
-            should_inject_continue: false,
-        };
-        model_handle.update(ctx, |model, model_ctx| {
-            model.set_pending_handoff(Some(pending), model_ctx);
-        });
-        model_handle.update(ctx, |model, ctx| {
-            model.queue_handoff_auto_submit(ctx);
-        });
-
-        let source_pwd = source_view.as_ref(ctx).pwd();
-        let session_id = source_view
-            .as_ref(ctx)
-            .active_block_session_id()
-            .unwrap_or_default();
-        let mut paths: Vec<StandardizedPath> = Vec::new();
-        if let Some(ref pwd) = source_pwd
-            && let Ok(sp) = StandardizedPath::try_new(pwd)
-        {
-            paths.push(sp);
-        }
-        let upload_target = handoff::snapshot::resolve_upload_target(session_id, ctx);
-        handoff::snapshot::spawn_handoff_snapshot_upload(paths, upload_target, model_handle, ctx);
-    }
-
     /// Opens a local-to-cloud handoff pane in place over the active local pane.
-    /// Triggered by `/move-to-cloud`, `&` compose mode, and the handoff footer chip.
+    /// Triggered by `/handoff`, `&` compose mode, and the handoff footer chip.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn start_local_to_cloud_handoff(
         &mut self,
@@ -15486,9 +15396,6 @@ impl Workspace {
             .as_ref(ctx)
             .active_session_view(ctx)
         else {
-            log::warn!(
-                "start_local_to_cloud_handoff: no active session view in the active tab to hand off"
-            );
             let window_id = ctx.window_id();
             WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
@@ -15536,6 +15443,7 @@ impl Workspace {
             });
         }
     }
+
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn start_local_to_cloud_handoff_from_source(
         &mut self,
@@ -15545,399 +15453,331 @@ impl Workspace {
         intent: LocalToCloudHandoffIntent,
         ctx: &mut ViewContext<Self>,
     ) {
-        let show_user_feedback = intent.shows_user_feedback();
-
         if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
             Self::record_automatic_handoff_failed(intent, ctx);
             return;
         }
 
-        let terminal_view_id = source_view.id();
-        let source_conversation = {
-            let history_model = BlocklistAIHistoryModel::as_ref(ctx);
-            match intent.expected_conversation_id() {
-                Some(expected_conversation_id) => {
-                    let Some(active_conversation) =
-                        history_model.active_conversation(terminal_view_id)
-                    else {
-                        Self::record_automatic_handoff_failed(intent, ctx);
-                        return;
-                    };
-
-                    if active_conversation.id() != expected_conversation_id {
-                        Self::record_automatic_handoff_failed(intent, ctx);
-                        return;
-                    }
-
-                    Some(active_conversation.clone())
-                }
-                None => history_model.active_conversation(terminal_view_id).cloned(),
-            }
-        };
-
-        // Chip, `&` Enter, and `/handoff` with no arg dispatch `launch: None`;
-        // synthesize an empty `PendingCloudLaunch` so auto-submit fires. The
-        // empty-prompt substitution happens in `build_handoff_spawn_request`.
-        // Attachments come from the source input for symmetry across entry points.
-        let launch = match (launch, intent) {
-            (
-                None,
-                LocalToCloudHandoffIntent::UserInitiated(
-                    HandoffEntryPoint::FooterChip
-                    | HandoffEntryPoint::Ampersand
-                    | HandoffEntryPoint::SlashCommand,
-                ),
-            ) => {
-                let attachments = source_view.update(ctx, |view, ctx| {
-                    let input = view.input().clone();
-                    input.update(ctx, |input, ctx| {
-                        input.collect_cloud_launch_attachments(ctx)
-                    })
-                });
-                Some(PendingCloudLaunch {
-                    prompt: String::new(),
-                    attachments,
-                })
-            }
-            (launch, _) => launch,
-        };
-
-        let has_existing_conversation = source_conversation.as_ref().is_some_and(|c| !c.is_empty());
-
-        // Capture the source-conversation state once. An "active" source is
-        // non-empty AND in-progress/blocked; the wire-level substitution and
-        // the telemetry injection_path read the same bool so the two cannot
-        // drift across the in-progress cancellation below.
-        let source_conversation_active = source_conversation.as_ref().is_some_and(|c| {
-            !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked())
+        let source_attachments = source_view.update(ctx, |view, ctx| {
+            let input = view.input().clone();
+            input.update(ctx, |input, ctx| {
+                input.collect_cloud_launch_attachments(ctx)
+            })
         });
-        let empty_prompt = launch.as_ref().is_none_or(|l| l.prompt.is_empty());
-        let injection_path = if !empty_prompt {
-            HandoffInjectionPath::None
-        } else if source_conversation_active {
-            HandoffInjectionPath::Continue
-        } else {
-            HandoffInjectionPath::SnapshotRehydration
-        };
-
-        send_telemetry_from_ctx!(
-            CloudAgentTelemetryEvent::HandoffInitiated {
-                entry_point: intent.entry_point(),
-                forked_existing_conversation: has_existing_conversation,
-                empty_prompt,
-                injection_path,
-            },
-            ctx
-        );
-
-        let Some(source_conversation) =
-            source_conversation.filter(|conversation| !conversation.is_empty())
-        else {
-            if show_user_feedback {
-                log::warn!(
-                    "start_local_to_cloud_handoff: no non-empty source conversation found; starting a fresh cloud launch"
-                );
-                self.start_fresh_cloud_launch(source_view, launch, environment_id, ctx);
-            } else {
-                Self::record_automatic_handoff_failed(intent, ctx);
+        let launch = match launch {
+            Some(mut launch)
+                if launch.attachments.request_attachments.is_empty()
+                    && launch.attachments.display_attachments.is_empty() =>
+            {
+                launch.attachments = source_attachments;
+                Some(launch)
             }
-            return;
+            Some(launch) => Some(launch),
+            None if intent.shows_user_feedback() => {
+                Some(PendingCloudLaunch::new(String::new(), source_attachments))
+            }
+            None => None,
+        };
+        let history = BlocklistAIHistoryModel::handle(ctx);
+        let controller = source_view.as_ref(ctx).ai_controller().clone();
+        let context = source_view.as_ref(ctx).ai_context_model().clone();
+        let terminal_surface_id = source_view.id();
+        let current_working_directory = source_view.as_ref(ctx).pwd();
+        let session_id = source_view
+            .as_ref(ctx)
+            .active_block_session_id()
+            .unwrap_or_default();
+        let snapshot_target = handoff::snapshot::resolve_upload_target(session_id, ctx);
+        let has_long_running_command = source_view.as_ref(ctx).has_active_long_running_command();
+        let cancellation_reason = if intent.expected_conversation_id().is_some() {
+            CancellationReason::AutomaticCloudHandoff
+        } else {
+            CancellationReason::ManuallyCancelled
+        };
+        let prepare_input = HandoffPrepareInput {
+            terminal_surface_id,
+            expected_conversation_id: intent.expected_conversation_id(),
+            history,
+            controller,
+            context,
+            current_working_directory,
+            snapshot_target,
+            has_long_running_command,
+            launch: launch.clone(),
+            environment_id,
+            environment_required: false,
+            entry_point: intent.entry_point(),
+            surface: HandoffSurface::Gui,
+            cancellation_reason,
+            require_in_progress_source: intent.expected_conversation_id().is_some(),
+        };
+        let pending = match prepare_handoff(prepare_input, ctx) {
+            Ok(pending) => pending,
+            Err(error) => {
+                self.handle_handoff_prepare_error(
+                    &source_view,
+                    launch,
+                    environment_id,
+                    intent,
+                    error,
+                    ctx,
+                );
+                return;
+            }
         };
 
-        if intent.expected_conversation_id().is_some()
-            && !source_conversation.status().is_in_progress()
-        {
-            Self::record_automatic_handoff_failed(intent, ctx);
-            return;
-        }
-
-        if source_conversation_active {
-            let has_long_running_command =
-                source_view.as_ref(ctx).has_active_long_running_command();
-
-            if has_long_running_command {
-                if show_user_feedback {
-                    Self::restore_source_handoff_draft(&source_view, launch, environment_id, ctx);
-                    let window_id = ctx.window_id();
-                    WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "Can't hand off while a command is running. Cancel the command or wait for it to finish."
-                                    .to_owned(),
-                            ),
-                            window_id,
+        let presentation = pending.presentation_snapshot();
+        let model_slot: Arc<Mutex<Option<ModelHandle<AmbientAgentViewModel>>>> =
+            Arc::new(Mutex::new(None));
+        let materialize_slot = model_slot.clone();
+        let workspace_spawner = ctx.spawner();
+        let materialize_source_view = source_view.clone();
+        let materialize: MaterializeHandoffTarget = Box::new(move |materialization| {
+            Box::pin(async move {
+                workspace_spawner
+                    .spawn(move |workspace, ctx| {
+                        workspace.materialize_handoff_target(
+                            materialize_source_view,
+                            materialization,
+                            presentation,
+                            intent,
+                            materialize_slot,
                             ctx,
-                        );
+                        )
+                    })
+                    .await
+                    .map_err(anyhow::Error::from)?
+            })
+        });
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let commit = commit_handoff(pending, ai_client, Some(materialize), ctx);
+        ctx.spawn(commit, move |workspace, outcome, ctx| match outcome {
+            HandoffCommitOutcome::Rejected { mut pending, error } => {
+                let restoration = pending.take_restoration();
+                workspace.restore_handoff_after_commit_failure(
+                    &source_view,
+                    restoration,
+                    intent,
+                    Some(error),
+                    ctx,
+                );
+            }
+            HandoffCommitOutcome::Failed(failure) => {
+                let model = model_slot.lock().ok().and_then(|slot| slot.clone());
+                if let Some(model) = model {
+                    model.update(ctx, |model, ctx| {
+                        model.handle_handoff_commit_failure(failure, ctx);
                     });
                 } else {
-                    Self::record_automatic_handoff_failed(intent, ctx);
+                    workspace.restore_handoff_after_commit_failure(
+                        &source_view,
+                        failure.restoration,
+                        intent,
+                        None,
+                        ctx,
+                    );
                 }
-                return;
             }
-
-            let conversation_id = source_conversation.id();
-            let cancellation_reason = if intent.expected_conversation_id().is_some() {
-                CancellationReason::AutomaticCloudHandoff
-            } else {
-                CancellationReason::ManuallyCancelled
-            };
-            source_view.update(ctx, |view, ctx| {
-                view.ai_controller().update(ctx, |controller, ctx| {
-                    controller.cancel_conversation_progress(
-                        conversation_id,
-                        cancellation_reason,
-                        ctx,
-                    );
-                });
-            });
-        }
-
-        let Some(source_token) = source_conversation.server_conversation_token().cloned() else {
-            if show_user_feedback {
-                Self::restore_source_handoff_draft(&source_view, launch, environment_id, ctx);
-                let window_id = ctx.window_id();
-                WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(
-                            "Your conversation hasn't synced to the cloud yet. Try sending another message, then hand off again."
-                                .to_owned(),
-                        ),
-                        window_id,
-                        ctx,
-                    );
-                });
-            } else {
-                Self::record_automatic_handoff_failed(intent, ctx);
-            }
-            return;
-        };
-
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let source_conversation_id = source_token.as_str().to_string();
-        let title_for_fork = source_conversation
-            .title()
-            .map(|t| format!("{t} (Moved to cloud)"));
-        ctx.spawn(
-            async move {
-                ai_client
-                    .fork_conversation(source_conversation_id, title_for_fork)
-                    .await
-            },
-            move |me, result, ctx| match result {
-                Ok(response) => {
-                    me.complete_local_to_cloud_handoff_open(
-                        source_view,
-                        source_conversation,
-                        LocalToCloudHandoffOpenParams {
-                            forked_conversation_id: response.forked_conversation_id,
-                            launch,
-                            environment_id,
-                            intent,
-                            should_inject_continue: source_conversation_active,
-                        },
-                        ctx,
-                    );
-                }
-                Err(err) => {
-                    log::warn!(
-                        "start_local_to_cloud_handoff: fork_conversation RPC failed: {err:#}"
-                    );
-                    if show_user_feedback {
-                        Self::restore_source_handoff_draft(
-                            &source_view,
-                            launch,
-                            environment_id,
-                            ctx,
-                        );
-                        let window_id = ctx.window_id();
-                        WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                            toast_stack.add_ephemeral_toast(
-                                DismissibleToast::error(
-                                    "Couldn't start the handoff. Check your network connection and try again."
-                                        .to_owned(),
-                                ),
-                                window_id,
-                                ctx,
-                            );
-                        });
-                    }
-                    Self::record_automatic_handoff_failed(intent, ctx);
-                }
-            },
-        );
-    }
-
-    /// Finishes the handoff after the fork RPC returns by restoring the forked
-    /// conversation in a cloud pane and starting snapshot prep.
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    #[allow(clippy::too_many_arguments)]
-    fn complete_local_to_cloud_handoff_open(
-        &mut self,
-        source_view: ViewHandle<TerminalView>,
-        source_conversation: AIConversation,
-        params: LocalToCloudHandoffOpenParams,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let LocalToCloudHandoffOpenParams {
-            forked_conversation_id,
-            launch,
-            environment_id,
-            intent,
-            should_inject_continue,
-        } = params;
-        let show_user_feedback = intent.shows_user_feedback();
-        let history_model = BlocklistAIHistoryModel::handle(ctx);
-        // Materialize the fork locally so the new pane can restore it.
-        let title_override = source_conversation
-            .title()
-            .map(|t| format!("{t} (Moved to cloud)"));
-        let local_fork = match history_model.update(ctx, |history_model, ctx| {
-            history_model.fork_conversation(
-                &source_conversation,
-                FORK_PREFIX,
-                true,
-                title_override.as_deref(),
-                ctx,
-            )
-        }) {
-            Ok(forked) => forked,
-            Err(err) => {
-                log::warn!(
-                    "complete_local_to_cloud_handoff_open: failed to materialize local fork of conversation {:?} for handoff: {err:#}",
-                    source_conversation.id()
-                );
-                if show_user_feedback {
-                    let window_id = ctx.window_id();
-                    WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "Couldn't save your conversation locally. Try sending another message, then hand off again."
-                                    .to_owned(),
-                            ),
-                            window_id,
-                            ctx,
-                        );
+            HandoffCommitOutcome::Created(created) => {
+                let model = model_slot.lock().ok().and_then(|slot| slot.clone());
+                if let Some(model) = model {
+                    model.update(ctx, |model, ctx| {
+                        model.monitor_created_handoff(created, ctx);
                     });
                 }
-                Self::record_automatic_handoff_failed(intent, ctx);
-                return;
             }
-        };
-        let local_fork_id = local_fork.id();
+        });
+    }
 
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    fn materialize_handoff_target(
+        &mut self,
+        source_view: ViewHandle<TerminalView>,
+        materialization: HandoffTargetMaterialization,
+        presentation: HandoffPresentationSnapshot,
+        intent: LocalToCloudHandoffIntent,
+        model_slot: Arc<Mutex<Option<ModelHandle<AmbientAgentViewModel>>>>,
+        ctx: &mut ViewContext<Self>,
+    ) -> anyhow::Result<()> {
+        debug_assert_eq!(
+            presentation.forked_existing_conversation,
+            materialization.source_conversation.is_some()
+        );
+        debug_assert_eq!(
+            presentation.source_conversation_id,
+            materialization
+                .source_conversation
+                .as_ref()
+                .map(AIConversation::id)
+        );
+        let local_fork = materialization
+            .source_conversation
+            .as_ref()
+            .map(|source_conversation| {
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.fork_conversation(
+                        source_conversation,
+                        FORK_PREFIX,
+                        true,
+                        materialization.title.as_deref(),
+                        ctx,
+                    )
+                })
+            })
+            .transpose()?;
         let handoff_target = self.prepare_handoff_target(&source_view, ctx);
         let Some((new_pane_view, model_handle)) =
-            handoff_target.update(ctx, |view, view_ctx| view.start_cloud_mode(None, view_ctx))
+            handoff_target.update(ctx, |view, ctx| view.start_cloud_mode(None, ctx))
         else {
-            log::warn!(
-                "complete_local_to_cloud_handoff_open: failed to push cloud-mode pane after forking conversation"
-            );
-            if show_user_feedback {
-                let window_id = ctx.window_id();
-                WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(
-                            "Couldn't open a cloud pane for handoff. Try again, or restart Warp if this keeps happening."
-                                .to_owned(),
-                        ),
-                        window_id,
-                        ctx,
-                    );
-                });
-            }
-            Self::record_automatic_handoff_failed(intent, ctx);
-            return;
+            anyhow::bail!("failed to open cloud pane for handoff");
         };
-
-        // Carry the source pane's model selection and execution profile onto
-        // the new cloud pane, which otherwise resolves to the profile default.
         Self::copy_model_and_profile_to_terminal_view(
             source_view.id(),
             model_handle.as_ref(ctx).terminal_view_id(),
             ctx,
         );
-
-        // Restore the forked conversation into the newly-created pane.
-        new_pane_view.update(ctx, |terminal_view, view_ctx| {
-            terminal_view.restore_conversation_after_view_creation(
-                RestoredAIConversation::new(local_fork.clone()),
-                true,
-                RestoreConversationEntryBehavior::PreserveAgentViewState,
-                view_ctx,
-            );
-        });
-
-        // Enter fullscreen agent view once restoration has populated history.
-        new_pane_view.update(ctx, |terminal_view, view_ctx| {
-            terminal_view.enter_agent_view_for_conversation(
-                None,
-                AgentViewEntryOrigin::RestoreExistingConversation,
-                local_fork_id,
-                view_ctx,
-            );
-        });
-
-        // Bind the local fork to the server fork token.
-        history_model.update(ctx, |history_model, ctx| {
-            history_model.set_server_conversation_token_for_conversation_and_persist(
-                local_fork_id,
-                forked_conversation_id.clone(),
+        let handoff_terminal_view_id = model_handle.as_ref(ctx).terminal_view_id();
+        LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+            preferences.update_preferred_agent_mode_llm(
+                &LLMId::from(presentation.model_id.as_str()),
+                handoff_terminal_view_id,
                 ctx,
             );
-            history_model.set_viewing_shared_session_for_conversation(local_fork_id, true);
         });
 
-        if let Some(env_id) = environment_id {
-            model_handle.update(ctx, |model, ctx| {
-                model.set_environment_id(Some(env_id), ctx);
+        if let Some(local_fork) = local_fork {
+            let history = BlocklistAIHistoryModel::handle(ctx);
+            let local_fork_id = local_fork.id();
+            new_pane_view.update(ctx, |terminal_view, ctx| {
+                terminal_view.restore_conversation_after_view_creation(
+                    RestoredAIConversation::new(local_fork),
+                    true,
+                    RestoreConversationEntryBehavior::PreserveAgentViewState,
+                    ctx,
+                );
+                terminal_view.enter_agent_view_for_conversation(
+                    None,
+                    AgentViewEntryOrigin::RestoreExistingConversation,
+                    local_fork_id,
+                    ctx,
+                );
             });
-        }
-
-        // Mark handoff from any orchestrated source so the server can inject
-        // the universal first-turn orchestration handoff message.
-        let orchestration_handoff = (source_conversation.is_child_agent_conversation()
-            || !history_model
-                .as_ref(ctx)
-                .child_conversation_ids_of(&source_conversation.id())
-                .is_empty())
-        .then_some(true);
-
-        // Keep handoff state on the cloud model until snapshot prep and submit finish.
-        let pending = PendingHandoff {
-            forked_conversation_id: Some(forked_conversation_id.clone()),
-            title: title_override,
-            touched_workspace: None,
-            snapshot_upload: SnapshotUploadStatus::Pending,
-            submission_state: HandoffSubmissionState::Idle,
-            auto_submit: launch,
-            orchestration_handoff,
-            should_inject_continue,
-        };
-        model_handle.update(ctx, |model, model_ctx| {
-            model.set_pending_handoff(Some(pending), model_ctx);
-        });
-        Self::record_automatic_handoff_succeeded(intent, ctx);
-
-        if show_user_feedback {
-            Self::show_handoff_success_toast(ctx);
+            if let Some(forked_conversation_id) = materialization.forked_conversation_id {
+                history.update(ctx, |history, ctx| {
+                    history.set_server_conversation_token_for_conversation_and_persist(
+                        local_fork_id,
+                        forked_conversation_id,
+                        ctx,
+                    );
+                    history.set_viewing_shared_session_for_conversation(local_fork_id, true);
+                });
+            }
         }
         model_handle.update(ctx, |model, ctx| {
-            model.queue_handoff_auto_submit(ctx);
+            model.set_environment_id(presentation.environment_id, ctx);
+            model.begin_local_to_cloud_handoff(ctx);
         });
 
-        let source_pwd = source_view.as_ref(ctx).pwd();
-        let session_id = source_view
-            .as_ref(ctx)
-            .active_block_session_id()
-            .unwrap_or_default();
-        let mut paths = extract_paths_from_conversation(&source_conversation);
-        if let Some(ref pwd) = source_pwd
-            && let Ok(sp) = StandardizedPath::try_new(pwd)
-        {
-            paths.push(sp);
+        if let Ok(mut slot) = model_slot.lock() {
+            *slot = Some(model_handle);
         }
-        let upload_target = handoff::snapshot::resolve_upload_target(session_id, ctx);
-        handoff::snapshot::spawn_handoff_snapshot_upload(paths, upload_target, model_handle, ctx);
+        Self::record_automatic_handoff_succeeded(intent, ctx);
+        if intent.shows_user_feedback() {
+            Self::show_handoff_success_toast(ctx);
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    fn handle_handoff_prepare_error(
+        &mut self,
+        source_view: &ViewHandle<TerminalView>,
+        launch: Option<PendingCloudLaunch>,
+        environment_id: Option<SyncId>,
+        intent: LocalToCloudHandoffIntent,
+        error: HandoffPrepareError,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        Self::record_automatic_handoff_failed(intent, ctx);
+        if !intent.shows_user_feedback() {
+            return;
+        }
+        let launch = launch.map(|launch| {
+            PendingCloudLaunch::new(launch.prompt, HandoffLaunchAttachments::default())
+        });
+        Self::restore_source_handoff_draft(source_view, launch, environment_id, ctx);
+        let message = match error {
+            HandoffPrepareError::LongRunningCommand => {
+                "Can't hand off while a command is running. Cancel the command or wait for it to finish."
+            }
+            HandoffPrepareError::ActiveOrBlockedChild => {
+                "Can't hand off while a child agent is running or waiting for input."
+            }
+            HandoffPrepareError::MissingServerConversationToken => {
+                "Your conversation hasn't synced to the cloud yet. Try sending another message, then hand off again."
+            }
+            HandoffPrepareError::InvalidModel => {
+                "Custom models can't run in the cloud. Switch to a Warp model to hand off."
+            }
+            HandoffPrepareError::EmptySourceAndPrompt => {
+                "Nothing to hand off — start a conversation first."
+            }
+            HandoffPrepareError::SourceConversationChanged
+            | HandoffPrepareError::SourceNotInProgress
+            | HandoffPrepareError::HandoffDisabled
+            | HandoffPrepareError::MissingRequiredEnvironment
+            | HandoffPrepareError::InvalidEnvironment => {
+                "Couldn't start the handoff. Check your selection and try again."
+            }
+        };
+        let window_id = ctx.window_id();
+        WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::error(message.to_owned()),
+                window_id,
+                ctx,
+            );
+        });
+    }
+
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    fn restore_handoff_after_commit_failure(
+        &mut self,
+        source_view: &ViewHandle<TerminalView>,
+        restoration: Option<HandoffRestoration>,
+        intent: LocalToCloudHandoffIntent,
+        prepare_error: Option<HandoffPrepareError>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        Self::record_automatic_handoff_failed(intent, ctx);
+        if !intent.shows_user_feedback() {
+            return;
+        }
+        if let Some(restoration) = restoration {
+            let launch = PendingCloudLaunch::new(
+                restoration.prompt,
+                HandoffLaunchAttachments::new(Vec::new(), restoration.attachments),
+            );
+            Self::restore_source_handoff_draft(
+                source_view,
+                Some(launch),
+                restoration.environment_id,
+                ctx,
+            );
+        }
+        let message = if prepare_error.is_some() {
+            "The handoff settings changed before it started. Review them and try again."
+        } else {
+            "Couldn't start the handoff. Check your network connection and try again."
+        };
+        let window_id = ctx.window_id();
+        WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::error(message.to_owned()),
+                window_id,
+                ctx,
+            );
+        });
     }
 
     pub(crate) fn handle_file_tree_event(
