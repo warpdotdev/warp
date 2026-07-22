@@ -431,6 +431,80 @@ fn set_active_block_agent_driving(view: &mut TerminalView, conversation_id: AICo
         .active_block_mut()
         .set_agent_interaction_mode_for_requested_command(action_id, None, conversation_id);
 }
+#[test]
+fn focus_input_action_focuses_input_when_input_box_visible() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let (input_id, editor_id) = terminal.read(&app, |view, ctx| {
+            let editor = view.input.as_ref(ctx).editor().clone();
+            (view.input.id(), editor.id())
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            let model = view.model.lock();
+            assert!(view.is_input_box_visible(&model, ctx));
+            drop(model);
+
+            view.handle_action(&TerminalAction::FocusInputAndClearSelection, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                matches!(ctx.focused_view_id(window_id), Some(id) if id == input_id || id == editor_id)
+            );
+        });
+    })
+}
+
+#[test]
+fn focus_input_action_focuses_terminal_for_long_running_command_with_hidden_input() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let terminal_id = terminal.id();
+
+        terminal.update(&mut app, |view, ctx| {
+            bootstrap_with_long_running_block(view);
+            let model = view.model.lock();
+            assert!(!view.is_input_box_visible(&model, ctx));
+            drop(model);
+
+            view.handle_action(&TerminalAction::FocusInputAndClearSelection, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(ctx.focused_view_id(window_id), Some(terminal_id));
+        });
+    })
+}
+
+#[test]
+fn focus_input_action_focuses_terminal_for_alt_screen_with_hidden_input() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let terminal_id = terminal.id();
+
+        terminal.update(&mut app, |view, ctx| {
+            bootstrap_with_long_running_block(view);
+            {
+                let mut model = view.model.lock();
+                model.set_mode(ansi::Mode::SwapScreen {
+                    save_cursor_and_clear_screen: true,
+                });
+                assert!(model.is_alt_screen_active());
+                assert!(!view.is_input_box_visible(&model, ctx));
+            }
+
+            view.handle_action(&TerminalAction::FocusInputAndClearSelection, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(ctx.focused_view_id(window_id), Some(terminal_id));
+        });
+    })
+}
 
 #[test]
 fn updated_conversation_metadata_refreshes_selected_conversation_pane_title() {
