@@ -39,6 +39,29 @@ fn slash_command_is_submitted_as_prompt_only_for_prompt_commands() {
 }
 
 #[test]
+fn logout_command_executes_immediately_and_takes_no_argument() {
+    use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
+
+    assert_eq!(
+        TuiSlashCommand::from_static_command(&commands::LOGOUT),
+        Some(TuiSlashCommand::Logout)
+    );
+    assert!(slash_command_is_supported_in_tui(&commands::LOGOUT));
+    assert_eq!(commands::LOGOUT.name, "/logout");
+    assert_eq!(
+        commands::LOGOUT.description,
+        "Log out and return to the sign-in page"
+    );
+    assert!(commands::LOGOUT.argument.is_none());
+    assert!(!slash_command_is_submitted_as_prompt(&commands::LOGOUT));
+    assert_eq!(
+        slash_command_selection_behavior(&commands::LOGOUT),
+        SlashCommandSelectionBehavior::Execute
+    );
+    assert_eq!(commands::LOGOUT.availability, Availability::ALWAYS);
+}
+
+#[test]
 fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
     for (command, expected) in [
         (&*commands::AGENT, TuiSlashCommand::Agent),
@@ -57,6 +80,7 @@ fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
         (&*commands::EXPORT_TO_FILE, TuiSlashCommand::ExportToFile),
         (&commands::MCP, TuiSlashCommand::Mcp),
         (&commands::EXIT, TuiSlashCommand::Exit),
+        (&commands::LOGOUT, TuiSlashCommand::Logout),
         (&commands::VIEW_LOGS, TuiSlashCommand::ViewLogs),
     ] {
         assert_eq!(

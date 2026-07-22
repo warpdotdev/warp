@@ -200,6 +200,7 @@ pub use crate::throttle::throttle;
 pub use crate::tui::{
     TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
     TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
+    log_out as tui_log_out,
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::tui_test_support::{

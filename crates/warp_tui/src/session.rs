@@ -124,21 +124,21 @@ fn init(
             });
             let orchestration = TuiOrchestrationModel::register(ctx);
             TuiSessions::wire_orchestration(&sessions, &orchestration, ctx);
+            let sessions_for_login = sessions.clone();
+            let root_for_login = root.clone();
+            let login_model = TuiLoginModel::handle(ctx);
+            ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
+                TuiLoginEvent::LoggedIn => {
+                    create_terminal_session_after_login(&sessions_for_login, &root_for_login, ctx);
+                }
+                TuiLoginEvent::LoggedOut => {
+                    sessions_for_login.update(ctx, |sessions, ctx| sessions.clear(ctx));
+                    root_for_login.update(ctx, |root, ctx| root.show_auth(ctx));
+                }
+            });
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
                 // Already authenticated at mount: create the first session now.
                 create_terminal_session_after_login(&sessions, &root, ctx);
-            } else {
-                // Otherwise wait for login to complete and create it then.
-                let sessions_for_login = sessions.clone();
-                let root_for_login = root.clone();
-                let login_model = TuiLoginModel::handle(ctx);
-                ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
-                    TuiLoginEvent::LoggedIn => create_terminal_session_after_login(
-                        &sessions_for_login,
-                        &root_for_login,
-                        ctx,
-                    ),
-                });
             }
         }
         Err(error) => {

@@ -38,6 +38,8 @@ pub enum TuiLoginPhase {
 pub enum TuiLoginEvent {
     /// Authentication completed and the TUI can create its terminal session.
     LoggedIn,
+    /// Authentication was cleared and the TUI should return to the login page.
+    LoggedOut,
 }
 
 /// Singleton holding the TUI's [`TuiLoginPhase`]. Updated by [`init`]'s auth
@@ -83,11 +85,6 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
     // login placeholder until the model flips to `LoggedIn`.
     mount(ctx);
 
-    if logged_in {
-        activate_global_mcp_servers(ctx);
-        return;
-    }
-
     // Reuses the same device-authorization flow as `oz login` (see
     // `app/src/ai/agent_sdk/admin.rs`). The browser handles login; control
     // returns here once the device code is approved.
@@ -97,17 +94,11 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
             verification_url_complete,
             user_code,
         } => {
-            // Prefer the "complete" URL (device code pre-filled) for opening.
-            let url_to_open = verification_url_complete
-                .as_deref()
-                .unwrap_or(verification_url.as_str());
-            ctx.open_url(url_to_open);
-            set_login_phase(
+            handle_received_device_authorization_code(
+                verification_url,
+                verification_url_complete.as_deref(),
+                user_code,
                 ctx,
-                TuiLoginPhase::AwaitingLogin {
-                    verification_uri: Some(url_to_open.to_owned()),
-                    user_code: Some(user_code.clone()),
-                },
             );
         }
         AuthManagerEvent::AuthComplete => {
@@ -123,6 +114,56 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
         _ => {}
     });
 
+    if logged_in {
+        activate_global_mcp_servers(ctx);
+        return;
+    }
+
+    AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
+        auth_manager.authorize_device(ctx);
+    });
+}
+
+fn handle_received_device_authorization_code(
+    verification_url: &str,
+    verification_url_complete: Option<&str>,
+    user_code: &str,
+    ctx: &mut AppContext,
+) {
+    // A device-auth request can finish delivering its code after an
+    // already-authenticated startup. It must not replace the logged-in TUI
+    // with the login placeholder; device codes emitted after an explicit
+    // logout are still accepted because the phase has already returned to
+    // `AwaitingLogin`.
+    if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
+        return;
+    }
+
+    // Prefer the "complete" URL (device code pre-filled) for opening.
+    let url_to_open = verification_url_complete.unwrap_or(verification_url);
+    ctx.open_url(url_to_open);
+    set_login_phase(
+        ctx,
+        TuiLoginPhase::AwaitingLogin {
+            verification_uri: Some(url_to_open.to_owned()),
+            user_code: Some(user_code.to_owned()),
+        },
+    );
+}
+
+/// Logs out the current TUI user and starts a fresh device-authorization flow.
+///
+/// The login model event is delivered after the current command handler returns,
+/// allowing the session owner to tear down the dispatching terminal view safely.
+pub fn log_out(ctx: &mut AppContext) {
+    crate::auth::log_out(ctx);
+    set_login_phase(
+        ctx,
+        TuiLoginPhase::AwaitingLogin {
+            verification_uri: None,
+            user_code: None,
+        },
+    );
     AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
         auth_manager.authorize_device(ctx);
     });
@@ -139,11 +180,18 @@ fn activate_global_mcp_servers(ctx: &mut AppContext) {
 /// [`TuiLoginEvent::LoggedIn`] when authentication completes.
 fn set_login_phase(ctx: &mut AppContext, phase: TuiLoginPhase) {
     TuiLoginModel::handle(ctx).update(ctx, |model, ctx| {
-        let logged_in = matches!(phase, TuiLoginPhase::LoggedIn);
+        let logged_in = matches!(&phase, TuiLoginPhase::LoggedIn);
+        let logged_out = matches!(
+            (&model.phase, &phase),
+            (TuiLoginPhase::LoggedIn, TuiLoginPhase::AwaitingLogin { .. })
+        );
         model.phase = phase;
         ctx.notify();
         if logged_in {
             ctx.emit(TuiLoginEvent::LoggedIn);
+        }
+        if logged_out {
+            ctx.emit(TuiLoginEvent::LoggedOut);
         }
     });
 }

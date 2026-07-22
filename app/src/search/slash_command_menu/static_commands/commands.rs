@@ -82,6 +82,15 @@ pub const EXIT: StaticCommand = StaticCommand {
     argument: None,
 };
 
+pub const LOGOUT: StaticCommand = StaticCommand {
+    name: "/logout",
+    description: "Log out and return to the sign-in page",
+    icon_path: "bundled/svg/log-out-01.svg",
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static CREATE_ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/create-environment",
     description: "Create an Oz environment (Docker image + repos) via guided setup",
@@ -689,6 +698,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         commands.extend([
             MCP,
             EXIT,
+            LOGOUT,
             VIEW_LOGS,
             ENABLE_NATURAL_LANGUAGE_DETECTION,
             DISABLE_NATURAL_LANGUAGE_DETECTION,

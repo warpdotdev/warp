@@ -54,6 +54,12 @@ impl RootTuiView {
         ctx.notify();
     }
 
+    /// Transitions from the live session container back to authentication.
+    pub(crate) fn show_auth(&mut self, ctx: &mut ViewContext<Self>) {
+        self.state = RootTuiState::Auth;
+        ctx.notify();
+    }
+
     fn focused_session_view(&self, ctx: &AppContext) -> Option<TuiSessionView> {
         if !ctx.has_singleton_model::<TuiSessions>() {
             return None;

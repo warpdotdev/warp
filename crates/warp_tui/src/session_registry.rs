@@ -461,6 +461,26 @@ impl TuiSessions {
         }
         ctx.notify();
     }
+
+    /// Removes every retained session, dropping terminal managers and notifying
+    /// orchestration of each removed session.
+    pub(crate) fn clear(&mut self, ctx: &mut ModelContext<Self>) {
+        let removed_ids: Vec<_> = self.sessions.drain(..).map(|session| session.id).collect();
+        self.focused_session_id = None;
+        if removed_ids.is_empty() {
+            return;
+        }
+
+        for id in removed_ids {
+            if ctx.has_singleton_model::<TuiOrchestrationModel>() {
+                TuiOrchestrationModel::handle(ctx).update(ctx, |orchestration, ctx| {
+                    orchestration.handle_session_removed(id, ctx);
+                });
+            }
+            ctx.emit(TuiSessionsEvent::SessionRemoved(id));
+        }
+        ctx.notify();
+    }
     /// Focuses a registered session. Returns whether focus changed.
     pub(crate) fn focus_session(&mut self, id: TuiSessionId, ctx: &mut ModelContext<Self>) -> bool {
         if self.focused_session_id == Some(id) || self.session(id).is_none() {

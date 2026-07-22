@@ -68,6 +68,46 @@ fn slash_command_menu_renders_view_logs_row() {
     });
 }
 
+#[test]
+fn slash_command_menu_renders_logout_row() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let input_editor = ctx.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
+            let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
+            suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(TuiInputSuggestionsMode::SlashCommands, ctx);
+            });
+            let mixer = ctx.add_model(|_| SlashCommandMixer::new());
+            let model = ctx.add_model(|_| {
+                TuiSlashCommandModel::new_for_test(
+                    input_editor,
+                    suggestions_mode,
+                    mixer,
+                    vec![TuiSlashCommandRow {
+                        title: "/logout".to_owned(),
+                        description: Some("Log out and return to the sign-in page".to_owned()),
+                        action: AcceptSlashCommandOrSavedPrompt::SlashCommand {
+                            id: SlashCommandId::new(),
+                        },
+                    }],
+                    0,
+                )
+            });
+            let menu = TuiInlineMenu::new(model);
+            let element = menu.render(ctx).expect("slash command menu should render");
+            let lines = render_menu_lines(element, ctx);
+
+            assert!(lines.iter().any(|line| line.contains("/logout")));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Log out and return to the sign-in page"))
+            );
+        });
+    });
+}
+
 fn render_menu_lines(mut element: Box<dyn TuiElement>, ctx: &AppContext) -> Vec<String> {
     let mut rendered_views = EntityIdMap::default();
     let mut layout_ctx = TuiLayoutContext {
