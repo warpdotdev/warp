@@ -299,6 +299,7 @@ fn use_headless_in_memory_preferences() -> bool {
 }
 
 #[cfg(not(target_family = "wasm"))]
+#[allow(dead_code)]
 fn use_headless_in_memory_preferences() -> bool {
     false
 }

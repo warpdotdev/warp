@@ -135,12 +135,13 @@ mod common;
 // the native-only functions that call it are gated.
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 mod config_file;
-// The full AgentDriver (driver module) depends on many native-only backends
-// (MCP, skills/fs, blocklist recording, bedrock credentials, harness support,
-// etc.) that are cfg(not(target_family="wasm"))-gated. On wasm, the
-// `run_agent` path uses a direct MAA request instead (see `run_agent`).
+// The AgentDriver module. On native, the full driver.rs is used. On wasm, a
+// minimal driver_wasm.rs stub provides AgentDriver::new (no-op TerminalDriver)
+// + AgentDriver::run (MAA loop + session-sharing registration).
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod driver;
+#[cfg(target_family = "wasm")]
+pub(crate) mod driver_wasm;
 #[cfg(not(target_family = "wasm"))]
 mod environment;
 #[cfg(not(target_family = "wasm"))]
