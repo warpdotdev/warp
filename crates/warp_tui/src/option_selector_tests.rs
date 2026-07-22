@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use string_offset::CharOffset;
 
+use string_offset::CharOffset;
 use warp::tui_export::{
     Appearance, OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus,
 };

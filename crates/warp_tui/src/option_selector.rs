@@ -12,12 +12,6 @@
 //! through [`TuiOptionSelector::handle_back`].
 use std::collections::{HashMap, HashSet};
 
-use crate::editor_view::{
-    TuiEditorVerticalDirection, TuiEditorView, TuiEditorViewAction, TuiEditorViewEvent,
-};
-use crate::inline_menu::keep_selected_visible;
-use crate::keybindings::TUI_BINDING_GROUP;
-use crate::tui_builder::TuiUiBuilder;
 use warp::tui_export::{OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus};
 use warp_search_core::inline_menu::InlineMenuSelection;
 use warpui_core::elements::MouseStateHandle;
@@ -32,6 +26,13 @@ use warpui_core::{
     AppContext, BlurContext, Entity, EntityId, FocusContext, TuiView, TypedActionView, ViewContext,
     ViewHandle,
 };
+
+use crate::editor_view::{
+    TuiEditorVerticalDirection, TuiEditorView, TuiEditorViewAction, TuiEditorViewEvent,
+};
+use crate::inline_menu::keep_selected_visible;
+use crate::keybindings::TUI_BINDING_GROUP;
+use crate::tui_builder::TuiUiBuilder;
 
 /// Maximum option rows visible at once; longer lists scroll.
 pub(crate) const MAX_VISIBLE_OPTION_ROWS: usize = 6;
