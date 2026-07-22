@@ -1142,6 +1142,11 @@ pub trait AIClient: 'static + Send + Sync {
 
     async fn get_request_limit_info(&self) -> Result<RequestUsageInfo, anyhow::Error>;
 
+    /// Fetches the server-authoritative AI credit availability for the current user.
+    async fn get_ai_credit_availability(
+        &self,
+    ) -> Result<crate::ai::request_usage_model::AICreditAvailability, anyhow::Error>;
+
     /// Returns conversation usage history for the current user over the requested number of days.
     ///
     /// If `last_updated_end_timestamp` is provided, only conversations updated before that timestamp are returned.
@@ -1741,6 +1746,20 @@ impl AIClient for ServerApi {
         })
     }
 
+    #[cfg(feature = "agent_mode_evals")]
+    async fn get_ai_credit_availability(
+        &self,
+    ) -> Result<crate::ai::request_usage_model::AICreditAvailability, anyhow::Error> {
+        use crate::ai::request_usage_model::{
+            AICreditAvailability, AICreditDenialReason,
+        };
+        Ok(AICreditAvailability {
+            available: true,
+            denial_reason: AICreditDenialReason::None,
+            credit_source: None,
+        })
+    }
+
     #[cfg(not(feature = "agent_mode_evals"))]
     async fn get_request_limit_info(&self) -> Result<RequestUsageInfo, anyhow::Error> {
         let variables = GetRequestLimitInfoVariables {
@@ -1791,6 +1810,66 @@ impl AIClient for ServerApi {
             }
             warp_graphql::queries::get_request_limit_info::UserResult::Unknown => {
                 Err(anyhow!("failed to get request limit info"))
+            }
+        }
+    }
+
+    #[cfg(not(feature = "agent_mode_evals"))]
+    async fn get_ai_credit_availability(
+        &self,
+    ) -> Result<crate::ai::request_usage_model::AICreditAvailability, anyhow::Error> {
+        use warp_graphql::queries::get_ai_credit_availability::{
+            AICreditAvailabilityDenialReason as GqlDenialReason,
+            AICreditAvailabilitySource as GqlSource, GetAICreditAvailability,
+            GetAICreditAvailabilityVariables,
+        };
+        use crate::ai::request_usage_model::{
+            AICreditAvailability, AICreditDenialReason, AICreditSource,
+        };
+
+        let variables = GetAICreditAvailabilityVariables {
+            request_context: get_request_context(),
+        };
+        let operation = GetAICreditAvailability::build(variables);
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.user {
+            warp_graphql::queries::get_ai_credit_availability::UserResult::UserOutput(
+                user_output,
+            ) => {
+                let gql = user_output.user.ai_credit_availability;
+                let denial_reason = match gql.denial_reason {
+                    GqlDenialReason::None => AICreditDenialReason::None,
+                    GqlDenialReason::OutOfCredits => AICreditDenialReason::OutOfCredits,
+                    GqlDenialReason::Delinquent => AICreditDenialReason::Delinquent,
+                    GqlDenialReason::EnterpriseTeamSpendLimitHit => {
+                        AICreditDenialReason::EnterpriseTeamSpendLimitHit
+                    }
+                    GqlDenialReason::EnterprisePerUserSpendLimitHit => {
+                        AICreditDenialReason::EnterprisePerUserSpendLimitHit
+                    }
+                    GqlDenialReason::EnterpriseWorkspaceSpendLimitHit => {
+                        AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit
+                    }
+                };
+                let credit_source = gql.credit_source.map(|s| match s {
+                    GqlSource::BaseLimit => AICreditSource::BaseLimit,
+                    GqlSource::BonusGrant => AICreditSource::BonusGrant,
+                    GqlSource::Payg => AICreditSource::Payg,
+                    GqlSource::Overage => AICreditSource::Overage,
+                    GqlSource::AmbientBonusGrant => AICreditSource::AmbientBonusGrant,
+                });
+                Ok(AICreditAvailability {
+                    available: gql.available,
+                    denial_reason,
+                    credit_source,
+                })
+            }
+            warp_graphql::queries::get_ai_credit_availability::UserResult::UserFacingError(e) => {
+                Err(anyhow!(get_user_facing_error_message(e)))
+            }
+            warp_graphql::queries::get_ai_credit_availability::UserResult::Unknown => {
+                Err(anyhow!("failed to get AI credit availability"))
             }
         }
     }

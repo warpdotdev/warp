@@ -152,6 +152,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         joinable_teams: vec![],
                         experiments: None,
                         feature_model_choices: None,
+                        ai_credit_availability: None,
                     },
                     pricing_info: None,
                 })
@@ -169,6 +170,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         joinable_teams: vec![],
                         experiments: None,
                         feature_model_choices: None,
+                        ai_credit_availability: None,
                     },
                     pricing_info: None,
                 })
@@ -305,6 +307,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
                 joinable_teams: vec![],
                 experiments: None,
                 feature_model_choices: None,
+                ai_credit_availability: None,
             },
             pricing_info: None,
         })
@@ -361,6 +364,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 joinable_teams: vec![],
                 experiments: None,
                 feature_model_choices: None,
+                ai_credit_availability: None,
             },
             pricing_info: None,
         })

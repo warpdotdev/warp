@@ -96,6 +96,7 @@ fn test_leaving_team_removes_objects() {
                     joinable_teams: vec![],
                     experiments: None,
                     feature_model_choices: None,
+                    ai_credit_availability: None,
                 },
                 pricing_info: None,
             })
@@ -165,6 +166,7 @@ fn test_leaving_team_removes_objects() {
                         joinable_teams: vec![],
                         experiments: None,
                         feature_model_choices: None,
+                        ai_credit_availability: None,
                     },
                     pricing_info: None,
                 }),

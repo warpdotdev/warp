@@ -79,6 +79,29 @@ type AIConversationFormat {
   hasTaskList: Boolean!
 }
 
+enum AICreditAvailabilityDenialReason {
+  NONE
+  OUT_OF_CREDITS
+  DELINQUENT
+  ENTERPRISE_TEAM_SPEND_LIMIT_HIT
+  ENTERPRISE_PER_USER_SPEND_LIMIT_HIT
+  ENTERPRISE_WORKSPACE_SPEND_LIMIT_HIT
+}
+
+enum AICreditAvailabilitySource {
+  BASE_LIMIT
+  BONUS_GRANT
+  PAYG
+  OVERAGE
+  AMBIENT_BONUS_GRANT
+}
+
+type AICreditAvailability {
+  available: Boolean!
+  denialReason: AICreditAvailabilityDenialReason!
+  creditSource: AICreditAvailabilitySource
+}
+
 enum AICreditsUsageAndCostSubjectType {
   SERVICE_ACCOUNT
   TEAM
@@ -4318,6 +4341,7 @@ The User type is the primary way of interacting with our graph.
 Nearly all data is scoped to the currently logged-in user.
 """
 type User {
+  aiCreditAvailability: AICreditAvailability!
   anonymousUserInfo: AnonymousUserInfo
   availableHarnesses: AvailableHarnesses!
   billingMetadata: BillingMetadata

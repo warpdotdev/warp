@@ -15,6 +15,7 @@ use super::user_workspaces::{
     CreateTeamResponse, UserWorkspaces, WorkspacesMetadataResponse, WorkspacesMetadataWithPricing,
 };
 use super::workspace::WorkspaceUid;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::llms::LLMPreferences;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::CloudObjectEventEntrypoint;
@@ -125,6 +126,7 @@ impl TeamUpdateManager {
                     joinable_teams: vec![],
                     experiments: None,
                     feature_model_choices: None,
+                    ai_credit_availability: None,
                 },
                 pricing_info: None,
             })
@@ -496,6 +498,13 @@ impl TeamUpdateManager {
                     LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
                         llm_preferences
                             .update_feature_model_choices(feature_model_choices.try_into(), ctx);
+                    });
+                }
+
+                // Feed the piggybacked AI credit availability into the shared model.
+                if let Some(availability) = user_workspaces_access.ai_credit_availability {
+                    AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                        usage_model.update_ai_credit_availability(availability, ctx);
                     });
                 }
 

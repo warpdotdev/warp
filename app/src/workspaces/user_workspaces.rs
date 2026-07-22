@@ -106,6 +106,8 @@ pub struct WorkspacesMetadataResponse {
     /// It makes most sense to fetch this in workspaces which is queried every 10 minutes.
     /// This is list of available LLM models for the user.
     pub feature_model_choices: Option<FeatureModelChoice>,
+    /// Server-authoritative AI credit availability piggybacked from the metadata refresh.
+    pub ai_credit_availability: Option<crate::ai::request_usage_model::AICreditAvailability>,
 }
 
 // A representation of all data we fetch at a single time via our 10 minute poll.

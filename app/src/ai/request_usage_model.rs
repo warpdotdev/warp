@@ -21,6 +21,42 @@ use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::WorkspaceUid;
 
+/// Server-authoritative reason for AI credit unavailability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AICreditDenialReason {
+    /// Credits are available; no denial.
+    #[default]
+    None,
+    OutOfCredits,
+    Delinquent,
+    EnterpriseTeamSpendLimitHit,
+    EnterprisePerUserSpendLimitHit,
+    EnterpriseWorkspaceSpendLimitHit,
+    /// Unknown server-returned value (forward-compat guard).
+    Unknown,
+}
+
+/// Which credit source is currently funding AI access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AICreditSource {
+    BaseLimit,
+    BonusGrant,
+    Payg,
+    Overage,
+    AmbientBonusGrant,
+}
+
+/// Server-authoritative AI credit availability snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AICreditAvailability {
+    /// Whether the user currently has inference access.
+    pub available: bool,
+    /// Stable, consumer-visible denial reason (meaningful only when `available == false`).
+    pub denial_reason: AICreditDenialReason,
+    /// Credit source currently funding access (present when `available == true`).
+    pub credit_source: Option<AICreditSource>,
+}
+
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
 pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
 
@@ -198,6 +234,19 @@ pub struct AIRequestUsageModel {
 
     /// Whether the ambient trial credits banner has been dismissed by the user.
     ambient_credits_banner_dismissed: bool,
+
+    /// Server-authoritative AI credit availability state.
+    /// `None` until the first successful fetch.
+    ai_credit_availability: Option<AICreditAvailability>,
+
+    /// Time of the last successful `aiCreditAvailability` fetch.
+    ai_credit_availability_last_refreshed: Option<Instant>,
+
+    /// True while a focused availability fetch is in flight.
+    ai_credit_availability_refresh_in_flight: bool,
+
+    /// Last error from the availability fetch, if any (cleared on success).
+    ai_credit_availability_last_error: Option<String>,
 }
 
 impl Entity for AIRequestUsageModel {
@@ -212,6 +261,8 @@ pub enum AIRequestUsageModelEvent {
         server_conversation_id: String,
         request_id: String,
     },
+    /// Fires whenever the server-authoritative credit availability state changes.
+    AICreditAvailabilityUpdated,
 }
 
 impl AIRequestUsageModel {
@@ -229,6 +280,10 @@ impl AIRequestUsageModel {
             bonus_grants: vec![],
             buy_addon_credits_banner_dismissed: false,
             ambient_credits_banner_dismissed,
+            ai_credit_availability: None,
+            ai_credit_availability_last_refreshed: None,
+            ai_credit_availability_refresh_in_flight: false,
+            ai_credit_availability_last_error: None,
         }
     }
 
@@ -241,6 +296,10 @@ impl AIRequestUsageModel {
             bonus_grants: vec![],
             buy_addon_credits_banner_dismissed: false,
             ambient_credits_banner_dismissed: get_cached_ambient_credits_banner_dismissed(ctx),
+            ai_credit_availability: None,
+            ai_credit_availability_last_refreshed: None,
+            ai_credit_availability_refresh_in_flight: false,
+            ai_credit_availability_last_error: None,
         }
     }
 
@@ -283,6 +342,96 @@ impl AIRequestUsageModel {
         });
 
         ctx.emit(AIRequestUsageModelEvent::RequestUsageUpdated);
+    }
+
+    /// Spawns a focused fetch for `aiCreditAvailability`, coalescing concurrent requests.
+    ///
+    /// - No-ops when the user is not logged in or a fetch is already in flight.
+    /// - On success, updates the shared state and emits [`AIRequestUsageModelEvent::AICreditAvailabilityUpdated`].
+    /// - On failure, records the last error and emits the event so subscribers can surface a degraded state.
+    /// - Call this on meaningful changes that can affect access (plan/billing, team/workspace
+    ///   membership, auth completion, API-key/credential changes). Do **not** add an independent
+    ///   availability timer or a per-request refresh.
+    pub fn refresh_ai_credit_availability_async(&mut self, ctx: &mut ModelContext<Self>) {
+        if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+            return;
+        }
+        if self.ai_credit_availability_refresh_in_flight {
+            return;
+        }
+        self.ai_credit_availability_refresh_in_flight = true;
+        let ai_client = self.ai_client.clone();
+        ctx.spawn(
+            async move { ai_client.get_ai_credit_availability().await },
+            |model, result, ctx| {
+                model.ai_credit_availability_refresh_in_flight = false;
+                match result {
+                    Ok(availability) => {
+                        let changed = model.ai_credit_availability.as_ref() != Some(&availability);
+                        model.ai_credit_availability = Some(availability);
+                        model.ai_credit_availability_last_refreshed = Some(Instant::now());
+                        model.ai_credit_availability_last_error = None;
+                        if changed {
+                            ctx.emit(AIRequestUsageModelEvent::AICreditAvailabilityUpdated);
+                        }
+                    }
+                    Err(e) => {
+                        let msg = format!("{e:#}");
+                        log::warn!("Failed to fetch AI credit availability: {msg}");
+                        model.ai_credit_availability_last_error = Some(msg);
+                        ctx.emit(AIRequestUsageModelEvent::AICreditAvailabilityUpdated);
+                    }
+                }
+            },
+        );
+    }
+
+    /// Updates the shared availability state from a piggybacked metadata refresh.
+    /// This is called from the workspace-metadata update path so every periodic/triggered
+    /// metadata refresh also refreshes availability without an extra round-trip.
+    pub fn update_ai_credit_availability(
+        &mut self,
+        availability: AICreditAvailability,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let changed = self.ai_credit_availability.as_ref() != Some(&availability);
+        self.ai_credit_availability = Some(availability);
+        self.ai_credit_availability_last_refreshed = Some(Instant::now());
+        self.ai_credit_availability_last_error = None;
+        if changed {
+            ctx.emit(AIRequestUsageModelEvent::AICreditAvailabilityUpdated);
+        }
+    }
+
+    /// Resets all availability state on logout.
+    pub fn reset_ai_credit_availability(&mut self, ctx: &mut ModelContext<Self>) {
+        let had_state = self.ai_credit_availability.is_some();
+        self.ai_credit_availability = None;
+        self.ai_credit_availability_last_refreshed = None;
+        self.ai_credit_availability_refresh_in_flight = false;
+        self.ai_credit_availability_last_error = None;
+        if had_state {
+            ctx.emit(AIRequestUsageModelEvent::AICreditAvailabilityUpdated);
+        }
+    }
+
+    /// Returns the current server-authoritative credit availability snapshot, if any.
+    /// Returns `None` before the first successful fetch or after logout.
+    pub fn ai_credit_availability(&self) -> Option<&AICreditAvailability> {
+        self.ai_credit_availability.as_ref()
+    }
+
+    /// Returns `true` if the server has reported that inference credits are available.
+    /// Falls back to the locally-derived `has_any_ai_remaining` check when no server
+    /// availability has been fetched yet (compatibility rollout period).
+    pub fn is_ai_available(&self, ctx: &AppContext) -> bool {
+        if let Some(avail) = &self.ai_credit_availability {
+            avail.available
+        } else {
+            // Pre-fetch fallback: use the local derivation until the server-authoritative
+            // value arrives.
+            self.has_any_ai_remaining(ctx)
+        }
     }
 
     pub fn provide_negative_feedback_response_for_ai_conversation(

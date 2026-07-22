@@ -828,6 +828,169 @@ fn test_has_any_ai_remaining_true_with_byo_key_and_no_workspace() {
 }
 
 #[test]
+fn test_ai_credit_availability_initially_none() {
+    App::test((), |mut app| async move {
+        let request_usage_model = add_request_usage_model(&mut app);
+        request_usage_model.update(&mut app, |model, _ctx| {
+            assert!(
+                model.ai_credit_availability().is_none(),
+                "expected ai_credit_availability to be None before any server response"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_update_ai_credit_availability_coalesces_identical_values() {
+    // Verify that calling update_ai_credit_availability with the same value twice does not
+    // clobber the stored state and still reflects the last-known-good value.
+    App::test((), |mut app| async move {
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        let avail = AICreditAvailability {
+            available: true,
+            denial_reason: AICreditDenialReason::None,
+            credit_source: Some(AICreditSource::BaseLimit),
+        };
+        // First write.
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.update_ai_credit_availability(avail.clone(), ctx);
+        });
+        // Second write with identical value — should be a no-op (no state corruption).
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.update_ai_credit_availability(avail.clone(), ctx);
+        });
+        // State should still be the same value after both writes.
+        request_usage_model.update(&mut app, |model, _ctx| {
+            assert_eq!(
+                model.ai_credit_availability(),
+                Some(&avail),
+                "expected stored value unchanged after duplicate write"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_update_ai_credit_availability_stores_value() {
+    App::test((), |mut app| async move {
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        let avail = AICreditAvailability {
+            available: false,
+            denial_reason: AICreditDenialReason::OutOfCredits,
+            credit_source: None,
+        };
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.update_ai_credit_availability(avail.clone(), ctx);
+        });
+        request_usage_model.update(&mut app, |model, _ctx| {
+            let stored = model.ai_credit_availability();
+            assert_eq!(stored, Some(&avail));
+        });
+    });
+}
+
+#[test]
+fn test_reset_ai_credit_availability_clears_state() {
+    App::test((), |mut app| async move {
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        let avail = AICreditAvailability {
+            available: true,
+            denial_reason: AICreditDenialReason::None,
+            credit_source: Some(AICreditSource::BonusGrant),
+        };
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.update_ai_credit_availability(avail, ctx);
+        });
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.reset_ai_credit_availability(ctx);
+        });
+        request_usage_model.update(&mut app, |model, _ctx| {
+            assert!(
+                model.ai_credit_availability().is_none(),
+                "expected ai_credit_availability to be None after reset"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_is_ai_available_falls_back_to_local_when_no_server_response() {
+    App::test((), |mut app| async move {
+        // Without a workspace the local fallback returns based on request_limit_info.
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            // No server-authoritative value yet.
+            assert!(model.ai_credit_availability().is_none());
+
+            // Local fallback: still has requests.
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 5);
+            assert!(
+                model.is_ai_available(ctx),
+                "expected is_ai_available to fall back to local check when no server data"
+            );
+
+            // Local fallback: at limit.
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            assert!(
+                !model.is_ai_available(ctx),
+                "expected is_ai_available to return false via local fallback when at limit"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_is_ai_available_uses_server_value_when_present() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        // Server says unavailable, but local calculation would say available.
+        let avail = AICreditAvailability {
+            available: false,
+            denial_reason: AICreditDenialReason::Delinquent,
+            credit_source: None,
+        };
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 5); // local says yes
+            model.update_ai_credit_availability(avail, ctx);
+        });
+        request_usage_model.update(&mut app, |model, ctx| {
+            assert!(
+                !model.is_ai_available(ctx),
+                "expected server-authoritative unavailability to override local calculation"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_all_denial_reasons_stored_correctly() {
+    let reasons = [
+        AICreditDenialReason::None,
+        AICreditDenialReason::OutOfCredits,
+        AICreditDenialReason::Delinquent,
+        AICreditDenialReason::EnterpriseTeamSpendLimitHit,
+        AICreditDenialReason::EnterprisePerUserSpendLimitHit,
+        AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit,
+    ];
+    for reason in reasons {
+        let avail = AICreditAvailability {
+            available: matches!(reason, AICreditDenialReason::None),
+            denial_reason: reason,
+            credit_source: None,
+        };
+        // Just verify the struct can be created with each reason.
+        assert_eq!(avail.denial_reason, reason);
+    }
+}
+
+#[test]
 fn test_byo_api_key_disabled_for_anonymous_firebase_user() {
     App::test((), |mut app| async move {
         let _guard = FeatureFlag::SoloUserByok.override_enabled(true);
