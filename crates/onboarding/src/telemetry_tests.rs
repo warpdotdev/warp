@@ -18,6 +18,60 @@ fn account_first_started_payload_includes_flow_metadata() {
 }
 
 #[test]
+fn account_first_lifecycle_payloads_include_flow_and_classification() {
+    assert_eq!(
+        OnboardingEvent::OnboardingAuthCompleted {
+            account_class: "free_icp".to_string(),
+            has_team: true,
+            is_paid: false,
+            team_discovery_outcome: "unknown".to_string(),
+        }
+        .payload(),
+        Some(json!({
+            "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+            "account_class": "free_icp",
+            "has_team": true,
+            "is_paid": false,
+            "team_discovery_outcome": "unknown",
+        }))
+    );
+    assert_eq!(
+        OnboardingEvent::OnboardingUpgradeStarted {
+            source_slide: "head_start".to_string(),
+            account_class: "free_icp".to_string(),
+        }
+        .payload(),
+        Some(json!({
+            "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+            "source_slide": "head_start",
+            "account_class": "free_icp",
+        }))
+    );
+    assert_eq!(
+        OnboardingEvent::OnboardingUpgradeCompleted {
+            source_slide: "head_start".to_string(),
+            account_class: "free_icp".to_string(),
+        }
+        .payload(),
+        Some(json!({
+            "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+            "source_slide": "head_start",
+            "account_class": "free_icp",
+        }))
+    );
+    assert_eq!(
+        OnboardingEvent::OnboardingCompleted {
+            completion_type: "upgrade_completed".to_string(),
+        }
+        .payload(),
+        Some(json!({
+            "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+            "completion_type": "upgrade_completed",
+        }))
+    );
+}
+
+#[test]
 fn offer_action_payload_includes_account_class() {
     assert_eq!(
         OnboardingEvent::OnboardingAction {
