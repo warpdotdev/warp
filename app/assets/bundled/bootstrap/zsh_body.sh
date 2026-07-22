@@ -685,6 +685,33 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       fi
   }
 
+  # Strips prompt constructs that zsh counts as visible "glitch" columns even when they appear
+  # inside a %{...%} zero-width region, returning the result in $REPLY. The explicit-width form %n{
+  # is rewritten to %{ (preserving the brace pairing), and the %G, %nG, and %-nG forms are removed
+  # entirely. Neither change affects the rendered prompt bytes, only zsh's internal width
+  # accounting. Literal %% escapes are matched first so that they cannot form false positives (e.g.
+  # %%1{ renders as literal text and must be left alone).
+  function warp_strip_glitch_width_constructs() {
+    setopt localoptions extendedglob
+    local match mbegin mend
+    REPLY=${1:-}
+    REPLY=${REPLY//(#b)(%%|%<->\{|%(-|)(<->|)G)/${${match[1]:#%(-|)(<->|)G}/(#s)%<->\{(#e)/%\{}}}}
+  }
+
+  # Called live via PROMPT_SUBST on every prompt render. Evaluates _WARP_RAW_PROMPT using shell-only
+  # expansion (${(e)...}), which expands subshells like $(git_prompt_info) but does NOT process %
+  # prompt sequences. The result is then stripped of %n{...%} and %G glitch-width constructs so that
+  # zsh's countprompt() sees zero columns for the prompt, keeping its cursor-column model in sync
+  # with the physical cursor (which stays at 0 because Warp routes prompt bytes to a separate grid).
+  # Using PROMPT_SUBST means async prompt updates that call zle reset-prompt automatically
+# re-evaluate and re-strip without waiting for the next precmd.
+  function _warp_stripped_prompt() {
+    [[ -z "${_WARP_RAW_PROMPT:-}" ]] && return
+    local REPLY
+    warp_strip_glitch_width_constructs "${(e)_WARP_RAW_PROMPT}"
+    print -rn -- "$REPLY"
+  }
+
   # Check whether the prompt-related variables have OSC prompt marker sequences,
   # and if not, wrap them with the appropriate markers so that we can direct the
   # prompt bytes to the appropriate grids.
@@ -766,12 +793,32 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
         PROMPT=$preceding_suffix$following_suffix
       fi
 
+      # Update _WARP_RAW_PROMPT — the user's true raw prompt content that
+      # _warp_stripped_prompt evaluates at render time.
+      #
+      # After the marker-stripping above, $PROMPT is the inner content:
+      #  - Exactly '$(_warp_stripped_prompt)': our placeholder from a previous
+      #    run — _WARP_RAW_PROMPT is already correct, leave it alone.
+      #  - Contains '$(_warp_stripped_prompt)' but isn't exactly it (e.g. a
+      #    virtualenv prefix was prepended): extract the prefix before the
+      #    placeholder and prepend it to
+      #    _WARP_RAW_PROMPT once, avoiding repeated accumulation.
+      #  - Anything else: a genuine new prompt from the user.
+      if [[ "$PROMPT" == '$(_warp_stripped_prompt)' ]]; then
+        : # _WARP_RAW_PROMPT is already correct
+      elif [[ "$PROMPT" == *'$(_warp_stripped_prompt)'* ]]; then
+        local _warp_extra_pfx="${PROMPT%%'$(_warp_stripped_prompt)'*}"
+        if [[ "${_WARP_RAW_PROMPT:-}" != "$_warp_extra_pfx"* ]]; then
+          _WARP_RAW_PROMPT="${_warp_extra_pfx}${_WARP_RAW_PROMPT:-}"
+        fi
+      else
+        _WARP_RAW_PROMPT="$PROMPT"
+      fi
       ORIGINAL_PROMPT=$PROMPT
       PROMPT="$prompt_prefix$PROMPT$suffix"
     fi
 
     if [[ -n "${RPROMPT:-}" && "${RPROMPT:-}" != *"$rprompt_prefix"* ]]; then
-      ORIGINAL_RPROMPT=$RPROMPT
       RPROMPT="$rprompt_prefix$RPROMPT$suffix"
     fi
 
@@ -786,14 +833,14 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     # If we are using the Warp prompt, we pass a "hidden left prompt" to the prompt
     # preview grid (the hidden prompt grid) with cursor markers surrounding the entire prompt.
     if [[ "$WARP_HONOR_PS1" != "1" ]]; then
-      if [[ "$PROMPT" != "%{$prompt_prefix$ORIGINAL_PROMPT$suffix%}" ]]; then
+      if [[ "$PROMPT" != "%{$prompt_prefix\$(_warp_stripped_prompt)$suffix%}" ]]; then
         # We purposefully surround this entire prompt with cursor markers to prevent
         # the shell from moving its internal state of the cursor position, for purposes
         # of printing the command with the Warp prompt.
         # Note that the Warp prompt is always ABOVE the combined grid in finished blocks
         # (same line prompt only affects the input editor with Warp prompt, not
         # finished blocks).
-        PROMPT="%{$prompt_prefix$ORIGINAL_PROMPT$suffix%}"
+        PROMPT="%{$prompt_prefix\$(_warp_stripped_prompt)$suffix%}"
       fi
     # Otherwise, if we are using the PS1, we use the normal prompt markers.
     else
