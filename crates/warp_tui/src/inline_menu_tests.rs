@@ -120,6 +120,16 @@ fn lower_overflow_renders_a_down_arrow_as_the_last_row() {
         vec!["Conversation 0", "Conversation 1", "Conversation 2", "↓"]
     );
 }
+#[test]
+fn multiline_conversation_title_is_ellipsized_without_hiding_lower_overflow() {
+    let mut snapshot = rows_snapshot(5, 0, 0, 4);
+    snapshot.rows[0].title = "Conversation 0\ncontinued title".to_owned();
+
+    assert_eq!(
+        rendered_labels(snapshot, 4),
+        vec!["Conversation 0...", "Conversation 1", "Conversation 2", "↓"]
+    );
+}
 
 #[test]
 fn upper_overflow_renders_an_up_arrow_as_the_first_row() {

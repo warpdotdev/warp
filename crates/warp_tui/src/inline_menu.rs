@@ -106,6 +106,13 @@ pub(crate) struct TuiInlineMenuRow {
     pub(crate) is_selectable: bool,
     pub(crate) style: TuiInlineMenuRowStyle,
 }
+/// Returns a single-line menu title while leaving the source text unchanged.
+pub(crate) fn single_line_menu_title(text: &str) -> String {
+    let Some((first_line, _)) = text.split_once('\n') else {
+        return text.to_owned();
+    };
+    format!("{}...", first_line.strip_suffix('\r').unwrap_or(first_line))
+}
 
 /// A presentation-only tab in a TUI inline-menu header.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -915,10 +922,11 @@ fn menu_result_row(
     } else {
         slash_command_columns.available_columns
     };
+    let single_line_title = single_line_menu_title(&row.title);
     let title = match row.style {
-        TuiInlineMenuRowStyle::Default => row.title.clone(),
+        TuiInlineMenuRowStyle::Default => single_line_title,
         TuiInlineMenuRowStyle::InlineMenuItem => format_tui_first_column(
-            &row.title,
+            &single_line_title,
             slash_command_columns.with_second_visible(show_description),
         ),
     };
