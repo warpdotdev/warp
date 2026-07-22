@@ -257,8 +257,30 @@ impl Client {
     /// Helper method to determine if the request should include warp-specific headers. The only case
     /// where we should include custom headers is if the request is same-origin and is targetted to our server.
     /// For example, app.warp.dev --> app.warp.dev.
+    ///
+    /// In a DOM-free wasm runtime (e.g. the Node prototype, REMOTE-2264) there is
+    /// no browser `window`, so the same-origin check cannot read
+    /// `window().location().hostname()`. In that case, default to `true` (include
+    /// the Warp headers) so the request proceeds — the headless CLI/Node path
+    /// always targets the Warp server, so including the headers is correct.
     #[cfg(target_family = "wasm")]
     fn include_warp_http_headers<U: IntoUrl + Clone>(url: U) -> bool {
+        // Check for the window global's existence first to avoid panicking in a
+        // DOM-free runtime. `gloo::utils::window()` throws when there is no
+        // `window` global.
+        let has_window = js_sys::Reflect::get(&js_sys::global(), &"window".into())
+            .map(|v| {
+                !v.is_undefined()
+                    && !v.is_null()
+                    && v.as_f64().is_none()
+                    && v.as_string().is_none()
+                    && v.as_bool().is_none()
+            })
+            .unwrap_or(false);
+        if !has_window {
+            // No browser window (DOM-free runtime): always include Warp headers.
+            return true;
+        }
         url.into_url().is_ok_and(|url| {
             url.host_str().is_some_and(|dest_host| {
                 let window_hostname = gloo::utils::window()
