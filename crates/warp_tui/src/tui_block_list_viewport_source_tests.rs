@@ -191,7 +191,7 @@ fn zero_height_agent_block_contributes_no_rows_and_grows_with_content() {
 }
 
 #[test]
-fn read_only_content_omits_zero_height_agent_after_terminal_block() {
+fn read_only_content_omits_zero_height_rich_content_after_terminal_block() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let mut terminal_model = TerminalModel::mock(None, None);
