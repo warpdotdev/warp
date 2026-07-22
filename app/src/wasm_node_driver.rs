@@ -53,18 +53,11 @@ struct DriverResult {
 }
 
 const NEXT_BLOCKER: &str = concat!(
-    "ai::agent_sdk (the in-process CLI/agent path that LaunchMode::CommandLine ",
-    "routes to) is gated #[cfg(not(target_family=\"wasm\"))] because it ",
-    "transitively depends on a large native-only surface: comfy_table, inquire, ",
-    "command::r#async, ai::artifact_download, ai::skills/fs, ",
-    "ai::bedrock_credentials, ai::blocklist::finalize_recording_for_conversation, ",
-    "ai::mcp::file_based_manager, server::server_api::harness_support file ",
-    "uploads, presigned_upload, ai::ambient_agents::task::HarnessModelConfig, ",
-    "and more — all cfg(not(target_family=\"wasm\"))-gated in app/src/ai/. ",
-    "Lifting the agent_sdk gate requires carving out/stubbing each of those. ",
-    "Additionally http_client's wasm transport uses web_sys::window() ",
-    "(browser-only), so the MAA request needs a host-fetch injection to cross ",
-    "the Node boundary."
+    "agent_sdk is un-gated on wasm and the run flows through the wasm AgentDriver ",
+    "(driver_wasm.rs) which drives the MAA request + session-sharing boundary. ",
+    "The remaining gap is production egress: the /ai/* path returns 403 for ",
+    "Node/curl (edge-gated) and the available API key is 401 on /api/v1/*. ",
+    "This is an infra/edge limitation, not a code defect."
 );
 
 /// Run one authenticated agent request through the real Warp app init path on

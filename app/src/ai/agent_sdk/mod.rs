@@ -222,10 +222,10 @@ pub fn run(
     }
 }
 
-/// wasm dispatch_command: handles AgentCommand::Run via the direct MAA request
-/// path (warp_multi_agent_client::generate_multi_agent_output), bypassing the
-/// full AgentDriver which depends on native-only backends. Other commands
-/// return an error on wasm.
+/// wasm dispatch_command: handles AgentCommand::Run by constructing the wasm
+/// AgentDriver (driver_wasm.rs) and calling AgentDriver::run, which drives the
+/// MAA request AND performs the session-sharing conversation-consumer
+/// register/teardown. Other commands return an error on wasm.
 #[cfg(target_family = "wasm")]
 fn dispatch_command(
     ctx: &mut AppContext,
@@ -246,101 +246,62 @@ fn dispatch_command(
                 }
             };
 
-            // Build a minimal MAA Request using the same proto wire format as
-            // the CLI path (mirrors the wasm_node_proto crate).
-            use warp_multi_agent_api as api;
-            use warp_multi_agent_api::request::input::user_inputs::UserInput;
-            use warp_multi_agent_api::request::input::user_inputs::user_input::Input as UserInputKind;
-            use warp_multi_agent_api::request::input::{Type as InputType, UserInputs, UserQuery};
-            use warp_multi_agent_api::request::settings::ModelConfig;
-            use warp_multi_agent_api::request::{Input, Metadata, Settings, TaskContext};
-            let user_query = UserQuery {
-                query: prompt_str.clone(),
-                referenced_attachments: Default::default(),
-                mode: None,
-                intended_agent: Default::default(),
-            };
-            let request = api::Request {
-                task_context: Some(TaskContext { tasks: vec![] }),
-                input: Some(Input {
-                    context: None,
-                    r#type: Some(InputType::UserInputs(UserInputs {
-                        inputs: vec![UserInput {
-                            input: Some(UserInputKind::UserQuery(user_query)),
-                        }],
-                    })),
-                }),
-                settings: Some(Settings {
-                    model_config: Some(ModelConfig {
-                        base: args.model.model.clone().unwrap_or_default(),
-                        ..Default::default()
-                    }),
-                    web_context_retrieval_enabled: true,
-                    supports_parallel_tool_calls: true,
-                    planning_enabled: true,
-                    supports_create_files: true,
-                    supports_long_running_commands: true,
-                    should_preserve_file_content_in_history: true,
-                    supports_todos_ui: true,
-                    supports_started_child_task_message: true,
-                    supports_suggest_prompt: true,
-                    supports_reasoning_message: true,
-                    ..Default::default()
-                }),
-                metadata: Some(Metadata {
-                    conversation_id: String::new(),
-                    logging: Default::default(),
-                    ambient_agent_task_id: String::new(),
-                    forked_from_conversation_id: String::new(),
-                    parent_agent_id: String::new(),
-                    agent_name: String::new(),
-                }),
-                existing_suggestions: None,
-                mcp_context: None,
+            // Construct the wasm AgentDriver options.
+            use crate::ai::agent_sdk::driver_wasm as driver;
+            let options = driver::AgentDriverOptions {
+                working_dir: std::path::PathBuf::from("/"),
+                secrets: Default::default(),
+                task_id: None,
+                parent_run_id: None,
+                should_share: false,
+                idle_on_complete: None,
+                resume: None,
+                cloud_providers: Vec::new(),
+                environment: None,
+                selected_harness: Harness::Oz,
+                third_party_harness_model_config: None,
+                snapshot_disabled: Some(true),
+                snapshot_upload_timeout: None,
+                snapshot_script_timeout: None,
+                skip_initial_turn: false,
+                strict_mcp_startup: false,
+                mcp_startup_timeout: None,
             };
 
-            // Get the server API's base client for the MAA request.
-            let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
-            let base_client = server_api.base_client();
+            // Construct the AgentDriver model.
+            let driver_handle = ctx.add_model(|ctx| {
+                driver::AgentDriver::new(options, ctx)
+                    .unwrap_or_else(|e| panic!("AgentDriver::new failed: {e}"))
+            });
 
-            // Spawn the MAA request as an async task on the foreground executor.
-            // `Foreground::spawn` on wasm takes just the future (no callback).
+            // Build the task and run it.
+            let task = driver::Task {
+                prompt: driver::AgentRunPrompt::Local(prompt_str.clone()),
+                model: None,
+                profile: None,
+                mcp_specs: Vec::new(),
+                harness: driver::HarnessKind::Oz,
+            };
+
+            log::info!(
+                "Dispatching AgentDriver::run on wasm for prompt: {}",
+                prompt_str
+            );
+
+            // Spawn the AgentDriver::run future on the foreground executor.
+            // AgentDriver::run internally does the MAA request + session-sharing
+            // conversation-consumer register/teardown.
+            let run_future = driver_handle.update(ctx, |driver, ctx| driver.run(task, ctx));
             ctx.foreground_executor()
                 .spawn(async move {
-                    log::info!("Sending MAA request for prompt: {prompt_str}");
-                    match warp_multi_agent_client::generate_multi_agent_output(
-                        base_client.as_ref(),
-                        &request,
-                    )
-                    .await
-                    {
-                        Ok(stream) => {
-                            use futures::StreamExt as _;
-                            let mut stream = stream;
-                            while let Some(event) = stream.next().await {
-                                match event {
-                                    Ok(response_event) => {
-                                        log::info!(
-                                            "MAA response event: {:?}",
-                                            response_event.r#type
-                                        );
-                                    }
-                                    Err(err) => {
-                                        log::error!("MAA stream error: {err:?}");
-                                        break;
-                                    }
-                                }
-                            }
-                            log::info!("MAA stream completed");
-                        }
-                        Err(err) => {
-                            log::error!("MAA request failed: {err}");
-                        }
+                    match run_future.await {
+                        Ok(()) => log::info!("AgentDriver::run completed successfully on wasm"),
+                        Err(e) => log::error!("AgentDriver::run failed on wasm: {e}"),
                     }
                 })
                 .detach();
 
-            log::info!("Agent run dispatched via direct MAA path on wasm");
+            log::info!("Agent run dispatched via AgentDriver on wasm");
             Ok(())
         }
         other => {
