@@ -233,73 +233,10 @@ fn subpage_from_str_parses_display_names() {
     );
 }
 
-// ── Subpage search filter simulation ────────────────────────────────────────
-// These tests simulate the per-subpage search filtering logic used in
-// handle_search_editor_event: each subpage should only be visible if its
-// own widgets' search terms match, not if a sibling subpage's terms match.
-fn matching_widget_indices(widget_search_terms: &[&str], query: &str) -> Vec<usize> {
-    widget_search_terms
-        .iter()
-        .enumerate()
-        .filter_map(|(index, terms)| {
-            settings_page::search_terms_match(terms, query).then_some(index)
-        })
-        .collect()
-}
-
-#[test]
-fn code_subpage_search_reapplies_filter_after_restore() {
-    let widgets = [
-        "Editor and Code Review",
-        "code editor open files markdown",
-        "code review panel right side diff git",
-        "format on save lsp language server formatting",
-        "auto save autosave automatically save editor files",
-    ];
-    let filtered_before_restore = matching_widget_indices(&widgets, "auto save");
-    assert_eq!(filtered_before_restore, vec![4]);
-    let filtered_after_restore = matching_widget_indices(&widgets, "auto save");
-    assert_eq!(filtered_after_restore, filtered_before_restore);
-}
-
-#[test]
-fn ai_subpage_search_reapplies_filter_after_restore() {
-    let widgets = [
-        "Warp Agent",
-        "active AI suggestions",
-        "conversation input",
-        "agent attribution",
-    ];
-    let filtered_before_restore = matching_widget_indices(&widgets, "agent attribution");
-    assert_eq!(filtered_before_restore, vec![3]);
-    let filtered_after_restore = matching_widget_indices(&widgets, "agent attribution");
-    assert_eq!(filtered_after_restore, filtered_before_restore);
-}
-
-#[test]
-fn restored_auto_selected_subpage_uses_the_search_query() {
-    let indexing_widgets = ["Indexing and projects", "codebase index repository code"];
-    let editor_widgets = [
-        "Editor and Code Review",
-        "code review panel right side diff git",
-        "auto save autosave automatically save editor files",
-    ];
-    assert!(matching_widget_indices(&indexing_widgets, "auto save").is_empty());
-    assert_eq!(
-        matching_widget_indices(&editor_widgets, "auto save"),
-        vec![2]
-    );
-}
-
-#[test]
-fn clearing_search_restores_all_subpage_widgets() {
-    let widgets = [
-        "Editor and Code Review",
-        "code review panel right side diff git",
-        "auto save autosave automatically save editor files",
-    ];
-    assert_eq!(matching_widget_indices(&widgets, ""), vec![0, 1, 2]);
-}
+// The subpage rebuild/restore regression coverage now drives the real PageType
+// cycle — rebuild via PageType::new_uncategorized (what set_active_subpage does),
+// reapply via update_filter, and assertions via get_filtered() — against the real
+// Code and AI widgets. See code_page_tests.rs and ai_page_tests.rs.
 
 /// Helper: given a map of subpage→MatchData, returns which subpages are visible.
 fn visible_subpages(
