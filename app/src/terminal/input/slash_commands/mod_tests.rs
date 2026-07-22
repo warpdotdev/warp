@@ -1,8 +1,9 @@
-use super::{
-    TuiSlashCommand, slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui,
-};
+use super::slash_command_is_submitted_as_prompt;
 use crate::features::FeatureFlag;
-use crate::search::slash_command_menu::static_commands::{Availability, commands};
+use crate::search::slash_command_menu::static_commands::{
+    Availability, SlashCommandKind, commands,
+};
+
 const BASELINE_AVAILABILITY: Availability = Availability::AGENT_VIEW
     .union(Availability::AI_ENABLED)
     .union(Availability::NO_LRC_CONTROL);
@@ -12,44 +13,32 @@ const BASELINE_AVAILABILITY: Availability = Availability::AGENT_VIEW
 /// and must be treated as "run now" by the prompt-queue gate and the shared-session viewer path.
 #[test]
 fn slash_command_is_submitted_as_prompt_only_for_prompt_commands() {
-    // Prompt-submitting commands reiterate their text into the conversation.
     assert!(slash_command_is_submitted_as_prompt(&commands::COMPACT));
     assert!(slash_command_is_submitted_as_prompt(&commands::PLAN));
     assert!(slash_command_is_submitted_as_prompt(&commands::ORCHESTRATE));
 
-    // Action-emitting commands run immediately and are never queued / forwarded as prompts.
-    assert!(!slash_command_is_submitted_as_prompt(&commands::FORK));
-    assert!(!slash_command_is_submitted_as_prompt(
-        &commands::FORK_AND_COMPACT
-    ));
-    assert!(!slash_command_is_submitted_as_prompt(&commands::FORK_FROM));
-    assert!(!slash_command_is_submitted_as_prompt(
-        &commands::CONTINUE_LOCALLY
-    ));
-    assert!(!slash_command_is_submitted_as_prompt(
-        &commands::COMPACT_AND
-    ));
-    assert!(!slash_command_is_submitted_as_prompt(&commands::MODEL));
-    assert!(!slash_command_is_submitted_as_prompt(
-        &commands::AUTO_APPROVE
-    ));
-    assert!(!slash_command_is_submitted_as_prompt(&commands::REWIND));
-    assert!(!slash_command_is_submitted_as_prompt(
-        &commands::CONVERSATIONS
-    ));
-    assert!(!slash_command_is_submitted_as_prompt(&commands::QUEUE));
-    assert!(!slash_command_is_submitted_as_prompt(&commands::MCP));
+    for command in [
+        &*commands::FORK,
+        &*commands::FORK_AND_COMPACT,
+        &commands::FORK_FROM,
+        &*commands::CONTINUE_LOCALLY,
+        &*commands::COMPACT_AND,
+        &*commands::MODEL,
+        &commands::AUTO_APPROVE,
+        &commands::REWIND,
+        &commands::CONVERSATIONS,
+        &*commands::QUEUE,
+        &commands::MCP,
+    ] {
+        assert!(!slash_command_is_submitted_as_prompt(command));
+    }
 }
 
 #[test]
 fn auto_approve_is_an_exact_no_argument_command() {
     use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
 
-    assert_eq!(
-        TuiSlashCommand::from_static_command(&commands::AUTO_APPROVE),
-        Some(TuiSlashCommand::AutoApprove)
-    );
-    assert!(slash_command_is_supported_in_tui(&commands::AUTO_APPROVE));
+    assert_eq!(commands::AUTO_APPROVE.kind, SlashCommandKind::AutoApprove);
     assert_eq!(
         slash_command_selection_behavior(&commands::AUTO_APPROVE),
         SlashCommandSelectionBehavior::Execute
@@ -58,50 +47,45 @@ fn auto_approve_is_an_exact_no_argument_command() {
 }
 
 #[test]
-fn tui_supports_the_selected_low_effort_commands_but_not_orchestrate() {
+fn tui_commands_have_typed_identities_and_explicit_surface_support() {
     for (command, expected) in [
-        (&*commands::AGENT, TuiSlashCommand::Agent),
-        (&*commands::NEW, TuiSlashCommand::New),
-        (&*commands::COMPACT, TuiSlashCommand::Compact),
-        (&commands::COST, TuiSlashCommand::Cost),
-        (&*commands::PLAN, TuiSlashCommand::Plan),
-        (&commands::MODEL, TuiSlashCommand::Model),
+        (&*commands::AGENT, SlashCommandKind::Agent),
+        (&*commands::NEW, SlashCommandKind::New),
+        (&*commands::COMPACT, SlashCommandKind::Compact),
+        (&commands::COST, SlashCommandKind::Cost),
+        (&*commands::PLAN, SlashCommandKind::Plan),
+        (&*commands::MODEL, SlashCommandKind::Model),
         (
             &*commands::CREATE_NEW_PROJECT,
-            TuiSlashCommand::CreateNewProject,
+            SlashCommandKind::CreateNewProject,
         ),
         (
             &commands::EXPORT_TO_CLIPBOARD,
-            TuiSlashCommand::ExportToClipboard,
+            SlashCommandKind::ExportToClipboard,
         ),
-        (&*commands::EXPORT_TO_FILE, TuiSlashCommand::ExportToFile),
-        (&commands::AUTO_APPROVE, TuiSlashCommand::AutoApprove),
-        (&commands::MCP, TuiSlashCommand::Mcp),
-        (&commands::EXIT, TuiSlashCommand::Exit),
-        (&commands::LOGOUT, TuiSlashCommand::Logout),
-        (&commands::VIEW_LOGS, TuiSlashCommand::ViewLogs),
+        (&*commands::EXPORT_TO_FILE, SlashCommandKind::ExportToFile),
+        (&commands::AUTO_APPROVE, SlashCommandKind::AutoApprove),
+        (&commands::MCP, SlashCommandKind::Mcp),
+        (&commands::EXIT, SlashCommandKind::Exit),
+        (&commands::LOGOUT, SlashCommandKind::Logout),
+        (&commands::VIEW_LOGS, SlashCommandKind::ViewLogs),
     ] {
         assert_eq!(
-            TuiSlashCommand::from_static_command(command),
-            Some(expected),
-            "{} should map to its TUI command",
+            command.kind, expected,
+            "{} should have its typed command identity",
             command.name
         );
-        assert!(
-            slash_command_is_supported_in_tui(command),
-            "{} should be supported in TUI",
-            command.name
-        );
+        assert!(command.supports_surface(settings::SettingsMode::Tui));
     }
 
     let command = &*commands::ORCHESTRATE;
-    assert_eq!(TuiSlashCommand::from_static_command(command), None);
-    assert!(!slash_command_is_supported_in_tui(command));
+    assert_eq!(command.kind, SlashCommandKind::Orchestrate);
+    assert!(!command.supports_surface(settings::SettingsMode::Tui));
 }
 
 #[test]
 fn model_command_is_supported_in_tui_without_becoming_a_prompt_command() {
-    assert!(slash_command_is_supported_in_tui(&commands::MODEL));
+    assert_eq!(commands::MODEL.kind, SlashCommandKind::Model);
     assert!(!slash_command_is_submitted_as_prompt(&commands::MODEL));
     assert!(commands::MODEL.argument.is_none());
 }
@@ -110,20 +94,13 @@ fn model_command_is_supported_in_tui_without_becoming_a_prompt_command() {
 fn exit_command_executes_immediately_and_takes_no_argument() {
     use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
 
-    assert_eq!(
-        TuiSlashCommand::from_static_command(&commands::EXIT),
-        Some(TuiSlashCommand::Exit)
-    );
-    assert!(slash_command_is_supported_in_tui(&commands::EXIT));
-    // No argument, and it is never reiterated into the conversation as a prompt.
+    assert_eq!(commands::EXIT.kind, SlashCommandKind::Exit);
     assert!(commands::EXIT.argument.is_none());
     assert!(!slash_command_is_submitted_as_prompt(&commands::EXIT));
-    // With no argument, accepting the command from the menu runs it immediately.
     assert_eq!(
         slash_command_selection_behavior(&commands::EXIT),
         SlashCommandSelectionBehavior::Execute
     );
-    // Available in every session context (gated to the TUI at registry level).
     assert_eq!(commands::EXIT.availability, Availability::ALWAYS);
 }
 
@@ -131,11 +108,7 @@ fn exit_command_executes_immediately_and_takes_no_argument() {
 fn logout_command_executes_immediately_and_takes_no_argument() {
     use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
 
-    assert_eq!(
-        TuiSlashCommand::from_static_command(&commands::LOGOUT),
-        Some(TuiSlashCommand::Logout)
-    );
-    assert!(slash_command_is_supported_in_tui(&commands::LOGOUT));
+    assert_eq!(commands::LOGOUT.kind, SlashCommandKind::Logout);
     assert!(commands::LOGOUT.argument.is_none());
     assert!(!slash_command_is_submitted_as_prompt(&commands::LOGOUT));
     assert_eq!(
@@ -178,25 +151,19 @@ fn natural_language_detection_commands_are_supported_in_tui() {
     for (command, expected) in [
         (
             &commands::ENABLE_NATURAL_LANGUAGE_DETECTION,
-            TuiSlashCommand::EnableNaturalLanguageDetection,
+            SlashCommandKind::EnableNaturalLanguageDetection,
         ),
         (
             &commands::DISABLE_NATURAL_LANGUAGE_DETECTION,
-            TuiSlashCommand::DisableNaturalLanguageDetection,
+            SlashCommandKind::DisableNaturalLanguageDetection,
         ),
     ] {
         assert_eq!(
-            TuiSlashCommand::from_static_command(command),
-            Some(expected),
-            "{} should map to its TUI command",
+            command.kind, expected,
+            "{} should have its typed command identity",
             command.name
         );
-        assert!(
-            slash_command_is_supported_in_tui(command),
-            "{} should be supported in TUI",
-            command.name
-        );
-        // The toggle commands run immediately and are never reiterated as a prompt.
+        assert!(command.supports_surface(settings::SettingsMode::Tui));
         assert!(command.argument.is_none());
         assert!(!slash_command_is_submitted_as_prompt(command));
     }

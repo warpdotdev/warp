@@ -26,9 +26,9 @@ use warp::tui_export::{
     LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, ModelEvent, ParsedSlashCommandInput,
     PersistenceWriter, PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
     ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
-    SlashCommandDataSource as _, SlashCommandSelectionBehavior, StartAgentExecutorEvent,
-    StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface, TerminalSurfaceInit,
-    TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommand, TuiSlashCommandDataSource,
+    SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
+    StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface,
+    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommandDataSource,
     TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, UserTakeOverReason,
     WAKEUP_THROTTLE_PERIOD, block_context_from_terminal_model, build_slash_command_mixer,
     detect_possible_git_repo, export_conversation_markdown, log_out_tui,
@@ -2824,16 +2824,16 @@ impl TuiTerminalSessionView {
         argument: Option<&String>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(tui_command) = TuiSlashCommand::from_static_command(command) else {
+        if !command.supports_tui() {
             log::debug!(
                 "TUI slash command selection is not supported yet: {}",
                 command.name
             );
             return;
-        };
+        }
 
-        match tui_command {
-            TuiSlashCommand::Agent | TuiSlashCommand::New => {
+        match command.kind {
+            SlashCommandKind::Agent | SlashCommandKind::New => {
                 if !self
                     .ai_context_model
                     .as_ref(ctx)
@@ -2862,48 +2862,48 @@ impl TuiTerminalSessionView {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::Conversations => {
+            SlashCommandKind::Conversations => {
                 self.conversation_menu
                     .update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::AutoApprove => {
+            SlashCommandKind::AutoApprove => {
                 self.toggle_auto_approve(true, ctx);
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::Cost => {
+            SlashCommandKind::Cost => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 ctx.dispatch_typed_action_deferred(
                     TuiTerminalSessionAction::ToggleResponseSummaryVisibility,
                 );
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::Model => {
+            SlashCommandKind::Model => {
                 self.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::Skills => {
+            SlashCommandKind::InvokeSkill => {
                 if !FeatureFlag::ListSkills.is_enabled() {
                     return;
                 }
                 self.skills_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::Mcp => {
+            SlashCommandKind::Mcp => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.mcp_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::Exit => {
+            SlashCommandKind::Exit => {
                 record_static_slash_command_accepted(command.name, true, ctx);
                 ctx.terminate_app(TerminationMode::ForceTerminate, None);
             }
-            TuiSlashCommand::Logout => {
+            SlashCommandKind::Logout => {
                 record_static_slash_command_accepted(command.name, true, ctx);
                 log_out_tui(ctx);
             }
-            TuiSlashCommand::ViewLogs => {
+            SlashCommandKind::ViewLogs => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 ctx.spawn(
                     async move {
@@ -2932,7 +2932,7 @@ impl TuiTerminalSessionView {
                 );
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::CreateNewProject => {
+            SlashCommandKind::CreateNewProject => {
                 let Some(query) = argument
                     .map(|argument| argument.trim())
                     .filter(|argument| !argument.is_empty())
@@ -2950,7 +2950,7 @@ impl TuiTerminalSessionView {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::ExportToClipboard => {
+            SlashCommandKind::ExportToClipboard => {
                 if let Some(conversation) = self
                     .conversation_selection
                     .as_ref(ctx)
@@ -2976,7 +2976,7 @@ impl TuiTerminalSessionView {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::ExportToFile => {
+            SlashCommandKind::ExportToFile => {
                 let Some(conversation) = self
                     .conversation_selection
                     .as_ref(ctx)
@@ -3016,7 +3016,7 @@ impl TuiTerminalSessionView {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::Compact | TuiSlashCommand::Plan => {
+            SlashCommandKind::Compact | SlashCommandKind::Plan => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 let command_name = command.name;
                 let prompt = argument
@@ -3031,11 +3031,54 @@ impl TuiTerminalSessionView {
                 self.send_prompt(prompt, ctx);
                 record_static_slash_command_accepted(command_name, true, ctx);
             }
-            TuiSlashCommand::EnableNaturalLanguageDetection => {
+            SlashCommandKind::EnableNaturalLanguageDetection => {
                 self.set_nld_enabled(true, command.name, ctx);
             }
-            TuiSlashCommand::DisableNaturalLanguageDetection => {
+            SlashCommandKind::DisableNaturalLanguageDetection => {
                 self.set_nld_enabled(false, command.name, ctx);
+            }
+            SlashCommandKind::CloudAgent
+            | SlashCommandKind::AddMcp
+            | SlashCommandKind::CreateEnvironment
+            | SlashCommandKind::CreateDockerSandbox
+            | SlashCommandKind::EditSkill
+            | SlashCommandKind::AddPrompt
+            | SlashCommandKind::AddRule
+            | SlashCommandKind::Edit
+            | SlashCommandKind::RenameTab
+            | SlashCommandKind::RenameConversation
+            | SlashCommandKind::SetTabColor
+            | SlashCommandKind::Fork
+            | SlashCommandKind::MoveToCloud
+            | SlashCommandKind::OpenCodeReview
+            | SlashCommandKind::Index
+            | SlashCommandKind::Init
+            | SlashCommandKind::OpenProjectRules
+            | SlashCommandKind::OpenMcpServers
+            | SlashCommandKind::OpenSettingsFile
+            | SlashCommandKind::Changelog
+            | SlashCommandKind::Feedback
+            | SlashCommandKind::OpenRepo
+            | SlashCommandKind::OpenRules
+            | SlashCommandKind::Host
+            | SlashCommandKind::Harness
+            | SlashCommandKind::Environment
+            | SlashCommandKind::Profile
+            | SlashCommandKind::Orchestrate
+            | SlashCommandKind::CompactAnd
+            | SlashCommandKind::Queue
+            | SlashCommandKind::ForkAndCompact
+            | SlashCommandKind::ForkFrom
+            | SlashCommandKind::ContinueLocally
+            | SlashCommandKind::Usage
+            | SlashCommandKind::RemoteControl
+            | SlashCommandKind::Prompts
+            | SlashCommandKind::Rewind => {
+                debug_assert!(
+                    false,
+                    "Attempted to execute GUI-only slash command in the TUI: {}",
+                    command.name
+                );
             }
         }
     }

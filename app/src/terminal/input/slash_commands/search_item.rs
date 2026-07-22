@@ -41,9 +41,12 @@ impl SearchItem for InlineItem {
     ) -> Box<dyn Element> {
         let icon_color = inline_styles::icon_color(appearance);
         let icon_size = inline_styles::font_size(appearance);
+        let icon_path = self
+            .icon_path
+            .expect("items rendered in the GUI slash command menu must have an icon");
 
         Container::new(
-            ConstrainedBox::new(Icon::new(self.icon_path, icon_color.into_solid()).finish())
+            ConstrainedBox::new(Icon::new(icon_path, icon_color.into_solid()).finish())
                 .with_width(icon_size)
                 .with_height(icon_size)
                 .finish(),
