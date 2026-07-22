@@ -61,6 +61,7 @@ pub enum SlashCommandKind {
     DisableNaturalLanguageDetection,
     Exit,
     Logout,
+    Version,
     CreateEnvironment,
     CreateDockerSandbox,
     CreateNewProject,

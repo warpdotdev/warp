@@ -37,6 +37,7 @@ use warp::tui_export::{
     record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
+use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
@@ -193,6 +194,27 @@ const COST_CONVERSATION_IN_PROGRESS_HINT: &str =
 
 fn log_bundle_success_message(path: &Path) -> String {
     format!("Log bundle saved to {}", path.display())
+}
+
+/// User-facing CLI binary name for the current channel.
+///
+/// Installed builds expose `warp`, `warp-dev`, `warp-preview`, etc. Local cargo
+/// builds don't ship a versioned `warp` binary on PATH, so they intentionally
+/// target `warp-dev` (the dogfood channel name).
+fn tui_cli_binary_name(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Stable => "warp",
+        Channel::Dev | Channel::Local => "warp-dev",
+        Channel::Preview => "warp-preview",
+        Channel::Oss => "warp-oss",
+        Channel::Integration => "warp-integration",
+    }
+}
+
+/// Shell command used by `/version` to print the binary version as a normal
+/// transcript block.
+fn version_shell_command(channel: Channel) -> String {
+    format!("{} --version", tui_cli_binary_name(channel))
 }
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
@@ -2902,6 +2924,13 @@ impl TuiTerminalSessionView {
             SlashCommandKind::Logout => {
                 record_static_slash_command_accepted(command.name, true, ctx);
                 log_out_tui(ctx);
+            }
+            SlashCommandKind::Version => {
+                // Run as a normal user shell command so version output lands in
+                // the transcript as a regular shell block.
+                let command_text = version_shell_command(ChannelState::channel());
+                self.execute_user_command(&command_text, ctx);
+                record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::ViewLogs => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));

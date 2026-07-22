@@ -1997,3 +1997,33 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
         });
     });
 }
+
+#[test]
+fn version_shell_command_uses_channel_cli_names() {
+    use warp_core::channel::Channel;
+
+    assert_eq!(
+        super::version_shell_command(Channel::Stable),
+        "warp --version"
+    );
+    assert_eq!(
+        super::version_shell_command(Channel::Dev),
+        "warp-dev --version"
+    );
+    assert_eq!(
+        super::version_shell_command(Channel::Local),
+        "warp-dev --version"
+    );
+    assert_eq!(
+        super::version_shell_command(Channel::Preview),
+        "warp-preview --version"
+    );
+    assert_eq!(
+        super::version_shell_command(Channel::Oss),
+        "warp-oss --version"
+    );
+    assert_eq!(
+        super::version_shell_command(Channel::Integration),
+        "warp-integration --version"
+    );
+}
