@@ -1018,10 +1018,12 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             }
             InlineToken::Delimiter { kind, count } => {
                 let node_index = state.nodes.len();
-                let preceding_char = state
-                    .nodes
-                    .last()
-                    .and_then(|fragment| fragment.text.chars().last());
+                let preceding_char = state.nodes.iter().rev().find_map(|fragment| {
+                    fragment
+                        .text
+                        .rfind(|c: char| c != '\n')
+                        .map(|i| fragment.text[i..].chars().next().unwrap())
+                });
                 let following_char = remaining.chars().next();
 
                 let delimiter =
@@ -1067,10 +1069,7 @@ fn strip_trailing_hard_break(fragments: &mut Vec<FormattedTextFragment>) {
     for i in (0..fragments.len()).rev() {
         let frag = &fragments[i];
         if frag.styles == FormattedTextStyles::default()
-            && frag
-                .text
-                .chars()
-                .all(|c| c.is_whitespace() && c != '\n')
+            && frag.text.chars().all(|c| c.is_whitespace() && c != '\n')
         {
             trailing_ws_end = i;
         } else {

@@ -3012,4 +3012,36 @@ fn test_parse_br_before_closing_markup_at_line_end() {
         parse_all("<u>line<br><br></u>", parse_inline),
         vec![FormattedTextFragment::underline("line\n")]
     );
+
+    assert_eq!(
+        parse_all("**line<br>**", parse_inline),
+        vec![FormattedTextFragment::bold("line")]
+    );
+
+    assert_eq!(
+        parse_all("**line<br><br>**", parse_inline),
+        vec![FormattedTextFragment::bold("line\n")]
+    );
+
+    assert_eq!(
+        parse_all("*line<br>*", parse_inline),
+        vec![FormattedTextFragment::italic("line")]
+    );
+
+    assert_eq!(
+        parse_all("~~line<br>~~", parse_inline),
+        vec![FormattedTextFragment::strikethrough("line")]
+    );
+}
+
+#[test]
+fn test_inline_line_count_with_br() {
+    let line = FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("hello\nworld")]);
+    assert_eq!(line.num_lines(), 2);
+
+    let header = FormattedTextLine::Heading(FormattedTextHeader {
+        heading_size: 1,
+        text: vec![FormattedTextFragment::plain_text("title\nsubtitle")],
+    });
+    assert_eq!(header.num_lines(), 2);
 }
