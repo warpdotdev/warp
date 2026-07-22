@@ -204,11 +204,6 @@ const PILL_BOTTOM_MARGIN: i32 = 90;
 const SEGMENT_MARGIN_PRE: Duration = Duration::from_millis(250);
 #[cfg(any(linux, test))]
 const SEGMENT_MARGIN_POST: Duration = Duration::from_millis(1000);
-/// How long an overlay pill lingers past its action's `finish_offset`. Equal to
-/// `SEGMENT_MARGIN_POST` so a pill never extends past the retained post-action
-/// footage.
-#[cfg(any(linux, test))]
-const OVERLAY_LINGER: Duration = SEGMENT_MARGIN_POST;
 
 /// One retained source segment of the cut recording.
 ///
@@ -254,11 +249,11 @@ fn group_source_interval(
 
 /// The source interval over which an entry's overlay pill is shown. Unlike
 /// [`group_source_interval`] (the action window that drives the cut), this
-/// lingers [`OVERLAY_LINGER`] past `finish_offset` so the pill stays readable
-/// instead of flashing for a single frame on an instantaneous action. It is
-/// bounded by `source_duration` and by the next group's start so pills never
-/// extend past kept frames or overlap. Returns `None` when the interval is
-/// empty.
+/// lingers [`SEGMENT_MARGIN_POST`] past `finish_offset` so the pill stays
+/// readable instead of flashing for a single frame on an instantaneous action.
+/// It is bounded by `source_duration` and by the next group's start so pills
+/// never extend past kept frames or overlap. Returns `None` when the interval
+/// is empty.
 #[cfg(any(linux, test))]
 fn overlay_display_interval(
     entry: &ActionLogEntry,
@@ -267,9 +262,11 @@ fn overlay_display_interval(
     frame: Duration,
 ) -> Option<(Duration, Duration)> {
     let (start, action_finish) = group_source_interval(entry, source_duration, frame)?;
+    // Reuse the post-action margin as the linger so the pill never outlasts the
+    // footage the cut retained after the action.
     let mut end = entry
         .finish_offset
-        .saturating_add(OVERLAY_LINGER)
+        .saturating_add(SEGMENT_MARGIN_POST)
         .min(source_duration)
         .max(action_finish);
     if let Some(next_offset) = next_offset {
@@ -376,7 +373,7 @@ pub(crate) fn remap_source_interval(
 /// Builds an ASS subtitle document that renders each entry as a bottom-center
 /// row on the compacted output timeline. Entries are ordered by source start;
 /// each group's overlay display interval (its action window lingered
-/// `OVERLAY_LINGER` past `finish_offset`, bounded by the next group's start) is
+/// `SEGMENT_MARGIN_POST` past `finish_offset`, bounded by the next group's start) is
 /// remapped through the retained segments before timecode formatting, so pills
 /// stay aligned with their actions after the cut and remain readable. Groups
 /// whose remapped interval is empty (for example wholly inside a removed gap)

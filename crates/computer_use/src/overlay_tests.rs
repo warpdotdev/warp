@@ -391,9 +391,9 @@ fn overlay_remaps_pill_timings_through_cut_segments() {
 #[test]
 fn instantaneous_action_pill_lingers_past_finish() {
     // An instantaneous action (finish == offset) must still show a readable
-    // pill, not a single frame: the overlay lingers OVERLAY_LINGER (1000 ms)
-    // past the action. Segment [750, 2000+frame]; display interval [1000, 2000]
-    // remaps to [250, 1250] ms (~1000 ms visible).
+    // pill, not a single frame: the overlay lingers the 1000 ms post-action
+    // margin past the action. Segment [750, 2000+frame]; display interval
+    // [1000, 2000] remaps to [250, 1250] ms (~1000 ms visible).
     let ass = build_overlay_ass(
         &[entry(1000, 1000, &["Return"])],
         (1280, 720),
