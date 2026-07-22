@@ -4118,7 +4118,6 @@ impl AIBlock {
         self.aws_bedrock_credentials_error_view = Some(view);
         ctx.notify();
     }
-
     pub fn accept_pending_unit_test_suggestion(
         &mut self,
         interaction_source: InteractionSource,

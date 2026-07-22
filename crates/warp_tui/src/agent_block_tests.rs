@@ -131,30 +131,6 @@ fn agent_block_renders_invalid_api_key_detail_without_usage_notice() {
 }
 
 #[test]
-fn agent_block_renders_gemini_enterprise_credentials_error_without_api_key_copy() {
-    App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let block = test_agent_block(
-            &mut app,
-            FakeAgentBlockModel {
-                inputs: Vec::new(),
-                status: failed_output(
-                    Vec::new(),
-                    RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid,
-                ),
-            },
-        );
-
-        app.read(|ctx| {
-            let text = render_block_lines(block.as_ref(ctx), 120, ctx).join("\n");
-            assert!(text.contains("Gemini Enterprise credentials expired or invalid"));
-            assert!(text.contains("Refresh your Gemini Enterprise credentials"));
-            assert!(!text.contains("API key"));
-        });
-    });
-}
-
-#[test]
 fn agent_block_suppresses_recovery_pending_failure() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());

@@ -3080,10 +3080,12 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             // Fallback for contexts that don't have the stateful view (e.g. CLI subagent)
             fallback_message
         }
-        FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid { title, detail } => {
+        FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid {
+            fallback_message: _,
+        } => {
             return render_gemini_enterprise_credentials_error(
-                title,
-                &detail,
+                "Gemini Enterprise credentials expired or invalid",
+                "Warp couldn't authenticate with Google Cloud. Refresh your Gemini Enterprise credentials, then retry the request.",
                 props.invalid_api_key_button_handle,
                 app,
             );

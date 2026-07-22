@@ -27,7 +27,6 @@ const ERROR_APOLOGY_TEXT: &str = "I'm sorry, I couldn't complete that request.";
 const INTERNAL_WARP_ERROR: &str = "Internal Warp error.";
 pub const FAILED_OUTPUT_USAGE_NOTICE_TEXT: &str = "This response won't count towards your usage.";
 pub const OUT_OF_CREDITS_SUBSCRIBE_LABEL: &str = "Subscribe";
-
 /// Text to use as a label throughout the app for user interactions that will attach selected
 /// block(s) or text selections to a new AI query.
 pub static ATTACH_AS_AGENT_MODE_CONTEXT_TEXT: LazyLock<&'static str> =
@@ -79,8 +78,7 @@ pub enum FailedOutputPresentation {
         fallback_message: String,
     },
     GeminiEnterpriseCredentialsExpiredOrInvalid {
-        title: &'static str,
-        detail: String,
+        fallback_message: String,
     },
 }
 
@@ -151,8 +149,10 @@ pub fn failed_output_presentation(
         }
         RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => {
             FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid {
-                title: "Gemini Enterprise credentials expired or invalid",
-                detail: "Warp couldn't authenticate with Google Cloud. Refresh your Gemini Enterprise credentials, then retry the request.".to_string(),
+                fallback_message: format!(
+                    "{ERROR_APOLOGY_TEXT}\n\nGemini Enterprise credentials expired or invalid.\n\n\
+                     Warp couldn't authenticate with Google Cloud. Refresh your Gemini Enterprise credentials, then retry the request."
+                ),
             }
         }
         RenderableAIError::TransientNetworkError { .. } => {
