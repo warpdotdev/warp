@@ -584,12 +584,12 @@ fn agent_event_give_up_reason(
     let now = Instant::now();
     let window_start = *retry_window_started_at.get_or_insert(now);
 
-    if let Some(threshold) = config.auth_error_give_up_failures {
-        if consecutive_auth_failures >= threshold {
-            return Some(format!(
-                "stopping after {consecutive_auth_failures} consecutive authentication failures"
-            ));
-        }
+    if let Some(threshold) = config.auth_error_give_up_failures
+        && consecutive_auth_failures >= threshold
+    {
+        return Some(format!(
+            "stopping after {consecutive_auth_failures} consecutive authentication failures"
+        ));
     }
 
     if let Some(max) = config.max_retry_duration {
