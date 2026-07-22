@@ -2,98 +2,14 @@ use url::Url;
 use warpui::{App, EntityId};
 
 use super::*;
-use crate::ai::blocklist::handoff::HandoffLaunchAttachments;
 use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::server::server_api::ClientError;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
-
 fn attachment() -> AttachmentInput {
     AttachmentInput {
         file_name: "context.txt".to_owned(),
         mime_type: "text/plain".to_owned(),
         data: "hello".to_owned(),
-    }
-}
-
-fn pending_launch() -> PendingCloudLaunch {
-    PendingCloudLaunch {
-        prompt: "fix tests".to_owned(),
-        attachments: HandoffLaunchAttachments {
-            request_attachments: vec![attachment()],
-            display_attachments: vec![],
-        },
-    }
-}
-
-/// Empty-prompt launch fixture for empty-prompt handoff tests. Mirrors what
-/// the workspace synthesizes when the chip / `&` / `/handoff` is dispatched
-/// with `launch: None`.
-fn empty_pending_launch() -> PendingCloudLaunch {
-    PendingCloudLaunch {
-        prompt: String::new(),
-        attachments: HandoffLaunchAttachments::default(),
-    }
-}
-
-fn pending_handoff() -> PendingHandoff {
-    PendingHandoff {
-        forked_conversation_id: Some("forked-conversation".to_owned()),
-        title: None,
-        touched_workspace: None,
-        snapshot_upload: SnapshotUploadStatus::Pending,
-        submission_state: HandoffSubmissionState::Idle,
-        auto_submit: Some(pending_launch()),
-        orchestration_handoff: None,
-        should_inject_continue: false,
-    }
-}
-
-fn pending_handoff_fresh_launch() -> PendingHandoff {
-    PendingHandoff {
-        forked_conversation_id: None,
-        title: None,
-        touched_workspace: None,
-        snapshot_upload: SnapshotUploadStatus::Pending,
-        submission_state: HandoffSubmissionState::Idle,
-        auto_submit: Some(pending_launch()),
-        orchestration_handoff: None,
-        should_inject_continue: false,
-    }
-}
-
-fn pending_handoff_with_orchestration() -> PendingHandoff {
-    PendingHandoff {
-        forked_conversation_id: Some("forked-conversation".to_owned()),
-        title: None,
-        touched_workspace: None,
-        snapshot_upload: SnapshotUploadStatus::Pending,
-        submission_state: HandoffSubmissionState::Idle,
-        auto_submit: Some(pending_launch()),
-        orchestration_handoff: Some(true),
-        should_inject_continue: false,
-    }
-}
-
-/// Variant of `pending_handoff` for empty-prompt handoff tests. Lets the caller
-/// set the source-conversation state and substitute an empty-prompt launch.
-fn pending_handoff_empty(inject_continue: bool) -> PendingHandoff {
-    PendingHandoff {
-        forked_conversation_id: Some("forked-conversation".to_owned()),
-        title: None,
-        touched_workspace: None,
-        snapshot_upload: SnapshotUploadStatus::Pending,
-        submission_state: HandoffSubmissionState::Idle,
-        auto_submit: Some(empty_pending_launch()),
-        orchestration_handoff: None,
-        should_inject_continue: inject_continue,
-    }
-}
-
-/// Non-empty `TouchedWorkspace` for the snapshot-rehydration substitution test.
-fn touched_workspace_with_orphan_file() -> TouchedWorkspace {
-    TouchedWorkspace {
-        repos: vec![],
-        orphan_files: vec![std::path::PathBuf::from("/tmp/handoff-fixture.txt")],
     }
 }
 
@@ -133,6 +49,156 @@ fn record_ambient_execution_ended_clears_active_session_and_enables_followup() {
                 model.is_ready_for_cloud_followup_prompt(),
                 "after the live execution session ends the pane should accept a cloud follow-up"
             );
+        });
+    });
+}
+
+fn install_default_agent_mode_model(
+    model: &warpui::ModelHandle<AmbientAgentViewModel>,
+    app: &mut App,
+    info: LLMInfo,
+) {
+    let default_id = info.id.clone();
+    model.update(app, |_model, ctx| {
+        let models = ModelsByFeature {
+            agent_mode: AvailableLLMs::new(default_id, vec![info], None)
+                .expect("valid available llms"),
+            ..Default::default()
+        };
+        LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+            prefs.update_feature_model_choices(Ok(models), ctx);
+        });
+    });
+}
+
+#[test]
+fn spawn_config_falls_back_to_auto_only_for_non_cloud_runnable_model() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        install_default_agent_mode_model(
+            &model,
+            &mut app,
+            LLMInfo::new_for_test("custom-router:local:byok"),
+        );
+        model.read(&app, |model, app| {
+            assert_eq!(
+                model.build_default_spawn_config(app).model_id.as_deref(),
+                Some("auto")
+            );
+        });
+
+        install_default_agent_mode_model(&model, &mut app, LLMInfo::new_for_test("auto-genius"));
+        model.read(&app, |model, app| {
+            assert_eq!(
+                model.build_default_spawn_config(app).model_id.as_deref(),
+                Some("auto-genius")
+            );
+        });
+    });
+}
+
+#[test]
+fn spawn_config_honors_pane_model_override() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+        let terminal_view_id = model.read(&app, |model, _| model.terminal_view_id);
+
+        model.update(&mut app, |_model, ctx| {
+            let models = ModelsByFeature {
+                agent_mode: AvailableLLMs::new(
+                    "auto".into(),
+                    vec![
+                        LLMInfo::new_for_test("auto"),
+                        LLMInfo::new_for_test("auto-genius"),
+                    ],
+                    None,
+                )
+                .expect("valid available llms"),
+                ..Default::default()
+            };
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                prefs.update_feature_model_choices(Ok(models), ctx);
+                prefs.update_preferred_agent_mode_llm(
+                    &LLMId::from("auto-genius"),
+                    terminal_view_id,
+                    ctx,
+                );
+            });
+        });
+
+        model.read(&app, |model, app| {
+            assert_eq!(
+                model.build_default_spawn_config(app).model_id.as_deref(),
+                Some("auto-genius")
+            );
+        });
+    });
+}
+
+#[test]
+fn spawn_agent_omits_orchestration_handoff_for_fresh_launches() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.spawn_agent("new run".to_owned(), vec![], ctx);
+        });
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert!(request.orchestration_handoff.is_none());
+            let json = serde_json::to_value(request).expect("request should serialize to JSON");
+            assert!(json.get("orchestration_handoff").is_none());
+        });
+    });
+}
+
+#[test]
+fn duplicate_handoff_completion_is_ignored() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.begin_local_to_cloud_handoff(ctx);
+            model.handle_handoff_commit_failure(
+                HandoffCommitFailure {
+                    issue: CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
+                        message: "first failure".to_owned(),
+                    }),
+                    request: Some(retry_request("first request")),
+                    restoration: None,
+                    derived_workspace_had_content: None,
+                    snapshot_failed: false,
+                },
+                ctx,
+            );
+            model.handle_handoff_commit_failure(
+                HandoffCommitFailure {
+                    issue: CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
+                        message: "stale failure".to_owned(),
+                    }),
+                    request: Some(retry_request("stale request")),
+                    restoration: None,
+                    derived_workspace_had_content: None,
+                    snapshot_failed: false,
+                },
+                ctx,
+            );
+        });
+
+        model.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .request()
+                    .and_then(|request| request.prompt.as_deref()),
+                Some("first request")
+            );
+            assert_eq!(model.error_message(), Some("first failure"));
         });
     });
 }
@@ -410,488 +476,6 @@ fn followup_github_auth_does_not_reuse_stored_initial_request() {
             model.handle_github_auth_completed(ctx);
 
             assert!(matches!(model.status(), Status::NeedsGithubAuth { .. }));
-        });
-    });
-}
-
-#[test]
-fn queue_handoff_auto_submit_enters_waiting_state_without_consuming_launch() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff()), ctx);
-        });
-
-        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
-
-        assert!(queued);
-        model.read(&app, |model, _| {
-            assert!(matches!(
-                model.status(),
-                Status::WaitingForSession {
-                    kind: SessionStartupKind::InitialRun,
-                    ..
-                }
-            ));
-            let request = model.request().expect("request should be populated");
-            assert_eq!(request.prompt.as_deref(), Some("fix tests"));
-            assert_eq!(
-                request.conversation_id.as_deref(),
-                Some("forked-conversation")
-            );
-            assert_eq!(request.attachments.len(), 1);
-            assert!(request.initial_snapshot_token.is_none());
-
-            let handoff = model
-                .pending_handoff
-                .as_ref()
-                .expect("handoff should remain");
-            assert_eq!(handoff.submission_state, HandoffSubmissionState::Queued);
-            assert!(handoff.auto_submit.is_some());
-        });
-
-        let queued_again =
-            model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
-        assert!(!queued_again);
-    });
-}
-
-#[test]
-fn maybe_auto_submit_handoff_waits_for_workspace_and_snapshot_then_consumes_launch() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff()), ctx);
-            assert!(model.maybe_auto_submit_handoff(ctx).is_none());
-
-            model.set_pending_handoff_workspace(TouchedWorkspace::default(), ctx);
-            assert!(model.maybe_auto_submit_handoff(ctx).is_none());
-
-            model.set_pending_handoff_snapshot_upload(
-                SnapshotUploadStatus::SkippedEmptyWorkspace,
-                ctx,
-            );
-            let launch = model
-                .maybe_auto_submit_handoff(ctx)
-                .expect("ready handoff should auto-submit");
-            assert_eq!(launch.prompt, "fix tests");
-            assert!(model.maybe_auto_submit_handoff(ctx).is_none());
-        });
-    });
-}
-
-#[test]
-fn fresh_launch_queues_handoff_with_no_conversation_id() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff_fresh_launch()), ctx);
-        });
-
-        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
-
-        assert!(queued);
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert_eq!(request.prompt.as_deref(), Some("fix tests"));
-            assert!(request.conversation_id.is_none());
-            assert_eq!(request.attachments.len(), 1);
-        });
-    });
-}
-
-#[test]
-fn fresh_launch_auto_submits_after_snapshot_settles() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff_fresh_launch()), ctx);
-            assert!(model.maybe_auto_submit_handoff(ctx).is_none());
-
-            model.set_pending_handoff_workspace(TouchedWorkspace::default(), ctx);
-            assert!(model.maybe_auto_submit_handoff(ctx).is_none());
-
-            model.set_pending_handoff_snapshot_upload(
-                SnapshotUploadStatus::SkippedEmptyWorkspace,
-                ctx,
-            );
-            let launch = model
-                .maybe_auto_submit_handoff(ctx)
-                .expect("ready fresh-launch handoff should auto-submit");
-            assert_eq!(launch.prompt, "fix tests");
-            assert!(model.maybe_auto_submit_handoff(ctx).is_none());
-        });
-    });
-}
-
-#[test]
-fn handoff_request_omits_orchestration_handoff_when_pending_handoff_has_none() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff()), ctx);
-            model.queue_handoff_auto_submit(ctx);
-        });
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert!(request.orchestration_handoff.is_none());
-            let json = serde_json::to_value(request).expect("request should serialize to JSON");
-            assert!(json.get("orchestration_handoff").is_none());
-        });
-    });
-}
-
-#[test]
-fn handoff_request_carries_universal_orchestration_handoff_marker() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff_with_orchestration()), ctx);
-            model.queue_handoff_auto_submit(ctx);
-        });
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert_eq!(request.orchestration_handoff, Some(true));
-
-            let json = serde_json::to_value(request).expect("request should serialize to JSON");
-            assert_eq!(
-                json.get("orchestration_handoff")
-                    .and_then(serde_json::Value::as_bool),
-                Some(true)
-            );
-        });
-    });
-}
-
-/// Installs a single-model Agent Mode catalog (also used as the default) so
-/// `get_active_base_model` resolves to it via the profile-default fallback.
-fn install_default_agent_mode_model(
-    model: &warpui::ModelHandle<AmbientAgentViewModel>,
-    app: &mut App,
-    info: LLMInfo,
-) {
-    let default_id = info.id.clone();
-    model.update(app, |_model, ctx| {
-        let models = ModelsByFeature {
-            agent_mode: AvailableLLMs::new(default_id, vec![info], None)
-                .expect("valid available llms"),
-            ..Default::default()
-        };
-        LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-            prefs.update_feature_model_choices(Ok(models), ctx);
-        });
-    });
-}
-
-/// The local→cloud handoff "invalid model_id" regression: when the pane's
-/// active Agent Mode model is not cloud-runnable (custom-endpoint/BYOK model or
-/// local custom router), `build_default_spawn_config` must fall back to the
-/// `auto` slug instead of forwarding an id the cloud `start_agent` endpoint
-/// rejects, while a server-accepted Oz slug is forwarded unchanged. A local
-/// custom-router id stands in for the custom-endpoint UUID case, which the
-/// `is_cloud_runnable_oz_model_id` unit tests in `llms_tests.rs` cover.
-#[test]
-fn spawn_config_falls_back_to_auto_only_for_non_cloud_runnable_model() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        // Handoff mode makes `selected_harness()` == Oz so the Oz model-id
-        // branch of `build_default_spawn_config` runs.
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff()), ctx);
-        });
-
-        install_default_agent_mode_model(
-            &model,
-            &mut app,
-            LLMInfo::new_for_test("custom-router:local:byok"),
-        );
-        model.read(&app, |model, app| {
-            assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
-                Some("auto"),
-                "a non-cloud-runnable model must fall back to the `auto` slug"
-            );
-        });
-
-        install_default_agent_mode_model(&model, &mut app, LLMInfo::new_for_test("auto-genius"));
-        model.read(&app, |model, app| {
-            assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
-                Some("auto-genius"),
-                "a server-accepted Oz slug should be forwarded unchanged"
-            );
-        });
-    });
-}
-
-/// The handoff carries the source conversation's selected model onto the new
-/// pane by seeding a per-pane override on the new pane's `terminal_view_id`.
-/// This verifies that such an override is honored by
-/// `build_default_spawn_config` (instead of reverting to the profile default).
-#[test]
-fn handoff_honors_pane_model_override() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-        let terminal_view_id = model.read(&app, |model, _| model.terminal_view_id);
-
-        // Catalog with two slug models; `auto` is the profile default.
-        model.update(&mut app, |_model, ctx| {
-            let models = ModelsByFeature {
-                agent_mode: AvailableLLMs::new(
-                    "auto".into(),
-                    vec![
-                        LLMInfo::new_for_test("auto"),
-                        LLMInfo::new_for_test("auto-genius"),
-                    ],
-                    None,
-                )
-                .expect("valid available llms"),
-                ..Default::default()
-            };
-            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                prefs.update_feature_model_choices(Ok(models), ctx);
-            });
-        });
-
-        // Seed a per-pane selection, as the handoff open path's carry-over does.
-        model.update(&mut app, |_model, ctx| {
-            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                prefs.update_preferred_agent_mode_llm(
-                    &LLMId::from("auto-genius"),
-                    terminal_view_id,
-                    ctx,
-                );
-            });
-        });
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff()), ctx);
-        });
-
-        model.read(&app, |model, app| {
-            assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
-                Some("auto-genius"),
-                "the carried per-pane model override must be honored over the profile default"
-            );
-        });
-    });
-}
-
-#[test]
-fn spawn_agent_omits_orchestration_handoff_for_fresh_launches() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.spawn_agent("new run".to_owned(), vec![], ctx);
-        });
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert!(request.orchestration_handoff.is_none());
-            let json = serde_json::to_value(request).expect("request should serialize to JSON");
-            assert!(json.get("orchestration_handoff").is_none());
-        });
-    });
-}
-
-#[test]
-fn snapshot_failure_is_treated_as_settled_for_auto_submit() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff()), ctx);
-            model.set_pending_handoff_workspace(TouchedWorkspace::default(), ctx);
-            model.set_pending_handoff_snapshot_upload(
-                SnapshotUploadStatus::Failed("upload failed".to_owned()),
-                ctx,
-            );
-
-            let launch = model
-                .maybe_auto_submit_handoff(ctx)
-                .expect("Failed snapshot should be treated as settled");
-            assert_eq!(launch.prompt, "fix tests");
-            assert!(model.maybe_auto_submit_handoff(ctx).is_none());
-        });
-    });
-}
-
-#[test]
-fn empty_prompt_auto_submit_with_active_source_substitutes_continue_on_wire() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff_empty(/*inject_continue*/ true)), ctx);
-        });
-
-        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
-        assert!(
-            queued,
-            "empty-prompt auto-submit should be accepted, not gated"
-        );
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert_eq!(
-                request.prompt.as_deref(),
-                Some("Continue"),
-                "active source + empty prompt must substitute the wire prompt with \"Continue\"",
-            );
-        });
-    });
-}
-
-#[test]
-fn empty_prompt_auto_submit_with_idle_source_sends_none_on_the_wire() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff_empty(/*inject_continue*/ false)), ctx);
-            // The queue path passes no snapshot token to
-            // `build_handoff_spawn_request`, so the substitution resolves to
-            // `None` regardless of the derived workspace. The
-            // snapshot-rehydration substitution can only fire on the
-            // `submit_handoff` path (covered separately).
-            model.set_pending_handoff_workspace(touched_workspace_with_orphan_file(), ctx);
-        });
-
-        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
-        assert!(queued);
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert!(
-                request.prompt.is_none(),
-                "idle source + empty prompt must send prompt: None (got {:?})",
-                request.prompt
-            );
-        });
-    });
-}
-
-#[test]
-fn empty_prompt_submit_handoff_with_idle_source_and_snapshot_substitutes_apply_workspace_changes() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        let token: InitialSnapshotToken =
-            serde_json::from_str("\"snapshot-token-abc\"").expect("snapshot token should parse");
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff_empty(/*inject_continue*/ false)), ctx);
-            model.set_pending_handoff_workspace(touched_workspace_with_orphan_file(), ctx);
-            model.set_pending_handoff_snapshot_upload(SnapshotUploadStatus::Uploaded(token), ctx);
-        });
-
-        // submit_handoff is the only entry point that can resolve the
-        // snapshot-rehydration substitution; it passes the snapshot token
-        // through to `build_handoff_spawn_request`.
-        model.update(&mut app, |model, ctx| {
-            model.submit_handoff(String::new(), vec![], ctx);
-        });
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert_eq!(
-                request.prompt.as_deref(),
-                Some("Apply the workspace changes from my previous session."),
-                "idle source + non-empty snapshot token must substitute the rehydration prompt",
-            );
-            assert!(
-                request.initial_snapshot_token.is_some(),
-                "the snapshot token must still ride alongside the substituted prompt",
-            );
-        });
-    });
-}
-
-#[test]
-fn empty_prompt_submit_handoff_with_active_source_and_snapshot_concatenates_continue_and_apply() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        let token: InitialSnapshotToken =
-            serde_json::from_str("\"snapshot-token-xyz\"").expect("snapshot token should parse");
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff_empty(/*inject_continue*/ true)), ctx);
-            model.set_pending_handoff_workspace(touched_workspace_with_orphan_file(), ctx);
-            model.set_pending_handoff_snapshot_upload(SnapshotUploadStatus::Uploaded(token), ctx);
-        });
-
-        model.update(&mut app, |model, ctx| {
-            model.submit_handoff(String::new(), vec![], ctx);
-        });
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert_eq!(
-                request.prompt.as_deref(),
-                Some("Continue. Apply the workspace changes from my previous session."),
-                "active source + non-empty snapshot token must concatenate both substitutions",
-            );
-            assert!(
-                request.initial_snapshot_token.is_some(),
-                "the snapshot token must still ride alongside the substituted prompt",
-            );
-        });
-    });
-}
-
-#[test]
-fn empty_prompt_submit_handoff_with_idle_source_and_no_snapshot_sends_none_on_the_wire() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff_empty(/*inject_continue*/ false)), ctx);
-            model.set_pending_handoff_workspace(TouchedWorkspace::default(), ctx);
-            model.set_pending_handoff_snapshot_upload(
-                SnapshotUploadStatus::SkippedEmptyWorkspace,
-                ctx,
-            );
-        });
-
-        model.update(&mut app, |model, ctx| {
-            model.submit_handoff(String::new(), vec![], ctx);
-        });
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            assert!(
-                request.prompt.is_none(),
-                "idle source + empty snapshot must send prompt: None (got {:?})",
-                request.prompt,
-            );
-            assert!(request.initial_snapshot_token.is_none());
         });
     });
 }

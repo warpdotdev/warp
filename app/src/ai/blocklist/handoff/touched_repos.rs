@@ -30,7 +30,9 @@ use warpui::r#async::FutureExt as _;
 
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::{AIAgentAction, AIAgentActionType, AIAgentOutputMessageType};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::agent_input_footer::sort_environments_by_recency;
+use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, GithubRepo};
 use crate::server::ids::SyncId;
 
@@ -418,6 +420,18 @@ fn push_resolved(
     if seen.insert(sp.clone()) {
         paths.push(sp);
     }
+}
+
+pub(super) fn descendant_safe_paths(
+    history: &BlocklistAIHistoryModel,
+    parent_id: crate::ai::agent::conversation::AIConversationId,
+) -> Vec<StandardizedPath> {
+    descendant_conversation_ids_in_spawn_order(history, parent_id)
+        .into_iter()
+        .filter_map(|id| history.conversation(&id))
+        .filter(|conversation| conversation.status().is_done())
+        .flat_map(extract_paths_from_conversation)
+        .collect()
 }
 
 #[cfg(test)]

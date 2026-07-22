@@ -31,10 +31,6 @@ use crate::editor::InteractionState;
 use crate::server::ids::ServerId;
 use crate::terminal::TerminalView;
 use crate::terminal::model::blocks::{INLINE_BANNER_HEIGHT, ToTotalIndex as _};
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::terminal::view::ambient_agent::{
-    HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
-};
 use crate::terminal::view::shared_session::test_utils::terminal_view_for_viewer;
 use crate::terminal::view::{AIQueryRouting, TerminalAction, resolve_ai_query_routing};
 use crate::test_util::add_window_with_terminal;
@@ -974,19 +970,7 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
                 .expect("cloud mode terminal should have an ambient agent view model")
                 .clone();
             ambient_agent_view_model.update(ctx, |model, ctx| {
-                model.set_pending_handoff(
-                    Some(PendingHandoff {
-                        forked_conversation_id: None,
-                        title: None,
-                        touched_workspace: None,
-                        snapshot_upload: SnapshotUploadStatus::Pending,
-                        submission_state: HandoffSubmissionState::Idle,
-                        auto_submit: None,
-                        orchestration_handoff: None,
-                        should_inject_continue: false,
-                    }),
-                    ctx,
-                );
+                model.begin_local_to_cloud_handoff(ctx);
             });
 
             view.on_session_share_joined(

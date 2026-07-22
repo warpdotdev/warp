@@ -15,15 +15,15 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::extract_user_query_mode;
 use crate::ai::ambient_agents::github_auth_notifier::{GitHubAuthEvent, GitHubAuthNotifier};
-use crate::ai::ambient_agents::spawn::{AmbientAgentEvent, spawn_task, submit_run_followup};
+use crate::ai::ambient_agents::spawn::{
+    AmbientAgentEvent, monitor_spawned_task, spawn_task, submit_run_followup,
+};
 use crate::ai::ambient_agents::task::{HarnessAuthSecretsConfig, HarnessConfig};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::ambient_agents::{AgentSource, AmbientAgentTaskId};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::PendingCloudLaunch;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::touched_repos::TouchedWorkspace;
+use crate::ai::blocklist::handoff::{HandoffCommitFailure, HandoffCreated};
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::{
     CloudAgentComputerUseState, resolve_cloud_agent_computer_use_state,
@@ -39,27 +39,11 @@ use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::server::server_api::ai::InitialSnapshotToken;
 use crate::server::server_api::ai::{
     AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, SpawnAgentRequest,
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
-
-/// Wire prompt substituted for an empty-prompt handoff against an active source
-/// conversation that also carries uploaded snapshot content.
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-const HANDOFF_CONTINUE_WITH_SNAPSHOT_PROMPT: &str =
-    "Continue. Apply the workspace changes from my previous session.";
-/// Wire prompt substituted for an empty-prompt handoff against an active source
-/// conversation with no snapshot content.
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
-/// Wire prompt substituted for an empty-prompt handoff against an idle source
-/// conversation that carries uploaded snapshot content.
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
 
 /// Cloud `config.model_id` fallback slug used when the pane's active Oz model
 /// is not cloud-runnable (e.g. a custom-endpoint/BYOK model or local custom
@@ -105,85 +89,6 @@ impl AgentProgress {
 pub enum SessionStartupKind {
     InitialRun,
     Followup,
-}
-
-/// Gates `submit_handoff` against double-submits.
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) enum HandoffSubmissionState {
-    #[default]
-    Idle,
-    Queued,
-    Starting,
-}
-
-/// Outcome of the chip-click async snapshot upload.
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) enum SnapshotUploadStatus {
-    /// Upload is still in flight, or has not started yet.
-    #[default]
-    Pending,
-    /// Touched workspace was empty so no upload happened. The cloud agent will
-    /// start with no rehydration content.
-    SkippedEmptyWorkspace,
-    /// Upload succeeded; the inner token is sent to the server on spawn.
-    Uploaded(InitialSnapshotToken),
-    /// Upload failed. The error message is surfaced as a toast via
-    /// `HandoffSnapshotUploadFailed`.
-    Failed(String),
-}
-
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-impl SnapshotUploadStatus {
-    /// True when the upload has resolved to a final state. `Pending` blocks
-    /// submit; all other variants (including `Failed`) allow it to proceed.
-    /// On `Failed`, `initial_snapshot_token()` returns `None` so the cloud
-    /// run starts without a local file snapshot.
-    fn is_settled(&self) -> bool {
-        !matches!(self, Self::Pending)
-    }
-
-    /// Returns the initial snapshot token to send on spawn, if any.
-    fn initial_snapshot_token(&self) -> Option<InitialSnapshotToken> {
-        match self {
-            Self::Uploaded(token) => Some(token.clone()),
-            Self::SkippedEmptyWorkspace | Self::Pending | Self::Failed(_) => None,
-        }
-    }
-}
-
-/// Per-pane handoff context. Seeded by the chip / slash command's open path on a
-/// fresh cloud-mode pane and consumed by `submit_handoff`. Its presence is the
-/// single source of truth for "this pane is in handoff mode" via
-/// `is_local_to_cloud_handoff()`.
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-#[derive(Debug, Clone)]
-pub(crate) struct PendingHandoff {
-    /// Forked conversation id minted by `POST /agent/conversations/{conversation_id}/fork`.
-    /// Sent under `conversation_id` on the subsequent `POST /agent/runs` request.
-    /// `None` for fresh cloud launches that have no source conversation to fork.
-    pub(crate) forked_conversation_id: Option<String>,
-    /// Title override for the cloud run (e.g. "<title> (Moved to cloud)").
-    pub(crate) title: Option<String>,
-    /// `None` until `derive_touched_workspace` completes.
-    pub(crate) touched_workspace: Option<TouchedWorkspace>,
-    /// Outcome of the async snapshot upload.
-    pub(crate) snapshot_upload: SnapshotUploadStatus,
-    /// Gates submit — prevents double-submitting while the spawn is in flight.
-    pub(crate) submission_state: HandoffSubmissionState,
-    /// When the user types `& query` or `/handoff query`, the launch payload is
-    /// stashed here so `maybe_auto_submit_handoff` can consume it once
-    /// the touched workspace and snapshot upload have settled.
-    pub(crate) auto_submit: Option<PendingCloudLaunch>,
-    /// True when the source conversation was orchestrated at handoff time.
-    /// Forwarded to the server as `SpawnAgentRequest.orchestration_handoff`.
-    pub(crate) orchestration_handoff: Option<bool>,
-    /// Inject `"Continue"` into the wire prompt for empty-prompt submits,
-    /// so the cloud agent picks up where the cancelled local source left
-    /// off. Captured at handoff init since the source is cancelled before
-    /// submit.
-    pub(crate) should_inject_continue: bool,
 }
 
 /// Status of the ambient agent run.
@@ -279,9 +184,10 @@ pub struct AmbientAgentViewModel {
     /// Prompt text for a follow-up that has been submitted but not yet attached to a new session.
     pending_followup_prompt: Option<String>,
 
-    /// See [`PendingHandoff`].
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pending_handoff: Option<PendingHandoff>,
+    is_local_to_cloud_handoff: bool,
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    handoff_completion_received: bool,
 }
 
 impl AmbientAgentViewModel {
@@ -349,7 +255,9 @@ impl AmbientAgentViewModel {
             last_ended_execution_session_id: None,
             pending_followup_prompt: None,
             #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-            pending_handoff: None,
+            is_local_to_cloud_handoff: false,
+            #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+            handoff_completion_received: false,
         }
     }
 
@@ -511,6 +419,7 @@ impl AmbientAgentViewModel {
         if self.harness == harness {
             return;
         }
+        self.handoff_completion_received = true;
         self.harness = harness;
         self.harness_model_id = None;
         self.harness_reasoning_level = None;
@@ -581,7 +490,7 @@ impl AmbientAgentViewModel {
     pub(crate) fn is_local_to_cloud_handoff(&self) -> bool {
         #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
         {
-            self.pending_handoff.is_some()
+            self.is_local_to_cloud_handoff
         }
         #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
         {
@@ -589,221 +498,105 @@ impl AmbientAgentViewModel {
         }
     }
 
-    /// True when this pane is a handoff pane and the touched-workspace derivation +
-    /// snapshot upload have both settled and no submission is in flight. Used by the
-    /// input layer to gate clearing the editor buffer on submit.
-    pub(crate) fn is_handoff_ready_to_submit(&self) -> bool {
-        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-        {
-            let Some(handoff) = self.pending_handoff.as_ref() else {
-                return false;
-            };
-            handoff.touched_workspace.is_some()
-                && handoff.snapshot_upload.is_settled()
-                && matches!(
-                    handoff.submission_state,
-                    HandoffSubmissionState::Idle | HandoffSubmissionState::Queued
-                )
-        }
-        #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
-        {
-            false
-        }
-    }
-
-    /// Seeds the handoff context onto this pane. Called by the workspace bootstrap
-    /// after splitting in a fresh cloud-mode pane and entering agent view.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn set_pending_handoff(
-        &mut self,
-        pending: Option<PendingHandoff>,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    pub(crate) fn begin_local_to_cloud_handoff(&mut self, ctx: &mut ModelContext<Self>) {
         let previous_harness = self.selected_harness();
-        self.pending_handoff = pending;
-        if self.selected_harness() != previous_harness {
-            ctx.emit(AmbientAgentViewModelEvent::HarnessSelected);
-        }
-        ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
-    }
-
-    /// Updates the touched workspace once async derivation completes and emits
-    /// `HandoffSnapshotPrepared` so analytics can join it against the earlier
-    /// `HandoffInitiated.injection_path`. No-op when no handoff context is set.
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn set_pending_handoff_workspace(
-        &mut self,
-        workspace: TouchedWorkspace,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let Some(handoff) = self.pending_handoff.as_mut() else {
-            return;
-        };
-        let derived_workspace_had_content =
-            !workspace.repos.is_empty() || !workspace.orphan_files.is_empty();
-        handoff.touched_workspace = Some(workspace);
-        send_telemetry_from_ctx!(
-            CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
-                derived_workspace_had_content,
-            },
-            ctx
-        );
-        ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
-    }
-
-    /// Records the outcome of the async snapshot upload.
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn set_pending_handoff_snapshot_upload(
-        &mut self,
-        snapshot_upload: SnapshotUploadStatus,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let Some(handoff) = self.pending_handoff.as_mut() else {
-            return;
-        };
-        handoff.snapshot_upload = snapshot_upload;
-        ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
-    }
-
-    /// Records a snapshot upload failure on the pending handoff. The run will
-    /// proceed without a local file snapshot (the cloud agent still has the
-    /// forked conversation context).
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn record_handoff_snapshot_upload_failed(
-        &mut self,
-        error_message: String,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.set_pending_handoff_snapshot_upload(
-            SnapshotUploadStatus::Failed(error_message.clone()),
-            ctx,
-        );
-        ctx.emit(AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { error_message });
-    }
-
-    /// Build the `SpawnAgentRequest` for a handoff submit. Callers MUST
-    /// normalize an empty prompt to `None` before calling; the empty-prompt
-    /// arms below treat `None` as the empty-prompt signal. All substitutions
-    /// are local-to-cloud-only; the server never sees an in-progress signal
-    /// it has to interpret.
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    fn build_handoff_spawn_request(
-        &self,
-        prompt: Option<String>,
-        attachments: Vec<AttachmentInput>,
-        forked_conversation_id: Option<String>,
-        initial_snapshot_token: Option<InitialSnapshotToken>,
-        should_inject_continue: bool,
-        ctx: &AppContext,
-    ) -> SpawnAgentRequest {
-        let config = Some(self.build_default_spawn_config(ctx));
-        let has_snapshot_content = initial_snapshot_token
-            .as_ref()
-            .is_some_and(|token| !token.as_str().is_empty());
-
-        let prompt = prompt.filter(|p| !p.trim().is_empty());
-        let raw_wire_prompt = match (prompt, should_inject_continue, has_snapshot_content) {
-            (Some(p), _, _) => Some(p),
-            (None, true, true) => Some(HANDOFF_CONTINUE_WITH_SNAPSHOT_PROMPT.to_owned()),
-            (None, true, false) => Some(HANDOFF_CONTINUE_PROMPT.to_owned()),
-            (None, false, true) => Some(HANDOFF_APPLY_SNAPSHOT_PROMPT.to_owned()),
-            (None, false, false) => None,
-        };
-
-        let (wire_prompt, mode) = match raw_wire_prompt {
-            Some(p) => {
-                let (p, mode) = extract_user_query_mode(p);
-                (Some(p), mode)
-            }
-            None => (None, Default::default()),
-        };
-
-        SpawnAgentRequest {
-            prompt: wire_prompt,
-            mode,
-            config,
-            title: self.pending_handoff.as_ref().and_then(|h| h.title.clone()),
-            team: None,
-            skill: None,
-            attachments,
-            interactive: None,
-            parent_run_id: None,
-            runtime_skills: vec![],
-            referenced_attachments: vec![],
-            conversation_id: forked_conversation_id,
-            initial_snapshot_token,
-            agent_identity_uid: None,
-            snapshot_disabled: should_disable_snapshot(ctx).then_some(true),
-            orchestration_handoff: self
-                .pending_handoff
-                .as_ref()
-                .and_then(|h| h.orchestration_handoff),
-        }
-    }
-
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn queue_handoff_auto_submit(&mut self, ctx: &mut ModelContext<Self>) -> bool {
-        let Some((launch, forked_conversation_id, should_inject_continue)) = ({
-            let handoff = self.pending_handoff.as_mut();
-            handoff.and_then(|handoff| {
-                if !matches!(handoff.submission_state, HandoffSubmissionState::Idle) {
-                    return None;
-                }
-                let launch = handoff.auto_submit.as_ref()?.clone();
-                handoff.submission_state = HandoffSubmissionState::Queued;
-                Some((
-                    launch,
-                    handoff.forked_conversation_id.clone(),
-                    handoff.should_inject_continue,
-                ))
-            })
-        }) else {
-            return false;
-        };
-
-        // The queue path never has the snapshot token yet — `submit_handoff`
-        // is the only entry point that does. Empty prompts on this path resolve
-        // to either `"Continue"` (active source) or `None` (idle source).
-        let prompt = (!launch.prompt.is_empty()).then_some(launch.prompt);
-        self.request = Some(self.build_handoff_spawn_request(
-            prompt,
-            launch.attachments.request_attachments,
-            forked_conversation_id,
-            None,
-            should_inject_continue,
-            ctx,
-        ));
+        self.is_local_to_cloud_handoff = true;
+        self.handoff_completion_received = false;
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),
             kind: SessionStartupKind::InitialRun,
         };
         self.start_progress_timer(ctx);
+        if self.selected_harness() != previous_harness {
+            ctx.emit(AmbientAgentViewModelEvent::HarnessSelected);
+        }
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
+    }
+    /// `HandoffInitiated.injection_path`. No-op when no handoff context is set.
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    pub(crate) fn monitor_created_handoff(
+        &mut self,
+        created: HandoffCreated,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self.is_local_to_cloud_handoff || self.handoff_completion_received {
+            return;
+        }
+        self.handoff_completion_received = true;
+        send_telemetry_from_ctx!(
+            CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
+                derived_workspace_had_content: created.derived_workspace_had_content,
+            },
+            ctx
+        );
+        if created.snapshot_failed {
+            ctx.emit(AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed {
+                error_message: "Workspace changes could not be uploaded; continuing without them."
+                    .to_owned(),
+            });
+        }
+        self.request = Some(created.request);
+        self.source = None;
         ctx.emit(AmbientAgentViewModelEvent::DispatchedAgent);
-        true
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let stream = monitor_spawned_task(
+            created.task_id,
+            created.run_id,
+            created.at_capacity,
+            ai_client,
+            None,
+        );
+        ctx.spawn_stream_local(
+            stream,
+            |me, event_result, ctx| me.handle_ambient_agent_event_result(event_result, ctx),
+            |_me, _ctx| {},
+        );
     }
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn maybe_auto_submit_handoff(
+    pub(crate) fn handle_handoff_commit_failure(
         &mut self,
+        failure: HandoffCommitFailure,
         ctx: &mut ModelContext<Self>,
-    ) -> Option<PendingCloudLaunch> {
-        let handoff = self.pending_handoff.as_mut()?;
-        if handoff.touched_workspace.is_none()
-            || !handoff.snapshot_upload.is_settled()
-            || !matches!(
-                handoff.submission_state,
-                HandoffSubmissionState::Idle | HandoffSubmissionState::Queued
-            )
-        {
-            return None;
+    ) {
+        if !self.is_local_to_cloud_handoff || self.handoff_completion_received {
+            return;
         }
-        // An empty `PendingCloudLaunch.prompt` is still a valid auto-submit;
-        // `submit_handoff` and `build_handoff_spawn_request` decide what gets
-        // sent on the wire.
-        let launch = handoff.auto_submit.take()?;
-        ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
-        Some(launch)
+        self.handoff_completion_received = true;
+        if let Some(derived_workspace_had_content) = failure.derived_workspace_had_content {
+            send_telemetry_from_ctx!(
+                CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
+                    derived_workspace_had_content,
+                },
+                ctx
+            );
+        }
+        if failure.snapshot_failed {
+            ctx.emit(AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed {
+                error_message: "Workspace changes could not be uploaded; continuing without them."
+                    .to_owned(),
+            });
+        }
+        self.request = failure.request;
+        match failure.issue {
+            CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
+                message,
+                auth_url,
+            }) => self.handle_needs_github_auth(auth_url, message, ctx),
+            CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Capacity { message }) => {
+                self.handle_spawn_error(message, ctx);
+                ctx.emit(AmbientAgentViewModelEvent::ShowCloudAgentCapacityModal);
+            }
+            CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::OutOfCredits { message }) => {
+                self.handle_spawn_error(message, ctx);
+                ctx.emit(AmbientAgentViewModelEvent::ShowAICreditModal);
+            }
+            CloudAgentStartupIssue::Failed(
+                CloudAgentStartupFailure::ServerOverloaded { message }
+                | CloudAgentStartupFailure::Other { message },
+            ) => self.handle_spawn_error(message, ctx),
+        }
     }
 
     /// Whether the harness CLI has started running. Only meaningful for non-oz runs.
@@ -1166,6 +959,11 @@ impl AmbientAgentViewModel {
         self.last_ended_execution_session_id = None;
         self.pending_followup_prompt = None;
         self.request = None;
+        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+        {
+            self.is_local_to_cloud_handoff = false;
+            self.handoff_completion_received = false;
+        }
         self.setup_commands_state = Default::default();
         self.stop_progress_timer();
         ctx.notify();
@@ -1306,13 +1104,7 @@ impl AmbientAgentViewModel {
         self.spawn_internal(request, ctx);
     }
 
-    /// Stores `request` on `self.request` and starts the spawn-task RPC stream, routing its
-    /// events back through [`Self::handle_ambient_agent_event_result`]. Does NOT transition
-    /// `status`, start the progress timer, or emit [`AmbientAgentViewModelEvent::DispatchedAgent`]
-    /// — callers own those side effects. Used by [`Self::spawn_internal`] for the full
-    /// first-time dispatch and by [`Self::submit_handoff`] to start the stream once the
-    /// handoff snapshot has settled, without re-running the UI transition that
-    /// [`Self::queue_handoff_auto_submit`] already performed.
+    /// Stores `request` and starts the combined spawn-and-monitor stream.
     fn start_spawn_stream(&mut self, mut request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
         request.interactive = Some(true);
         self.request = Some(request.clone());
@@ -1675,84 +1467,8 @@ impl AmbientAgentViewModel {
 
         self.status = Status::Cancelled { progress };
         self.pending_followup_prompt = None;
-        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-        if let Some(handoff) = self.pending_handoff.as_mut() {
-            handoff.auto_submit = None;
-        }
 
         ctx.emit(AmbientAgentViewModelEvent::Cancelled);
-    }
-
-    /// Drive the local-to-cloud handoff submission for this pane. Reads the cached
-    /// forked conversation id and snapshot upload result off the pending handoff,
-    /// then starts the spawn stream. Caller must check `is_handoff_ready_to_submit`.
-    ///
-    /// When [`Self::queue_handoff_auto_submit`] has already run (the `&` / `/handoff`
-    /// auto-submit path), the pane is already in [`Status::WaitingForSession`] with
-    /// progress timer running and [`AmbientAgentViewModelEvent::DispatchedAgent`] emitted;
-    /// we just start the network call via [`Self::start_spawn_stream`]. When it has
-    /// not (manual submit from a handoff pane that was opened without an auto-submit
-    /// launch — currently only reachable through defensive paths), we fall back to the
-    /// full [`Self::spawn_internal`] so the pane still transitions and emits.
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn submit_handoff(
-        &mut self,
-        prompt: String,
-        attachments: Vec<AttachmentInput>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let Some(handoff) = self.pending_handoff.as_mut() else {
-            log::warn!("submit_handoff called without pending_handoff set; ignoring");
-            return;
-        };
-        if matches!(handoff.submission_state, HandoffSubmissionState::Starting) {
-            // Double-submit guard: spawn already in flight.
-            return;
-        }
-        if handoff.touched_workspace.is_none() {
-            log::warn!("submit_handoff called before touched-workspace derivation completed");
-            return;
-        }
-        if !handoff.snapshot_upload.is_settled() {
-            log::warn!(
-                "submit_handoff called with unsettled snapshot_upload: {:?}",
-                handoff.snapshot_upload
-            );
-            return;
-        }
-        let initial_snapshot_token = handoff.snapshot_upload.initial_snapshot_token();
-        let forked_conversation_id = handoff.forked_conversation_id.clone();
-        let already_dispatched = matches!(handoff.submission_state, HandoffSubmissionState::Queued);
-        let should_inject_continue = handoff.should_inject_continue;
-        handoff.submission_state = HandoffSubmissionState::Starting;
-        ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
-
-        // Normalize the empty-prompt case to `None` for the builder; the
-        // builder's substitution arms treat `None` as the empty-prompt signal.
-        let prompt = (!prompt.is_empty()).then_some(prompt);
-        let request = self.build_handoff_spawn_request(
-            prompt,
-            attachments,
-            forked_conversation_id,
-            initial_snapshot_token,
-            should_inject_continue,
-            ctx,
-        );
-        if already_dispatched {
-            self.start_spawn_stream(request, ctx);
-        } else {
-            self.spawn_internal(request, ctx);
-        }
-    }
-
-    #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
-    pub(crate) fn submit_handoff(
-        &mut self,
-        prompt: String,
-        attachments: Vec<AttachmentInput>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.spawn_agent(prompt, attachments, ctx);
     }
 
     /// Cancels the ambient agent task if one is currently running.
