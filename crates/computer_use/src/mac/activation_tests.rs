@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use objc2::rc::Retained;
+use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{
-    CGEvent, CGEventField, CGEventSource, CGEventSourceStateID, CGEventType,
+    CGEvent, CGEventField, CGEventSource, CGEventSourceStateID, CGEventType, CGMouseButton,
 };
 
 use super::*;
@@ -32,6 +33,11 @@ fn tap_context(window_number: i64, is_previous: bool, suppress: bool) -> TapCont
 /// plus the standard mouse window-under-pointer fields (91/92) exactly as
 /// `post_appkit_activation` / `post_window_mouse_event` do. Pass `None` for any field to leave
 /// it unset (its default zero value), which lets the tests express the missing/invalid matrix.
+///
+/// The event is built as a mouse event because the window-under-pointer fields (91/92) only
+/// persist on mouse events — on a generic `CGEvent::new` event the setters are silently ignored
+/// and reads return 0. The callback under test never reads the event's own type (it receives
+/// the tapped `CGEventType` separately), so the mouse type does not affect the matrix.
 fn synthetic_focus_event(
     field_51_window: Option<i64>,
     field_58_valid: Option<i64>,
@@ -39,8 +45,13 @@ fn synthetic_focus_event(
     field_92_window: Option<i64>,
 ) -> Retained<CGEvent> {
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
-    let event = CGEvent::new(source.as_deref())
-        .expect("creating a synthetic CGEvent for the callback matrix must succeed");
+    let event = CGEvent::new_mouse_event(
+        source.as_deref(),
+        CGEventType::MouseMoved,
+        CGPoint { x: 0.0, y: 0.0 },
+        CGMouseButton::Left,
+    )
+    .expect("creating a synthetic CGEvent for the callback matrix must succeed");
     if let Some(window) = field_51_window {
         CGEvent::set_integer_value_field(Some(&event), FIELD_WINDOW_NUMBER, window);
     }
