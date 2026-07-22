@@ -1370,10 +1370,6 @@ pub(crate) fn run_command_line_wasm(launch_mode: LaunchMode) -> anyhow::Result<w
     timer.mark_interval_end("LOG_FILE_SETUP_COMPLETE");
 
     ::settings::set_settings_mode(launch_mode.settings_mode());
-    let private_preferences = settings::init_private_user_preferences();
-    let (public_preferences, startup_toml_parse_error) = settings::init_public_user_preferences();
-
-    let pre_sentry_errors: Vec<anyhow::Error> = Vec::new();
 
     // On a DOM-free wasm runtime (e.g. Node) there is no browser `window`, so
     // `warp_util::assets::make_absolute_url` cannot read `window().location()`.
@@ -1381,6 +1377,18 @@ pub(crate) fn run_command_line_wasm(launch_mode: LaunchMode) -> anyhow::Result<w
     // URL absolutization (reached during `WarpConfig::new` in `initialize_app`)
     // succeeds. The browser web-GUI path keeps using `window().location()`.
     warp_util::assets::set_headless_asset_origin(ChannelState::server_root_url().as_ref() as &str);
+    // Use an in-memory preferences backend on this DOM-free wasm runtime so the
+    // settings init (which otherwise reads browser `localStorage` via
+    // `LocalStoragePreferences`) does not panic with "no window". The browser
+    // web-GUI path keeps `LocalStoragePreferences` (the flag is `false` there).
+    // This must run before init_private_user_preferences /
+    // init_public_user_preferences so the backend selection sees the flag.
+    settings::set_headless_wasm_preferences();
+
+    let private_preferences = settings::init_private_user_preferences();
+    let (public_preferences, startup_toml_parse_error) = settings::init_public_user_preferences();
+
+    let pre_sentry_errors: Vec<anyhow::Error> = Vec::new();
 
     let mut app = warpui::platform::headless::new_headless_app(Box::new(ASSETS))?;
     app.update(|ctx| {
