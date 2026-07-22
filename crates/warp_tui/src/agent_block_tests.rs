@@ -1435,11 +1435,16 @@ fn streaming_reasoning_renders_thinking_header_with_body() {
                 }]
             );
 
-            let rendered = render_block_lines(block, 40, app_ctx);
-            assert_eq!(rendered[0], "Thinking... ▾");
-            // Body lines are indented four spaces beneath the header.
-            assert_eq!(rendered[1], "    line one");
-            assert_eq!(rendered[2], "    line two");
+            // A blank line separates the header from the body, and body lines
+            // are left-aligned with the header (no indent).
+            let rendered = render_block_lines_including_blank(block, 40, app_ctx);
+            let header = rendered
+                .iter()
+                .position(|line| line == "Thinking... ▾")
+                .expect("thinking header rendered");
+            assert_eq!(rendered[header + 1], "");
+            assert_eq!(rendered[header + 2], "line one");
+            assert_eq!(rendered[header + 3], "line two");
         });
     });
 }
@@ -1639,10 +1644,13 @@ fn expanded_conversation_summary_shows_its_body() {
             block
                 .collapsible_states
                 .set_collapsed(MessageId::new("summary-1".to_owned()), false);
-            assert_eq!(
-                render_block_lines(block, 40, app_ctx),
-                vec!["Conversation summarized ▾", "    condensed context"]
-            );
+            let rendered = render_block_lines_including_blank(block, 40, app_ctx);
+            let header = rendered
+                .iter()
+                .position(|line| line == "Conversation summarized ▾")
+                .expect("conversation summary header rendered");
+            assert_eq!(rendered[header + 1], "");
+            assert_eq!(rendered[header + 2], "condensed context");
         });
     });
 }
@@ -1685,10 +1693,20 @@ fn multiple_reasoning_blocks_render_independent_collapse_state() {
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
             // The finished block collapses; the streaming one stays expanded.
-            let rendered = render_block_lines(block, 40, app_ctx);
-            assert_eq!(rendered[0], "Thought for 3 seconds ▸");
-            assert_eq!(rendered[1], "Thinking... ▾");
-            assert_eq!(rendered[2], "    still going");
+            // Blank-line gap, then the left-aligned body.
+            let rendered = render_block_lines_including_blank(block, 40, app_ctx);
+            assert!(
+                rendered
+                    .iter()
+                    .any(|line| line == "Thought for 3 seconds ▸"),
+                "{rendered:?}"
+            );
+            let header = rendered
+                .iter()
+                .position(|line| line == "Thinking... ▾")
+                .expect("streaming thinking header rendered");
+            assert_eq!(rendered[header + 1], "");
+            assert_eq!(rendered[header + 2], "still going");
             assert!(rendered.iter().all(|line| !line.contains("done body")));
         });
     });
@@ -2380,6 +2398,28 @@ fn render_block_lines(block: &TuiAIBlock, width: u16, app: &AppContext) -> Vec<S
         .into_iter()
         .map(|line| line.trim_end().to_owned())
         .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// Renders the block at `width` and returns every row trimmed of trailing
+/// padding, preserving blank rows so tests can assert on inter-section spacing.
+fn render_block_lines_including_blank(
+    block: &TuiAIBlock,
+    width: u16,
+    app: &AppContext,
+) -> Vec<String> {
+    let height = desired_height(block, width, app).max(1) as u16;
+    let mut presenter = TuiPresenter::new();
+    let frame = presenter.present_element(
+        block.render_element(app),
+        TuiRect::new(0, 0, width, height),
+        app,
+    );
+    frame
+        .buffer
+        .to_lines()
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
         .collect()
 }
 
