@@ -317,6 +317,103 @@ fn cost_slash_command_toggles_usage_display_mode() {
     });
 }
 
+/// Renders the agent-mode footer row (`render_status_footer_row` + the real
+/// `UsageToggle::render_entry`) to text lines, reading the credits⇄cost
+/// `mode` from the persisted `AISettings.usage_display_mode` setting that
+/// `/cost` toggles. The test conversation has no real usage, so the entry
+/// would be hidden via `render_footer`; this renders the same row
+/// `render_footer` builds with fixed totals and the *real* toggled mode,
+/// yielding a `TuiBuffer::to_lines` snapshot of the slash-command → setting
+/// → footer render path.
+fn render_usage_footer_row(app: &mut App, totals: ConversationUsageTotals) -> Vec<String> {
+    app.update(|ctx| {
+        let builder = TuiUiBuilder::from_app(ctx);
+        let mode = AISettings::as_ref(ctx).usage_display_mode;
+        let usage = UsageToggle::default().render_entry(mode, totals, ctx, |_, _| {});
+        let row = render_status_footer_row(
+            FooterSegments {
+                shell_mode: false,
+                model_label: Some(
+                    TuiText::new("TestModel")
+                        .with_style(builder.primary_text_style())
+                        .truncate()
+                        .finish(),
+                ),
+                cwd: None,
+                branch: None,
+                usage: Some(usage),
+                diff_additions: 0,
+                diff_deletions: 0,
+            },
+            &builder,
+        )
+        .finish();
+        render_element(row, ctx, 60).to_lines()
+    })
+}
+
+#[test]
+fn cost_slash_command_toggles_footer_usage_text_between_credits_and_cost() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        let totals = ConversationUsageTotals {
+            credits_spent: 2.5,
+            cost_in_cents: 3.2,
+        };
+
+        // Default mode is Credits, so the footer's usage entry renders the
+        // GUI-consistent credits total — not the provider dollar cost.
+        assert_eq!(
+            app.read(|ctx| AISettings::as_ref(ctx).usage_display_mode),
+            TuiUsageDisplayMode::Credits,
+        );
+        let credits_row = render_usage_footer_row(&mut app, totals).join("\n");
+        assert!(
+            credits_row.contains("2.5 credits"),
+            "credits mode renders the credits total in the footer: {credits_row}",
+        );
+        assert!(
+            !credits_row.contains("$0.03"),
+            "credits mode does not render the dollar cost: {credits_row}",
+        );
+
+        // `/cost` flips the persisted mode to Cost, so the same footer row now
+        // renders the provider dollar cost — not the credits total.
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::COST, None, ctx);
+        });
+        assert_eq!(
+            app.read(|ctx| AISettings::as_ref(ctx).usage_display_mode),
+            TuiUsageDisplayMode::Cost,
+        );
+        let cost_row = render_usage_footer_row(&mut app, totals).join("\n");
+        assert!(
+            cost_row.contains("$0.03"),
+            "cost mode renders the provider dollar cost in the footer: {cost_row}",
+        );
+        assert!(
+            !cost_row.contains("credits"),
+            "cost mode does not render the credits total: {cost_row}",
+        );
+
+        // `/cost` again toggles back to Credits, restoring the credits total.
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::COST, None, ctx);
+        });
+        assert_eq!(
+            app.read(|ctx| AISettings::as_ref(ctx).usage_display_mode),
+            TuiUsageDisplayMode::Credits,
+        );
+        let again_row = render_usage_footer_row(&mut app, totals).join("\n");
+        assert!(
+            again_row.contains("2.5 credits"),
+            "toggling back restores the credits total in the footer: {again_row}",
+        );
+    });
+}
+
 #[test]
 fn auto_approve_actions_control_transient_color_feedback() {
     App::test((), |mut app| async move {
