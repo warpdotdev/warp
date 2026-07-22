@@ -1,5 +1,5 @@
-//! wasm32-unknown-unknown + Node prototype entrypoint that drives the
-//! `AgentDriver` path as far as is constructible on a DOM-free wasm runtime
+//! wasm32-unknown-unknown + Node prototype entrypoint that drives the real
+//! Warp app init path as far as is constructible on a DOM-free wasm runtime
 //! (REMOTE-2264).
 //!
 //! This is a **proof-of-concept for learning**, not a production feature (see
@@ -7,42 +7,40 @@
 //!
 //! # Approach
 //!
-//! Per the approved spec the full `AgentDriver` is the primary path. This
-//! module constructs a headless [`warpui::App`] (with an [`AppContext`])
-//! **without** running the blocking platform event loop — using
-//! [`warpui::platform::headless::new_headless_app`], which builds the headless
-//! platform impls and returns the `App` directly. On wasm the foreground/
-//! background executors schedule via `wasm_bindgen_futures::spawn_local`, so a
-//! `#[wasm_bindgen] pub async fn` can spawn work on the app's foreground
-//! executor and `await` it; the JS event loop polls the spawned future as this
-//! async fn yields. No DOM/`window`/`document` is required.
+//! Per reviewer guidance, this reuses the REAL app init path rather than a
+//! parallel/hand-rolled init. [`crate::run_command_line_wasm`] does the same
+//! pre-AppContext setup as `run_internal` and the same `run_app_init` (which
+//! registers the full singleton surface + calls `initialize_app` + `launch()`),
+//! but drives it through a headless `App` constructed via
+//! `warpui::platform::headless::new_headless_app` instead of the blocking
+//! `AppBuilder::run` event loop. On wasm the foreground/background executors
+//! schedule via `wasm_bindgen_futures::spawn_local`, so this `#[wasm_bindgen]
+//! pub async fn` can keep the `App` alive and let the JS event loop poll
+//! spawned work as it yields.
 //!
-//! It then runs a trimmed init (feature flags, `AppExecutionMode`, auth state
-//! with the API key, `ServerApiProvider`, `AuthManager`) — the minimum
-//! `AgentDriver::new` reads — and reports the furthest stage reached. The
-//! remaining concrete blockers for the full `AgentDriver::run` (documented in
-//! the findings) are: (a) `AgentDriver::new` requires a `ModelContext<Self>`
-//! and a `TerminalDriver` backed by a real `TerminalView`, whose
-//! shell/PTY bootstrap is `local_tty`-gated and unavailable on
-//! `wasm32-unknown-unknown`; (b) the `http_client` wasm transport uses
-//! `web_sys::window()` (browser-only), so the MAA request needs a host-`fetch`
-//! injection to cross the Node boundary; (c) `AgentDriver::run_internal` reads
-//! many singleton models (skills, MCP, environment, blocklist permissions,
-//! execution profiles) that a trimmed init does not register. This module
-//! surfaces those as structured errors rather than silently falling back to the
-//! direct MAA path.
+//! # Concrete blocker (documented in findings)
+//!
+//! `LaunchMode::CommandLine`'s `launch()` arm routes to `agent_sdk::run`, but
+//! `ai::agent_sdk` is gated `#[cfg(not(target_family = "wasm"))]` because it
+//! transitively depends on a large native-only surface (`comfy_table`,
+//! `inquire`, `command::r#async`, `ai::artifact_download`,
+//! `ai::skills`/fs, `ai::bedrock_credentials`,
+//! `ai::blocklist::finalize_recording_for_conversation`,
+//! `ai::mcp::file_based_manager`, `server::server_api::harness_support` file
+//! uploads, `presigned_upload`, `ai::ambient_agents::task::HarnessModelConfig`,
+//! …) that is `cfg(not(target_family="wasm"))`-gated throughout `app/src/ai/`.
+//! Lifting the `agent_sdk` gate requires carving out/stubbing all of those.
+//! This entrypoint therefore reports the furthest stage reached
+//! (`constructed_app` → `app_init`) and the precise next blocker rather than
+//! silently falling back.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use crate::auth::AuthStateProvider;
-use crate::features;
-use crate::server::server_api::ServerApiProvider;
-
 const STAGE_CONSTRUCTED_APP: &str = "constructed_app";
-const STAGE_TRIMMED_INIT: &str = "trimmed_init";
+const STAGE_APP_INIT: &str = "app_init";
 
 #[derive(Debug, Serialize)]
 struct DriverResult {
@@ -55,23 +53,27 @@ struct DriverResult {
 }
 
 const NEXT_BLOCKER: &str = concat!(
-    "AgentDriver::new needs a ModelContext<Self> + a TerminalDriver backed by a ",
-    "real TerminalView whose shell/PTY bootstrap is local_tty-gated (unavailable ",
-    "on wasm32-unknown-unknown); http_client's wasm transport uses ",
-    "web_sys::window() (browser-only) so the MAA request needs a host-fetch ",
-    "injection; and AgentDriver::run_internal reads many singleton models ",
-    "(skills, MCP, environment, blocklist permissions, execution profiles) a ",
-    "trimmed init does not register."
+    "ai::agent_sdk (the in-process CLI/agent path that LaunchMode::CommandLine ",
+    "routes to) is gated #[cfg(not(target_family=\"wasm\"))] because it ",
+    "transitively depends on a large native-only surface: comfy_table, inquire, ",
+    "command::r#async, ai::artifact_download, ai::skills/fs, ",
+    "ai::bedrock_credentials, ai::blocklist::finalize_recording_for_conversation, ",
+    "ai::mcp::file_based_manager, server::server_api::harness_support file ",
+    "uploads, presigned_upload, ai::ambient_agents::task::HarnessModelConfig, ",
+    "and more — all cfg(not(target_family=\"wasm\"))-gated in app/src/ai/. ",
+    "Lifting the agent_sdk gate requires carving out/stubbing each of those. ",
+    "Additionally http_client's wasm transport uses web_sys::window() ",
+    "(browser-only), so the MAA request needs a host-fetch injection to cross ",
+    "the Node boundary."
 );
 
-/// Run one authenticated agent request through the `AgentDriver` path as far
-/// as is constructible on a DOM-free wasm runtime.
+/// Run one authenticated agent request through the real Warp app init path on
+/// wasm, as far as is constructible.
 ///
 /// `config` is a JS object: `{ prompt, api_key, server_root_url }`.
 ///
-/// Returns a structured JSON result naming the furthest stage reached
-/// (`constructed_app` → `trimmed_init`) and, when the constructible stages
-/// succeed, the concrete next blocker for the full `AgentDriver::run`.
+/// Returns a structured JSON result naming the furthest stage reached and the
+/// concrete next blocker.
 #[wasm_bindgen]
 pub async fn run_agent_driver_wasm(config: JsValue) -> JsValue {
     console_error_panic_hook::set_once();
@@ -105,94 +107,100 @@ pub async fn run_agent_driver_wasm(config: JsValue) -> JsValue {
         ));
     }
 
-    // 1. Construct a headless App (with AppContext) WITHOUT the blocking event
-    //    loop. On wasm the foreground executor schedules via spawn_local.
-    let mut app = match catch_unwind(AssertUnwindSafe(|| {
-        warpui::platform::headless::new_headless_app(Box::new(warp_assets::Assets))
-    })) {
+    // Build a LaunchMode::CommandLine for `oz agent run --prompt <prompt>`. The
+    // command is dropped by the wasm launch() arm (agent_sdk is wasm-gated),
+    // but constructing it exercises the real LaunchMode path.
+    let launch_mode = build_command_line_launch_mode(&prompt, &api_key);
+
+    // Drive the real app init path via a headless App (no blocking event loop).
+    let app_result = catch_unwind(AssertUnwindSafe(|| {
+        crate::run_command_line_wasm(launch_mode)
+    }));
+    let app = match app_result {
         Ok(Ok(app)) => app,
         Ok(Err(e)) => {
             return result_to_js(&err_result(
-                format!("new_headless_app: {e:#}"),
+                format!("run_command_line_wasm: {e:#}"),
                 STAGE_CONSTRUCTED_APP,
                 None,
             ));
         }
         Err(p) => {
             return result_to_js(&err_result(
-                panic_str(&p).unwrap_or_else(|| "new_headless_app panicked".to_string()),
-                STAGE_CONSTRUCTED_APP,
+                panic_str(&p).unwrap_or_else(|| "run_command_line_wasm panicked".to_string()),
+                STAGE_APP_INIT,
                 None,
             ));
         }
     };
 
-    // 2. Trimmed init inside an AppContext update closure. Capture panics
-    //    (e.g. missing singleton models) as structured errors.
-    let api_key_for_init = api_key.clone();
-    let result: Result<(), (String, &'static str)> = catch_unwind(AssertUnwindSafe(|| {
-        app.update(|ctx| trimmed_init(ctx, &api_key_for_init))
-    }))
-    .map_err(|p| {
-        (
-            panic_str(&p).unwrap_or_else(|| "app update panicked".to_string()),
-            STAGE_CONSTRUCTED_APP,
-        )
-    })
-    .and_then(|inner| inner);
+    // `run_command_line_wasm` ran `run_app_init` (initialize_app + launch())
+    // synchronously inside `app.update`. If we reached here, the real app init
+    // (full singleton surface) succeeded without panicking — the piece the
+    // reviewer flagged as available. Keep the App alive for spawned work to
+    // drain, then report the stage + next blocker.
+    let _ = app.foreground_executor();
+    drop(app);
 
-    match result {
-        Ok(()) => result_to_js(&DriverResult {
-            ok: true,
-            stage: STAGE_TRIMMED_INIT.to_string(),
-            error: None,
-            next_blocker: Some(NEXT_BLOCKER.to_string()),
-        }),
-        Err((msg, stage)) => result_to_js(&err_result(msg, stage, None)),
-    }
+    result_to_js(&DriverResult {
+        ok: true,
+        stage: STAGE_APP_INIT.to_string(),
+        error: None,
+        next_blocker: Some(NEXT_BLOCKER.to_string()),
+    })
 }
 
-fn trimmed_init(ctx: &mut warpui::AppContext, api_key: &str) -> Result<(), (String, &'static str)> {
-    features::init_feature_flags();
+/// Build a `LaunchMode::CommandLine` for `oz agent run --prompt <prompt>`.
+///
+/// `RunAgentArgs` does not derive `Default`, so build it field-by-field.
+fn build_command_line_launch_mode(prompt: &str, api_key: &str) -> crate::LaunchMode {
+    use warp_cli::agent::{AgentCommand, PromptArg, RunAgentArgs};
+    use warp_cli::{CliCommand, GlobalOptions};
 
-    // AppExecutionMode: SDK / not sandboxed. AgentDriver reads autonomy/isolation
-    // from this.
-    ctx.add_singleton_model(|ctx| {
-        warp_core::execution_mode::AppExecutionMode::new(
-            warp_core::execution_mode::ExecutionMode::Sdk,
-            false,
-            ctx,
-        )
-    });
-
-    // Auth: construct AuthState with the API key (initialize() formats the
-    // `wk-` prefix and returns early before any secure-storage read), then
-    // register AuthStateProvider + ServerApiProvider + AuthManager (the
-    // minimum AgentDriver::new reads).
-    let auth_state = std::sync::Arc::new(warp_server_auth::auth_state::AuthState::initialize(
-        ctx,
-        Some(api_key.to_string()),
-    ));
-    let auth_state_for_provider = auth_state.clone();
-    ctx.add_singleton_model(move |_ctx| AuthStateProvider::new(auth_state_for_provider));
-
-    let server_api_provider = ctx.add_singleton_model({
-        move |ctx| {
-            ServerApiProvider::new(
-                auth_state,
-                Some(crate::ai::ambient_agents::AgentSource::Cli),
-                None,
-                ctx,
-            )
-        }
-    });
-    let server_api = server_api_provider.as_ref(ctx).get();
-    let auth_client = server_api_provider.as_ref(ctx).get_auth_client();
-    ctx.add_singleton_model(move |ctx| {
-        crate::auth::auth_manager::AuthManager::new(server_api.clone(), auth_client.clone(), ctx)
-    });
-
-    Ok(())
+    let run_args = RunAgentArgs {
+        prompt_arg: PromptArg {
+            prompt: Some(prompt.to_string()),
+            saved_prompt: None,
+        },
+        model: Default::default(),
+        config_file: Default::default(),
+        skill: None,
+        name: None,
+        cwd: None,
+        gui: false,
+        share: warp_cli::share::ShareArgs { share: None },
+        mcp_specs: Vec::new(),
+        mcp_servers: Vec::new(),
+        strict_mcp_startup: false,
+        mcp_startup_timeout: None,
+        environment: None,
+        idle_on_complete: None,
+        snapshot: warp_cli::agent::SnapshotArgs {
+            no_snapshot: true,
+            snapshot_upload_timeout: None,
+            snapshot_script_timeout: None,
+        },
+        task_id: None,
+        sandboxed: false,
+        bedrock_inference_role: None,
+        bedrock_role_region: None,
+        computer_use: Default::default(),
+        conversation: None,
+        profile: None,
+        harness: Default::default(),
+        skip_initial_turn: false,
+        configure_git_credentials_with_github: false,
+    };
+    crate::LaunchMode::CommandLine {
+        command: CliCommand::Agent(AgentCommand::Run(run_args)),
+        global_options: GlobalOptions {
+            api_key: Some(api_key.to_string()),
+            ..Default::default()
+        },
+        debug: false,
+        is_sandboxed: false,
+        computer_use_override: None,
+    }
 }
 
 fn err_result(err: impl Into<String>, stage: &str, next_blocker: Option<String>) -> DriverResult {

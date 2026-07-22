@@ -1234,67 +1234,160 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         crate::util::bindings::custom_tag_to_keystroke,
     );
 
-    app_builder.run(move |ctx| {
-        #[cfg(not(target_family = "wasm"))]
-        // Rotate the log files in the background.
-        ctx.background_executor()
-            .spawn(warp_logging::rotate_log_files())
-            .detach();
-
-        ctx.add_singleton_model(|ctx| {
-            AppExecutionMode::new(
-                launch_mode.execution_mode(),
-                launch_mode.is_sandboxed(),
-                ctx,
-            )
-        });
-        #[cfg(feature = "crash_reporting")]
-        crate::crash_reporting::set_client_type_tag(launch_mode.execution_mode().client_id());
-
-        // Add the terminal server singleton to the application.
-        #[cfg(feature = "local_tty")]
-        ctx.add_singleton_model(move |_ctx| pty_spawner);
-
-        // Register user preferences.  This must be done before initializing
-        // feature flags or experiments, both of which check user preferences for
-        // overrides.
-        ctx.add_singleton_model(move |_ctx| ::settings::PublicPreferences::new(public_preferences));
-        ctx.add_singleton_model(move |_ctx| private_preferences);
-        let startup_toml_parse_error = startup_toml_parse_error;
-
-        #[cfg(enable_crash_recovery)]
-        ctx.add_singleton_model(move |_ctx| crash_recovery);
-
-        #[cfg(feature = "plugin_host")]
-        ctx.add_singleton_model(move |ctx| {
-            plugin::PluginHost::new(ctx).expect("Could not instantiate PluginHost")
-        });
-        let app_state = initialize_app(
-            &launch_mode,
-            timer,
-            startup_toml_parse_error,
+    let init_fn = move |ctx: &mut warpui::AppContext| {
+        run_app_init(
             ctx,
+            launch_mode,
+            timer,
+            public_preferences,
+            private_preferences,
+            startup_toml_parse_error,
+            pre_sentry_errors,
+            #[cfg(feature = "local_tty")]
+            pty_spawner,
+            #[cfg(enable_crash_recovery)]
+            crash_recovery,
+        );
+    };
+
+    app_builder.run(init_fn)
+}
+
+/// The shared app-init body used by both the platform event-loop path
+/// (`app_builder.run`) and the wasm32 + Node async path
+/// (`run_internal_wasm_async`). Registers the full singleton surface
+/// (preferences, execution mode, terminal server) and calls `initialize_app` +
+/// `launch()`, exactly as the standard Warp launch does.
+///
+/// On wasm, `LaunchMode::CommandLine` is routed to `agent_sdk::run` (see
+/// `launch()`); PTY spawning is gated behind `local_tty`, which is absent on
+/// `wasm32-unknown-unknown`, so the no-PTY path is exercised naturally.
+#[allow(clippy::too_many_arguments)]
+fn run_app_init(
+    ctx: &mut warpui::AppContext,
+    launch_mode: LaunchMode,
+    timer: IntervalTimer,
+    public_preferences: warpui_extras::user_preferences::Model,
+    private_preferences: ::settings::PrivatePreferences,
+    startup_toml_parse_error: Option<warpui_extras::user_preferences::Error>,
+    _pre_sentry_errors: Vec<anyhow::Error>,
+    #[cfg(feature = "local_tty")] pty_spawner: terminal::local_tty::spawner::PtySpawner,
+    #[cfg(enable_crash_recovery)] crash_recovery: crash_recovery::CrashRecovery,
+) {
+    #[cfg(not(target_family = "wasm"))]
+    // Rotate the log files in the background.
+    ctx.background_executor()
+        .spawn(warp_logging::rotate_log_files())
+        .detach();
+
+    ctx.add_singleton_model(|ctx| {
+        AppExecutionMode::new(
+            launch_mode.execution_mode(),
+            launch_mode.is_sandboxed(),
+            ctx,
+        )
+    });
+    #[cfg(feature = "crash_reporting")]
+    crate::crash_reporting::set_client_type_tag(launch_mode.execution_mode().client_id());
+
+    // Add the terminal server singleton to the application.
+    #[cfg(feature = "local_tty")]
+    ctx.add_singleton_model(move |_ctx| pty_spawner);
+
+    // Register user preferences.  This must be done before initializing
+    // feature flags or experiments, both of which check user preferences for
+    // overrides.
+    ctx.add_singleton_model(move |_ctx| ::settings::PublicPreferences::new(public_preferences));
+    ctx.add_singleton_model(move |_ctx| private_preferences);
+
+    #[cfg(enable_crash_recovery)]
+    ctx.add_singleton_model(move |_ctx| crash_recovery);
+
+    #[cfg(feature = "plugin_host")]
+    ctx.add_singleton_model(move |ctx| {
+        plugin::PluginHost::new(ctx).expect("Could not instantiate PluginHost")
+    });
+    let app_state = initialize_app(
+        &launch_mode,
+        timer,
+        startup_toml_parse_error,
+        ctx,
+        _pre_sentry_errors,
+    );
+
+    if ImprovedPaletteSearch::improved_search_enabled(ctx) {
+        FeatureFlag::UseTantivySearch.set_enabled(true);
+    }
+
+    // The TUI front-end reuses the full `initialize_app` bootstrap above (so
+    // auth, `Appearance`, settings, etc. exist), then runs the device-login
+    // flow and mounts the TUI (via `crate::tui::init`) instead of the
+    // GUI/CLI `launch()` path.
+    match launch_mode {
+        #[cfg(feature = "tui")]
+        LaunchMode::Tui { mount, .. } => crate::tui::init(mount, ctx),
+        #[cfg(not(feature = "tui"))]
+        LaunchMode::Tui { .. } => {
+            unreachable!("the `tui` launch mode requires the `tui` feature")
+        }
+        other => launch(ctx, app_state, other),
+    }
+}
+
+/// wasm32-unknown-unknown + Node analogue of `run_internal` for a
+/// `LaunchMode::CommandLine` (REMOTE-2264). Reuses the REAL app init path —
+/// the same pre-AppContext setup as `run_internal` and the same
+/// `run_app_init` (which registers the full singleton surface + calls
+/// `initialize_app` + `launch()`) — but drives it through a headless `App`
+/// constructed via `warpui::platform::headless::new_headless_app` instead of
+/// the blocking `AppBuilder::run` event loop.
+///
+/// On wasm the foreground/background executors schedule via
+/// `wasm_bindgen_futures::spawn_local`, so the caller (a `#[wasm_bindgen] pub
+/// async fn`) can keep the `App` alive and let the JS event loop poll spawned
+/// work as it yields. PTY spawning is gated behind `local_tty`, which is
+/// absent on `wasm32-unknown-unknown`; `agent_sdk::run`'s CommandLine arm
+/// routes to the in-process agent path without spawning a PTY.
+///
+/// Returns the constructed `App` so the caller can keep it alive for the
+/// duration of the async run.
+#[cfg(target_family = "wasm")]
+pub(crate) fn run_command_line_wasm(launch_mode: LaunchMode) -> anyhow::Result<warpui::App> {
+    let mut timer = IntervalTimer::new();
+
+    if launch_mode.needs_profiling() {
+        profiling::init();
+    }
+    features::init_feature_flags();
+
+    let log_destination = launch_mode.log_destination();
+    let is_cli = log_destination.is_some();
+    warp_logging::init(warp_logging::LogConfig {
+        is_cli,
+        log_destination,
+        ..Default::default()
+    })?;
+    timer.mark_interval_end("LOG_FILE_SETUP_COMPLETE");
+
+    ::settings::set_settings_mode(launch_mode.settings_mode());
+    let private_preferences = settings::init_private_user_preferences();
+    let (public_preferences, startup_toml_parse_error) = settings::init_public_user_preferences();
+
+    let pre_sentry_errors: Vec<anyhow::Error> = Vec::new();
+
+    let mut app = warpui::platform::headless::new_headless_app(Box::new(ASSETS))?;
+    app.update(|ctx| {
+        run_app_init(
+            ctx,
+            launch_mode,
+            timer,
+            public_preferences,
+            private_preferences,
+            startup_toml_parse_error,
             pre_sentry_errors,
         );
-
-        if ImprovedPaletteSearch::improved_search_enabled(ctx) {
-            FeatureFlag::UseTantivySearch.set_enabled(true);
-        }
-
-        // The TUI front-end reuses the full `initialize_app` bootstrap above (so
-        // auth, `Appearance`, settings, etc. exist), then runs the device-login
-        // flow and mounts the TUI (via `crate::tui::init`) instead of the
-        // GUI/CLI `launch()` path.
-        match launch_mode {
-            #[cfg(feature = "tui")]
-            LaunchMode::Tui { mount, .. } => crate::tui::init(mount, ctx),
-            #[cfg(not(feature = "tui"))]
-            LaunchMode::Tui { .. } => {
-                unreachable!("the `tui` launch mode requires the `tui` feature")
-            }
-            other => launch(ctx, app_state, other),
-        }
-    })
+    });
+    Ok(app)
 }
 
 pub struct UpdateQuakeModeEventArg {
@@ -2989,9 +3082,15 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
         } => {
             cfg_if::cfg_if! {
                 if #[cfg(target_family = "wasm")] {
-                    panic!("Cannot execute CLI command {command:?} on the web");
+                    // `agent_sdk` (the in-process CLI/agent path) is gated off
+                    // wasm by a large native-only dependency surface (see
+                    // `agents/specs/REMOTE-2264: findings.md`). On wasm the CLI
+                    // command cannot run via the real `agent_sdk::run` until that
+                    // surface is carved out; report and drop it.
+                    let _ = (ctx, command, global_options);
+                    log::warn!("CLI command on wasm: agent_sdk is not compiled into this wasm build");
                 } else {
-                    if let Err(err) = crate::ai::agent_sdk::run(ctx, command.clone(), global_options.clone()) {
+                    if let Err(err) = crate::ai::agent_sdk::run(ctx, command, global_options) {
                         eprintln!("{err:#}");
                         report_error!(err);
                         std::process::exit(1);

@@ -5,10 +5,52 @@ This is the findings report for the prototype built in `crates/wasm_node_proto` 
 It is a deliverable of the implementation run, not a spec. The approved spec
 lives at `agents/specs/REMOTE-2264: wasm32 CLI in Node prototype.md`.
 
-## TL;DR (AgentDriver push)
+## TL;DR (AgentDriver push — second pass: reuse run_internal)
 
-Following reviewer guidance ("AppContext is very much available on wasm";
-"make TerminalDriver a no-op"), a second pass genuinely pursued the full
+Following a second reviewer course-correction ("reuse `run_internal()` with
+`LaunchMode::CommandLine`; don't build a parallel init"), a second pass pivoted
+from the parallel trimmed init to reusing the REAL app init path:
+
+- Extracted `run_app_init` (the shared init body: full singleton surface +
+  `initialize_app` + `launch()`) from `run_internal`'s `app_builder.run`
+  closure, so both the platform event-loop path and a new wasm-async path call
+  the same code.
+- Added `run_command_line_wasm(launch_mode) -> App` (wasm-gated): does the same
+  pre-AppContext setup as `run_internal`, then drives `run_app_init` through a
+  headless `App` via `warpui::platform::headless::new_headless_app` (no blocking
+  event loop) instead of `AppBuilder::run`. The `#[wasm_bindgen] pub async fn
+  run_agent_driver_wasm` builds a `LaunchMode::CommandLine` and calls it.
+- Flipped `launch()`'s `LaunchMode::CommandLine` wasm arm from `panic!` to route
+  to `agent_sdk::run` (gated out `std::process::exit`).
+
+**Concrete blocker (precise, from a real Node 25 run):** the real
+`run_app_init`/`initialize_app` path panics with `Error: Can't find the global
+Window` from `gloo_utils::window()` (`gloo-utils-0.2.0/src/lib.rs:14`). The
+standard wasm init path assumes a **browser** environment — it reaches
+`gloo::utils::window()` (a browser global) during model construction, which is
+unavailable in a DOM-free Node runtime. This is the `web_sys::window()` blocker
+surfaced at the init stage (not `agent_sdk`). Additionally, `ai::agent_sdk`
+(the in-process CLI/agent path `LaunchMode::CommandLine` routes to) is itself
+gated `#[cfg(not(target_family="wasm"))]` because it transitively depends on a
+large native-only surface (`comfy_table`, `inquire`, `command::r#async`,
+`ai::artifact_download`, `ai::skills`/fs, `ai::bedrock_credentials`,
+`ai::blocklist::finalize_recording_for_conversation`,
+`ai::mcp::file_based_manager`, `server::server_api::harness_support` file
+uploads, `presigned_upload`, `ai::ambient_agents::task::HarnessModelConfig`,
+…) that is `cfg(not(target_family="wasm"))`-gated throughout `app/src/ai/`.
+
+So reusing `run_internal` on wasm in Node requires (a) replacing/stubbing the
+`gloo::utils::window()` / browser-global reads in the init path with
+host-backed or no-op equivalents for a DOM-free runtime, and (b) carving out
+the `agent_sdk` native-only dependency surface so `agent_sdk::run` compiles on
+wasm. The headless `App`/`AppContext` still constructs fine (`new_headless_app`
+succeeds); the blocker is the browser-env assumption in the shared init + the
+`agent_sdk` gate.
+
+## TL;DR (AgentDriver push — first pass: parallel init)
+
+Following the first reviewer guidance ("AppContext is very much available on
+wasm"; "make TerminalDriver a no-op"), a first pass genuinely pursued the full
 `AgentDriver` path on `wasm32-unknown-unknown`:
 
 - **The `warp` app crate compiles for `wasm32-unknown-unknown`** (headless /
