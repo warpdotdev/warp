@@ -310,6 +310,13 @@ pub(crate) struct TuiShortcutSection {
 }
 
 impl TuiTerminalSessionState {
+    pub(super) fn with_blocking_input_source(mut self, source: BlockingInputSource) -> Self {
+        let state = match &mut self {
+            Self::AltScreen { state, .. } | Self::Block(state) => state,
+        };
+        state.interaction = TuiInteractionState::Blocking(source);
+        self
+    }
     fn state(&self) -> &TuiBlockSessionState {
         match self {
             Self::AltScreen { state, .. } | Self::Block(state) => state,
@@ -373,7 +380,8 @@ impl TuiTerminalSessionState {
                     BlockingInputSource::LongRunningCommand => TuiInputTarget::Pty,
                     BlockingInputSource::AskQuestion(_)
                     | BlockingInputSource::Permission(_)
-                    | BlockingInputSource::Orchestration(_) => TuiInputTarget::Disabled,
+                    | BlockingInputSource::Orchestration(_)
+                    | BlockingInputSource::Handoff(_) => TuiInputTarget::Disabled,
                 },
                 TuiInteractionState::StartingShell => TuiInputTarget::Disabled,
                 TuiInteractionState::Composer(_) => TuiInputTarget::AgentEditor,
@@ -463,7 +471,8 @@ impl TuiTerminalSessionState {
             TuiInteractionState::Blocking(
                 BlockingInputSource::AskQuestion(_)
                 | BlockingInputSource::Permission(_)
-                | BlockingInputSource::Orchestration(_),
+                | BlockingInputSource::Orchestration(_)
+                | BlockingInputSource::Handoff(_),
             )
             | TuiInteractionState::StartingShell
             | TuiInteractionState::Pty(TuiPtyState::Process) => return Vec::new(),

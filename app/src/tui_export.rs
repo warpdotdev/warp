@@ -72,7 +72,7 @@ pub use crate::ai::blocklist::handoff::{
     HandoffCommitFailure, HandoffCommitOutcome, HandoffCreated, HandoffLaunchAttachments,
     HandoffPrepareError, HandoffPrepareInput, HandoffPresentationSnapshot, HandoffRestoration,
     HandoffTargetMaterialization, MaterializeHandoffTarget, PendingCloudLaunch, PendingHandoff,
-    SnapshotUploadTarget, execute_handoff, prepare_handoff,
+    SnapshotUploadTarget, execute_handoff, prepare_handoff, suggest_handoff_environment,
 };
 pub use crate::ai::blocklist::history_model::{
     AIQueryHistory, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
@@ -108,6 +108,9 @@ pub use crate::ai::blocklist::{
 pub use crate::ai::blocklist::{
     PreparedLocalOzChildLaunch, apply_child_agent_model_override, prepare_local_oz_child_launch,
 };
+pub use crate::ai::cloud_environments::{
+    CloudEnvironment, CloudEnvironmentCatalog, CloudEnvironmentCatalogEvent, OZ_ENVIRONMENTS_URL,
+};
 pub use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
 };
@@ -129,8 +132,8 @@ pub use crate::ai::orchestration::{
     PreparedRemoteChildLaunch, RemoteChildLaunchConfig, accept_disabled_reason_with_auth,
     api_key_snapshot, auth_secret_selection_required, classify_cloud_agent_startup_error,
     empty_env_recommendation_message, environment_snapshot, harness_is_selectable,
-    harness_snapshot, host_snapshot, location_snapshot, model_snapshot, oz_run_url,
-    persist_environment_selection, persist_host_selection, prepare_remote_child_launch,
+    harness_snapshot, host_snapshot, location_snapshot, model_snapshot, oz_model_snapshot,
+    oz_run_url, persist_environment_selection, persist_host_selection, prepare_remote_child_launch,
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
     resolve_default_host_slug, should_show_auth_secret_picker,
 };
@@ -156,11 +159,12 @@ pub use crate::search::slash_command_menu::static_commands::{
     SlashCommandKind, SlashCommandSurfaces,
 };
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
+pub use crate::server::ids::SyncId;
 pub use crate::server::server_api::ServerApiProvider;
 #[cfg(feature = "voice_input")]
 pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
-    AIClient, AgentConfigSnapshot, SpawnAgentRequest, SpawnAgentResponse,
+    AIClient, AgentConfigSnapshot, AttachmentInput, SpawnAgentRequest, SpawnAgentResponse,
 };
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
@@ -236,7 +240,7 @@ pub use crate::util::repo_detection::{RepoDetectionSessionType, detect_possible_
 pub use crate::util::time_format::format_elapsed_seconds;
 #[cfg(feature = "voice_input")]
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
-pub use crate::workspaces::user_workspaces::UserWorkspaces;
+pub use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Builds the live-shell completion context used to parse TUI input for NLD.
 pub fn tui_completion_session_context(

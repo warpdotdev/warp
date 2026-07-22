@@ -9,6 +9,7 @@ use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::cloud_object::model::generic_string_model::StringModel as _;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+#[cfg(feature = "tui")]
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::SyncId;
 
@@ -99,7 +100,7 @@ impl CloudEnvironmentCatalog {
     }
 
     /// Requests an out-of-band refresh of cloud objects from the server.
-    #[allow(dead_code)]
+    #[cfg(feature = "tui")]
     pub fn refresh_from_server(&self, ctx: &mut ModelContext<Self>) {
         UpdateManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.refresh_updated_objects(ctx);

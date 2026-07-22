@@ -26,6 +26,7 @@ use command::r#async::Command;
 use futures::future::join_all;
 use tokio::fs as tokio_fs;
 use warp_util::standardized_path::StandardizedPath;
+use warpui::AppContext;
 use warpui::r#async::FutureExt as _;
 
 use crate::ai::agent::conversation::AIConversation;
@@ -33,6 +34,7 @@ use crate::ai::agent::{AIAgentAction, AIAgentActionType, AIAgentOutputMessageTyp
 use crate::ai::cloud_environments::{
     CloudAmbientAgentEnvironment, GithubRepo, sort_environments_by_recency,
 };
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::server::ids::SyncId;
 
 /// Cap on how many of the conversation's action results we scan for paths,
@@ -200,6 +202,25 @@ pub(crate) async fn resolve_repo_for_path(path: &Path) -> Option<TouchedRepo> {
         .as_deref()
         .and_then(parse_github_repo);
     Some(TouchedRepo { git_root, repo_id })
+}
+
+/// Suggests the available environment whose configured repositories overlap
+/// the Git repository containing `path`.
+pub fn suggest_handoff_environment(
+    path: PathBuf,
+    ctx: &AppContext,
+) -> impl std::future::Future<Output = Option<SyncId>> + Send + 'static {
+    let environments = CloudAmbientAgentEnvironment::get_all(ctx);
+    async move {
+        let touched_repo = resolve_repo_for_path(&path).await?;
+        pick_handoff_overlap_env(
+            &TouchedWorkspace {
+                repos: vec![touched_repo],
+                orphan_files: Vec::new(),
+            },
+            environments,
+        )
+    }
 }
 
 /// Pick the env that has the most overlap with the touched repos, breaking ties by

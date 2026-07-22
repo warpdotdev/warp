@@ -41,6 +41,9 @@ pub use pipeline::{
 #[cfg(feature = "local_fs")]
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use snapshot::SnapshotUploadTarget;
+#[cfg(feature = "local_fs")]
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use touched_repos::suggest_handoff_environment;
 
 /// Prompt attachments represented for both cloud submission and local restoration.
 #[cfg_attr(target_family = "wasm", allow(dead_code))]

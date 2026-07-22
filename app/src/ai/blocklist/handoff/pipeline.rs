@@ -339,7 +339,11 @@ impl PendingHandoff {
         self.config.model_id = Some(model_id);
     }
 
-    fn set_valid_environment_ids(&mut self, valid_environment_ids: HashSet<SyncId>) {
+    /// Replaces the environment catalog used by [`Self::validate`].
+    ///
+    /// Frontends call this when their environment projection changes while
+    /// retaining an editable pending handoff.
+    pub fn set_valid_environment_ids(&mut self, valid_environment_ids: HashSet<SyncId>) {
         self.valid_environment_ids = valid_environment_ids;
     }
 

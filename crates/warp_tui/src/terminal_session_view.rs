@@ -68,6 +68,7 @@ use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuMode
 use crate::conversation_selection::TuiConversationSelection;
 use crate::editor_interaction::TuiEditorCommand;
 use crate::exit_confirmation::{CTRL_C_EXIT_WINDOW, ExitConfirmation};
+use crate::handoff::TuiHandoffBlock;
 use crate::inline_menu::{MAX_INLINE_MENU_ROWS, TuiInlineMenu, active_inline_menu};
 use crate::input::view::TuiInputAction;
 use crate::input::{TuiInputView, TuiInputViewEvent};
@@ -116,10 +117,12 @@ use crate::zero_state_animation::{
     ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
 };
 mod completions;
+
+#[path = "handoff/session.rs"]
+mod handoff_session;
 mod input_detection;
 mod shortcuts;
 pub(crate) mod state;
-
 use self::completions::CompletionRequestState;
 use self::input_detection::InputDetectionState;
 use self::state::{
@@ -158,6 +161,8 @@ pub(super) enum BlockingInputSource {
     Permission(ViewHandle<TuiPermissionPrompt>),
     /// The specialized orchestration configuration request.
     Orchestration(ViewHandle<TuiOrchestrationBlock>),
+    /// A local-to-cloud handoff configuration or result card.
+    Handoff(ViewHandle<TuiHandoffBlock>),
 }
 
 impl BlockingInputSource {
@@ -171,10 +176,10 @@ impl BlockingInputSource {
             Self::AskQuestion(view) => Some(TuiChildView::new(&view).finish()),
             Self::Permission(view) => Some(TuiChildView::new(&view).finish()),
             Self::Orchestration(view) => Some(TuiChildView::new(&view).finish()),
+            Self::Handoff(view) => Some(TuiChildView::new(&view).finish()),
         }
     }
 }
-
 /// Events emitted by the TUI terminal session surface.
 pub(crate) enum TuiTerminalSessionEvent {
     ExecuteCommand(Box<ExecuteCommandEvent>),
@@ -645,6 +650,7 @@ pub(crate) struct TuiTerminalSessionView {
     conversation_restore_state: ConversationRestoreState,
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
+    handoff: Option<ViewHandle<TuiHandoffBlock>>,
     orchestration_tab_bar: ViewHandle<TuiTabBarView>,
     orchestration_tabs_focused: bool,
     zero_state_view: ViewHandle<TuiZeroStateView>,
@@ -823,7 +829,12 @@ impl TuiTerminalSessionView {
         &self,
         ctx: &AppContext,
     ) -> Result<TuiTerminalSessionState, TuiTerminalSessionStateResolveError> {
-        self.session_state.as_ref(ctx).resolve(ctx)
+        let state = self.session_state.as_ref(ctx).resolve(ctx)?;
+        Ok(if let Some(handoff) = self.active_handoff(ctx) {
+            state.with_blocking_input_source(BlockingInputSource::Handoff(handoff))
+        } else {
+            state
+        })
     }
 
     fn update_process_input_focus(&mut self, ctx: &mut ViewContext<Self>) {
@@ -841,6 +852,7 @@ impl TuiTerminalSessionView {
             BlockingInputSource::AskQuestion(view) => ctx.focus(&view),
             BlockingInputSource::Permission(view) => ctx.focus(&view),
             BlockingInputSource::Orchestration(view) => ctx.focus(&view),
+            BlockingInputSource::Handoff(view) => ctx.focus(&view),
         }
     }
 
@@ -1759,6 +1771,7 @@ impl TuiTerminalSessionView {
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
             exit_summary,
+            handoff: None,
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
             zero_state_view,
@@ -3259,6 +3272,13 @@ impl TuiTerminalSessionView {
     }
 
     fn select_tui_slash_command(&mut self, command: &StaticCommand, ctx: &mut ViewContext<Self>) {
+        if command.kind == SlashCommandKind::MoveToCloud {
+            self.input_view.update(ctx, |input, ctx| {
+                input.set_text("/handoff ", ctx);
+            });
+            ctx.notify();
+            return;
+        }
         match slash_command_selection_behavior(command) {
             SlashCommandSelectionBehavior::InsertCommandText(text) => {
                 self.input_view.update(ctx, |input, ctx| {
@@ -3269,6 +3289,40 @@ impl TuiTerminalSessionView {
                 self.execute_tui_slash_command(command, None, ctx);
             }
         }
+    }
+
+    fn start_new_conversation(
+        &mut self,
+        prompt: Option<&String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !self
+            .ai_context_model
+            .as_ref(ctx)
+            .can_start_new_conversation()
+        {
+            self.show_transient_hint(NEW_CONVERSATION_COMMAND_RUNNING_HINT.to_owned(), ctx);
+            return false;
+        }
+        self.cancel_active_conversation(ctx);
+        let terminal_surface_id = ctx.view_id();
+        self.transcript.update(ctx, |transcript, ctx| {
+            transcript.clear_for_new_conversation(ctx);
+        });
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.clear_conversations_for_terminal_surface(terminal_surface_id, ctx);
+        });
+        self.conversation_selection.update(ctx, |selection, ctx| {
+            selection.select_new_conversation(AgentViewEntryOrigin::Tui, ctx);
+        });
+        if let Some(prompt) = prompt
+            .map(|argument| argument.trim())
+            .filter(|argument| !argument.is_empty())
+        {
+            self.send_prompt(prompt.to_owned(), ctx);
+        }
+        self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+        true
     }
 
     fn execute_tui_slash_command(
@@ -3287,38 +3341,17 @@ impl TuiTerminalSessionView {
 
         match command.kind {
             SlashCommandKind::Agent | SlashCommandKind::New => {
-                if !self
-                    .ai_context_model
-                    .as_ref(ctx)
-                    .can_start_new_conversation()
-                {
-                    self.show_transient_hint(NEW_CONVERSATION_COMMAND_RUNNING_HINT.to_owned(), ctx);
-                    return;
+                if self.start_new_conversation(argument, ctx) {
+                    record_static_slash_command_accepted(command.name, true, ctx);
                 }
-                self.cancel_active_conversation(ctx);
-                let terminal_surface_id = ctx.view_id();
-                self.transcript.update(ctx, |transcript, ctx| {
-                    transcript.clear_for_new_conversation(ctx);
-                });
-                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                    history.clear_conversations_for_terminal_surface(terminal_surface_id, ctx);
-                });
-                self.conversation_selection.update(ctx, |selection, ctx| {
-                    selection.select_new_conversation(AgentViewEntryOrigin::Tui, ctx);
-                });
-                if let Some(prompt) = argument
-                    .map(|argument| argument.trim())
-                    .filter(|argument| !argument.is_empty())
-                {
-                    self.send_prompt(prompt.to_owned(), ctx);
-                }
-                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-                record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::Conversations => {
                 self.conversation_menu
                     .update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            SlashCommandKind::MoveToCloud => {
+                self.start_handoff(argument, ctx);
             }
             SlashCommandKind::AutoApprove => {
                 self.toggle_auto_approve(true, ctx);
@@ -3517,7 +3550,6 @@ impl TuiTerminalSessionView {
             | SlashCommandKind::RenameConversation
             | SlashCommandKind::SetTabColor
             | SlashCommandKind::Fork
-            | SlashCommandKind::MoveToCloud
             | SlashCommandKind::OpenCodeReview
             | SlashCommandKind::Index
             | SlashCommandKind::Init
@@ -3697,14 +3729,18 @@ impl TuiView for TuiTerminalSessionView {
         "TuiTerminalSessionView"
     }
 
-    fn child_view_ids(&self, _ctx: &AppContext) -> Vec<EntityId> {
-        vec![
+    fn child_view_ids(&self, ctx: &AppContext) -> Vec<EntityId> {
+        let mut view_ids = vec![
             self.transcript.id(),
             self.input_view.id(),
             self.orchestration_tab_bar.id(),
             self.attachment_bar.id(),
             self.zero_state_view.id(),
-        ]
+        ];
+        if let Some(handoff) = self.active_handoff(ctx) {
+            view_ids.push(handoff.id());
+        }
+        view_ids
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
@@ -3960,6 +3996,9 @@ impl TuiView for TuiTerminalSessionView {
                 .finish(),
             );
         }
+        if let Some(BlockingInputSource::Handoff(handoff)) = state.blocking_input_source() {
+            content = content.child(TuiChildView::new(handoff).finish());
+        }
         if !blocker_active
             && (input_target.agent_editor_owns_input()
                 || matches!(input_target, TuiInputTarget::Disabled))
@@ -4106,6 +4145,9 @@ impl TerminalSurface for TuiTerminalSessionView {
     }
 }
 
+#[cfg(test)]
+#[path = "handoff/tests.rs"]
+mod handoff_tests;
 #[cfg(test)]
 #[path = "terminal_session_view_tests.rs"]
 mod tests;

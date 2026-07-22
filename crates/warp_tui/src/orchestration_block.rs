@@ -43,6 +43,7 @@ use crate::option_selector::{
     OptionSelectorHeader, OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent,
 };
 use crate::orchestrated_agent_identity_styling::AgentIdentity;
+use crate::tui_ask_question_view::PageNavigationDirection;
 use crate::tui_builder::TuiUiBuilder;
 
 const ORCHESTRATION_BLOCK_TITLE: &str = "Can I start additional agents for this task?";
@@ -103,14 +104,6 @@ enum CardMode {
     Configuring { page: ConfigPage },
 }
 
-/// Direction to navigate after the selector confirms the current page.
-/// Arrow actions retain this until the selector emits its confirmation event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PageConfirmationNavigation {
-    Previous,
-    Next,
-}
-
 /// Events emitted to the owning agent block.
 #[derive(Clone, Debug)]
 pub(crate) enum TuiOrchestrationBlockEvent {
@@ -157,7 +150,7 @@ pub(crate) struct TuiOrchestrationBlock {
     mode: CardMode,
     selector: ViewHandle<TuiOptionSelector>,
     /// Arrow direction awaiting the selector's confirmation event.
-    pending_page_navigation: Option<PageConfirmationNavigation>,
+    pending_page_navigation: Option<PageNavigationDirection>,
     /// Validation reason shown inline after a blocked Accept.
     accept_error: Option<String>,
 
@@ -544,11 +537,11 @@ impl TuiOrchestrationBlock {
         };
         let navigation = self.pending_page_navigation.take();
         let target = match navigation {
-            Some(PageConfirmationNavigation::Previous) => index
+            Some(PageNavigationDirection::Previous) => index
                 .checked_sub(1)
                 .and_then(|index| sequence.get(index))
                 .copied(),
-            Some(PageConfirmationNavigation::Next) | None => sequence.get(index + 1).copied(),
+            Some(PageNavigationDirection::Next) | None => sequence.get(index + 1).copied(),
         };
         match target {
             Some(target) => self.open_page(target, ctx),
@@ -709,7 +702,7 @@ impl TuiOrchestrationBlock {
     /// Confirms the selection, then applies the requested arrow navigation.
     fn handle_arrow_navigation(
         &mut self,
-        navigation: PageConfirmationNavigation,
+        navigation: PageNavigationDirection,
         ctx: &mut ViewContext<Self>,
     ) {
         self.pending_page_navigation = Some(navigation);
@@ -764,10 +757,10 @@ impl TypedActionView for TuiOrchestrationBlock {
             TuiOrchestrationBlockAction::Accept => self.handle_accept(ctx),
             TuiOrchestrationBlockAction::Configure => self.handle_configure(ctx),
             TuiOrchestrationBlockAction::CommitAndPreviousPage => {
-                self.handle_arrow_navigation(PageConfirmationNavigation::Previous, ctx)
+                self.handle_arrow_navigation(PageNavigationDirection::Previous, ctx)
             }
             TuiOrchestrationBlockAction::CommitAndNextPage => {
-                self.handle_arrow_navigation(PageConfirmationNavigation::Next, ctx)
+                self.handle_arrow_navigation(PageNavigationDirection::Next, ctx)
             }
             TuiOrchestrationBlockAction::NextPage => self.navigate_page(true, ctx),
             TuiOrchestrationBlockAction::Back => self.handle_back(ctx),
