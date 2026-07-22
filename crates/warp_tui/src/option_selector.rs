@@ -454,6 +454,11 @@ impl TuiOptionSelector {
             .flatten()
     }
 
+    /// Whether keyboard shortcuts for the option list should be active.
+    pub(crate) fn list_is_focused(&self) -> bool {
+        self.focused
+    }
+
     /// The highlighted item index, including a trailing custom-text entry.
     #[cfg(test)]
     pub(crate) fn highlighted_index(&self) -> Option<usize> {

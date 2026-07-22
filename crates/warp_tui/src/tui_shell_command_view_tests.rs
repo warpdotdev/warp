@@ -92,7 +92,13 @@ fn blocked_command_card_matches_permission_layout() {
         let header_row = row_containing("Is it OK if I run this command");
         let command_row = row_containing("echo 1");
         let first_option_row = row_containing("(1) yes");
+        row_containing("(3) Other");
         let footer_row = row_containing("Esc to cancel");
+        assert!(
+            lines[usize::from(header_row)]
+                .trim_end()
+                .ends_with("e to edit command")
+        );
         assert!(first_option_row >= command_row + 2);
 
         let (header_background, surface_background) = app.read(|ctx| {
