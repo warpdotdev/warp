@@ -122,12 +122,6 @@ pub(crate) fn render_thinking_section(
         header,
         finished_duration.is_some(),
         body,
-        // Left-align the thinking body with its header (no indent) and
-        // separate the two with a blank line.
-        CollapsibleBodyLayout {
-            padding_left: 0,
-            blank_line_before_body: true,
-        },
         app,
     )
 }
@@ -147,21 +141,8 @@ pub(crate) fn render_summarization_section(
         "Conversation summarized".to_owned(),
         finished,
         body,
-        // Indent the summary body beneath its header, with no blank-line gap.
-        CollapsibleBodyLayout {
-            padding_left: 4,
-            blank_line_before_body: false,
-        },
         app,
     )
-}
-
-/// Layout of a collapsible section's body relative to its header.
-struct CollapsibleBodyLayout {
-    /// Columns to indent the body by; `0` left-aligns it with the header.
-    padding_left: u16,
-    /// Whether to reserve a blank row between the header and the body.
-    blank_line_before_body: bool,
 }
 
 fn render_collapsible_message_section(
@@ -170,18 +151,11 @@ fn render_collapsible_message_section(
     header: String,
     finished: bool,
     body: Box<dyn TuiElement>,
-    layout: CollapsibleBodyLayout,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
-    // Indent the body so every wrapped line aligns beneath the header (a
-    // zero indent left-aligns the body with the header text instead), and
-    // optionally reserve a blank row above it to separate it from the header.
-    let mut body_container = TuiContainer::new(body).with_padding_left(layout.padding_left);
-    if layout.blank_line_before_body {
-        body_container = body_container.with_padding_top(1);
-    }
-    let body_element = body_container.finish();
+    // Left-align the body with the header and separate the two with a blank row.
+    let body_element = TuiContainer::new(body).with_padding_top(1).finish();
 
     let collapsed = states.is_collapsed(message_id, finished);
     let toggle_message_id = message_id.clone();

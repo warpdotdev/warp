@@ -1638,10 +1638,13 @@ fn expanded_conversation_summary_shows_its_body() {
             block
                 .collapsible_states
                 .set_collapsed(MessageId::new("summary-1".to_owned()), false);
-            assert_eq!(
-                render_block_lines(block, 40, app_ctx),
-                vec!["Conversation summarized ▾", "    condensed context"]
-            );
+            let rendered = render_block_lines_including_blank(block, 40, app_ctx);
+            let header = rendered
+                .iter()
+                .position(|line| line == "Conversation summarized ▾")
+                .expect("conversation summary header rendered");
+            assert_eq!(rendered[header + 1], "");
+            assert_eq!(rendered[header + 2], "condensed context");
         });
     });
 }
