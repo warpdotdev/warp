@@ -3062,29 +3062,14 @@ fn test_br_in_table_cell_round_trips_as_literal_br() {
         panic!("expected a table, got {result:?}");
     };
 
+    // The in-cell break must round-trip as literal `<br>` and never as a raw `\n` that would
+    // split the row. The internal tab/newline format has exactly two lines (header + one data
+    // row); the GFM pipe format has exactly three (header + separator + one data row).
     let internal = table.to_internal_format();
-    // Exactly two lines (header + one data row), no spurious row from the in-cell break.
-    assert_eq!(
-        internal.lines().count(),
-        2,
-        "in-cell break must not add a table row, got {internal:?}"
-    );
-    assert!(
-        internal.contains("one<br>two"),
-        "expected <br> in internal format, got {internal:?}"
-    );
+    assert_eq!(internal, "A\tB\none<br>two\tplain\n");
 
     let plain = table.to_plain_text();
-    assert!(
-        plain.contains("| one<br>two |"),
-        "expected <br> in GFM plain text, got {plain:?}"
-    );
-    // Header + separator + one data row.
-    assert_eq!(
-        plain.lines().count(),
-        3,
-        "in-cell break must not add a pipe-table row, got {plain:?}"
-    );
+    assert_eq!(plain, "| A | B |\n| --- | --- |\n| one<br>two | plain |");
 }
 
 // Regression guards for `<br>` combined with inline style delimiters. A `<br>` inside a
