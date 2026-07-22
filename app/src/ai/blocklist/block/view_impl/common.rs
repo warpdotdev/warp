@@ -69,6 +69,7 @@ use crate::ai::blocklist::code_block::{
 };
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
+use crate::ai::blocklist::inline_action::gemini_enterprise_credentials_error::GeminiEnterpriseCredentialsErrorView;
 use crate::ai::blocklist::inline_action::inline_action_header::{
     INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
 };
@@ -3036,6 +3037,8 @@ pub struct FailedOutputProps<'a> {
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
     pub subscribe_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
+    pub gemini_enterprise_credentials_error_view:
+        Option<&'a ViewHandle<GeminiEnterpriseCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
 }
@@ -3081,14 +3084,12 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             fallback_message
         }
         FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid {
-            fallback_message: _,
+            fallback_message,
         } => {
-            return render_gemini_enterprise_credentials_error(
-                "Gemini Enterprise credentials expired or invalid",
-                "Warp couldn't authenticate with Google Cloud. Refresh your Gemini Enterprise credentials, then retry the request.",
-                props.invalid_api_key_button_handle,
-                app,
-            );
+            if let Some(view) = props.gemini_enterprise_credentials_error_view {
+                return ChildView::new(view).finish();
+            }
+            fallback_message
         }
     };
 
@@ -3320,83 +3321,6 @@ fn render_invalid_api_key_error(
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(Shrinkable::new(1., detail_text).finish())
                 .with_child(settings_button)
-                .finish(),
-        )
-        .finish()
-}
-
-fn render_gemini_enterprise_credentials_error(
-    title: &str,
-    detail: &str,
-    state_handle: &MouseStateHandle,
-    app: &AppContext,
-) -> Box<dyn Element> {
-    let appearance = Appearance::as_ref(app);
-    let theme = appearance.theme();
-
-    let alert_icon = ConstrainedBox::new(
-        Icon::AlertTriangle
-            .to_warpui_icon(error_color(theme).into())
-            .finish(),
-    )
-    .with_width(icon_size(app))
-    .with_height(icon_size(app))
-    .finish();
-
-    let alert_text = Text::new(title.to_string(), appearance.ui_font_family(), 14.)
-        .with_color(error_color(theme))
-        .with_selectable(false)
-        .finish();
-
-    let detail_text = Text::new(detail.to_string(), appearance.ui_font_family(), 14.)
-        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
-        .with_selectable(false)
-        .finish();
-
-    let refresh_button = appearance
-        .ui_builder()
-        .button(
-            warpui::ui_components::button::ButtonVariant::Outlined,
-            state_handle.clone(),
-        )
-        .with_style(UiComponentStyles {
-            border_color: Some(internal_colors::neutral_4(theme).into()),
-            ..Default::default()
-        })
-        .with_hovered_styles(UiComponentStyles {
-            background: Some(internal_colors::fg_overlay_2(theme).into()),
-            ..Default::default()
-        })
-        .with_clicked_styles(UiComponentStyles {
-            background: Some(internal_colors::fg_overlay_3(theme).into()),
-            ..Default::default()
-        })
-        .with_text_label("Refresh credentials".to_string())
-        .with_cursor(Some(Cursor::PointingHand))
-        .build()
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(AIBlockAction::RefreshGeminiEnterpriseCredentials);
-        })
-        .finish();
-
-    Flex::column()
-        .with_spacing(16.)
-        .with_child(
-            Flex::row()
-                .with_spacing(8.)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(alert_icon)
-                .with_child(alert_text)
-                .finish(),
-        )
-        .with_child(
-            Flex::row()
-                .with_spacing(8.)
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(Shrinkable::new(1., detail_text).finish())
-                .with_child(refresh_button)
                 .finish(),
         )
         .finish()
