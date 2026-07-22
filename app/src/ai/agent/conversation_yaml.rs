@@ -9,9 +9,9 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use api::message::Message;
 use api::message::tool_call::Tool;
 use api::message::tool_call_result::Result as ToolCallResultType;
-use api::message::Message;
 use warp_multi_agent_api as api;
 
 use super::task::helper::{SubagentExt, ToolExt};
@@ -93,12 +93,11 @@ fn write_task_messages(
                 content.push_str("type: user_query\n");
                 content.push_str("query: |\n");
                 write_block_scalar(&mut content, &uq.query);
-                if let Some(ctx) = &uq.context {
-                    if let Some(dir_ctx) = &ctx.directory {
-                        if !dir_ctx.pwd.is_empty() {
-                            content.push_str(&format!("working_directory: {}\n", dir_ctx.pwd));
-                        }
-                    }
+                if let Some(ctx) = &uq.context
+                    && let Some(dir_ctx) = &ctx.directory
+                    && !dir_ctx.pwd.is_empty()
+                {
+                    content.push_str(&format!("working_directory: {}\n", dir_ctx.pwd));
                 }
                 write_yaml_file(dir, &filename, &content)?;
                 *index += 1;
@@ -1115,12 +1114,11 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
 /// matching Subagent tool call.
 fn find_subtask_id_for_tool_call(task: &api::Task, tool_call_id: &str) -> Option<String> {
     task.messages.iter().find_map(|m| {
-        if let Some(Message::ToolCall(tc)) = &m.message {
-            if tc.tool_call_id == tool_call_id {
-                if let Some(Tool::Subagent(sub)) = &tc.tool {
-                    return Some(sub.task_id.clone());
-                }
-            }
+        if let Some(Message::ToolCall(tc)) = &m.message
+            && tc.tool_call_id == tool_call_id
+            && let Some(Tool::Subagent(sub)) = &tc.tool
+        {
+            return Some(sub.task_id.clone());
         }
         None
     })

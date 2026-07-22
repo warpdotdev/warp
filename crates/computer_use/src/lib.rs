@@ -8,11 +8,12 @@ mod imp;
 #[cfg(macos)]
 mod mock;
 mod noop;
+mod overlay;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,6 +23,7 @@ use async_trait::async_trait;
 // module definition.
 #[cfg(noop)]
 use noop as imp;
+pub use overlay::{ActionLogEntry, is_meaningful_action_group, overlay_labels_for};
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
@@ -102,6 +104,28 @@ pub fn background_supported() -> bool {
         noop::background_supported()
     } else {
         imp::background_supported()
+    }
+}
+
+/// Ends the background computer-use session owned by `owner` (the client conversation id),
+/// restoring the user's original keyboard focus.
+///
+/// On macOS a background session activates the target window and installs focus-suppression
+/// taps; this tears down only the windows owned by `owner`, deactivates them, and re-activates the
+/// app that was frontmost before the session, so the user's keystrokes return to where they were.
+/// Scoping by owner keeps concurrent background sessions (e.g. another conversation driving a
+/// different window) intact. Idempotent and a no-op when `owner` has no active session, and on
+/// platforms without background per-window control.
+///
+/// Call this whenever a computer-use session ends — normal completion, cancellation, or teardown.
+pub fn end_background_session(owner: &str) {
+    #[cfg(macos)]
+    {
+        imp::end_background_session(owner);
+    }
+    #[cfg(not(macos))]
+    {
+        let _ = owner;
     }
 }
 
@@ -222,6 +246,12 @@ pub trait Actor: Send + Sync + 'static {
     /// Returns the platform that this actor is running on, if known.
     fn platform(&self) -> Option<Platform>;
 
+    /// Records the owner of the background computer-use session this actor drives (the client
+    /// conversation id), so that when the session ends [`end_background_session`] tears down only
+    /// this owner's background-activation state and leaves concurrent sessions untouched. Set it
+    /// before performing actions. Default no-op; only the macOS actor tracks per-session ownership.
+    fn set_background_session_owner(&mut self, _owner: Option<String>) {}
+
     async fn perform_actions(
         &mut self,
         actions: &[TargetedAction],
@@ -231,10 +261,10 @@ pub trait Actor: Send + Sync + 'static {
 
 /// Returns a recorder that can capture a video of the computer-use display.
 ///
-/// A real recorder is only available on Linux (X11); every other platform, and
-/// any `test-util` build, gets a no-op recorder that reports recording as
-/// unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a mock
-/// recorder for UI testing (see `mock`).
+/// A real recorder is available on Linux (X11) and macOS (avfoundation); every
+/// other platform, and any `test-util` build, gets a no-op recorder that reports
+/// recording as unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a
+/// mock recorder for UI testing (see `mock`).
 pub fn create_recorder() -> Box<dyn Recorder> {
     #[cfg(macos)]
     if std::env::var_os("WARP_MOCK_RECORDER").is_some() {
@@ -244,6 +274,29 @@ pub fn create_recorder() -> Box<dyn Recorder> {
         Box::new(noop::Recorder::new())
     } else {
         Box::new(imp::Recorder::new())
+    }
+}
+
+/// Burns action labels into a recorded video, returning the path to the
+/// annotated file. The original file is left untouched; the caller owns cleanup
+/// of both. Real compositing (ffmpeg + libass) only runs on the Linux capture
+/// path; every other target returns `input` unchanged so callers can treat
+/// annotation as best-effort and upload the original on any failure.
+pub async fn burn_in_action_log(
+    input: &Path,
+    entries: &[ActionLogEntry],
+    dimensions: (u32, u32),
+    source_duration: Duration,
+    frame_rate: u32,
+) -> Result<PathBuf, RecordingError> {
+    #[cfg(all(linux, not(noop)))]
+    {
+        imp::burn_in_action_log(input, entries, dimensions, source_duration, frame_rate).await
+    }
+    #[cfg(not(all(linux, not(noop))))]
+    {
+        let _ = (entries, dimensions, source_duration, frame_rate);
+        Ok(input.to_path_buf())
     }
 }
 
@@ -273,6 +326,14 @@ pub struct RecordingConfig {
     pub max_duration: Duration,
     /// Maximum output size in bytes before the runtime auto-stops recording.
     pub max_size_bytes: u64,
+    /// How many times faster the output video should play back relative to real
+    /// time. For example, 4.0 makes a 4-minute recording play in 1 minute. A
+    /// value of 0.0 or 1.0 means real-time (no speedup). Applied via an ffmpeg
+    /// presentation-timestamp rescale filter on the output video.
+    pub playback_speed_multiplier: f32,
+    /// The surface to capture. `Screen` records the whole X display (legacy behavior);
+    /// `Window` records the targeted window after making it foreground-visible when supported.
+    pub target: Target,
 }
 
 impl Default for RecordingConfig {
@@ -283,6 +344,11 @@ impl Default for RecordingConfig {
             // NOTE: Bounds every capture so an unattended recording can't grow without bound (~10 min / 1 GiB).
             max_duration: Duration::from_secs(10 * 60),
             max_size_bytes: 1024 * 1024 * 1024,
+            // NOTE: 4x playback speed keeps demo videos short and watchable. A 4-minute
+            // recording plays in 1 minute. The server can override via the StartRecording
+            // tool call's playback_speed_multiplier field.
+            playback_speed_multiplier: 4.0,
+            target: Target::Screen,
         }
     }
 }
@@ -295,17 +361,17 @@ pub struct RecordingHandle {
     height: u32,
     exit_state: RecordingExitState,
     // The live capture process plus the fields used to finalize it are only
-    // populated by the real Linux recorder; the no-op recorders never construct
-    // a handle.
-    #[cfg(linux)]
+    // populated by the real Linux and macOS recorders; the no-op recorders never
+    // construct a handle.
+    #[cfg(any(linux, macos))]
     path: PathBuf,
-    #[cfg(linux)]
+    #[cfg(any(linux, macos))]
     started_at: instant::Instant,
-    #[cfg(linux)]
+    #[cfg(any(linux, macos))]
     process: Option<tokio::process::Child>,
     // The handle owns and deletes partial output until `Recorder::stop`
     // validates the file and transfers its path to `RecordingOutput`.
-    #[cfg(linux)]
+    #[cfg(any(linux, macos))]
     cleanup_on_drop: bool,
 }
 
@@ -330,7 +396,7 @@ impl RecordingHandle {
             return Some(kind);
         }
 
-        #[cfg(linux)]
+        #[cfg(any(linux, macos))]
         if let Some(process) = self.process.as_mut()
             && let Ok(Some(status)) = process.try_wait()
         {
@@ -356,20 +422,20 @@ impl RecordingHandle {
             width,
             height,
             exit_state: exit_state.clone(),
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             path: PathBuf::new(),
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             started_at: instant::Instant::now(),
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             process: None,
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             cleanup_on_drop: false,
         };
         (handle, exit_state)
     }
 }
 
-#[cfg(linux)]
+#[cfg(any(linux, macos))]
 impl Drop for RecordingHandle {
     fn drop(&mut self) {
         // A handle can be abandoned without reaching `Recorder::stop`, notably

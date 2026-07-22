@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use command::r#async::Command;
 use itertools::Itertools;
@@ -99,13 +99,13 @@ impl MSYS2CommandExecutor {
             // We exclude anything from the Windows filesystem here because it is very slow.
             // Compgen can take over a minute to run locally otherwise. We retrieve the
             // Windows executables by using a Windows-native shell.
-            if command.contains("compgen") {
-                if let Some(path) = environment_variables.get_mut("PATH") {
-                    *path = path
-                        .split(":")
-                        .filter(|path| !path.starts_with("/c/"))
-                        .join(":");
-                }
+            if command.contains("compgen")
+                && let Some(path) = environment_variables.get_mut("PATH")
+            {
+                *path = path
+                    .split(":")
+                    .filter(|path| !path.starts_with("/c/"))
+                    .join(":");
             }
             command_process.envs(environment_variables);
         }

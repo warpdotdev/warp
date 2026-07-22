@@ -7,10 +7,10 @@ use warp_managed_secrets::ManagedSecretValue;
 use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
 use crate::ai::mcp::parsing::resolve_json;
 use crate::ai::mcp::{
-    mcp_provider_from_file_path, CLIServer, JsonTemplate, MCPProvider, MCPServer, MCPServerExt,
+    CLIServer, JsonTemplate, MCPProvider, MCPServer, MCPServerExt,
     ParsedTemplatableMCPServerResult, ServerSentEvents, StaticEnvVar, StaticHeader,
     TemplatableMCPServer, TemplatableMCPServerInstallation, TemplateVariable, TransportType,
-    VariableType, VariableValue,
+    VariableType, VariableValue, mcp_provider_from_file_path,
 };
 
 #[test]
@@ -119,14 +119,18 @@ fn test_sse_server_with_headers() {
     if let TransportType::ServerSentEvents(parsed_sse) = &parsed_server.transport_type {
         assert_eq!(parsed_sse.url, "https://example.com/sse");
         assert_eq!(parsed_sse.headers.len(), 2);
-        assert!(parsed_sse
-            .headers
-            .iter()
-            .any(|h| h.name == "Authorization" && h.value == "Bearer token123"));
-        assert!(parsed_sse
-            .headers
-            .iter()
-            .any(|h| h.name == "X-Custom-Header" && h.value == "custom-value"));
+        assert!(
+            parsed_sse
+                .headers
+                .iter()
+                .any(|h| h.name == "Authorization" && h.value == "Bearer token123")
+        );
+        assert!(
+            parsed_sse
+                .headers
+                .iter()
+                .any(|h| h.name == "X-Custom-Header" && h.value == "custom-value")
+        );
     } else {
         panic!("Expected ServerSentEvents transport type");
     }

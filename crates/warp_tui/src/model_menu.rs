@@ -1,13 +1,13 @@
 //! Searchable TUI model picker state.
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
-use warp::tui_export::{query_model_picker_choices, LLMId, LLMPreferences, LLMPreferencesEvent};
+use warp::tui_export::{LLMId, LLMPreferences, LLMPreferencesEvent, query_model_picker_choices};
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::inline_menu::{
-    result_row_capacity, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
-    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
+    MAX_INLINE_MENU_ROWS, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
+    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
@@ -179,6 +179,7 @@ impl TuiModelMenuModel {
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
                     description: (!row.is_selectable).then(|| "disabled".to_owned()),
+                    state_suffix: None,
                     is_selectable: row.is_selectable,
                     style: TuiInlineMenuRowStyle::Default,
                 })

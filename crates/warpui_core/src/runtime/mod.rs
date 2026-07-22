@@ -22,7 +22,7 @@
 //! implementation.
 
 use std::cell::{Cell, RefCell};
-use std::io::{self, stdout, Stdout, Write};
+use std::io::{self, Stdout, Write, stdout};
 use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
@@ -31,27 +31,28 @@ use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as CrosstermEvent,
+    Event as CrosstermEvent, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
+use crate::r#async::executor::ForegroundTask;
+use crate::r#async::{Timer, block_on};
 use crate::elements::tui::{TuiEvent, TuiEventContext, TuiPoint, TuiRect, TuiSize};
 use crate::event::ModifiersState;
 use crate::presenter::tui::TuiPresenter;
-use crate::r#async::executor::ForegroundTask;
-use crate::r#async::{block_on, Timer};
 use crate::{App, AppContext, TuiView, ViewHandle, WindowId};
 
 mod event_conversion;
 mod renderer;
 mod terminal_probe;
 
-pub use event_conversion::crossterm_event_to_tui_event;
 use event_conversion::ClickTracker;
+pub use event_conversion::crossterm_event_to_tui_event;
 pub use renderer::TuiFrameRenderer;
 pub use terminal_probe::{
-    probe_terminal_colors, BackgroundLuminance, ProbedRgb, ProbedTerminalColors,
+    BackgroundLuminance, ProbedRgb, ProbedTerminalColors, probe_terminal_colors,
 };
 use warp_errors::report_error;
 
@@ -413,13 +414,28 @@ impl TuiTerminal for CrosstermTerminal {
 /// restoring the terminal on drop. Held by [`TuiRuntime::enter`] (so the
 /// `run_until` path restores when the runtime drops) or by a [`TuiDriverHandle`]
 /// (so a headless app restores deterministically when its session is dropped).
-pub struct TuiTerminalGuard(RawModeGuard<CrosstermModeControl>);
+pub struct TuiTerminalGuard {
+    _guard: RawModeGuard<CrosstermModeControl>,
+    keyboard_enhancement_supported: bool,
+}
 
 impl TuiTerminalGuard {
     /// Enables raw mode and switches to the alternate screen, restoring both
     /// when the guard is dropped.
     pub fn enter() -> io::Result<Self> {
-        Ok(Self(RawModeGuard::enter(CrosstermModeControl)?))
+        let keyboard_enhancement_supported =
+            matches!(terminal::supports_keyboard_enhancement(), Ok(true));
+        Ok(Self {
+            _guard: RawModeGuard::enter(CrosstermModeControl {
+                keyboard_enhancement_supported,
+            })?,
+            keyboard_enhancement_supported,
+        })
+    }
+
+    /// Whether the host terminal supports the Kitty keyboard-enhancement protocol.
+    pub fn keyboard_enhancement_supported(&self) -> bool {
+        self.keyboard_enhancement_supported
     }
 }
 
@@ -443,6 +459,13 @@ pub struct TuiDriverHandle {
     _repaint_timer: Rc<RefCell<Option<ForegroundTask>>>,
     _reader: thread::JoinHandle<()>,
     _guard: TuiTerminalGuard,
+}
+
+impl TuiDriverHandle {
+    /// Whether the host terminal supports the Kitty keyboard-enhancement protocol.
+    pub fn keyboard_enhancement_supported(&self) -> bool {
+        self._guard.keyboard_enhancement_supported()
+    }
 }
 
 /// Starts a headless TUI session that draws `root_view` and feeds terminal input
@@ -613,18 +636,44 @@ trait TerminalModeControl {
     fn leave(&mut self);
 }
 
-struct CrosstermModeControl;
-fn enter_terminal_screen(out: &mut impl Write) -> io::Result<()> {
+struct CrosstermModeControl {
+    keyboard_enhancement_supported: bool,
+}
+
+fn enter_terminal_screen(
+    out: &mut impl Write,
+    keyboard_enhancement_supported: bool,
+) -> io::Result<()> {
     execute!(
         out,
         EnterAlternateScreen,
         EnableMouseCapture,
         EnableBracketedPaste,
         Hide
-    )
+    )?;
+
+    // Opt into the Kitty keyboard protocol so protocol-aware terminals (Ghostty,
+    // kitty, foot, WezTerm) report modified keys distinctly. This only affects
+    // the TUI's own host terminal — the GUI never enters raw mode / the alt
+    // screen and never runs this. The capability query happens before the input
+    // reader starts because crossterm's query cannot run concurrently with
+    // event polling.
+    if keyboard_enhancement_supported {
+        let _ = execute!(
+            out,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
+    Ok(())
 }
 
-fn leave_terminal_screen(out: &mut impl Write) -> io::Result<()> {
+fn leave_terminal_screen(
+    out: &mut impl Write,
+    keyboard_enhancement_supported: bool,
+) -> io::Result<()> {
+    if keyboard_enhancement_supported {
+        let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
     execute!(
         out,
         Show,
@@ -638,8 +687,8 @@ impl TerminalModeControl for CrosstermModeControl {
     fn enter(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut out = stdout();
-        if let Err(error) = enter_terminal_screen(&mut out) {
-            let _ = leave_terminal_screen(&mut out);
+        if let Err(error) = enter_terminal_screen(&mut out, self.keyboard_enhancement_supported) {
+            let _ = leave_terminal_screen(&mut out, self.keyboard_enhancement_supported);
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
@@ -648,7 +697,7 @@ impl TerminalModeControl for CrosstermModeControl {
 
     fn leave(&mut self) {
         let mut out = stdout();
-        let _ = leave_terminal_screen(&mut out);
+        let _ = leave_terminal_screen(&mut out, self.keyboard_enhancement_supported);
         let _ = terminal::disable_raw_mode();
     }
 }

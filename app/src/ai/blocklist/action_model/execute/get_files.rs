@@ -21,8 +21,8 @@ use crate::{
 };
 
 use super::{
-    read_local_file_context, ActionExecution, AnyActionExecution, ExecuteActionInput,
-    PreprocessActionInput,
+    describe_failed_files, read_local_file_context, ActionExecution, AnyActionExecution,
+    ExecuteActionInput, PreprocessActionInput,
 };
 
 pub struct GetFilesExecutor {
@@ -313,15 +313,14 @@ impl GetFilesExecutor {
                 let result =
                     read_local_file_context(&files, current_working_directory, shell, None, None)
                         .await?;
-                if result.missing_files.is_empty() {
+                if result.failed_files.is_empty() {
                     Ok(GetFilesResult::Success {
                         files: result.file_contexts,
                     })
                 } else {
-                    let missing_files = result.missing_files.join(", ");
+                    let failed_files = describe_failed_files(&result.failed_files);
                     Ok(GetFilesResult::Error(format!(
-                        "These files do not exist: {}",
-                        missing_files
+                        "Failed to read files: {failed_files}"
                     )))
                 }
             }),

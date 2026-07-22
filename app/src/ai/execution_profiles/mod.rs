@@ -1,7 +1,7 @@
 pub use cloud_object_models::{
     AIExecutionProfile, ActionPermission, AskUserQuestionPermission, CloudAIExecutionProfile,
-    CloudAIExecutionProfileModel, ComputerUsePermission, RunAgentsPermission, WriteToPtyPermission,
-    PROFILE_NAME_MAX_LENGTH,
+    CloudAIExecutionProfileModel, ComputerUsePermission, PROFILE_NAME_MAX_LENGTH,
+    RunAgentsPermission, WriteToPtyPermission,
 };
 use markdown_parser::{FormattedTextFragment, FormattedTextInline};
 use warp_core::features::FeatureFlag;
@@ -29,9 +29,11 @@ pub(crate) fn long_context_pricing_warning_title() -> FormattedTextInline {
     ]
 }
 
+mod config;
 pub mod editor;
 pub mod model_menu_items;
 pub mod profiles;
+pub use config::{ExecutionProfileId, ExecutionProfilesConfig};
 
 /// Result of resolving the cloud agent computer use setting.
 /// Contains both the effective value and whether it's forced by organization policy.

@@ -9,12 +9,13 @@ use warp::tui_export::{
     LongRunningCommandControlState, TaskId, TerminalModel, TranscriptScope, UserTakeOverReason,
 };
 use warpui::EntityIdMap;
-use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewportedElement};
 use warpui_core::App;
+use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewportedElement};
 
 use super::{
-    hide_agent_requested_command_from_top_level, terminal_use_conversation_to_resume,
-    terminal_use_interrupt_action, user_controlled_line_bytes, TerminalUseInterruptAction,
+    TerminalUseInterruptAction, TuiInputTarget, hide_agent_requested_command_from_top_level,
+    inline_process_owns_input, terminal_use_conversation_to_resume, terminal_use_interrupt_action,
+    tui_input_target, tui_input_target_for_state,
 };
 use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
 
@@ -37,11 +38,85 @@ fn model_with_finished_block(command: &str) -> (TerminalModel, BlockId) {
 }
 
 #[test]
-fn user_controlled_line_has_no_agent_cursor_movement_prefix() {
-    #[cfg(target_os = "windows")]
-    assert_eq!(user_controlled_line_bytes("hello"), b"hello\r");
-    #[cfg(not(target_os = "windows"))]
-    assert_eq!(user_controlled_line_bytes("hello"), b"hello\n");
+fn ordinary_long_running_command_owns_inline_input() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("cat", "");
+
+    assert!(inline_process_owns_input(&model));
+}
+#[test]
+fn shell_startup_routes_input_by_bootstrap_stage() {
+    let mut model = TerminalModel::mock(None, None);
+    assert_eq!(tui_input_target(&model), TuiInputTarget::AgentEditor);
+
+    model.block_list_mut().reinit_shell();
+    assert_eq!(tui_input_target(&model), TuiInputTarget::Disabled);
+    assert_eq!(
+        tui_input_target_for_state(false, true, false, false, false),
+        TuiInputTarget::Disabled,
+        "silent startup-script execution should keep the bootstrap editor visible",
+    );
+    assert_eq!(
+        tui_input_target_for_state(false, true, true, false, false),
+        TuiInputTarget::Pty,
+        "visible startup-script output should accept interactive PTY input",
+    );
+}
+
+#[test]
+fn submit_policy_blocks_bootstrap_but_allows_ready_prompt() {
+    assert!(
+        !tui_input_target_for_state(false, false, false, false, false).agent_editor_owns_input(),
+        "bootstrap submission must remain disabled"
+    );
+    assert!(
+        tui_input_target_for_state(false, false, false, true, false).agent_editor_owns_input(),
+        "the normal prompt must accept submission"
+    );
+}
+#[test]
+fn agent_command_owns_input_only_after_user_takeover() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("cargo build", "Compiling");
+    let conversation_id = AIConversationId::new();
+    let task_id = TaskId::new("terminal-use-task".to_owned());
+    {
+        let block = model.block_list_mut().active_block_mut();
+        block.set_agent_interaction_mode_for_requested_command(
+            AIAgentActionId::from("requested-command".to_owned()),
+            Some(task_id.clone()),
+            conversation_id,
+        );
+    }
+    assert!(!inline_process_owns_input(&model));
+
+    {
+        let block = model.block_list_mut().active_block_mut();
+        block
+            .set_agent_interaction_mode_for_agent_monitored_command(&task_id, conversation_id)
+            .expect("command should become agent monitored");
+    }
+    assert!(!inline_process_owns_input(&model));
+
+    {
+        let block = model.block_list_mut().active_block_mut();
+        block
+            .take_over_control_for_user(UserTakeOverReason::Manual)
+            .expect("user takeover should succeed");
+    }
+    assert!(inline_process_owns_input(&model));
+}
+
+#[test]
+fn tagged_in_agent_keeps_editor_input_visible() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("cat", "");
+    model
+        .block_list_mut()
+        .active_block_mut()
+        .set_is_agent_tagged_in(true);
+
+    assert!(!inline_process_owns_input(&model));
 }
 
 fn mark_visible_agent_requested_command(
@@ -195,8 +270,8 @@ fn terminal_use_interrupt_follows_takeover_then_process_interrupt_policy() {
         should_hide_responses: false,
     };
     assert_eq!(
-        terminal_use_interrupt_action(&agent),
-        TerminalUseInterruptAction::TakeControl
+        terminal_use_interrupt_action(Some(&agent), true),
+        Some(TerminalUseInterruptAction::TakeControl)
     );
 
     let stopped = LongRunningCommandControlState::User {
@@ -205,16 +280,16 @@ fn terminal_use_interrupt_follows_takeover_then_process_interrupt_policy() {
         },
     };
     assert_eq!(
-        terminal_use_interrupt_action(&stopped),
-        TerminalUseInterruptAction::InterruptCommand
+        terminal_use_interrupt_action(Some(&stopped), true),
+        Some(TerminalUseInterruptAction::InterruptCommand)
     );
 
     let manual = LongRunningCommandControlState::User {
         reason: UserTakeOverReason::Manual,
     };
     assert_eq!(
-        terminal_use_interrupt_action(&manual),
-        TerminalUseInterruptAction::InterruptCommand
+        terminal_use_interrupt_action(Some(&manual), true),
+        Some(TerminalUseInterruptAction::InterruptCommand)
     );
 
     let transferred = LongRunningCommandControlState::User {
@@ -223,9 +298,15 @@ fn terminal_use_interrupt_follows_takeover_then_process_interrupt_policy() {
         },
     };
     assert_eq!(
-        terminal_use_interrupt_action(&transferred),
-        TerminalUseInterruptAction::InterruptCommand
+        terminal_use_interrupt_action(Some(&transferred), true),
+        Some(TerminalUseInterruptAction::InterruptCommand)
     );
+
+    assert_eq!(
+        terminal_use_interrupt_action(None, true),
+        Some(TerminalUseInterruptAction::InterruptCommand)
+    );
+    assert_eq!(terminal_use_interrupt_action(None, false), None);
 }
 
 #[test]

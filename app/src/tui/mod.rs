@@ -5,12 +5,18 @@
 //! the TUI observes, mounts the TUI immediately (so it renders right away), and
 //! — when the user isn't logged in yet — drives the device-authorization login
 //! flow, flipping the model to [`TuiLoginPhase::LoggedIn`] when it completes.
+mod mcp;
 
+pub use mcp::{
+    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
+    TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
+};
 use warpui::{AppContext, Entity, SingletonEntity};
 
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
-use crate::auth::AuthStateProvider;
 use crate::TuiMountFn;
+use crate::ai::mcp::FileBasedMCPManager;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
+use crate::auth::{self, AuthStateProvider};
 
 /// Login state of the headless TUI, observed by the `warp_tui` root view to
 /// decide whether to show the login placeholder or the input UI.
@@ -28,6 +34,14 @@ pub enum TuiLoginPhase {
     LoggedIn,
 }
 
+/// Events emitted by [`TuiLoginModel`].
+pub enum TuiLoginEvent {
+    /// Authentication completed and the TUI can create its terminal session.
+    LoggedIn,
+    /// The current user logged out and the TUI should return to authentication.
+    LoggedOut,
+}
+
 /// Singleton holding the TUI's [`TuiLoginPhase`]. Updated by [`init`]'s auth
 /// flow and read by the `warp_tui` root view.
 pub struct TuiLoginModel {
@@ -42,7 +56,7 @@ impl TuiLoginModel {
 }
 
 impl Entity for TuiLoginModel {
-    type Event = ();
+    type Event = TuiLoginEvent;
 }
 
 impl SingletonEntity for TuiLoginModel {}
@@ -65,18 +79,10 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
     ctx.add_singleton_model(move |_| TuiLoginModel {
         phase: initial_phase,
     });
+    ctx.add_singleton_model(TuiMcpManager::new);
 
-    // Mount the TUI now so it renders immediately; the root view shows the
-    // login placeholder until the model flips to `LoggedIn`.
-    mount(ctx);
-
-    if logged_in {
-        return;
-    }
-
-    // Reuses the same device-authorization flow as `oz login` (see
-    // `app/src/ai/agent_sdk/admin.rs`). The browser handles login; control
-    // returns here once the device code is approved.
+    // Keep the auth subscription alive for the full process lifetime so a
+    // logged-in TUI can complete device authorization again after logout.
     ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| match event {
         AuthManagerEvent::ReceivedDeviceAuthorizationCode {
             verification_url,
@@ -96,7 +102,10 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
                 },
             );
         }
-        AuthManagerEvent::AuthComplete => set_login_phase(ctx, TuiLoginPhase::LoggedIn),
+        AuthManagerEvent::AuthComplete => {
+            set_login_phase(ctx, TuiLoginPhase::LoggedIn);
+            activate_global_mcp_servers(ctx);
+        }
         AuthManagerEvent::AuthFailed(err) => set_login_phase(
             ctx,
             TuiLoginPhase::Failed {
@@ -105,17 +114,61 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
         ),
         _ => {}
     });
+    // Mount the TUI now so it renders immediately; the root view shows the
+    // login placeholder until the model flips to `LoggedIn`.
+    mount(ctx);
 
+    if logged_in {
+        activate_global_mcp_servers(ctx);
+    } else {
+        authorize_device(ctx);
+    }
+}
+
+fn authorize_device(ctx: &mut AppContext) {
     AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
         auth_manager.authorize_device(ctx);
     });
 }
 
-/// Updates the shared [`TuiLoginModel`] phase and notifies observers, so the
-/// root view re-renders (and the TUI driver repaints).
-fn set_login_phase(ctx: &mut AppContext, phase: TuiLoginPhase) {
-    TuiLoginModel::handle(ctx).update(ctx, |model, ctx| {
-        model.phase = phase;
-        ctx.notify();
+fn activate_global_mcp_servers(ctx: &mut AppContext) {
+    FileBasedMCPManager::handle(ctx).update(ctx, |manager, ctx| {
+        manager.activate_global_warp_servers(ctx);
     });
 }
+
+/// Logs out the current TUI user and starts a fresh device-authorization flow.
+pub fn log_out_tui(ctx: &mut AppContext) {
+    auth::log_out(ctx);
+    set_logged_out_phase(ctx);
+    authorize_device(ctx);
+}
+
+fn set_logged_out_phase(ctx: &mut AppContext) {
+    TuiLoginModel::handle(ctx).update(ctx, |model, ctx| {
+        model.phase = TuiLoginPhase::AwaitingLogin {
+            verification_uri: None,
+            user_code: None,
+        };
+        ctx.notify();
+        ctx.emit(TuiLoginEvent::LoggedOut);
+    });
+}
+
+/// Updates the shared [`TuiLoginModel`] phase and notifies observers, so the
+/// root view re-renders (and the TUI driver repaints). Emits
+/// [`TuiLoginEvent::LoggedIn`] when authentication completes.
+fn set_login_phase(ctx: &mut AppContext, phase: TuiLoginPhase) {
+    TuiLoginModel::handle(ctx).update(ctx, |model, ctx| {
+        let logged_in = matches!(phase, TuiLoginPhase::LoggedIn);
+        model.phase = phase;
+        ctx.notify();
+        if logged_in {
+            ctx.emit(TuiLoginEvent::LoggedIn);
+        }
+    });
+}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

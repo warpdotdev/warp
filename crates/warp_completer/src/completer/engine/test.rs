@@ -3,13 +3,13 @@ use string_offset::ByteOffset;
 use warp_util::path::EscapeChar;
 
 use super::LocationType;
-use crate::completer::testing::FakeCompletionContext;
 use crate::completer::CompletionContext;
+use crate::completer::testing::FakeCompletionContext;
 use crate::meta::{Span, SpannedItem};
 use crate::parsers::simple::{command_at_cursor_position, parse_for_completions};
-use crate::parsers::{classify_command, ParsedToken};
-use crate::signatures::testing::{create_test_command_registry, test_signature};
+use crate::parsers::{ParsedToken, classify_command};
 use crate::signatures::CommandRegistry;
+use crate::signatures::testing::{create_test_command_registry, test_signature};
 
 fn location(line: &str, registry: CommandRegistry, pos: usize) -> Vec<LocationType> {
     let ctx = FakeCompletionContext::new(registry);

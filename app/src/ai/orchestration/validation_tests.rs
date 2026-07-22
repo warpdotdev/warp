@@ -24,7 +24,8 @@ fn state(
     mode: RunAgentsExecutionMode,
     auth: AuthSecretSelection,
 ) -> OrchestrationConfigState {
-    let mut state = OrchestrationConfigState::from_run_agents_fields("auto", harness, &mode);
+    let mut state =
+        OrchestrationConfigState::from_run_agents_fields(Some("auto"), Some(harness), &mode);
     state.auth_secret_selection = auth;
     state
 }
@@ -34,6 +35,7 @@ fn cloud() -> RunAgentsExecutionMode {
         environment_id: "env-1".to_string(),
         worker_host: "warp".to_string(),
         computer_use_enabled: false,
+        runner_id: String::new(),
     }
 }
 

@@ -1,12 +1,19 @@
 use std::sync::Arc;
 
+use ai::agent::action_result::{
+    RunAgentsAgentOutcome, RunAgentsAgentOutcomeKind, RunAgentsLaunchedExecutionMode,
+    RunAgentsResult,
+};
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, BlockId, RequestCommandOutputResult, TaskId,
 };
 use warp_core::command::ExitCode;
 
-use super::{tool_call_label, CommandBlockState, ResolvedCommandBlock};
+use super::{
+    CommandBlockState, ResolvedCommandBlock, ToolCallDisplayState, launched_agents_label,
+    tool_call_display_state, tool_call_label,
+};
 
 /// Builds a `Finished` status wrapping the given result.
 fn finished(result: AIAgentActionResultType) -> AIActionStatus {
@@ -22,6 +29,15 @@ fn block(state: CommandBlockState) -> ResolvedCommandBlock {
     ResolvedCommandBlock {
         command: None,
         state,
+    }
+}
+
+fn failed_agent(name: &str) -> RunAgentsAgentOutcome {
+    RunAgentsAgentOutcome {
+        name: name.to_owned(),
+        kind: RunAgentsAgentOutcomeKind::Failed {
+            error: "launch failed".to_owned(),
+        },
     }
 }
 
@@ -41,6 +57,45 @@ fn command_action(command: &str) -> AIAgentAction {
         },
         requires_result: true,
     }
+}
+
+#[test]
+fn tool_call_statuses_map_to_tool_call_display_states() {
+    assert_eq!(
+        tool_call_display_state(None, true, None),
+        ToolCallDisplayState::Constructing
+    );
+    assert_eq!(
+        tool_call_display_state(None, false, None),
+        ToolCallDisplayState::Pending
+    );
+    assert_eq!(
+        tool_call_display_state(Some(&AIActionStatus::Blocked), false, None),
+        ToolCallDisplayState::Blocked
+    );
+    assert_eq!(
+        tool_call_display_state(Some(&AIActionStatus::RunningAsync), false, None),
+        ToolCallDisplayState::Running
+    );
+}
+
+#[test]
+fn all_failed_run_agents_uses_failure_glyph() {
+    let agents = vec![failed_agent("first"), failed_agent("second")];
+    assert_eq!(launched_agents_label(&agents), "Failed to spawn 2 agents");
+    let status = finished(AIAgentActionResultType::RunAgents(
+        RunAgentsResult::Launched {
+            model_id: "auto".to_owned(),
+            harness_type: "oz".to_owned(),
+            execution_mode: RunAgentsLaunchedExecutionMode::Local,
+            agents,
+        },
+    ));
+
+    let state = tool_call_display_state(Some(&status), false, None);
+
+    assert_eq!(state, ToolCallDisplayState::Failed);
+    assert_eq!(state.glyph(), "×");
 }
 
 /// One end-to-end pass over a tool call's lifecycle: the label text must

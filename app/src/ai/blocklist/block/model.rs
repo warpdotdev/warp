@@ -223,10 +223,10 @@ pub mod testing {
     use super::{AIBlockModel, AIBlockOutputStatus, OutputStatusUpdateCallback};
     use crate::ai::agent::conversation::AIConversationId;
     use crate::ai::agent::{AIAgentInput, AIAgentOutput, ServerOutputId, Shared};
+    use crate::ai::blocklist::AIBlock;
     use crate::ai::blocklist::model::{
         AIRequestType, PassiveRequestType, PassiveSuggestionTriggerType,
     };
-    use crate::ai::blocklist::AIBlock;
     use crate::ai::llms::LLMId;
 
     pub struct FakeAIBlockModel {

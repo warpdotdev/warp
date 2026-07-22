@@ -9,12 +9,12 @@ use std::cmp::{max, min};
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::selectable::{row_glyphs, row_text, TuiSelectionHandle};
+use super::selectable::{TuiSelectionHandle, row_glyphs, row_text};
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect,
     TuiRowResize, TuiScreenPoint, TuiScreenPosition, TuiScrollableElement, TuiSelectableElement,
-    TuiSelectionSpan, TuiSize,
+    TuiSelectionSpan, TuiSize, TuiStyle,
 };
 use crate::AppContext;
 
@@ -199,7 +199,7 @@ where
             }
         }
         for (origin, size) in selection_rects {
-            toggle_selection_reverse(surface, origin, size);
+            surface.set_style(origin, size, self.selection_style);
         }
     }
 
@@ -256,6 +256,25 @@ pub trait TuiViewportedElement {
         _available_width: u16,
         _app: &AppContext,
     ) -> Option<TuiViewportContent> {
+        None
+    }
+
+    /// Optional *logical* text for a resolved selection span.
+    ///
+    /// Returning `Some` lets copy source text from the content's logical model
+    /// instead of the rendered cell grid, so soft-wrapped visual rows are
+    /// rejoined into their original line (no newline inserted at a wrap point,
+    /// no rendered wrap/quote indentation captured) and the full selected range
+    /// is returned even when it exceeds what the viewport rendered. Returning
+    /// `None` (the default) makes the caller fall back to per-row grid-text
+    /// extraction, which is the right behavior for content that has no clean
+    /// logical form (diagrams, images, tables).
+    fn selection_logical_text(
+        &self,
+        _selection: TuiSelectionSpan,
+        _available_width: u16,
+        _app: &AppContext,
+    ) -> Option<String> {
         None
     }
 
@@ -382,26 +401,6 @@ fn render_viewport_content(
     buffer
 }
 
-/// Toggles reverse video over selected absolute bounds.
-fn toggle_selection_reverse(
-    surface: &mut TuiPaintSurface<'_>,
-    origin: TuiScreenPosition,
-    size: TuiSize,
-) {
-    for row in 0..size.height {
-        for col in 0..size.width {
-            let Some(cell) = surface.cell_mut(origin.offset(i32::from(col), i32::from(row))) else {
-                continue;
-            };
-            if cell.modifier.contains(super::Modifier::REVERSED) {
-                cell.modifier.remove(super::Modifier::REVERSED);
-            } else {
-                cell.modifier.insert(super::Modifier::REVERSED);
-            }
-        }
-    }
-}
-
 /// A variable-height viewport that delegates content slicing to its source.
 pub struct TuiViewportedList<Content>
 where
@@ -414,6 +413,7 @@ where
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
     vertical_alignment: TuiViewportVerticalAlignment,
+    selection_style: TuiStyle,
     selection_snapshot: RefCell<Option<(TuiResolvedViewport, TuiBuffer)>>,
 }
 
@@ -422,7 +422,7 @@ where
     Content: TuiViewportedElement,
 {
     /// Creates a generalized viewport over `content`.
-    pub fn new(state: TuiViewportedListState, content: Content) -> Self {
+    pub fn new(state: TuiViewportedListState, content: Content, selection_style: TuiStyle) -> Self {
         Self {
             state,
             content,
@@ -431,6 +431,7 @@ where
             size: None,
             origin: None,
             vertical_alignment: TuiViewportVerticalAlignment::Top,
+            selection_style,
             selection_snapshot: RefCell::new(None),
         }
     }
@@ -698,6 +699,16 @@ where
         };
         if selection.start.row >= end_row_exclusive {
             return None;
+        }
+        // Prefer the content's logical text so soft-wrapped rows rejoin without
+        // inserted newlines or rendered wrap indentation, and the full selected
+        // range is captured. Content that has no logical form returns `None`,
+        // and we fall back to per-row grid extraction below.
+        if let Some(logical) = self
+            .content
+            .selection_logical_text(selection, size.width, app)
+        {
+            return Some(logical);
         }
         let mut lines = Vec::new();
         let mut chunk_start = selection.start.row;

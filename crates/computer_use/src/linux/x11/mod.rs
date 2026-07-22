@@ -10,7 +10,7 @@ mod keyboard;
 mod mouse;
 mod screenshot;
 mod seat;
-mod windows;
+pub(crate) mod windows;
 
 use std::time::Duration;
 

@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use anyhow::Context;
-pub(crate) use driver::harness::{task_env_vars, validate_cli_installed, ClaudeHarness};
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
+pub(crate) use driver::harness::{ClaudeHarness, task_env_vars, validate_cli_installed};
 use telemetry::CliTelemetryEvent;
 use tracing::Instrument as _;
 use warp_cli::agent::{
@@ -27,6 +27,7 @@ use warp_cli::mcp::MCPCommand;
 use warp_cli::memory_store::{MemoryCommand, MemoryStoreCommand};
 use warp_cli::model::ModelCommand;
 use warp_cli::provider::ProviderCommand;
+use warp_cli::runner::RunnerCommand;
 use warp_cli::schedule::ScheduleSubcommand;
 use warp_cli::secret::SecretCommand;
 use warp_cli::share::ShareRequest;
@@ -39,38 +40,39 @@ use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
 use warp_logging::log_file_path;
 use warp_managed_secrets::ManagedSecretManager;
+use warp_server_client::iap::{IapManager, IapManagerEvent};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelSpawner, SingletonEntity};
 
-use crate::ai::agent::api::convert_conversation::{
-    convert_conversation_data_to_ai_conversation, RestorationMode,
-};
 use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::api::convert_conversation::{
+    RestorationMode, convert_conversation_data_to_ai_conversation,
+};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_sdk::driver::harness::{harness_kind, HarnessKind};
+use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
-use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::llms::LLMId;
 use crate::ai::skills::{
-    clone_repo_for_skill, resolve_skill_spec, ResolveSkillError, ResolvedSkill,
+    ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
 };
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::CloudModel;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::send_telemetry_sync_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
-use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
 
@@ -100,6 +102,7 @@ pub mod output;
 mod profiles;
 mod provider;
 pub(crate) mod retry;
+mod runner;
 mod schedule;
 mod secret;
 pub(crate) mod setup_observability;
@@ -211,6 +214,12 @@ fn dispatch_command(
                 return Err(anyhow::anyhow!("invalid value 'api-key'"));
             }
             api_key::run(ctx, global_options, api_key_cmd)
+        }
+        CliCommand::Runner(runner_cmd) => {
+            if !FeatureFlag::CloudAgentRunners.is_enabled() {
+                return Err(anyhow::anyhow!("invalid value 'runner'"));
+            }
+            runner::run(ctx, global_options, runner_cmd)
         }
     }
 }
@@ -679,8 +688,8 @@ impl AgentDriverRunner {
             // can currently be passed together (the worker server-side appends `--conversation`
             // alongside `--task-id` for Slack/Linear followups); when both are set, the explicit
             // `--conversation` value wins via the merge below.
-            if !has_task_id {
-                if let Some(conversation_id) = args.conversation.as_deref() {
+            if !has_task_id
+                && let Some(conversation_id) = args.conversation.as_deref() {
                     common::fetch_and_validate_conversation_harness(
                         server_api.clone(),
                         conversation_id,
@@ -688,7 +697,6 @@ impl AgentDriverRunner {
                     )
                     .await?;
                 }
-            }
             let resume_conversation_id = args.conversation.clone();
 
             // Build driver options and task, handling task creation or existing task setup.
@@ -798,10 +806,10 @@ impl AgentDriverRunner {
         }
         .await;
 
-        if let Err(ref err) = result {
-            if let Some(task_id) = task_id {
-                driver::report_driver_error(task_id, err, &server_api).await;
-            }
+        if let Err(ref err) = result
+            && let Some(task_id) = task_id
+        {
+            driver::report_driver_error(task_id, err, &server_api).await;
         }
         result
     }
@@ -1549,6 +1557,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::HarnessSupport(_) => true,
         CliCommand::Artifact(_) => true,
         CliCommand::ApiKey(_) => true,
+        CliCommand::Runner(_) => true,
     }
 }
 
@@ -1576,6 +1585,52 @@ fn launch_command(
             "You are not logged in - please log in with `{cli_name} login` to continue."
         ));
     }
+
+    // On staging the warp-server is fronted by IAP, so establish an IAP token
+    // before *any* warp-server request.
+    let iap = IapManager::handle(ctx);
+    if !iap.as_ref(ctx).is_enabled() || iap.as_ref(ctx).has_valid_token() {
+        refresh_auth_and_dispatch(ctx, command, global_options);
+        return Ok(());
+    }
+
+    let mut handled = false;
+    ctx.subscribe_to_model(&iap, move |_, event, ctx| {
+        if handled {
+            return;
+        }
+        match event {
+            IapManagerEvent::StateChanged
+                if IapManager::handle(ctx).as_ref(ctx).has_valid_token() =>
+            {
+                handled = true;
+                refresh_auth_and_dispatch(ctx, command.clone(), global_options.clone());
+            }
+            IapManagerEvent::AccessUnavailable => {
+                handled = true;
+                report_fatal_error(
+                    anyhow::anyhow!("Timed out establishing IAP access to warp-server."),
+                    ctx,
+                );
+            }
+            _ => {}
+        }
+    });
+
+    iap.update(ctx, |manager, ctx| manager.ensure_access(ctx));
+
+    Ok(())
+}
+
+/// Subscribes to auth events, triggers a user refresh, and dispatches the
+/// command once auth completes. Assumes IAP access (if applicable) is already
+/// established, since the auth refresh is itself an IAP-gated warp-server request.
+fn refresh_auth_and_dispatch(
+    ctx: &mut AppContext,
+    command: CliCommand,
+    global_options: GlobalOptions,
+) {
+    let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
     // User is logged in — subscribe to auth events, trigger a refresh, and wait
     // for the result before running the command.
@@ -1613,8 +1668,6 @@ fn launch_command(
     AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
         auth_manager.refresh_user(ctx);
     });
-
-    Ok(())
 }
 
 /// Check if we're running within Warp (for example, if this is an invocation of the Warp CLI
@@ -1797,6 +1850,12 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             ApiKeyCommand::List(_) => CliTelemetryEvent::ApiKeyList,
             ApiKeyCommand::Create(_) => CliTelemetryEvent::ApiKeyCreate,
             ApiKeyCommand::Expire(_) => CliTelemetryEvent::ApiKeyExpire,
+        },
+        CliCommand::Runner(runner_cmd) => match runner_cmd {
+            RunnerCommand::List(_) => CliTelemetryEvent::RunnerList,
+            RunnerCommand::Create(_) => CliTelemetryEvent::RunnerCreate,
+            RunnerCommand::Update(_) => CliTelemetryEvent::RunnerUpdate,
+            RunnerCommand::Delete(_) => CliTelemetryEvent::RunnerDelete,
         },
     }
 }

@@ -96,25 +96,70 @@ async fn finalize_recording(
     uploader: FileArtifactUploader,
     server_conversation_token: Option<crate::ai::agent::api::ServerConversationToken>,
 ) -> StopRecordingResult {
-    // Conversation cancellation discards the recording instead of publishing
-    // it. Dropping the handle kill-on-drops the ffmpeg process and removes the
-    // partial output, so there is nothing to finalize or upload.
+    // Both early exits discard the recording without uploading. They share the
+    // same mechanism — dropping the whole `ActiveRecording` struct, which
+    // kill-on-drops ffmpeg and removes the partial capture — but return
+    // different results to distinguish a user-initiated cancellation from a
+    // genuine finalization error. The cancellation check intentionally comes
+    // first so its `Cancelled` contract holds even when no action group was
+    // committed.
     if !should_upload {
         drop(recording);
         return StopRecordingResult::Cancelled;
     }
+    if recording.actions.is_empty() {
+        drop(recording);
+        return StopRecordingResult::Error(
+            "Recording contained no committed actions; no video artifact was published."
+                .to_string(),
+        );
+    }
+    let ActiveRecording {
+        handle,
+        actions,
+        frame_rate,
+        ..
+    } = recording;
     let recorder = computer_use::create_recorder();
-    let output = match recorder.stop(recording.handle).await {
+    let output = match recorder.stop(handle).await {
         Ok(output) => output,
         Err(error) => return StopRecordingResult::Error(error.to_string()),
     };
 
     let local_path = output.path.clone();
+
+    // Apply the post-stop smart cut (keep real action windows at 1x, drop
+    // blocked/thinking gaps) and burn the remapped overlay pills into the video
+    // before upload. Best-effort: on any failure the original 1x capture is
+    // uploaded unannotated (a no-cut video beats no video). The cut/overlay
+    // file, when produced, is a sibling of the mp4.
+    let mut upload_path = local_path.clone();
+    let mut overlay_path: Option<std::path::PathBuf> = None;
+    match computer_use::burn_in_action_log(
+        &local_path,
+        &actions,
+        (output.width, output.height),
+        output.duration,
+        frame_rate,
+    )
+    .await
+    {
+        Ok(path) if path != local_path => {
+            overlay_path = Some(path.clone());
+            upload_path = path;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("Recording cut/overlay burn-in failed; uploading original: {error}");
+        }
+    }
+
     let request = FileArtifactUploadRequest {
-        path: output.path,
+        path: upload_path,
         run_id: None,
         conversation_id: server_conversation_token,
-        description: None,
+        title: recording.summary.clone(),
+        description: recording.description.clone(),
     };
     let upload_result = async {
         let association = uploader.resolve_upload_association(&request).await?;
@@ -125,6 +170,9 @@ async fn finalize_recording(
     // uploads or retaining their files requires a separate persistence policy.
     let _ = std::fs::remove_file(&local_path);
     let _ = std::fs::remove_file(local_path.with_extension("log"));
+    if let Some(overlay_path) = overlay_path.as_ref() {
+        let _ = std::fs::remove_file(overlay_path);
+    }
 
     match upload_result {
         Ok(upload) => StopRecordingResult::Success(RecordingStopped {
@@ -149,7 +197,7 @@ fn build_finalize_future(
     ctx: &AppContext,
 ) -> (
     String,
-    impl Future<Output = StopRecordingResult> + Send + 'static,
+    impl Future<Output = StopRecordingResult> + Send + 'static + use<>,
 ) {
     let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
         .conversation(&recording.conversation_id)
@@ -201,7 +249,7 @@ fn start_or_join_finalization<T: Entity>(
             result_receiver,
         } => {
             RecordingController::handle(ctx).update(ctx, |_controller, ctx| {
-                spawn_finalize(recording, reason, should_upload, ctx);
+                spawn_finalize(*recording, reason, should_upload, ctx);
             });
             Some(RecordingFinalization::Pending(result_receiver))
         }
@@ -278,7 +326,7 @@ pub(crate) fn spawn_recording_exit_watcher(
                         }
                         computer_use::RecordingExitKind::Crashed => FinalizeReason::FfmpegExited,
                     };
-                    spawn_finalize(recording, reason, true, ctx);
+                    spawn_finalize(*recording, reason, true, ctx);
                 }
             }
             None if controller.active_recording_id() == Some(recording_id.as_str()) => {

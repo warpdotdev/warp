@@ -18,17 +18,17 @@ use warpui::r#async::SpawnedFutureHandle;
 use warpui::{EntityId, ModelContext};
 use work_queue::FindWorkQueue;
 
-use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
 use super::FindOptions;
+use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::find::model::TerminalFindModel;
+use crate::terminal::model::TerminalModel;
 use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, TotalIndex,
 };
 use crate::terminal::model::grid::grid_handler::{AbsolutePoint, GridHandler};
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
-use crate::terminal::model::TerminalModel;
 use crate::throttle::throttle;
 use crate::view_components::find::{FindDirection, FindEvent};
 
@@ -771,16 +771,14 @@ impl AsyncFindController {
         // Check for query refinement optimization.
         if let (Some(current_config), Some(new_query)) =
             (&self.current_config, options.query.as_ref())
+            && !options.is_regex_enabled
+            && !current_config.is_regex_enabled
+            && options.is_case_sensitive == current_config.is_case_sensitive
+            && is_query_refinement(&current_config.query, new_query)
         {
-            if !options.is_regex_enabled
-                && !current_config.is_regex_enabled
-                && options.is_case_sensitive == current_config.is_case_sensitive
-                && is_query_refinement(&current_config.query, new_query)
-            {
-                // New query is a refinement of the old query — filter existing results.
-                self.filter_results_for_refinement(options, block_sort_direction, ctx);
-                return;
-            }
+            // New query is a refinement of the old query — filter existing results.
+            self.filter_results_for_refinement(options, block_sort_direction, ctx);
+            return;
         }
 
         // Create new config.
@@ -930,29 +928,29 @@ impl AsyncFindController {
                 total_index,
             } => {
                 // Scan AI block on main thread.
-                if let Some(view) = self.rich_content_views.get(&view_id) {
-                    if let Some(config) = &self.current_config {
-                        let options = FindOptions {
-                            query: Some(config.query.clone()),
-                            is_case_sensitive: config.is_case_sensitive,
-                            is_regex_enabled: config.is_regex_enabled,
-                            blocks_to_include_in_results: None,
-                        };
-                        let start = instant::Instant::now();
-                        let match_ids = view.run_find(&options, ctx);
-                        let elapsed = start.elapsed();
-                        log::trace!(
-                            "[async_find] AI block scan took {}ms for view_id={:?}",
-                            elapsed.as_millis(),
-                            view_id
-                        );
-                        if !match_ids.is_empty() {
-                            self.block_results.ai_matches.insert(view_id, match_ids);
-                            self.block_results
-                                .ai_total_indices
-                                .insert(view_id, total_index);
-                            self.clamp_focused_match_index();
-                        }
+                if let Some(view) = self.rich_content_views.get(&view_id)
+                    && let Some(config) = &self.current_config
+                {
+                    let options = FindOptions {
+                        query: Some(config.query.clone()),
+                        is_case_sensitive: config.is_case_sensitive,
+                        is_regex_enabled: config.is_regex_enabled,
+                        blocks_to_include_in_results: None,
+                    };
+                    let start = instant::Instant::now();
+                    let match_ids = view.run_find(&options, ctx);
+                    let elapsed = start.elapsed();
+                    log::trace!(
+                        "[async_find] AI block scan took {}ms for view_id={:?}",
+                        elapsed.as_millis(),
+                        view_id
+                    );
+                    if !match_ids.is_empty() {
+                        self.block_results.ai_matches.insert(view_id, match_ids);
+                        self.block_results
+                            .ai_total_indices
+                            .insert(view_id, total_index);
+                        self.clamp_focused_match_index();
                     }
                 }
             }
@@ -1264,10 +1262,10 @@ impl AsyncFindController {
         ctx.spawn_stream_local(
             result_rx,
             move |me, msg, ctx| {
-                if let Some(controller) = &mut me.async_find_controller {
-                    if controller.generation == generation {
-                        controller.process_message(msg, ctx);
-                    }
+                if let Some(controller) = &mut me.async_find_controller
+                    && controller.generation == generation
+                {
+                    controller.process_message(msg, ctx);
                 }
             },
             |_me, _ctx| {},

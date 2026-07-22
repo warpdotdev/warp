@@ -10,6 +10,71 @@ fn command_names_are_unique() {
         assert!(seen.insert(name), "duplicate slash command name: {name}");
     }
 }
+#[test]
+fn view_logs_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command == &VIEW_LOGS)
+    );
+    assert!(
+        !all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .any(|command| command == &VIEW_LOGS)
+    );
+}
+
+#[test]
+fn auto_approve_command_is_local_agent_action_without_arguments() {
+    let tui_commands = all_commands(settings::SettingsMode::Tui);
+    let command = tui_commands
+        .iter()
+        .find(|command| command.name == AUTO_APPROVE.name)
+        .expect("expected /auto-approve to be registered in TUI mode");
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.name != AUTO_APPROVE.name)
+    );
+
+    assert_eq!(command.description, "Toggle auto approve");
+    assert_eq!(command.icon_path, "bundled/svg/fast-forward.svg");
+    assert!(!command.auto_enter_ai_mode);
+    assert_eq!(
+        command.availability,
+        Availability::AGENT_VIEW
+            | Availability::ACTIVE_CONVERSATION
+            | Availability::AI_ENABLED
+            | Availability::NOT_CLOUD_AGENT
+    );
+    assert!(command.argument.is_none());
+    assert!(command.is_active(
+        Availability::AGENT_VIEW
+            | Availability::ACTIVE_CONVERSATION
+            | Availability::AI_ENABLED
+            | Availability::NOT_CLOUD_AGENT
+    ));
+    assert!(!command.is_active(
+        Availability::AGENT_VIEW
+            | Availability::ACTIVE_CONVERSATION
+            | Availability::AI_ENABLED
+            | Availability::CLOUD_AGENT
+    ));
+}
+
+#[test]
+fn logout_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command == &LOGOUT)
+    );
+    assert!(
+        !all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .any(|command| command == &LOGOUT)
+    );
+}
 
 #[test]
 fn rename_tab_command_requires_argument() {
@@ -138,4 +203,43 @@ fn strip_command_prefix_substring_not_matched() {
     // "/planning" should not match "/plan"
     let result = strip_command_prefix("/planning something", "/plan");
     assert_eq!(result, None);
+}
+
+#[test]
+fn natural_language_detection_commands_are_registered_only_for_tui_mode() {
+    let tui_commands = all_commands(settings::SettingsMode::Tui);
+    assert!(
+        tui_commands
+            .iter()
+            .any(|command| command == &ENABLE_NATURAL_LANGUAGE_DETECTION)
+    );
+    assert!(
+        tui_commands
+            .iter()
+            .any(|command| command == &DISABLE_NATURAL_LANGUAGE_DETECTION)
+    );
+
+    let gui_commands = all_commands(settings::SettingsMode::Gui);
+    assert!(
+        !gui_commands
+            .iter()
+            .any(|command| command == &ENABLE_NATURAL_LANGUAGE_DETECTION)
+    );
+    assert!(
+        !gui_commands
+            .iter()
+            .any(|command| command == &DISABLE_NATURAL_LANGUAGE_DETECTION)
+    );
+}
+
+#[test]
+fn natural_language_detection_commands_are_ai_enabled_and_execute_immediately() {
+    for command in [
+        &ENABLE_NATURAL_LANGUAGE_DETECTION,
+        &DISABLE_NATURAL_LANGUAGE_DETECTION,
+    ] {
+        assert_eq!(command.availability, Availability::AI_ENABLED);
+        assert!(!command.auto_enter_ai_mode);
+        assert!(command.argument.is_none());
+    }
 }

@@ -36,10 +36,13 @@ where
 {
     pub fn new(
         snapshot_fn: impl Fn(&Query, &AppContext) -> S + Send + Sync + 'static,
-        match_fn: impl Fn(S) -> BoxFuture<'static, Result<Vec<QueryResult<A>>, DataSourceRunErrorWrapper>>
-            + Send
-            + Sync
-            + 'static,
+        match_fn: impl Fn(
+            S,
+        )
+            -> BoxFuture<'static, Result<Vec<QueryResult<A>>, DataSourceRunErrorWrapper>>
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         Self {
             snapshot_fn: Arc::new(snapshot_fn),

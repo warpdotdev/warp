@@ -3,7 +3,7 @@ pub mod command_executor;
 
 use std::collections::{HashMap, HashSet};
 #[cfg(windows)]
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
@@ -15,8 +15,8 @@ use async_channel::Sender;
 #[cfg(feature = "local_tty")]
 use command_executor::remote_server_executor::RemoteServerCommandExecutor;
 pub use command_executor::*;
-use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use instant::Instant;
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
@@ -26,10 +26,10 @@ use version_compare::Version;
 use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
-use warp_errors::{register_error, ErrorExt};
+use warp_errors::{ErrorExt, register_error};
 use warp_util::path::{
-    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
-    ShellFamily,
+    ShellFamily, convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path,
+    msys2_exe_to_root,
 };
 use warpui::platform::OperatingSystem;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -75,6 +75,30 @@ impl ErrorExt for ReadHistoryContentsError {
     }
 }
 register_error!(ReadHistoryContentsError);
+
+#[cfg(windows)]
+fn powershell_read_all_text_command(path: &OsStr) -> OsString {
+    let mut command = OsString::from("[System.IO.File]::ReadAllText('");
+    command.push(escape_powershell_single_quotes(path));
+    command.push("')");
+    command
+}
+
+/// Doubles every single quote in `path` so it is safe to embed inside a
+/// PowerShell single-quoted string literal.
+#[cfg(windows)]
+fn escape_powershell_single_quotes(path: &OsStr) -> OsString {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    const SINGLE_QUOTE: u16 = b'\'' as u16;
+    let mut escaped = Vec::new();
+    for unit in path.encode_wide() {
+        escaped.push(unit);
+        if unit == SINGLE_QUOTE {
+            escaped.push(SINGLE_QUOTE);
+        }
+    }
+    OsString::from_wide(&escaped)
+}
 
 // SessionId is defined in warp_core and re-exported here for backward compatibility.
 pub use warp_core::SessionId;
@@ -385,11 +409,9 @@ impl Sessions {
                 session_info.session_type,
                 BootstrapSessionType::WarpifiedRemote
             )
+            && let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
         {
-            if let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
-            {
-                session.set_remote_host_id(Some(host_id.clone()));
-            }
+            session.set_remote_host_id(Some(host_id.clone()));
         }
 
         let bootstrap_duration_seconds =
@@ -502,12 +524,11 @@ impl Sessions {
         event: ExecutedExecutorCommandEvent,
     ) {
         if let Some(in_band_command_output_tx) = self.in_band_command_output_tx_map.get(&session_id)
+            && let Err(e) = in_band_command_output_tx.try_send(event)
         {
-            if let Err(e) = in_band_command_output_tx.try_send(event) {
-                report_error!(anyhow::Error::new(e).context(
-                    "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor"
-                ));
-            }
+            log::warn!(
+                "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor: {e:#}"
+            );
         }
     }
 
@@ -716,7 +737,7 @@ impl SessionInfo {
                 }
             }
             Err(e) => {
-                warp_errors::report_error!(e);
+                log::warn!("Failed to get local hostname when determining session type: {e:#}");
                 BootstrapSessionType::Local
             }
         }
@@ -1467,8 +1488,7 @@ impl Session {
             .arg("-NoProfile")
             .arg("-NoLogo")
             .arg("-Command")
-            .arg("[System.IO.File]::ReadAllText($args[0])")
-            .arg(history_file_path)
+            .arg(powershell_read_all_text_command(history_file_path))
             .output()
             .await;
         match read_result {
@@ -1537,7 +1557,7 @@ impl Session {
                 )
             }
             CommandExitStatus::Failure => {
-                report_error!("Failed to parse history file from file");
+                log::warn!("Failed to read history file from remote session");
                 None
             }
         }
@@ -1625,11 +1645,11 @@ impl Session {
                     );
                     return vec![];
                 };
-                let res = output_string
+
+                output_string
                     .lines()
                     .map(|s| s.trim().to_string())
-                    .collect();
-                res
+                    .collect()
             }
             _ => {
                 log::warn!("failed to get git_branches_for_command_corrections");
@@ -1665,6 +1685,14 @@ impl Session {
             // Cases: powershell sessions
             ShellFamily::PowerShell => TypedPathBuf::from_windows(pwd),
         }
+    }
+
+    /// Returns whether `cwd` (a working directory reported for this session)
+    /// can be resolved to a usable native path.
+    pub fn can_resolve_cwd_to_native_path(&self, cwd: &str) -> bool {
+        let typed_path = self.convert_directory_to_typed_path_buf(cwd.to_string());
+        self.maybe_convert_to_native_path(&typed_path.to_path())
+            .is_ok()
     }
 }
 
@@ -1899,7 +1927,9 @@ pub mod testing {
                 .set(external_commands_with_values(commands))
                 .is_err()
             {
-                log::warn!("Ignored call to set_external_commands, as external commands had already been set!");
+                log::warn!(
+                    "Ignored call to set_external_commands, as external commands had already been set!"
+                );
             };
         }
 

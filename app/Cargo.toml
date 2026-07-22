@@ -2,7 +2,7 @@
 authors = ["Warp Team <dev@warp.dev>"]
 default-run = "warp-oss"
 description = "The cloud-backed terminal for individuals and teams"
-edition = "2021"
+edition = "2024"
 autobins = false
 name = "warp"
 version = "0.1.0"
@@ -594,6 +594,7 @@ default = [
     "cloud_environments",
     "create_environment_slash_command",
     "code_review_find",
+    "async_find",
     "shared_session_long_running_commands",
     "mcp_grouped_server_context",
     "fork_from_command",
@@ -668,6 +669,7 @@ default = [
     "vertical_tabs_summary_mode",
     "tab_configs",
     "grouped_tabs",
+    "pinned_tabs",
     "agent_harness",
     "hoa_onboarding_flow",
     "hoa_remote_control",
@@ -681,7 +683,6 @@ default = [
     "git_credential_refresh",
     "oz_handoff",
     "handoff_local_cloud",
-    "run_agents_tool",
     "pending_user_query_indicator",
     "queue_slash_command",
     "queued_prompts_v2",
@@ -695,6 +696,9 @@ default = [
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
+    "terminal_lifecycle_recovery",
+    "cloud_runners",
+    "cloud_agent_runners",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -731,6 +735,7 @@ nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
 nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
 nld_prompt_history_match = []
 msys2_shells = []
+file_backed_execution_profiles = []
 file_retrieval_tools = []
 get_started_tab = []
 code_mode_chip = []
@@ -843,8 +848,16 @@ voice_input = ["dep:voice_input"]
 system_theme = []
 tab_close_button_on_left = []
 team_features_override = []
-test-util = ["cloud_object_client/test-util", "warp_server_auth/test-util"]
+test-util = [
+    "cloud_object_client/test-util",
+    "warp_server_auth/test-util",
+    "http_client/test-util",
+    "warp_core/test-util",
+    "ai/test-util",
+    "warp_server_client/test-util",
+]
 team_workflows = ["team_features_override"]
+terminal_lifecycle_recovery = []
 toggle_bootstrap_block = []
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = [
@@ -938,6 +951,7 @@ integration_command = []
 artifact_command = []
 cloud_environments = []
 cloud_runners = []
+cloud_agent_runners = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
@@ -984,7 +998,6 @@ file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
-run_agents_tool = []
 wait_for_events_parent_registration = []
 pending_user_query_indicator = []
 queue_slash_command = []
@@ -1022,6 +1035,7 @@ cloud_mode_input_v2 = ["cloud_mode"]
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
 prompt_cache_expiry_warning = []
+osc_hyperlinks = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

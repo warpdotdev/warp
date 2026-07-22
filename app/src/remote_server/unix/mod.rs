@@ -17,11 +17,11 @@ use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 
 use warp_errors::report_error;
-use warpui::r#async::executor;
 use warpui::SingletonEntity;
+use warpui::r#async::executor;
 
 use super::server_model::{ConnectionId, ServerModel};
-use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_app_ctx};
 
 /// Run the `remote-server-daemon` subcommand.
 ///
@@ -51,11 +51,11 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
     let socket_path = proxy::socket_path(identity_key);
     let pid_path = proxy::pid_path(identity_key);
 
-    if let Some(parent) = socket_path.parent() {
-        if let Err(e) = proxy::ensure_private_daemon_dir(parent) {
-            report_error!(e.context("Failed to create daemon directory"));
-            return;
-        }
+    if let Some(parent) = socket_path.parent()
+        && let Err(e) = proxy::ensure_private_daemon_dir(parent)
+    {
+        report_error!(e.context("Failed to create daemon directory"));
+        return;
     }
     if socket_path.exists() {
         let _ = std::fs::remove_file(&socket_path);
@@ -153,8 +153,8 @@ pub(super) async fn handle_daemon_connection(
     spawner: warpui::ModelSpawner<ServerModel>,
     exec: std::sync::Arc<executor::Background>,
 ) {
-    use futures::io::{AsyncWriteExt, BufReader, BufWriter};
     use futures::AsyncReadExt as _;
+    use futures::io::{AsyncWriteExt, BufReader, BufWriter};
 
     let (conn_tx, conn_rx) = async_channel::unbounded::<remote_server::proto::ServerMessage>();
 

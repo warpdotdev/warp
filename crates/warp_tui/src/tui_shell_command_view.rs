@@ -12,27 +12,89 @@ use std::time::Duration;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType, BlockId,
-    BlocklistAIActionModel, RequestCommandOutputResult, TerminalModel,
+    AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType, AIConversationId,
+    BlockId, BlocklistAIActionModel, CancellationReason, RequestCommandOutputResult, TerminalModel,
 };
-use warpui_core::elements::tui::{tui_collapsible, Modifier, TuiChildView, TuiElement, TuiFlex};
-use warpui_core::elements::MouseStateHandle;
 use warpui_core::r#async::Timer;
+use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{Modifier, TuiChildView, TuiElement, TuiFlex, tui_collapsible};
+use warpui_core::keymap::macros::*;
+use warpui_core::keymap::{EditableBinding, FixedBinding};
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
-use crate::agent_block_sections::{
-    render_fallback_tool_call_section, tool_call_glyph_style, tool_call_label_style,
+use crate::agent_block_sections::render_fallback_tool_call_section;
+use crate::editor_view::{
+    TuiEditorVerticalDirection, TuiEditorView, TuiEditorViewAction, TuiEditorViewEvent,
 };
+use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
 use crate::terminal_block::TerminalBlockElement;
+use crate::terminal_use::user_controls_running_command;
 use crate::tool_call_labels::{
-    tool_call_display_state, tool_call_glyph, tool_call_label, CommandBlockState,
-    ResolvedCommandBlock,
+    CommandBlockState, ResolvedCommandBlock, tool_call_display_state, tool_call_label,
 };
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
+use crate::tui_permission_prompt::{
+    TuiPermissionPrompt, TuiPermissionPromptAction, TuiPermissionPromptEvent,
+    render_permission_card,
+};
 const COMMAND_AUTO_EXPAND_DELAY: Duration = Duration::from_secs(3);
+const SHELL_COMMAND_EDITING: &str = "TuiShellCommandEditing";
+
+pub(crate) fn init(app: &mut AppContext) {
+    let predicate = id!(TuiShellCommandView::ui_name()) & id!(SHELL_COMMAND_EDITING);
+    app.register_fixed_bindings([
+        FixedBinding::new(
+            "escape",
+            TuiShellCommandViewAction::CancelPermission,
+            predicate.clone(),
+        )
+        .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new(
+            "ctrl-e",
+            TuiShellCommandViewAction::SaveCommandEdit,
+            predicate.clone(),
+        )
+        .with_group(TUI_BINDING_GROUP),
+    ]);
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "tui:shell-permission:save",
+            "Save the edited shell command",
+            TuiShellCommandViewAction::SaveCommandEdit,
+        )
+        .with_context_predicate(predicate.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("enter"),
+        EditableBinding::new(
+            "tui:shell-permission:save",
+            "Save the edited shell command",
+            TuiShellCommandViewAction::SaveCommandEdit,
+        )
+        .with_context_predicate(predicate.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("numpadenter"),
+        EditableBinding::new(
+            "tui:shell-permission:previous",
+            "Move up in the shell command or permission responses",
+            TuiShellCommandViewAction::NavigateUp,
+        )
+        .with_context_predicate(predicate.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("up"),
+        EditableBinding::new(
+            "tui:shell-permission:next",
+            "Move down in the shell command or permission responses",
+            TuiShellCommandViewAction::NavigateDown,
+        )
+        .with_context_predicate(predicate)
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("down"),
+    ]);
+    app.register_tui_binding_validator::<TuiShellCommandView>(is_tui_owned_binding);
+}
 
 struct ShellCommandViewState {
     collapsed: bool,
@@ -72,7 +134,11 @@ pub(super) struct TuiShellCommandView {
     action: AIAgentAction,
     output_streaming: bool,
     action_model: ModelHandle<BlocklistAIActionModel>,
+    conversation_id: AIConversationId,
     terminal_model: Arc<FairMutex<TerminalModel>>,
+    command_editor: ViewHandle<TuiEditorView>,
+    permission_prompt: ViewHandle<TuiPermissionPrompt>,
+    command_was_edited: bool,
     state: ShellCommandViewState,
     command_running: Cell<bool>,
     header_mouse_state: MouseStateHandle,
@@ -81,12 +147,18 @@ pub(super) struct TuiShellCommandView {
 
 /// Events emitted to the owning agent block.
 pub(super) enum TuiShellCommandViewEvent {
+    BlockingStateChanged,
     LayoutChanged,
+    ReplacementGuidanceSubmitted(String),
 }
 
 /// User interactions handled by the shell-command view.
 #[derive(Clone, Debug)]
 pub(super) enum TuiShellCommandViewAction {
+    CancelPermission,
+    NavigateUp,
+    NavigateDown,
+    SaveCommandEdit,
     ToggleExpanded,
 }
 impl TuiShellCommandView {
@@ -94,17 +166,58 @@ impl TuiShellCommandView {
         action: AIAgentAction,
         output_streaming: bool,
         action_model: ModelHandle<BlocklistAIActionModel>,
+        conversation_id: AIConversationId,
         terminal_model: Arc<FairMutex<TerminalModel>>,
+        ctx: &mut ViewContext<Self>,
     ) -> Self {
         debug_assert!(matches!(
             &action.action,
             AIAgentActionType::RequestCommandOutput { .. }
         ));
+        let command = Self::action_command(&action).to_owned();
+        let command_editor = ctx.add_typed_action_tui_view(|ctx| TuiEditorView::multiline(4, ctx));
+        command_editor.update(ctx, |editor, ctx| editor.set_text(command, ctx));
+        let prompt_action_id = action.id.clone();
+        let prompt_action_model = action_model.clone();
+        let prompt_command_editor = command_editor.clone();
+        let permission_prompt = ctx.add_typed_action_tui_view(move |ctx| {
+            TuiPermissionPrompt::new(
+                prompt_action_model,
+                prompt_action_id,
+                Some(prompt_command_editor),
+                ctx,
+            )
+        });
+        ctx.subscribe_to_view(&command_editor, |view, _, event, ctx| {
+            let TuiEditorViewEvent::Changed(_) = event;
+            view.command_was_edited = true;
+            view.permission_prompt
+                .update(ctx, |prompt, ctx| prompt.set_body_error(None, ctx));
+            view.invalidate_layout(ctx);
+        });
+        ctx.subscribe_to_view(&permission_prompt, |view, _, event, ctx| match event {
+            TuiPermissionPromptEvent::AcceptRequested => view.accept(ctx),
+            TuiPermissionPromptEvent::ReplacementGuidanceSubmitted(text) => {
+                ctx.emit(TuiShellCommandViewEvent::ReplacementGuidanceSubmitted(
+                    text.clone(),
+                ));
+            }
+            TuiPermissionPromptEvent::RejectRequested => view.reject(ctx),
+            TuiPermissionPromptEvent::BlockingStateChanged => {
+                ctx.emit(TuiShellCommandViewEvent::BlockingStateChanged);
+                view.invalidate_layout(ctx);
+            }
+            TuiPermissionPromptEvent::LayoutChanged => view.invalidate_layout(ctx),
+        });
         Self {
             action,
             output_streaming,
             action_model,
+            conversation_id,
             terminal_model,
+            command_editor,
+            permission_prompt,
+            command_was_edited: false,
             state: ShellCommandViewState::new_collapsed(),
             command_running: Cell::new(false),
             header_mouse_state: MouseStateHandle::default(),
@@ -113,9 +226,112 @@ impl TuiShellCommandView {
     }
 
     /// Refreshes streamed action arguments without replacing interaction state.
-    pub(super) fn update_action(&mut self, action: AIAgentAction, output_streaming: bool) {
+    pub(super) fn update_action(
+        &mut self,
+        action: AIAgentAction,
+        output_streaming: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.command_was_edited && !self.command_editor.as_ref(ctx).is_focused() {
+            let command = Self::action_command(&action).to_owned();
+            self.command_editor
+                .update(ctx, |editor, ctx| editor.set_text(command, ctx));
+        }
         self.action = action;
         self.output_streaming = output_streaming;
+        self.invalidate_layout(ctx);
+    }
+
+    pub(super) fn active_permission_prompt(
+        &self,
+        app: &AppContext,
+    ) -> Option<ViewHandle<TuiPermissionPrompt>> {
+        self.permission_prompt
+            .as_ref(app)
+            .is_active(app)
+            .then(|| self.permission_prompt.clone())
+    }
+
+    fn action_command(action: &AIAgentAction) -> &str {
+        match &action.action {
+            AIAgentActionType::RequestCommandOutput { command, .. } => command,
+            _ => "",
+        }
+    }
+
+    fn save_command_edit(&self, ctx: &mut ViewContext<Self>) {
+        if !self.command_editor.as_ref(ctx).is_focused() {
+            return;
+        }
+        self.permission_prompt
+            .update(ctx, |prompt, ctx| prompt.restore_options_focus(ctx));
+        self.invalidate_layout(ctx);
+    }
+
+    fn navigate_command_editor(
+        &self,
+        direction: TuiEditorVerticalDirection,
+        prompt_action: TuiPermissionPromptAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.command_editor.as_ref(ctx).is_focused() {
+            return;
+        }
+        if self
+            .command_editor
+            .as_ref(ctx)
+            .can_move_vertically(direction, ctx)
+        {
+            self.command_editor.update(ctx, |editor, ctx| {
+                editor.handle_action(&TuiEditorViewAction::Command(direction.into()), ctx);
+            });
+        } else {
+            self.permission_prompt.update(ctx, |prompt, ctx| {
+                prompt.handle_action(&prompt_action, ctx);
+            });
+        }
+        self.invalidate_layout(ctx);
+    }
+
+    fn accept(&mut self, ctx: &mut ViewContext<Self>) {
+        let command = self.command_editor.as_ref(ctx).text(ctx);
+        if command.trim().is_empty() {
+            self.permission_prompt.update(ctx, |prompt, ctx| {
+                prompt.set_body_error(Some("Enter a command to continue.".to_owned()), ctx);
+            });
+            self.invalidate_layout(ctx);
+            return;
+        }
+        let action_id = self.action.id.clone();
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.handle_requested_command_accepted(&action_id, command, ctx);
+        });
+    }
+
+    fn reject(&self, ctx: &mut ViewContext<Self>) {
+        let action_id = self.action.id.clone();
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.cancel_action_with_id(
+                self.conversation_id,
+                &action_id,
+                CancellationReason::ManuallyCancelled,
+                ctx,
+            );
+        });
+    }
+
+    fn invalidate_layout(&self, ctx: &mut ViewContext<Self>) {
+        ctx.emit(TuiShellCommandViewEvent::LayoutChanged);
+        ctx.notify();
+    }
+
+    fn render_blocked(&self, app: &AppContext) -> Box<dyn TuiElement> {
+        render_permission_card(
+            &self.permission_prompt,
+            "Is it OK if I run this command and read the output?",
+            None,
+            app,
+        )
     }
 
     pub(super) fn set_cli_subagent_view(
@@ -172,6 +388,9 @@ impl TuiShellCommandView {
     pub(super) fn needs_continuous_height_measurement(&self) -> bool {
         !self.state.is_collapsed() && self.command_running.get()
     }
+    pub(super) fn is_expanded(&self) -> bool {
+        !self.state.is_collapsed()
+    }
 
     /// Resolves the shared terminal block exactly as the GUI requested-command
     /// view does: first by agent action metadata, then by a long-running
@@ -210,6 +429,14 @@ impl TuiShellCommandView {
             },
         })
     }
+
+    fn user_controls_command(&self) -> bool {
+        self.terminal_model
+            .lock()
+            .block_list()
+            .block_for_ai_action_id(&self.action.id)
+            .is_some_and(user_controls_running_command)
+    }
 }
 
 impl Entity for TuiShellCommandView {
@@ -222,10 +449,22 @@ impl TuiView for TuiShellCommandView {
     }
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
-        self.cli_subagent_view
-            .iter()
-            .map(|view| view.id())
-            .collect()
+        let mut ids = vec![self.permission_prompt.id()];
+        ids.extend(self.cli_subagent_view.iter().map(|view| view.id()));
+        ids
+    }
+
+    fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        let blocked = self
+            .action_model
+            .as_ref(app)
+            .get_action_status(&self.action.id)
+            .is_some_and(|status| status.is_blocked());
+        if blocked && self.command_editor.as_ref(app).is_focused() {
+            context.set.insert(SHELL_COMMAND_EDITING);
+        }
+        context
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
@@ -233,6 +472,10 @@ impl TuiView for TuiShellCommandView {
             .action_model
             .as_ref(app)
             .get_action_status(&self.action.id);
+        if matches!(status, Some(AIActionStatus::Blocked)) {
+            self.command_running.set(false);
+            return self.render_blocked(app);
+        }
         let Some(block) = self.resolved_block(status.as_ref()) else {
             self.command_running.set(false);
             return render_fallback_tool_call_section(
@@ -249,15 +492,15 @@ impl TuiView for TuiShellCommandView {
         let builder = TuiUiBuilder::from_app(app);
         let display_state =
             tool_call_display_state(status.as_ref(), false, Some(block.details.state));
-        let glyph_style = tool_call_glyph_style(display_state, &builder);
-        let mut label_style = tool_call_label_style(display_state, &builder);
+        let glyph_style = display_state.glyph_style(&builder);
+        let mut label_style = display_state.label_style(&builder);
         if self.header_mouse_state.lock().unwrap().is_hovered() {
             label_style = label_style.add_modifier(Modifier::BOLD);
         }
-        let collapsed = self.state.is_collapsed();
+        let collapsed = self.state.is_collapsed() && !self.user_controls_command();
         let label = tool_call_label(&self.action, status.as_ref(), false, Some(&block.details));
         let header_spans = vec![
-            (format!("{} ", tool_call_glyph(display_state)), glyph_style),
+            (format!("{} ", display_state.glyph()), glyph_style),
             (format!("{label} "), label_style),
         ];
 
@@ -288,7 +531,22 @@ impl TypedActionView for TuiShellCommandView {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
+            TuiShellCommandViewAction::CancelPermission => self.reject(ctx),
+            TuiShellCommandViewAction::NavigateUp => self.navigate_command_editor(
+                TuiEditorVerticalDirection::Up,
+                TuiPermissionPromptAction::MoveUp,
+                ctx,
+            ),
+            TuiShellCommandViewAction::NavigateDown => self.navigate_command_editor(
+                TuiEditorVerticalDirection::Down,
+                TuiPermissionPromptAction::MoveDown,
+                ctx,
+            ),
+            TuiShellCommandViewAction::SaveCommandEdit => self.save_command_edit(ctx),
             TuiShellCommandViewAction::ToggleExpanded => {
+                if self.user_controls_command() {
+                    return;
+                }
                 self.state.toggle();
                 ctx.emit(TuiShellCommandViewEvent::LayoutChanged);
                 ctx.notify();

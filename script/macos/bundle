@@ -250,13 +250,17 @@ elif [[ $RELEASE_CHANNEL = "local" || $RELEASE_CHANNEL = "dev" ]]; then
   # For dev bundles, we want to enable debug assertions to
   # catch violations that would otherwise silently pass in
   # a normal release build (e.g. in stable).
-  if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" || "$ARTIFACT" == "tui" ]]; then
+  if [[ "$ARTIFACT" == "tui" ]]; then
+    CARGO_PROFILE="release-tui-debug-assertions"
+  elif [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
     CARGO_PROFILE="release-cli-debug_assertions"
   else
     CARGO_PROFILE="release-lto-debug_assertions"
   fi
 else
-  if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" || "$ARTIFACT" == "tui" ]]; then
+  if [[ "$ARTIFACT" == "tui" ]]; then
+    CARGO_PROFILE="release-tui"
+  elif [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
     CARGO_PROFILE="release-cli"
   else
     CARGO_PROFILE="release-lto"
@@ -368,6 +372,9 @@ elif [[ "$ARTIFACT" == tui ]]; then
     *) WARP_BIN="warp-tui-$RELEASE_CHANNEL" ;;
   esac
   WARP_TUI_FEATURES="release_bundle,standalone"
+  if [[ "$RELEASE_CHANNEL" != "oss" ]]; then
+    WARP_TUI_FEATURES="$WARP_TUI_FEATURES,crash_reporting"
+  fi
 elif [[ "$ARTIFACT" == app ]]; then
   # All channels ship the v3 classifier and v2 heuristic.
   FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"

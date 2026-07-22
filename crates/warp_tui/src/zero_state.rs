@@ -7,19 +7,27 @@
 //! the first accepted submission produces a block and returns whenever the
 //! transcript empties out again.
 
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
+use std::time::Duration;
 
-use ai::project_context::model::ProjectContextModel;
-use warp::tui_export::{ChangelogModel, ChangelogState, SkillManager};
+use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use warp::tui_export::{
+    ActiveSession, ActiveSessionEvent, ChangelogModel, ChangelogModelEvent, ChangelogState,
+    SkillManager, TuiMcpConfigState, TuiMcpManager, TuiMcpServerStatus,
+};
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
+use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiText};
-use warpui_core::AppContext;
+use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
-use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater};
+use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
+use crate::zero_state_animation::{StarfieldState, ZeroStateAnimationElement};
 
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
 const MAX_CHANGELOG_BULLETS: usize = 3;
@@ -27,13 +35,100 @@ const MAX_CHANGELOG_BULLETS: usize = 3;
 /// Width cap on the text column so bullets wrap like the mock.
 const LEFT_COLUMN_MAX_COLS: u16 = 48;
 
-/// Renders the zero state for the transcript area. `cwd` is the session's
-/// working directory for the project section.
-pub(crate) fn render_zero_state(cwd: Option<&str>, app: &AppContext) -> Box<dyn TuiElement> {
-    let builder = TuiUiBuilder::from_app(app);
-    TuiConstrainedBox::new(render_left_column(cwd, &builder, app).finish())
-        .with_max_cols(LEFT_COLUMN_MAX_COLS)
-        .finish()
+// ---------------------------------------------------------------------------
+// TuiZeroStateView
+// ---------------------------------------------------------------------------
+
+/// The zero-state view: displayed when the transcript is empty.
+///
+/// Owns the starfield animation state so it persists across view re-renders
+/// (e.g. when MCP connects or a changelog loads).  The animation element
+/// receives an `Rc<RefCell<StarfieldState>>` clone on each render, keeping
+/// the star positions continuous through paint-only animation repaints.
+pub(crate) struct TuiZeroStateView {
+    starfield: Rc<RefCell<StarfieldState>>,
+    clock: AnimationClock,
+    active_session: ModelHandle<ActiveSession>,
+}
+
+impl TuiZeroStateView {
+    pub(crate) fn new(
+        active_session: ModelHandle<ActiveSession>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        // Subscribe to events that change what the zero state displays so
+        // this view re-renders independently of its parent.
+        ctx.subscribe_to_model(
+            &ChangelogModel::handle(ctx),
+            |_, _, event: &ChangelogModelEvent, ctx| {
+                if let ChangelogModelEvent::ChangelogRequestComplete { .. } = event {
+                    ctx.notify();
+                }
+            },
+        );
+        ctx.subscribe_to_model(
+            &TuiAutoupdater::handle(ctx),
+            |_, _, event: &TuiAutoupdaterEvent, ctx| {
+                let TuiAutoupdaterEvent::StatusChanged = event;
+                ctx.notify();
+            },
+        );
+        ctx.subscribe_to_model(
+            &ProjectContextModel::handle(ctx),
+            |_, _, event: &ProjectContextModelEvent, ctx| {
+                if let ProjectContextModelEvent::PathIndexed = event {
+                    ctx.notify();
+                }
+            },
+        );
+        ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&active_session, |_, _, event, ctx| {
+            let ActiveSessionEvent::UpdatedPwd = event else {
+                return;
+            };
+            ctx.notify();
+        });
+
+        Self {
+            starfield: Rc::new(RefCell::new(StarfieldState::new())),
+            clock: AnimationClock::starting_at(Duration::ZERO),
+            active_session,
+        }
+    }
+}
+
+impl Entity for TuiZeroStateView {
+    type Event = ();
+}
+
+impl TuiView for TuiZeroStateView {
+    fn ui_name() -> &'static str {
+        "TuiZeroStateView"
+    }
+
+    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        let builder = TuiUiBuilder::from_app(ctx);
+        let session = self.active_session.as_ref(ctx);
+        let cwd = session.current_working_directory().cloned().or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.to_string_lossy().into_owned())
+        });
+        let text_column =
+            TuiConstrainedBox::new(render_left_column(cwd.as_deref(), &builder, ctx).finish())
+                .with_max_cols(LEFT_COLUMN_MAX_COLS)
+                .finish();
+        let animation = ZeroStateAnimationElement::new(
+            Rc::clone(&self.starfield),
+            self.clock,
+            builder.accent_color(),
+        )
+        .finish();
+        TuiFlex::row()
+            .child(text_column)
+            .flex_child(animation)
+            .finish()
+    }
 }
 
 /// The left text column: title, version, "What's new", and project context.
@@ -74,7 +169,85 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
     if let Some(cwd) = cwd {
         column = render_project_section(cwd, column, builder, app);
     }
-    column
+    render_mcp_section(column, builder, app)
+}
+
+fn render_mcp_section(mut column: TuiFlex, builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
+    let snapshot = TuiMcpManager::as_ref(app).snapshot();
+    let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
+    let muted = builder.muted_text_style();
+    column = column.child(blank_row()).child(
+        TuiText::new("MCP")
+            .with_style(header_style)
+            .truncate()
+            .finish(),
+    );
+    if matches!(snapshot.config_state, TuiMcpConfigState::Missing) {
+        column = column.child(
+            TuiText::new(abbreviate_home_prefix(
+                &snapshot.config_path.display().to_string(),
+            ))
+            .with_style(builder.dim_text_style())
+            .truncate()
+            .finish(),
+        );
+    }
+
+    let (label, is_error) = mcp_status_label(snapshot);
+    let style = if is_error {
+        builder.error_text_style()
+    } else {
+        muted
+    };
+    column.child(TuiText::new(label).with_style(style).truncate().finish())
+}
+
+fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, bool) {
+    match &snapshot.config_state {
+        TuiMcpConfigState::Invalid { .. } => ("Config error · run /mcp".to_string(), true),
+        TuiMcpConfigState::Missing => ("Not configured · /mcp".to_string(), false),
+        TuiMcpConfigState::Ready if snapshot.servers.is_empty() => {
+            ("No servers configured · run /mcp".to_string(), false)
+        }
+        TuiMcpConfigState::Ready => {
+            let mut running = 0;
+            let mut starting = 0;
+            let mut authenticating = 0;
+            let mut stopping = 0;
+            let mut failed = 0;
+            let mut offline = 0;
+            for server in &snapshot.servers {
+                match &server.status {
+                    TuiMcpServerStatus::Offline => offline += 1,
+                    TuiMcpServerStatus::Starting => starting += 1,
+                    TuiMcpServerStatus::Authenticating => authenticating += 1,
+                    TuiMcpServerStatus::Running => running += 1,
+                    TuiMcpServerStatus::Stopping => stopping += 1,
+                    TuiMcpServerStatus::Failed { .. } => failed += 1,
+                }
+            }
+            let mut parts = Vec::new();
+            if running > 0 {
+                parts.push(format!("{running} connected"));
+            }
+            if starting > 0 {
+                parts.push(format!("{starting} starting"));
+            }
+            if authenticating > 0 {
+                parts.push(format!("{authenticating} needs auth"));
+            }
+            if stopping > 0 {
+                parts.push(format!("{stopping} stopping"));
+            }
+            if failed > 0 {
+                parts.push(format!("{failed} failed"));
+            }
+            if offline > 0 {
+                parts.push(format!("{offline} offline"));
+            }
+            (format!("{} · /mcp", parts.join(" · ")), false)
+        }
+    }
 }
 
 /// The version line: the release version (or "dev build"), with the
@@ -143,10 +316,10 @@ fn render_project_section(
     let mut rule_files: Vec<String> = Vec::new();
     if let Some(rules) = &rules {
         for rule in &rules.active_rules {
-            if let Some(name) = rule.path.file_name() {
-                if !rule_files.iter().any(|file| file == name) {
-                    rule_files.push(name.to_owned());
-                }
+            if let Some(name) = rule.path.file_name()
+                && !rule_files.iter().any(|file| file == name)
+            {
+                rule_files.push(name.to_owned());
             }
         }
     }
@@ -237,3 +410,7 @@ fn changelog_bullets(app: &AppContext) -> Vec<String> {
 fn blank_row() -> Box<dyn TuiElement> {
     TuiText::new(" ").truncate().finish()
 }
+
+#[cfg(test)]
+#[path = "zero_state_tests.rs"]
+mod tests;

@@ -5,19 +5,19 @@ use ::local_control::protocol::{
 };
 use ::local_control::{ControlError, ErrorCode};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use settings::Setting as _;
 use warpui::keymap::DescriptionContext;
 use warpui::{ModelContext, SingletonEntity};
 
+use crate::WindowSettings;
 use crate::local_control::LocalControlBridge;
 use crate::settings::{
-    derived_theme_kind, AccessibilitySettings, FontSettings, InputSettings, ThemeSettings,
+    AccessibilitySettings, FontSettings, InputSettings, ThemeSettings, derived_theme_kind,
 };
 use crate::themes::theme::ThemeKind;
 use crate::user_config::WarpConfig;
 use crate::util::bindings::trigger_to_keystroke;
-use crate::WindowSettings;
 
 pub(super) const ALLOWLISTED_SETTING_KEYS: &[&str] = &[
     "accessibility.accessibility_verbosity",

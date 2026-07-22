@@ -2,9 +2,9 @@
 
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+use warp_core::ui::Icon;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
 use warpui::elements::{ConstrainedBox, Container, Highlight, Shrinkable, Text};
 use warpui::fonts::{Properties, Weight};
 use warpui::scene::{CornerRadius, Radius};
@@ -15,8 +15,8 @@ use crate::ai::agent::AIAgentExchangeId;
 use crate::appearance::Appearance;
 use crate::search::{ItemHighlightState, SearchItem};
 use crate::terminal::input::inline_menu::styles::{
-    font_size, icon_color, item_background, menu_background_color, primary_text_color, ICON_MARGIN,
-    ITEM_CORNER_RADIUS, ITEM_HORIZONTAL_PADDING,
+    ICON_MARGIN, ITEM_CORNER_RADIUS, ITEM_HORIZONTAL_PADDING, font_size, icon_color,
+    item_background, menu_background_color, primary_text_color,
 };
 use crate::terminal::input::user_query::data_source::SelectUserQuery;
 
@@ -95,13 +95,13 @@ impl SearchItem for UserQuerySearchItem {
         .with_color(primary_text_color(theme, background.into()).into())
         .with_clip(ClipConfig::ellipsis());
 
-        if let Some(match_result) = &self.query_match_result {
-            if !match_result.matched_indices.is_empty() {
-                query_text = query_text.with_single_highlight(
-                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
-                    match_result.matched_indices.clone(),
-                );
-            }
+        if let Some(match_result) = &self.query_match_result
+            && !match_result.matched_indices.is_empty()
+        {
+            query_text = query_text.with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                match_result.matched_indices.clone(),
+            );
         }
 
         Container::new(Shrinkable::new(1., query_text.finish()).finish())

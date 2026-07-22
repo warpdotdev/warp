@@ -1,10 +1,10 @@
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 
 use super::util::{scroll_clipped_scrollable_handle_with_delta, scroll_delta_for_axis};
 use super::{NewScrollableElement, SingleAxisConfig};
-use crate::elements::new_scrollable::util::child_constraint_for_axis;
 use crate::elements::new_scrollable::ScrollableAxis;
+use crate::elements::new_scrollable::util::child_constraint_for_axis;
 use crate::elements::{
     Axis, ClippedScrollStateHandle, ScrollData, ScrollStateHandle, ScrollTarget, SelectableElement,
     Vector2FExt,

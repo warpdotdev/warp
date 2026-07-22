@@ -2,14 +2,14 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
+use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
-    resizable_state_handle, ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide,
-    Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-    Resizable, ResizableStateHandle, Shrinkable,
+    ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide, Element, Empty, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Resizable,
+    ResizableStateHandle, Shrinkable, resizable_state_handle,
 };
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -18,6 +18,7 @@ use warpui::{
     ViewContext, ViewHandle, WeakViewHandle,
 };
 
+use crate::TelemetryEvent;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::appearance::Appearance;
@@ -29,8 +30,8 @@ use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::drive::panel::{
     DrivePanel, DrivePanelEvent, MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH,
 };
-use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
 use crate::pane_group::pane::view::header::PANE_HEADER_HEIGHT;
+use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
 use crate::pane_group::working_directories::WorkingDirectory;
 use crate::pane_group::{
     PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel, {self},
@@ -48,8 +49,9 @@ use crate::util::file::external_editor::EditorSettings;
 use crate::util::openable_file_type::FileTarget;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{
-    is_markdown_file, resolve_file_target_with_editor_choice, EditorLayout,
+    EditorLayout, is_markdown_file, resolve_file_target_with_editor_choice,
 };
+use crate::workspace::WorkspaceAction;
 use crate::workspace::view::conversation_list::view::{
     ConversationListView, Event as ConversationListViewEvent,
 };
@@ -62,8 +64,6 @@ use crate::workspace::view::{
     OPEN_GLOBAL_SEARCH_BINDING_NAME, TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME,
     TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
-use crate::workspace::WorkspaceAction;
-use crate::TelemetryEvent;
 
 #[derive(Default)]
 struct MouseStateHandles {
@@ -188,10 +188,10 @@ fn toolbelt_tooltip_keybinding(binding_names: &[&'static str], app: &AppContext)
 
     // Preserve caller-provided ordering so we can prioritize specific bindings.
     for binding_name in binding_names {
-        if let Some(displayed) = keybinding_name_to_display_string(binding_name, app) {
-            if seen.insert(displayed.clone()) {
-                parts.push(displayed);
-            }
+        if let Some(displayed) = keybinding_name_to_display_string(binding_name, app)
+            && seen.insert(displayed.clone())
+        {
+            parts.push(displayed);
         }
     }
 
@@ -597,10 +597,10 @@ impl LeftPanelView {
 
         self.active_pane_group = Some(pane_group.downgrade());
 
-        if let Some(previous_pane_group_id) = previous_pane_group_id {
-            if previous_pane_group_id != pane_group_id {
-                self.deactivate_file_tree_view_for_pane_group(previous_pane_group_id, ctx);
-            }
+        if let Some(previous_pane_group_id) = previous_pane_group_id
+            && previous_pane_group_id != pane_group_id
+        {
+            self.deactivate_file_tree_view_for_pane_group(previous_pane_group_id, ctx);
         }
 
         // Query the current state from the model
@@ -1166,31 +1166,25 @@ impl View for LeftPanelView {
         };
 
         let content_area: Box<dyn Element> = match self.active_view.get() {
-            ToolPanelView::ProjectExplorer => {
-                if let Some(file_tree_view) = self.active_file_tree_view(app) {
-                    Shrinkable::new(
-                        1.0,
-                        Container::new(ChildView::new(&file_tree_view).finish())
-                            .with_padding_left(2.)
-                            .with_padding_right(2.)
-                            .finish(),
-                    )
-                    .finish()
-                } else {
-                    Shrinkable::new(1.0, Container::new(Empty::new().finish()).finish()).finish()
-                }
-            }
-            ToolPanelView::GlobalSearch { .. } => {
-                if let Some(global_search_view) = self.active_global_search_view(app) {
-                    Shrinkable::new(
-                        1.0,
-                        Container::new(ChildView::new(&global_search_view).finish()).finish(),
-                    )
-                    .finish()
-                } else {
-                    Shrinkable::new(1.0, Container::new(Empty::new().finish()).finish()).finish()
-                }
-            }
+            ToolPanelView::ProjectExplorer => match self.active_file_tree_view(app) {
+                Some(file_tree_view) => Shrinkable::new(
+                    1.0,
+                    Container::new(ChildView::new(&file_tree_view).finish())
+                        .with_padding_left(2.)
+                        .with_padding_right(2.)
+                        .finish(),
+                )
+                .finish(),
+                _ => Shrinkable::new(1.0, Container::new(Empty::new().finish()).finish()).finish(),
+            },
+            ToolPanelView::GlobalSearch { .. } => match self.active_global_search_view(app) {
+                Some(global_search_view) => Shrinkable::new(
+                    1.0,
+                    Container::new(ChildView::new(&global_search_view).finish()).finish(),
+                )
+                .finish(),
+                _ => Shrinkable::new(1.0, Container::new(Empty::new().finish()).finish()).finish(),
+            },
             ToolPanelView::WarpDrive => Shrinkable::new(
                 1.0,
                 Container::new(ChildView::new(&self.warp_drive_view).finish())

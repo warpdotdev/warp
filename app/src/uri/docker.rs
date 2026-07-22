@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use regex::Regex;
 use url::Url;
-use warp_util::path::{is_posix_portable_pathname, ShellFamily};
+use warp_util::path::{ShellFamily, is_posix_portable_pathname};
 use warpui::AppContext;
 
 use crate::root_view::SubshellCommandArg;

@@ -4,16 +4,16 @@ use std::path::{Path, PathBuf};
 
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
 use warp_core::ui::Icon;
+use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
 use warpui::elements::{ConstrainedBox, Container, Highlight, Text};
 use warpui::fonts::{Properties, Weight};
 use warpui::text_layout::ClipConfig;
 use warpui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
-use crate::search::result_renderer::ItemHighlightState;
 use crate::search::SearchItem;
+use crate::search::result_renderer::ItemHighlightState;
 use crate::terminal::input::inline_menu::styles as inline_styles;
 use crate::terminal::input::repos::AcceptRepo;
 use crate::util::git::RepoGitSummary;
@@ -118,13 +118,13 @@ impl SearchItem for RepoSearchItem {
             .with_clip(ClipConfig::ellipsis());
 
         // Highlight fuzzy match indices on the name portion.
-        if let Some(match_result) = &self.name_match_result {
-            if !match_result.matched_indices.is_empty() {
-                name_text = name_text.with_single_highlight(
-                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
-                    match_result.matched_indices.clone(),
-                );
-            }
+        if let Some(match_result) = &self.name_match_result
+            && !match_result.matched_indices.is_empty()
+        {
+            name_text = name_text.with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                match_result.matched_indices.clone(),
+            );
         }
 
         // Style branch suffix in secondary color.
