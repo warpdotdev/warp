@@ -132,13 +132,22 @@ pub(super) fn resolve_shell(
 ) -> Result<AvailableShell, ControlError> {
     #[cfg(feature = "local_tty")]
     {
+        if shell_name_looks_like_path(name) {
+            return Err(ControlError::new(
+                ErrorCode::InvalidParams,
+                format!(
+                    "shell must be a discovered shell command name, not a filesystem path: {name:?}"
+                ),
+            ));
+        }
         AvailableShells::as_ref(ctx)
             .find_by_command_name(name)
-            .or_else(|| AvailableShell::try_from(name).ok())
             .ok_or_else(|| {
                 ControlError::new(
                     ErrorCode::InvalidParams,
-                    format!("cannot resolve requested shell {name:?}"),
+                    format!(
+                        "cannot resolve requested shell {name:?}; use a discovered shell command name"
+                    ),
                 )
             })
     }
@@ -147,4 +156,14 @@ pub(super) fn resolve_shell(
         ErrorCode::UnsupportedAction,
         format!("shell selection is unavailable for requested shell {name:?}"),
     ))
+}
+
+/// Returns true when `name` is path-shaped rather than a bare shell command.
+///
+/// Local-control callers must select from shells Warp has already discovered.
+/// Accepting absolute/relative paths would let `tab.create` / `window.create`
+/// spawn an arbitrary same-user binary whose basename looks like a supported
+/// shell (for example `/tmp/evil/zsh`).
+fn shell_name_looks_like_path(name: &str) -> bool {
+    name.contains('/') || name.contains('\\')
 }

@@ -1,8 +1,8 @@
-use ::local_control::InstanceId;
 use ::local_control::protocol::TargetSelector;
+use ::local_control::{ErrorCode, InstanceId};
 use warpui::App;
 
-use super::create_tab;
+use super::{create_tab, shell_name_looks_like_path};
 use crate::local_control::LocalControlBridge;
 use crate::workspace::view::tests::{initialize_app, mock_workspace};
 
@@ -37,5 +37,46 @@ fn tab_create_handler_adds_and_activates_terminal_tab() {
         assert_eq!(response["tab"]["count"], previous_count + 1);
         assert_eq!(response["tab"]["active_index"], previous_count);
         assert!(response["tab"]["id"].is_string());
+    });
+}
+
+#[test]
+fn shell_name_looks_like_path_detects_unix_and_windows_paths() {
+    assert!(shell_name_looks_like_path("/tmp/evil/zsh"));
+    assert!(shell_name_looks_like_path("./zsh"));
+    assert!(shell_name_looks_like_path("../bin/bash"));
+    assert!(shell_name_looks_like_path(r"C:\evil\zsh.exe"));
+    assert!(shell_name_looks_like_path(r"evil\zsh"));
+    assert!(!shell_name_looks_like_path("zsh"));
+    assert!(!shell_name_looks_like_path("bash"));
+    assert!(!shell_name_looks_like_path("pwsh"));
+    assert!(!shell_name_looks_like_path(""));
+}
+
+#[test]
+fn tab_create_rejects_filesystem_path_shell_parameter() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let _workspace = mock_workspace(&mut app);
+        let bridge = app.add_singleton_model(LocalControlBridge::new);
+        let instance_id = InstanceId("inst_test".to_owned());
+
+        let err = bridge.update(&mut app, |bridge, ctx| {
+            bridge.set_instance_id(instance_id.clone());
+            create_tab(
+                &Some(instance_id.clone()),
+                &serde_json::json!({ "shell": "/tmp/evil/zsh" }),
+                &TargetSelector::default(),
+                ctx,
+            )
+            .expect_err("path-shaped shell must be rejected")
+        });
+
+        assert_eq!(err.code, ErrorCode::InvalidParams);
+        assert!(
+            err.message.contains("filesystem path"),
+            "unexpected message: {}",
+            err.message
+        );
     });
 }
