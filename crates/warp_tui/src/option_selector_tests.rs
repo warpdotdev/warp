@@ -115,6 +115,28 @@ fn set_page(app: &mut App, selector: &ViewHandle<TuiOptionSelector>, snapshot: O
 }
 
 #[test]
+fn set_page_returns_focus_to_selector_when_custom_text_editor_had_focus() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        let mut with_footer = snapshot(&["a"], Some("a"));
+        with_footer.footer = Some(OptionFooter::CustomText {
+            label: "Custom…".to_string(),
+        });
+        set_page(&mut app, &selector, with_footer);
+        // Open the custom-text editor so it owns focus.
+        act(&mut app, &selector, TuiOptionSelectorAction::SelectItem(1));
+        assert!(custom_text_field(&app, &selector).read(&app, |field, _| field.is_focused()));
+
+        // Replace the page while the custom-text editor has focus.
+        set_page(&mut app, &selector, snapshot(&["b", "c"], Some("b")));
+
+        // Focus must return to the selector list, not remain on the hidden editor.
+        assert!(!custom_text_field(&app, &selector).read(&app, |field, _| field.is_focused()));
+        assert!(selector.read(&app, |selector, _| selector.focused));
+    });
+}
+
+#[test]
 fn set_page_preserves_external_focus() {
     App::test((), |mut app| async move {
         let (selector, _) = add_selector(&mut app);

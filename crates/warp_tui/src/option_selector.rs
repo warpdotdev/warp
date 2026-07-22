@@ -416,9 +416,13 @@ impl TuiOptionSelector {
         if let Some(search_field) = self.search_field.as_ref() {
             search_field.update(ctx, |editor, ctx| editor.set_text("", ctx));
         }
+        let custom_text_was_focused = self.custom_text.editor.as_ref(ctx).is_focused();
         self.custom_text.reset_editor(ctx);
         self.select_id(self.page.snapshot.selected_id.clone());
         self.sync_after_items_changed();
+        if custom_text_was_focused {
+            ctx.focus_self();
+        }
     }
 
     /// Replaces the current page and resets its transient interaction state.
