@@ -1272,19 +1272,44 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
         // cell into a spurious extra row. Inline code cannot contain a newline from the `.md`
         // inline parser, so it is left untouched. Mirrors the guard in
         // `markdown_parser::inline_to_markdown`.
-        let fragment_text = if !next_styles.is_inline_code() && fragment.text.contains('\n') {
-            fragment.text.replace('\n', "<br>")
+        //
+        // Rather than allocate a newline-replaced copy of the (potentially large) fragment on
+        // this hot path, iterate the fragment's lines and emit a literal `<br>` between them.
+        // The styles never change between lines of one fragment, so `append_formatting` only
+        // does real work at the fragment boundary (first line); its per-line whitespace
+        // handling still applies to each line's start/end.
+        if !next_styles.is_inline_code() && fragment.text.contains('\n') {
+            let mut lines = fragment.text.split('\n');
+            // `contains('\n')` guarantees at least two segments, so `next()` is `Some`.
+            let first = lines.next().unwrap_or("");
+            let content = BufferMarkdownParser::append_formatting(
+                &previous_styles,
+                &next_styles,
+                first,
+                &mut markdown,
+            );
+            previous_styles = next_styles.clone();
+            BufferMarkdownParser::append_content(content, true, &mut markdown);
+            for line in lines {
+                markdown.push_str("<br>");
+                let content = BufferMarkdownParser::append_formatting(
+                    &previous_styles,
+                    &next_styles,
+                    line,
+                    &mut markdown,
+                );
+                BufferMarkdownParser::append_content(content, true, &mut markdown);
+            }
         } else {
-            fragment.text.clone()
-        };
-        let content = BufferMarkdownParser::append_formatting(
-            &previous_styles,
-            &next_styles,
-            fragment_text.as_str(),
-            &mut markdown,
-        );
-        previous_styles = next_styles;
-        BufferMarkdownParser::append_content(content, true, &mut markdown);
+            let content = BufferMarkdownParser::append_formatting(
+                &previous_styles,
+                &next_styles,
+                fragment.text.as_str(),
+                &mut markdown,
+            );
+            previous_styles = next_styles;
+            BufferMarkdownParser::append_content(content, true, &mut markdown);
+        }
     }
     BufferMarkdownParser::append_formatting(
         &previous_styles,

@@ -421,6 +421,32 @@ fn test_table_markdown_export_preserves_br_line_breaks() {
 }
 
 #[test]
+fn test_table_markdown_export_preserves_br_at_cell_edges() {
+    App::test((), |mut app| async move {
+        // Guards the per-line GFM export path against dropping or misplacing breaks at the
+        // edges of a cell: a leading break, a trailing break, consecutive breaks, and a break
+        // followed by leading whitespace on the next line. Each must round-trip to literal
+        // `<br>` with the surrounding whitespace preserved and no spurious pipe-table rows.
+        let markdown = format!(
+            "```{}\nh1\th2\n<br>lead\ttrail<br>\na<br><br>b\tword<br>  spaced\n```\n",
+            TABLE_BLOCK_MARKDOWN_LANG
+        );
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert_eq!(
+            exported_markdown,
+            "| h1 | h2 |\n| --- | --- |\n| <br>lead | trail<br> |\n| a<br><br>b | word<br>  spaced |\n"
+        );
+    });
+}
+
+#[test]
 fn test_url_link_display_text_round_trip_is_stable() {
     App::test((), |mut app| async move {
         let original =
