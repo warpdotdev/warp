@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{InstallLayout, InstallLock};
+use warp_core::channel::Channel;
+
+use super::{InstallLayout, InstallLock, download_endpoint};
 
 /// Creates a unique, empty temp directory for a test.
 fn temp_root(name: &str) -> PathBuf {
@@ -46,6 +48,22 @@ fn rejects_unmanaged_exe_paths() {
     assert_eq!(
         InstallLayout::from_canonical_exe_path(Path::new("/repo/target/debug/warp-tui-dev")),
         None
+    );
+}
+
+#[test]
+fn uses_channel_specific_download_endpoints() {
+    assert_eq!(
+        download_endpoint(Channel::Stable),
+        "/download/agent-cli/artifact"
+    );
+    assert_eq!(
+        download_endpoint(Channel::Preview),
+        "/download/agent-cli-preview/artifact"
+    );
+    assert_eq!(
+        download_endpoint(Channel::Dev),
+        "/download/agent-cli-dev/artifact"
     );
 }
 

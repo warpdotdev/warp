@@ -11,6 +11,7 @@ pub use mcp::{
     TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
     TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
 };
+use url::Url;
 use warpui::{AppContext, Entity, SingletonEntity};
 
 use crate::TuiMountFn;
@@ -93,11 +94,12 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
             let url_to_open = verification_url_complete
                 .as_deref()
                 .unwrap_or(verification_url.as_str());
-            ctx.open_url(url_to_open);
+            let url_to_open = tui_verification_url(url_to_open);
+            ctx.open_url(&url_to_open);
             set_login_phase(
                 ctx,
                 TuiLoginPhase::AwaitingLogin {
-                    verification_uri: Some(url_to_open.to_owned()),
+                    verification_uri: Some(url_to_open),
                     user_code: Some(user_code.clone()),
                 },
             );
@@ -129,6 +131,15 @@ fn authorize_device(ctx: &mut AppContext) {
     AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
         auth_manager.authorize_device(ctx);
     });
+}
+fn tui_verification_url(verification_url: &str) -> String {
+    let Ok(mut verification_url) = Url::parse(verification_url) else {
+        return verification_url.to_owned();
+    };
+    verification_url
+        .query_pairs_mut()
+        .append_pair("source", "warp-agent-cli");
+    verification_url.into()
 }
 
 fn activate_global_mcp_servers(ctx: &mut AppContext) {
