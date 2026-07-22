@@ -65,12 +65,13 @@ impl TuiConstrainedBox {
         let max_height = self.max_rows.map_or(constraint.max.height, |rows| {
             constraint.max.height.min(rows)
         });
-        // Apply min_cols: the child must be at least this wide, clamped to
-        // max_width so it degrades gracefully on terminals narrower than the
-        // requested minimum.
-        let min_width = self.min_cols.map_or(constraint.min.width, |cols| {
-            cols.min(max_width).max(constraint.min.width)
-        });
+        // Apply min_cols: floor the child's width to `min_cols`, taking the
+        // larger of `min_cols` and the parent's existing min, then clamp to
+        // max_width so the constraint invariant (min ≤ max) is always upheld.
+        let min_width = match self.min_cols {
+            None => constraint.min.width.min(max_width),
+            Some(cols) => cols.max(constraint.min.width).min(max_width),
+        };
         let min = TuiSize::new(min_width, constraint.min.height.min(max_height));
         TuiConstraint::new(min, TuiSize::new(max_width, max_height))
     }
