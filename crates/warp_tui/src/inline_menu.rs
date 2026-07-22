@@ -34,6 +34,8 @@ const SLASH_COMMAND_COLUMN_CONSTRAINTS: TuiTwoColumnConstraints = TuiTwoColumnCo
     preferred_maximum_second_columns: 21,
     gap_columns: 1,
 };
+
+pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
 const MIN_REAL_ROWS_WITH_SCROLL_INDICATORS: usize = 3;
 
 #[allow(dead_code)]
@@ -42,6 +44,7 @@ pub(crate) enum TuiInlineMenuRowStyle {
     Default,
     InlineMenuItem,
 }
+
 pub(crate) fn active_inline_menu(
     inline_menus: &[TuiInlineMenu],
     mode: TuiInputSuggestionsMode,
@@ -93,8 +96,6 @@ impl TuiInlineMenuHandle for ModelHandle<TuiMcpMenuModel> {
         self.as_ref(ctx).snapshot(ctx)
     }
 }
-
-pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
 
 /// A presentation-only row in a TUI inline menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
