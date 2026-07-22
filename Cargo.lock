@@ -6421,6 +6421,7 @@ dependencies = [
  "futures",
  "gloo",
  "http 1.4.0",
+ "js-sys",
  "log",
  "oauth2",
  "opentelemetry",
@@ -6436,6 +6437,7 @@ dependencies = [
  "tracing-subscriber",
  "warp_core",
  "warp_errors",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
 
@@ -16202,6 +16204,7 @@ dependencies = [
  "infer",
  "instant",
  "itertools 0.14.0",
+ "js-sys",
  "lazy_static",
  "libc",
  "log",
@@ -16245,6 +16248,7 @@ dependencies = [
  "warp_errors",
  "warp_util",
  "warpui_core",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
  "woothee",
 ]

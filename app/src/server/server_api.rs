@@ -487,6 +487,14 @@ impl ServerApi {
             .set_ambient_agent_task_id(task_id.map(|task_id| task_id.to_string()));
     }
 
+    /// Returns the shared base client used for authenticated server requests.
+    /// Used by the wasm32 direct-MAA path (REMOTE-2264) to call
+    /// `warp_multi_agent_client::generate_multi_agent_output`.
+    #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
+    pub fn base_client(&self) -> Arc<BaseClient> {
+        self.base_client.clone()
+    }
+
     /// Returns ambient agent headers to attach to requests.
     async fn ambient_agent_headers(&self) -> Result<Vec<(String, String)>> {
         self.ambient_headers(AmbientHeaderPolicy::inherit_all())

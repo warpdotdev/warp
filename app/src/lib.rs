@@ -3097,13 +3097,14 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
         } => {
             cfg_if::cfg_if! {
                 if #[cfg(target_family = "wasm")] {
-                    // `agent_sdk` (the in-process CLI/agent path) is gated off
-                    // wasm by a large native-only dependency surface (see
-                    // `agents/specs/REMOTE-2264: findings.md`). On wasm the CLI
-                    // command cannot run via the real `agent_sdk::run` until that
-                    // surface is carved out; report and drop it.
-                    let _ = (ctx, command, global_options);
-                    log::warn!("CLI command on wasm: agent_sdk is not compiled into this wasm build");
+                    // On wasm32-unknown-unknown (e.g. the Node prototype,
+                    // REMOTE-2264) the CLI command runs in-process via the real
+                    // `agent_sdk::run` path. `std::process::exit` is unavailable
+                    // on wasm; errors are reported but do not exit the process.
+                    if let Err(err) = crate::ai::agent_sdk::run(ctx, command, global_options) {
+                        log::error!("agent_sdk::run failed: {err:#}");
+                        report_error!(err);
+                    }
                 } else {
                     if let Err(err) = crate::ai::agent_sdk::run(ctx, command, global_options) {
                         eprintln!("{err:#}");

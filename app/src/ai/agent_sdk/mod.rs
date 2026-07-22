@@ -2,18 +2,29 @@
 //! For now this provides a simple runner that echoes the received command.
 
 use std::fmt::Write;
+#[cfg(not(target_family = "wasm"))]
 use std::future::Future;
+#[cfg(not(target_family = "wasm"))]
 use std::path::Path;
+#[cfg(not(target_family = "wasm"))]
 use std::pin::Pin;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
+#[cfg(not(target_family = "wasm"))]
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
+#[cfg(not(target_family = "wasm"))]
 use anyhow::Context;
+#[cfg(not(target_family = "wasm"))]
 pub use driver::AgentDriver;
+#[cfg(not(target_family = "wasm"))]
 use driver::AgentDriverError;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) use driver::harness::{ClaudeHarness, task_env_vars, validate_cli_installed};
 use telemetry::CliTelemetryEvent;
+#[cfg(not(target_family = "wasm"))]
 use tracing::Instrument as _;
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
 use warp_cli::agent::{
     AgentCommand, AgentProfileCommand, Harness, OutputFormat, Prompt, RunAgentArgs,
 };
@@ -30,88 +41,150 @@ use warp_cli::provider::ProviderCommand;
 use warp_cli::runner::RunnerCommand;
 use warp_cli::schedule::ScheduleSubcommand;
 use warp_cli::secret::SecretCommand;
+#[cfg(not(target_family = "wasm"))]
 use warp_cli::share::ShareRequest;
 use warp_cli::task::{MessageCommand, TaskCommand};
 use warp_cli::{CliCommand, GlobalOptions, OZ_HARNESS_ENV};
+#[cfg(not(target_family = "wasm"))]
 use warp_core::features::FeatureFlag;
+#[cfg(not(target_family = "wasm"))]
 use warp_errors::report_error;
 use warp_graphql::object_permissions::OwnerType;
+#[cfg(not(target_family = "wasm"))]
 use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
 use warp_logging::log_file_path;
+#[cfg(not(target_family = "wasm"))]
 use warp_managed_secrets::ManagedSecretManager;
+#[cfg(not(target_family = "wasm"))]
 use warp_server_client::iap::{IapManager, IapManagerEvent};
 use warpui::platform::TerminationMode;
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
 use warpui::{AppContext, ModelSpawner, SingletonEntity};
 
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::api::ServerConversationToken;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::api::convert_conversation::{
     RestorationMode, convert_conversation_data_to_ai_conversation,
 };
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::conversation::AIConversationId;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::ambient_agents::task::HarnessConfig;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::llms::LLMId;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::skills::{
     ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
 };
 use crate::auth::AuthStateProvider;
+#[cfg(not(target_family = "wasm"))]
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
+#[cfg(not(target_family = "wasm"))]
 use crate::cloud_object::CloudObjectLookup as _;
+#[cfg(not(target_family = "wasm"))]
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::send_telemetry_sync_from_app_ctx;
+#[cfg(not(target_family = "wasm"))]
 use crate::server::ids::{ServerId, SyncId};
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
 use crate::server::server_api::ServerApiProvider;
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
 use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
+#[cfg(not(target_family = "wasm"))]
 use crate::terminal::view::ConversationRestorationInNewPaneType;
+#[cfg(not(target_family = "wasm"))]
 use crate::workflows::workflow::Workflow;
 
+#[cfg(not(target_family = "wasm"))]
 mod admin;
+#[cfg(not(target_family = "wasm"))]
 mod agent_config;
+#[cfg(not(target_family = "wasm"))]
 mod agent_management;
+#[cfg(not(target_family = "wasm"))]
 mod ambient;
+#[cfg(not(target_family = "wasm"))]
 mod api_key;
+#[cfg(not(target_family = "wasm"))]
 mod artifact;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod artifact_upload;
+#[cfg(not(target_family = "wasm"))]
 mod common;
+// config_file uses comfy_table on some paths; allow dead code on wasm since
+// the native-only functions that call it are gated.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 mod config_file;
+// The full AgentDriver (driver module) depends on many native-only backends
+// (MCP, skills/fs, blocklist recording, bedrock credentials, harness support,
+// etc.) that are cfg(not(target_family="wasm"))-gated. On wasm, the
+// `run_agent` path uses a direct MAA request instead (see `run_agent`).
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod driver;
+#[cfg(not(target_family = "wasm"))]
 mod environment;
+#[cfg(not(target_family = "wasm"))]
 mod federate;
+#[cfg(not(target_family = "wasm"))]
 mod harness_support;
 #[cfg(not(target_family = "wasm"))]
 mod integration;
 #[cfg(not(target_family = "wasm"))]
 mod integration_output;
+#[cfg(not(target_family = "wasm"))]
 mod mcp;
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 mod mcp_config;
+#[cfg(not(target_family = "wasm"))]
 mod memory_store;
+#[cfg(not(target_family = "wasm"))]
 mod model;
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 mod oauth_flow;
+#[cfg(not(target_family = "wasm"))]
 pub mod output;
+#[cfg(not(target_family = "wasm"))]
 mod profiles;
+#[cfg(not(target_family = "wasm"))]
 mod provider;
 pub(crate) mod retry;
+#[cfg(not(target_family = "wasm"))]
 mod runner;
+#[cfg(not(target_family = "wasm"))]
 mod schedule;
+#[cfg(not(target_family = "wasm"))]
 mod secret;
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) mod setup_observability;
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 mod telemetry;
 #[cfg(test)]
 mod test_support;
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 mod text_layout;
 
 /// Prints a non-blocking warning to stderr when the CLI is invoked with a team-scoped API key.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 fn maybe_warn_team_api_key(ctx: &AppContext) {
     let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
     let owner_type = auth_state.api_key_owner_type();
@@ -135,10 +208,149 @@ pub fn run(
     let event = command_to_telemetry_event(&command);
     send_telemetry_sync_from_app_ctx!(event, ctx);
 
-    launch_command(ctx, command, global_options)
+    // On wasm, skip launch_command (which requires native auth flows) and
+    // dispatch directly. The wasm dispatch_command handles AgentCommand::Run
+    // via the direct MAA request path.
+    #[cfg(target_family = "wasm")]
+    {
+        return dispatch_command(ctx, command, global_options);
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        launch_command(ctx, command, global_options)
+    }
+}
+
+/// wasm dispatch_command: handles AgentCommand::Run via the direct MAA request
+/// path (warp_multi_agent_client::generate_multi_agent_output), bypassing the
+/// full AgentDriver which depends on native-only backends. Other commands
+/// return an error on wasm.
+#[cfg(target_family = "wasm")]
+fn dispatch_command(
+    ctx: &mut AppContext,
+    command: CliCommand,
+    _global_options: GlobalOptions,
+) -> anyhow::Result<()> {
+    match command {
+        CliCommand::Agent(AgentCommand::Run(args)) => {
+            // Extract the prompt.
+            let prompt = args
+                .prompt_arg
+                .to_prompt()
+                .ok_or_else(|| anyhow::anyhow!("missing prompt"))?;
+            let prompt_str = match prompt {
+                Prompt::PlainText(text) => text,
+                Prompt::SavedPrompt(_) => {
+                    return Err(anyhow::anyhow!("saved prompts not supported on wasm"));
+                }
+            };
+
+            // Build a minimal MAA Request using the same proto wire format as
+            // the CLI path (mirrors the wasm_node_proto crate).
+            use warp_multi_agent_api as api;
+            use warp_multi_agent_api::request::input::user_inputs::UserInput;
+            use warp_multi_agent_api::request::input::user_inputs::user_input::Input as UserInputKind;
+            use warp_multi_agent_api::request::input::{Type as InputType, UserInputs, UserQuery};
+            use warp_multi_agent_api::request::settings::ModelConfig;
+            use warp_multi_agent_api::request::{Input, Metadata, Settings, TaskContext};
+            let user_query = UserQuery {
+                query: prompt_str.clone(),
+                referenced_attachments: Default::default(),
+                mode: None,
+                intended_agent: Default::default(),
+            };
+            let request = api::Request {
+                task_context: Some(TaskContext { tasks: vec![] }),
+                input: Some(Input {
+                    context: None,
+                    r#type: Some(InputType::UserInputs(UserInputs {
+                        inputs: vec![UserInput {
+                            input: Some(UserInputKind::UserQuery(user_query)),
+                        }],
+                    })),
+                }),
+                settings: Some(Settings {
+                    model_config: Some(ModelConfig {
+                        base: args.model.model.clone().unwrap_or_default(),
+                        ..Default::default()
+                    }),
+                    web_context_retrieval_enabled: true,
+                    supports_parallel_tool_calls: true,
+                    planning_enabled: true,
+                    supports_create_files: true,
+                    supports_long_running_commands: true,
+                    should_preserve_file_content_in_history: true,
+                    supports_todos_ui: true,
+                    supports_started_child_task_message: true,
+                    supports_suggest_prompt: true,
+                    supports_reasoning_message: true,
+                    ..Default::default()
+                }),
+                metadata: Some(Metadata {
+                    conversation_id: String::new(),
+                    logging: Default::default(),
+                    ambient_agent_task_id: String::new(),
+                    forked_from_conversation_id: String::new(),
+                    parent_agent_id: String::new(),
+                    agent_name: String::new(),
+                }),
+                existing_suggestions: None,
+                mcp_context: None,
+            };
+
+            // Get the server API's base client for the MAA request.
+            let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
+            let base_client = server_api.base_client();
+
+            // Spawn the MAA request as an async task on the foreground executor.
+            // `Foreground::spawn` on wasm takes just the future (no callback).
+            ctx.foreground_executor()
+                .spawn(async move {
+                    log::info!("Sending MAA request for prompt: {prompt_str}");
+                    match warp_multi_agent_client::generate_multi_agent_output(
+                        base_client.as_ref(),
+                        &request,
+                    )
+                    .await
+                    {
+                        Ok(stream) => {
+                            use futures::StreamExt as _;
+                            let mut stream = stream;
+                            while let Some(event) = stream.next().await {
+                                match event {
+                                    Ok(response_event) => {
+                                        log::info!(
+                                            "MAA response event: {:?}",
+                                            response_event.r#type
+                                        );
+                                    }
+                                    Err(err) => {
+                                        log::error!("MAA stream error: {err:?}");
+                                        break;
+                                    }
+                                }
+                            }
+                            log::info!("MAA stream completed");
+                        }
+                        Err(err) => {
+                            log::error!("MAA request failed: {err}");
+                        }
+                    }
+                })
+                .detach();
+
+            log::info!("Agent run dispatched via direct MAA path on wasm");
+            Ok(())
+        }
+        other => {
+            log::warn!("CLI command not supported on wasm: {other:?}");
+            Err(anyhow::anyhow!("command not supported on wasm"))
+        }
+    }
 }
 
 /// Dispatch a CLI command to its handler.
+#[cfg(not(target_family = "wasm"))]
 fn dispatch_command(
     ctx: &mut AppContext,
     command: CliCommand,
@@ -224,6 +436,7 @@ fn dispatch_command(
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn format_skill_resolution_error(err: ResolveSkillError) -> String {
     match err {
         ResolveSkillError::NotFound { skill } => {
@@ -258,6 +471,7 @@ fn format_skill_resolution_error(err: ResolveSkillError) -> String {
 }
 
 /// Run the agent with the provided command.
+#[cfg(not(target_family = "wasm"))]
 fn run_agent(
     ctx: &mut AppContext,
     global_options: GlobalOptions,
@@ -353,6 +567,7 @@ fn run_agent(
 
 /// Build the merged agent configuration from all sources and the Task for the driver.
 /// Merge precedence: file < CLI < skill
+#[cfg(not(target_family = "wasm"))]
 fn build_merged_config_and_task(
     args: &RunAgentArgs,
     resolved_skill: &Option<ResolvedSkill>,
@@ -471,6 +686,7 @@ fn build_merged_config_and_task(
 
 /// Build the task for server-side prompt resolution (task_id is set).
 /// Only CLI args contribute — no config file merge needed.
+#[cfg(not(target_family = "wasm"))]
 fn build_server_side_task(
     args: &RunAgentArgs,
     resolved_skill: &Option<ResolvedSkill>,
@@ -540,6 +756,7 @@ fn build_server_side_task(
     Ok((config, task))
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn reconcile_task_harness(
     task_id: &str,
     selected_harness: &mut Harness,
@@ -559,6 +776,7 @@ fn reconcile_task_harness(
 }
 
 /// Resolve a `Prompt` to a plain string.
+#[cfg(not(target_family = "wasm"))]
 fn resolve_prompt(prompt: &Prompt, ctx: &AppContext) -> Result<String, AgentDriverError> {
     match prompt {
         Prompt::PlainText(prompt_str) => Ok(prompt_str.to_string()),
@@ -576,6 +794,7 @@ fn resolve_prompt(prompt: &Prompt, ctx: &AppContext) -> Result<String, AgentDriv
 }
 
 /// Run the task with the provided command.
+#[cfg(not(target_family = "wasm"))]
 fn run_task(
     ctx: &mut AppContext,
     global_options: GlobalOptions,
@@ -614,14 +833,18 @@ fn run_task(
 /// Singleton model that provides a ModelContext for spawning async operations
 /// when starting the agent driver. This is needed because conversation fetching
 /// requires spawning an async task, which requires a ModelContext.
+#[cfg(not(target_family = "wasm"))]
 struct AgentDriverRunner;
 
+#[cfg(not(target_family = "wasm"))]
 impl warpui::Entity for AgentDriverRunner {
     type Event = ();
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl warpui::SingletonEntity for AgentDriverRunner {}
 
+#[cfg(not(target_family = "wasm"))]
 impl AgentDriverRunner {
     #[tracing::instrument(skip_all, err, fields(
         tags.cloud_agent = true,
@@ -1509,6 +1732,7 @@ impl AgentDriverRunner {
 }
 
 /// Returns `true` if the given CLI command requires authentication.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 fn command_requires_auth(command: &CliCommand) -> bool {
     match command {
         CliCommand::Agent(agent_cmd) => match agent_cmd {
@@ -1566,6 +1790,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
 /// If auth is not required, dispatches the command immediately.
 /// If auth is required and the user is logged in, triggers a user refresh
 /// before launching the command.
+#[cfg(not(target_family = "wasm"))]
 fn launch_command(
     ctx: &mut AppContext,
     command: CliCommand,
@@ -1625,6 +1850,7 @@ fn launch_command(
 /// Subscribes to auth events, triggers a user refresh, and dispatches the
 /// command once auth completes. Assumes IAP access (if applicable) is already
 /// established, since the auth refresh is itself an IAP-gated warp-server request.
+#[cfg(not(target_family = "wasm"))]
 fn refresh_auth_and_dispatch(
     ctx: &mut AppContext,
     command: CliCommand,
@@ -1672,6 +1898,7 @@ fn refresh_auth_and_dispatch(
 
 /// Check if we're running within Warp (for example, if this is an invocation of the Warp CLI
 /// within a Warp terminal session).
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub fn is_running_in_warp() -> bool {
     std::env::var("TERM_PROGRAM")
         .map(|v| v == "WarpTerminal")
@@ -1679,6 +1906,7 @@ pub fn is_running_in_warp() -> bool {
 }
 
 /// Report a fatal error and terminate the app.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 fn report_fatal_error(err: anyhow::Error, ctx: &mut AppContext) {
     let mut message = err.to_string();
     for cause in err.chain().skip(1) {
@@ -1702,6 +1930,7 @@ fn report_fatal_error(err: anyhow::Error, ctx: &mut AppContext) {
     ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 fn resolve_orchestration_harness_label() -> &'static str {
     let Ok(raw) = std::env::var(OZ_HARNESS_ENV) else {
         return "unknown";
