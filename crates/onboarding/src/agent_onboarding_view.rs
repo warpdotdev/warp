@@ -356,6 +356,9 @@ impl AgentOnboardingView {
         self.onboarding_state.update(ctx, |state, ctx| {
             state.show_post_auth_offer(variant, ctx);
         });
+        if let Some(offer_slide) = &self.offer_slide {
+            offer_slide.update(ctx, |_, ctx| ctx.notify());
+        }
         ctx.focus_self();
         ctx.notify();
     }
