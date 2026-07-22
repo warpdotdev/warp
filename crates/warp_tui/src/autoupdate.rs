@@ -12,7 +12,7 @@
 //!
 //! and this module keeps that layout fresh: it polls on the same cadence as
 //! the GUI autoupdater (each poll is a single lightweight `/client_version`
-//! request), downloads newer builds from the server's `/download/tui`
+//! request), downloads newer builds from the server's `/download/agent-cli`
 //! endpoint, stages them into `versions/<version>`, and atomically retargets
 //! the `current` symlink. The running session is never touched — the new
 //! version is picked up on the next launch. In particular, the updater never
@@ -548,13 +548,14 @@ fn latest_version_for_channel(versions: &ChannelVersions) -> Result<String> {
     Ok(channel_version.version_info().version)
 }
 
-/// The server's `channel` query parameter for the current channel. Only
-/// channels accepted by [`latest_version_for_channel`] reach this.
-fn download_channel() -> &'static str {
-    match ChannelState::channel() {
-        Channel::Preview => "preview",
-        Channel::Stable => "stable",
-        Channel::Dev | Channel::Local | Channel::Oss | Channel::Integration => "dev",
+/// The Warp Agent CLI artifact endpoint for a release channel.
+fn download_endpoint(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Preview => "/download/agent-cli-preview/artifact",
+        Channel::Stable => "/download/agent-cli/artifact",
+        Channel::Dev | Channel::Local | Channel::Oss | Channel::Integration => {
+            "/download/agent-cli-dev/artifact"
+        }
     }
 }
 
@@ -591,9 +592,9 @@ async fn download_and_stage(
         "x86_64"
     };
     let url = format!(
-        "{}/download/tui?os={os}&arch={arch}&channel={}&version={version}",
+        "{}{}?os={os}&arch={arch}&version={version}",
         ChannelState::server_root_url().trim_end_matches('/'),
-        download_channel(),
+        download_endpoint(ChannelState::channel()),
     );
 
     async_fs::create_dir_all(&layout.versions_dir)
