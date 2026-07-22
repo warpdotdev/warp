@@ -1837,6 +1837,16 @@ fn is_sara_am_base(c: char) -> bool {
     matches!(c, '\u{0E01}'..='\u{0E2E}' | '\u{0E81}'..='\u{0EAE}')
 }
 
+/// True when a cell's display content is a Thai/Lao base a SARA AM can attach to
+/// (its first/base glyph is a consonant). Used by both the ligature and
+/// non-ligature paths to decide whether to fold a following SARA AM in.
+fn content_is_sara_am_base(content: CharOrStr<'_>) -> bool {
+    match content {
+        CharOrStr::Char(c) => is_sara_am_base(c),
+        CharOrStr::Str(s) => s.chars().next().is_some_and(is_sara_am_base),
+    }
+}
+
 /// Draw the glyph for the cell here, but don't draw the decorations (underlines and strikethroughs)
 /// yet.
 #[allow(clippy::too_many_arguments)]
@@ -1920,7 +1930,10 @@ fn render_cell_glyph(
                 CharOrStr::Str(_) => None,
             });
 
-            if let Some(sara_am_char) = following_sara_am {
+            // Only fold the SARA AM into this cell when it is an attachable Thai/Lao base;
+            // a SARA AM after a space, punctuation, Latin, etc. renders on its own instead.
+            let attachable = content_is_sara_am_base(cell_content);
+            if let Some(sara_am_char) = following_sara_am.filter(|_| attachable) {
                 let mut cluster = String::new();
                 match cell_content {
                     CharOrStr::Char(c) => cluster.push(c),
@@ -1951,10 +1964,13 @@ fn render_cell_glyph(
                     // `char::is_whitespace` for performance reasons.
                     CharOrStr::Char(' ' | '\t') => {}
                     // Thai/Lao SARA AM is normally rendered as part of the preceding consonant's
-                    // cluster (see `following_sara_am` above). Only draw it standalone when there
-                    // is no preceding cell to attach to (e.g. at the start of a line).
+                    // cluster (see `following_sara_am` above). Draw it standalone only when no
+                    // preceding attachable base consumed it (line start, or after a
+                    // space/punctuation/Latin cell).
                     CharOrStr::Char(c) if decompose_sara_am(c).is_some() => {
-                        if prev_cell.is_none() {
+                        let consumed_by_base = prev_cell
+                            .is_some_and(|p| content_is_sara_am_base(p.content_for_display()));
+                        if !consumed_by_base {
                             if let Some((glyph_id, font_id)) =
                                 glyphs.glyph_for_char(c, *font_id, ctx.font_cache)
                             {

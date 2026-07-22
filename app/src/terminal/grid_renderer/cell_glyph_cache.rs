@@ -83,6 +83,12 @@ impl CellGlyphCache {
                 let Some(run) = line.runs.first() else {
                     return vec![];
                 };
+                // If the shaper produced any missing glyph (id 0 / .notdef), treat this as
+                // a miss and return empty so the per-character fallback below runs instead
+                // of caching tofu.
+                if run.glyphs.iter().any(|g| g.id == 0) {
+                    return vec![];
+                }
                 run.glyphs
                     .iter()
                     .map(|g| (g.id, run.font_id, g.position_along_baseline))
