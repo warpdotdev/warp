@@ -98,6 +98,13 @@ impl GeminiEnterpriseCredentialsErrorView {
             button.set_disabled(disabled, ctx);
         });
     }
+
+    pub fn reset(&mut self, ctx: &mut ViewContext<Self>) {
+        self.refresh_requested = false;
+        self.refresh_succeeded = false;
+        self.update_refresh_button("Refresh credentials", false, ctx);
+        ctx.notify();
+    }
 }
 
 impl Entity for GeminiEnterpriseCredentialsErrorView {

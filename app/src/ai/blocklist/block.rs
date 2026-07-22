@@ -4136,8 +4136,11 @@ impl AIBlock {
         if !matches!(
             error,
             RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid
-        ) || self.gemini_enterprise_credentials_error_view.is_some()
-        {
+        ) {
+            return;
+        }
+        if let Some(view) = &self.gemini_enterprise_credentials_error_view {
+            view.update(ctx, |view, ctx| view.reset(ctx));
             return;
         }
 
