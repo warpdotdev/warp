@@ -9,7 +9,7 @@ use nom::bytes::complete::{
 use nom::character::complete::{char, one_of, satisfy, space0, space1};
 use nom::character::is_digit;
 use nom::combinator::{
-    all_consuming, consumed, eof, fail, flat_map, map, map_parser, recognize, value, verify,
+    all_consuming, consumed, eof, fail, flat_map, map, map_parser, opt, recognize, value, verify,
 };
 use nom::error::{ContextError, ErrorKind, ParseError, context, make_error};
 use nom::multi::{fold_many_m_n, fold_many1, many_m_n, many0};
@@ -1684,7 +1684,7 @@ fn parse_inline_token_br<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                 tag_no_case("br"),
                 space0,
                 // Optional self-closing slash: `<br/>` or `<br />`.
-                map(take_while_m_n(0, 1, |c| c == '/'), |_| ()),
+                opt(char('/')),
                 tag(">"),
             )),
         ),
